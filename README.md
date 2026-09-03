@@ -1,6 +1,91 @@
-# omelette-fleet
+<p align="center">
+  <img src="docs/assets/logo.png" width="160" alt="Omelette Fleet">
+</p>
 
-Plug Google Gemini, xAI Grok and OpenAI Codex into Claude Code as MCP **units** — read-only research and code-review peers. Each unit is its own stdio MCP server that spawns the vendor's own CLI headless (`agy`, `grok`, `codex`), so every call rides the subscription you already pay for. The child environment is built from a small allowlist rather than inherited, and API keys that would silently switch a CLI to metered billing are scrubbed on top of it. Claude Code stays the manager: **units propose, the manager applies.** A single config file with a two-key write ceiling keeps a unit from becoming a foot-gun, and a status feed reports what each unit is doing right now — for `tail -f`, a HUD, or a menu-bar app.
+<h1 align="center">Omelette Fleet</h1>
+
+<p align="center">Gemini, Grok and Codex as read-only units in Claude Code</p>
+
+<p align="center">
+  <a href="https://github.com/adxd-og/omelette-fleet/actions/workflows/test.yml"><img src="https://github.com/adxd-og/omelette-fleet/actions/workflows/test.yml/badge.svg" alt="test workflow status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/node-%E2%89%A5%2020-blue" alt="Node 20 or newer">
+  <img src="https://img.shields.io/badge/dependencies-zero-blue" alt="Zero runtime dependencies">
+</p>
+
+## What you get
+
+Three peers inside Claude Code, each on a subscription you already pay for, none of them able to write. `doctor` is where you find out whether that is actually true on your machine:
+
+```console
+$ omelette-fleet doctor      # example output — all three units; config tables trimmed
+FLEET DOCTOR · omelette-fleet 0.1.0 · node v20.19.5 · darwin
+fleet home    ~/.omelette
+fleet config  ~/.omelette/fleet.config.json
+claude CLI    ~/.local/bin/claude
+claude config ~/.claude.json
+
+── gemini (Gemini) ────────────────────────────────────────────
+  bin         agy → ~/.local/bin/agy   [AGY_BIN=(unset)]
+  version     1.1.25
+  login       OK — agy models listed 14 line(s)
+  config      closed — OMELETTE_ALLOW_WRITE does not list "gemini" · effective mode: read-only
+              KEY        VALUE                    SOURCE
+              enabled    true                     file
+              mode       read-only                file
+              model      Gemini 3.8 Flash (High)  file
+              timeoutS   300                      file
+  mcp         omelette-gemini registered (user) → node ~/omelette-fleet/servers/gemini.mjs [file exists]
+  status feed ~/.omelette is writable
+
+── grok (Grok) ────────────────────────────────────────────────
+  bin         grok → ~/.grok/bin/grok   [GROK_BIN=(unset)]
+  version     grok 1.0.13 (5e9a58528b76) [stable]
+  login       OK — grok models listed 5 line(s)
+  config      closed — OMELETTE_ALLOW_WRITE does not list "grok" · and this unit refuses workspace-write anyway · effective mode: read-only
+  mcp         omelette-grok registered (user) → node ~/omelette-fleet/servers/grok.mjs [file exists]
+
+── codex (Codex) ──────────────────────────────────────────────
+  bin         codex → ~/.local/bin/codex   [CODEX_BIN=(unset)]
+  version     codex-cli 0.153.0
+  login       OK — Logged in using ChatGPT
+  config      closed — OMELETTE_ALLOW_WRITE does not list "codex" · effective mode: read-only
+  mcp         omelette-codex registered (user) → node ~/omelette-fleet/servers/codex.mjs [file exists]
+
+No faults in units that are both enabled and registered.
+```
+
+## How it fits together
+
+```mermaid
+graph LR
+  CC["Claude Code (MCP client)"]
+
+  subgraph FLEET["one stdio MCP server per unit"]
+    SG["omelette-gemini"]
+    SK["omelette-grok"]
+    SX["omelette-codex"]
+  end
+
+  AGY["agy CLI"]
+  GRK["grok CLI"]
+  CDX["codex CLI"]
+  SUB["your Gemini / xAI / ChatGPT subscriptions"]
+
+  CFG["fleet.config.json + OMELETTE_ALLOW_WRITE ceiling"]
+  FEED["status-*.json + fleet-log.ndjson"]
+  READER["menu-bar app / tail -f"]
+
+  CC -->|stdio| FLEET
+  SG -->|spawn| AGY --> SUB
+  SK -->|spawn| GRK --> SUB
+  SX -->|spawn| CDX --> SUB
+  CFG -. "re-read per call" .-> FLEET
+  FLEET -. "writes" .-> FEED
+  FEED --> READER
+```
+
+Plug Google Gemini, xAI Grok and OpenAI Codex into Claude Code as MCP **units** — read-only research and code-review peers. Each unit is its own stdio MCP server that spawns the vendor's own CLI headless (`agy`, `grok`, `codex`), so every call rides the subscription you already pay for. The child environment is built from a small allowlist rather than inherited, and API keys that would silently switch a CLI to metered billing are scrubbed on top of it. Claude Code stays the manager: **units propose, the manager applies.** A single config file with a two-key write ceiling keeps a unit from becoming a foot-gun, and a status feed reports what each unit is doing right now.
 
 Zero runtime dependencies. Node core only, no build step.
 
@@ -113,7 +198,7 @@ Threat model, the per-unit enforcement matrix, and what is only best-effort: **[
 
 ## Status feed
 
-Every unit writes what it is doing to `$OMELETTE_HOME` (default `~/.omelette`): a per-unit snapshot `status-<unit>.json` with the calls running right now and the last finished event, and a shared append-only `fleet-log.ndjson` with one compact JSON line per start and end. Writes are atomic, mode 0600, fail-soft (an fs error can never break a tool call), and the log self-trims. Any menu-bar app, HUD or `tail -f` can read it. Schema and field lists: **[docs/STATUS-FEED.md](docs/STATUS-FEED.md)**.
+Every unit writes what it is doing to `$OMELETTE_HOME` (default `~/.omelette`): a per-unit snapshot `status-<unit>.json` with the calls running right now and the last finished event, and a shared append-only `fleet-log.ndjson` with one compact JSON line per start and end. Writes are atomic, mode 0600, fail-soft (an fs error can never break a tool call), and the log self-trims. Any menu-bar app, HUD or `tail -f` can read it. One reader of this feed is [Omelette usage-checker](https://github.com/adxd-og/usage-checker), a macOS menu-bar app; the feed is an open contract, so nothing here depends on it. Schema and field lists: **[docs/STATUS-FEED.md](docs/STATUS-FEED.md)**.
 
 ## Orchestration
 

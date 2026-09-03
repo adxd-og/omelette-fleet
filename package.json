@@ -4,6 +4,11 @@
   "description": "Plug Gemini, Grok and Codex into Claude Code as read-only research and review units — on the subscriptions you already pay for, fail-closed by design.",
   "type": "module",
   "license": "MIT",
+  "author": "adxd-og",
+  "homepage": "https://github.com/adxd-og/omelette-fleet#readme",
+  "bugs": {
+    "url": "https://github.com/adxd-og/omelette-fleet/issues"
+  },
   "bin": {
     "omelette-fleet": "bin/omelette-fleet.mjs"
   },
