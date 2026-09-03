@@ -18,7 +18,7 @@ core/                  everything that is not vendor-specific
 | `spawn.mjs` | One bounded child process: own process group, wall-clock SIGKILL, output caps, the **child-environment allowlist** and billing scrub, actionable ENOENT. |
 | `status.mjs` | The schema-1 status feed (per-unit snapshot + shared NDJSON log), fail-soft. |
 | `jsonrpc.mjs` | Newline-delimited JSON-RPC 2.0 over stdin/stdout — the MCP stdio transport. `createHandler` is pure and testable; `serve` wires it to the process. |
-| `client.mjs` | The other side of the same transport: drive one unit server the way a real client does. Behind `omelette-fleet call`, `scripts/mcp-call.mjs` and the end-to-end tests. |
+| `client.mjs` | The other side of the same transport: drive one unit server the way a real client does. Behind `omelette-fleet call`, `scripts/mcp-call.mjs` and the end-to-end tests. Every way a call can die is a rejection that does not wait out the timeout — a JSON-RPC `error` reply to any of the three requests, a child that exits, a stdin that closes under an unanswered request — and the timeout itself is clamped to 1–86400 s, because Node's int32 timers turn a larger value into an instant false "no answer". |
 | `log.mjs` | stderr-only logging. stdout belongs to JSON-RPC; one stray byte there and the client shows the server as offline. |
 
 A unit adapter never touches stdin/stdout, never reads the config file, never spawns directly, and never writes the status feed. It declares what is vendor-specific and receives everything else through `ctx`.

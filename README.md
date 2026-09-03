@@ -30,7 +30,9 @@ Then check the install:
 ./bin/omelette-fleet.mjs doctor
 ```
 
-`doctor` reports the binaries and versions it found, login state, the resolved config with sources, the effective mode and write ceiling per unit, MCP registration, and whether the status-feed directory is writable. It exits 1 only when a unit that is **both enabled and registered** is broken — a unit you deliberately never wired up is not a fault.
+`doctor` reports the binaries and versions it found, login state, the resolved config with sources, the effective mode and write ceiling per unit, MCP registration, and whether the status-feed directory is writable. It reads Claude Code's `.claude.json` from `$CLAUDE_CONFIG_DIR` first and `~/` second, and prints which file it used — "not registered" against the wrong file would be a lie.
+
+It exits 1 only for a unit that is **enabled and registered** *and* broken: the vendor binary is missing, the CLI says it is signed out, or the registration points at a server file that no longer exists. A unit you deliberately never wired up is not a fault — and neither is a login state of `unknown`. A probe `doctor` cannot interpret (a non-zero `--version`, a `login status` with no explicit signal) is reported as `unknown (exit N)` with the tail of its output, never as a version and never as "signed out".
 
 Once published, the same commands work as `npx omelette-fleet …`.
 
@@ -39,16 +41,16 @@ Once published, the same commands work as `npx omelette-fleet …`.
 | Command | What it does |
 |---|---|
 | `install [--prefix <name>] [--units <a,b,c>] [--dry-run] [--force]` | Registers one MCP server per unit as `<prefix>-<unit>` with `claude mcp add -s user`, and creates `<home>/fleet.config.json` from the shipped example if it does not exist yet (an existing file is never overwritten). A unit whose vendor CLI is not in `PATH` is skipped unless `--force`. `--dry-run` prints every command and every write and runs nothing. Exits 1 if a `claude mcp add` fails |
-| `uninstall [--prefix <name>] [--units <a,b,c>] [--dry-run]` | `claude mcp remove -s user` for those servers. The fleet config and the status files are never touched |
-| `doctor [--prefix <name>] [--probe-models]` | Per unit: binary, `--version`, login state, resolved config with sources, ceiling, MCP registration, status-feed writability. `--probe-models` spends real Codex calls to test every catalog id |
+| `uninstall [--prefix <name>] [--units <a,b,c>] [--dry-run]` | `claude mcp remove -s user` for those servers. Removing one that was never registered is a no-op; a removal that **fails for one that is registered** prints "Still registered" and exits 1. The fleet config and the status files are never touched |
+| `doctor [--prefix <name>] [--probe-models]` | Per unit: binary, `--version`, login state, resolved config with sources, ceiling, MCP registration, status-feed writability. A registration counts as yours only if its command is node and its path is *this* clone's `servers/<unit>.mjs` — otherwise it is reported as "registered elsewhere". `--probe-models` spends real Codex calls to test every catalog id |
 | `show [<unit>]` | Every config key for one unit or all of them: value, where it came from, and the ceiling |
 | `set <unit>.<key>=<value> [...]` | Changes keys in the config file. Unknown units, unknown keys and invalid values are refused; the rest of the file is kept |
-| `call <unit> <tool> [json-args] [--timeout <seconds>]` | Drives a unit's server over real stdio (initialize → tools/list → tools/call). Exit 0 = ok, 2 = the tool answered with an error, 1 = the server never answered. Default timeout 900 s |
-| `--help`, `--version` | |
+| `call <unit> <tool> [json-args] [--timeout <seconds>]` | Drives a unit's server over real stdio (initialize → tools/list → tools/call). `json-args` must be a JSON **object**. Exit 0 = ok, 2 = the tool answered with an error, 1 = usage error or the call never completed. Default timeout 900 s, clamped to 1–86400 |
+| `--help`, `--version` | Every subcommand answers `--help` / `-h` too, and so does `help <command>` |
 
-If `claude` is not in `PATH`, `install` still writes the fleet config and prints the exact `claude mcp add` commands to run later. Neither the CLI nor the servers ever shell out — every child is `spawn(bin, [args])`, so a path or a value containing a space is data, not shell syntax. The only file the CLI writes is `<home>/fleet.config.json`; Claude Code's own config is parsed, never written.
+If `claude` is not in `PATH`, `install` still writes the fleet config and prints the exact `claude mcp add` commands to run later; `uninstall` prints its commands and changes nothing. Neither the CLI nor the servers ever shell out — every child is `spawn(bin, [args])`, so a path or a value containing a space is data, not shell syntax. The only file the CLI writes is `<home>/fleet.config.json`; Claude Code's own config is parsed, never written.
 
-`call` is the way to test a unit without a client: `./bin/omelette-fleet.mjs call codex codex_models '{}'`.
+`call` is the way to test a unit without a client: `./bin/omelette-fleet.mjs call codex codex_models '{}'`. It distinguishes the two failures that matter — a tool that answered with an error (exit 2, the unit talking) from a server that errored at the protocol level or died mid-call (exit 1, the pipe breaking), rather than reporting either as an empty success.
 
 ## Units
 

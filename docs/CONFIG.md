@@ -115,13 +115,15 @@ An invalid value does not poison the key — it warns and falls through to the n
 
 ### Editing with `set`
 
-`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. It refuses to overwrite a file that is not valid JSON rather than silently replacing it, and it prints the before/after with sources:
+`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` (or the `units.<unit>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
 
 ```
 codex.timeoutS  600 [default] → 900 [file]
 ```
 
 It also warns you when a change will not take effect: an environment variable that still shadows the key, and a `mode` that needs `OMELETTE_ALLOW_WRITE` (or that the unit refuses outright).
+
+`set` is a read-modify-write of the whole file, and the CLI assumes one person is driving it: two `set` runs racing each other can lose one side's keys. Run them one at a time.
 
 ## Environment overrides
 
@@ -147,6 +149,7 @@ Fleet-wide:
 | `OMELETTE_ALLOW_WRITE` | Comma-separated list of units whose `workspace-write` request is honoured. **The second key of the write ceiling** — see [SECURITY.md](SECURITY.md) |
 | `ORION_ALLOW_GEMINI_MUTATE=1` | Legacy alias: opens the ceiling for `gemini` only |
 | `OMELETTE_ENV_PASSTHROUGH` | Comma-separated exact names or `PREFIX_*` patterns added to the child-environment allowlist for **every** unit. The escape hatch for a CLI that needs one more variable; add narrowly, and note the billing scrub still runs after it |
+| `CLAUDE_CONFIG_DIR` | Not a fleet setting, but `doctor` honours it: it looks for `.claude.json` there before `~/`, and prints which file it read |
 
 Binary location, if a CLI is not on `PATH`: `AGY_BIN`, `GROK_BIN`, `CODEX_BIN`.
 
