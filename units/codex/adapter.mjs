@@ -7,7 +7,7 @@
  * READ-ONLY POSTURE — one real layer, not six:
  *   `-s read-only` is Codex's own OS-level sandbox (Seatbelt on macOS, Landlock
  *   /seccomp on Linux). The model's shell commands physically cannot write.
- *   Verified live (codex-cli 0.146.0, 2026-09-02): the run header prints
+ *   Verified live (codex-cli 0.146.0, 2026-09-02; re-checked on 0.153.0, 2026-09-03): the run header prints
  *   `approval: never` and `sandbox: read-only`; `codex exec` never prompts.
  *   Never passed: `--dangerously-bypass-approvals-and-sandbox`,
  *   `--dangerously-bypass-hook-trust`.
@@ -21,8 +21,11 @@
  * `item.completed` of type `agent_message`; a failure is a `turn.failed`
  * event plus exit 1 (verified: an unknown model gives HTTP 400 in
  * `turn.failed`, exit 1). No stopReason guessing. `turn.completed` carries
- * real token usage (input / cached / output / reasoning) — the only unit in
- * the fleet that reports it; it is surfaced in the status feed.
+ * real token usage (input / cached / output / reasoning); Gemini reports
+ * input/output too, Grok reports none. It is surfaced in the status feed.
+ * A NON-ZERO exit that still produced an answer keeps the answer under a
+ * visible `[codex: CLI exited N — treat the answer as partial]` marker:
+ * dropping it wastes the run, returning it clean would be a lie.
  *
  * WEB SEARCH — `-c tools.web_search=true` (verified live: emits `web_search`
  * items and grounds the answer). Toggle per unit with `webSearch` in the
@@ -33,9 +36,24 @@
  * short. Positional prompts also work but Codex then prints "Reading
  * additional input from stdin..." whenever stdin is not a TTY.
  *
- * NOTIFY HOOK — the operator's ~/.codex/config.toml may carry a `notify`
- * hook (desktop notification on turn end). Every bridge call would fire it,
- * so `-c notify=[]` silences it for headless runs only.
+ * ISOLATION — without `--ignore-user-config` a bridge run inherits the whole
+ * of the operator's ~/.codex/config.toml: MCP servers, plugins, hooks, the
+ * `notify` command. The `-s read-only` sandbox bounds the FILESYSTEM, not a
+ * configured MCP tool, so an operator MCP server that mutates an external
+ * system (a tracker, a deploy endpoint) would be reachable from a "read-only"
+ * research call. Both `--ignore-user-config` and `--ignore-rules` (user /
+ * project execpolicy `.rules` files) are therefore passed on every spawn.
+ * Verified live with ChatGPT auth (codex-cli 0.153.0, 2026-09-03): auth still
+ * resolves through CODEX_HOME and `codex exec --ignore-user-config
+ * --ignore-rules -s read-only --skip-git-repo-check --json
+ * -c tools.web_search=false "Reply OK"` answers normally.
+ * `-c notify=[]` stays: harmless, and it keeps the desktop quiet if a future
+ * CLI version reads notify from somewhere else.
+ * CONSEQUENCE — "the vendor default model" no longer means the operator's
+ * configured default, because that default lives in the ignored file. So when
+ * nothing is configured (no `model` arg, no `codex.model` in the fleet
+ * config) this adapter pins the FIRST catalog entry explicitly and logs it;
+ * an unpinned run would silently be whatever the CLI hard-codes.
  *
  * BILLING — `OPENAI_API_KEY` / `CODEX_API_KEY` are deleted from the child env:
  * with an API key present Codex bills the metered API instead of the ChatGPT
@@ -56,7 +74,7 @@ export const catalog = makeCatalog({
   efforts: EFFORTS,
   guide: GUIDE,
   title: 'CODEX MODEL CATALOG',
-  vendorDefaultNote: 'omit `model` for the fleet default, else Codex\'s own default from ~/.codex/config.toml',
+  vendorDefaultNote: 'omit `model` for the fleet default, else the first id below — this unit ignores ~/.codex/config.toml',
 });
 
 const READONLY_PREFIX =
@@ -79,6 +97,9 @@ const AUTH_HELP =
 export function buildArgs({ model, effort, cwd, mode, webSearch }) {
   const args = [
     'exec', '--json', '--skip-git-repo-check',
+    // ISOLATION (see header): no ~/.codex/config.toml (MCP servers, plugins,
+    // hooks, notify), no user/project execpolicy .rules files.
+    '--ignore-user-config', '--ignore-rules',
     '-s', mode === 'workspace-write' ? 'workspace-write' : 'read-only',
     '-c', 'notify=[]',
     '-c', `tools.web_search=${webSearch ? 'true' : 'false'}`,
@@ -152,6 +173,9 @@ export function extractResult(res, { timeoutS } = {}) {
   // The final agent_message is the answer; earlier ones are narration.
   let text = messages.at(-1);
   if (!completed) text += '\n\n[codex: run ended before turn.completed — treat as partial]';
+  // A non-zero exit WITH an answer: keep the answer (the run is paid for and
+  // the text is usually the useful part) but never let it read as a clean one.
+  if (res.code !== 0) text += `\n\n[codex: CLI exited ${res.code} — treat the answer as partial]`;
   return { text, usage, searches };
 }
 
@@ -169,8 +193,12 @@ function checkCwd(raw) {
 const isDeterministic = (e) => /not authenticated|turn failed|hard-killed|not found in PATH/i.test((e && e.message) || '');
 
 async function runOnce(ctx, { prompt, cwd, mode }) {
-  const args = buildArgs({ model: ctx.model, effort: ctx.effort, cwd, mode, webSearch: ctx.cfg.webSearch });
-  ctx.log(`codex exec · sandbox=${mode} · model=${ctx.model || '(codex default)'} · effort=${ctx.effort || '(default)'} · web=${ctx.cfg.webSearch} · cwd=${cwd || '(process cwd)'}`);
+  // --ignore-user-config removed the operator's configured default, so an
+  // unpinned run would take whatever the CLI hard-codes. Pin the catalog head.
+  const model = ctx.model || catalog.ids[0];
+  if (!ctx.model) ctx.log(`no model configured — pinning the catalog default ${model} (--ignore-user-config means ~/.codex/config.toml is not consulted)`);
+  const args = buildArgs({ model, effort: ctx.effort, cwd, mode, webSearch: ctx.cfg.webSearch });
+  ctx.log(`codex exec · sandbox=${mode} · model=${model}${ctx.model ? '' : ' (catalog default)'} · effort=${ctx.effort || '(default)'} · web=${ctx.cfg.webSearch} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd: cwd || undefined, stdinText: prompt });
   const out = extractResult(res, { timeoutS: ctx.cfg.timeoutS });
   if (out.usage) ctx.log(`codex done · tokens in=${out.usage.input} (cached ${out.usage.cachedInput}) out=${out.usage.output} reasoning=${out.usage.reasoning} · web_search=${out.searches}`);
@@ -182,14 +210,17 @@ const MODEL_PROP = {
   enum: catalog.modelEnum(),
   description:
     'Optional. OMIT to use the fleet default (`codex.model` in the fleet config), ' +
-    'else Codex\'s own default. Must be an exact id — call codex_models for the guide. ' + GUIDE,
+    'else the first catalog entry — this unit runs with --ignore-user-config, so ' +
+    'the operator\'s ~/.codex/config.toml default never applies. ' +
+    'Must be an exact id — call codex_models for the guide. ' + GUIDE,
 };
 const EFFORT_PROP = {
   type: 'string',
   enum: catalog.effortEnum(),
   description:
-    'Optional reasoning effort: minimal/low = fast sweeps, medium, high = deeper ' +
-    'analysis (the fleet default), xhigh = hardest problems (slow). OMIT for the fleet default.',
+    'Optional reasoning effort: none/low = fast sweeps, medium, high = deeper ' +
+    'analysis (the fleet default), xhigh/max = hardest problems (slow, discouraged ' +
+    'for routine work). OMIT for the fleet default.',
 };
 
 export default defineUnit({
@@ -197,6 +228,9 @@ export default defineUnit({
   label: 'Codex',
   bin: { env: 'CODEX_BIN', default: 'codex' },
   billingRiskEnv: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
+  // CODEX_HOME (where auth lives, still read under --ignore-user-config) and the
+  // CLI's other knobs; CODEX_API_KEY matches the pattern and the scrub deletes it after.
+  envPassthrough: ['CODEX_*'],
   envMap: { model: 'CODEX_DEFAULT_MODEL', effort: 'CODEX_EFFORT', timeoutS: 'CODEX_TIMEOUT_S', webSearch: 'CODEX_WEB_SEARCH' },
   builtin: { timeoutS: 600, effort: 'high', webSearch: true },
   supportedModes: { 'read-only': true, 'workspace-write': true },
@@ -224,7 +258,7 @@ export default defineUnit({
       },
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
-        if (!prompt) return { text: 'Error: "prompt" is required.' };
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         // Research is read-only no matter what the config says (no directory to scope a write to).
         return ctx.retry(() => runOnce(ctx, { prompt: READONLY_PREFIX + prompt, mode: 'read-only' }), { skipIf: isDeterministic });
       },
@@ -257,9 +291,9 @@ export default defineUnit({
       },
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
-        if (!prompt) return { text: 'Error: "prompt" is required.' };
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         const c = checkCwd(args.cwd);
-        if (c.error) return { text: c.error };
+        if (c.error) return { text: c.error, isError: true };
         // workspace-write only with an explicit directory to scope it to.
         const mode = ctx.mode === 'workspace-write' && c.cwd ? 'workspace-write' : 'read-only';
         if (ctx.mode === 'workspace-write' && !c.cwd) ctx.log('workspace-write requested without cwd — running read-only');

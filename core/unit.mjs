@@ -8,7 +8,7 @@
  *   model / effort validation                (core/catalog.mjs)
  *   the git/deploy intent gate               (MUTATE_RE, per tool)
  *   status feed start/end                    (core/status.mjs)
- *   bounded spawn with env scrub + auth check (core/spawn.mjs)
+ *   bounded spawn with the env allowlist + billing scrub + auth check (core/spawn.mjs)
  *   JSON-RPC                                 (core/jsonrpc.mjs)
  *
  * defineUnit({
@@ -16,6 +16,10 @@
  *   label: 'Codex',                      // human name in error messages
  *   bin: { env: 'CODEX_BIN', default: 'codex' },
  *   billingRiskEnv: ['OPENAI_API_KEY'],  // deleted from every child env
+ *   envPassthrough: ['CODEX_*'],         // added to core/spawn.mjs's ALLOWED_ENV for this unit's
+ *                                        // children only (exact names or PREFIX_* patterns); the
+ *                                        // billing scrub runs AFTER it, so a pattern cannot
+ *                                        // re-admit an API key. Everything else is NOT inherited.
  *   envMap: { model: 'CODEX_DEFAULT_MODEL', timeoutS: 'CODEX_TIMEOUT_S' },   // legacy env overrides
  *   builtin: { timeoutS: 600 },          // unit defaults for config keys
  *   extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },        // unit-only config keys
@@ -28,7 +32,11 @@
  * tool.kind: research | review | image | pipeline | catalog. `catalog` tools
  * never spawn and are answered by the runtime. Every other kind gets
  * `run(args, ctx)` with ctx = { cfg, mode, model, effort, spawn, retry, log,
- * catalog, home } and returns a string or { text, usage? }.
+ * catalog, home } and returns a string or { text, usage?, isError? }.
+ * `isError: true` is how an adapter reports a REFUSAL it handled itself
+ * (missing prompt, bad cwd, bad imagePath): the text is the error, MCP is told
+ * so, and the status feed records "error" — a run that returns `Error: ...`
+ * text without the flag would be reported to the caller as a success.
  */
 import { serve } from './jsonrpc.mjs';
 import { runProcess } from './spawn.mjs';
@@ -61,6 +69,7 @@ export function defineUnit(spec) {
     label: spec.name,
     serverName: `omelette-${spec.name}`,
     billingRiskEnv: [],
+    envPassthrough: [],
     envMap: {},
     builtin: {},
     extraSchema: {},
@@ -111,7 +120,10 @@ export function createUnitRuntime(unit, { env = process.env } = {}) {
     const timeoutMs = hardKillMs ?? cfg.values.timeoutS * 1000;
     log(`spawn · bin=${bin} · argc=${args.length} · cwd=${cwd || '(process cwd)'} · hard-kill=${Math.round(timeoutMs / 1000)}s`);
     return runProcess({
-      bin, args, cwd, env: { ...env, ...(extraEnv || {}) }, scrubEnv: unit.billingRiskEnv,
+      // env is the PARENT env to select from: core/spawn.mjs builds the child
+      // from the allowlist + this unit's passthrough, never by inheritance.
+      bin, args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
+      scrubEnv: unit.billingRiskEnv,
       hardKillMs: timeoutMs, stdinText, outputCap, log,
       notFoundHelp: `${bin} not found in PATH — install the ${unit.label} CLI${unit.bin.env ? ` or point ${unit.bin.env} at it` : ''}`,
     }).then((res) => {
@@ -179,7 +191,10 @@ export function createUnitRuntime(unit, { env = process.env } = {}) {
       const r = await tool.run(args, ctx);
       const text = typeof r === 'string' ? r : (r && r.text) || '';
       const extra = r && typeof r === 'object' && r.usage ? { usage: r.usage } : undefined;
-      return finish(text || `(empty response from ${unit.label})`, false, extra);
+      // An adapter that refused the call itself says so with isError — otherwise
+      // MCP would report "prompt is required" as a successful answer.
+      const isError = !!(r && typeof r === 'object' && r.isError);
+      return finish(text || `(empty response from ${unit.label})`, isError, extra);
     } catch (e) {
       return finish(`${unit.label} error: ${(e && e.message) || e}`, true);
     }

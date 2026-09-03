@@ -14,6 +14,10 @@
  *             gpt-5.2-codex · gpt-5.1-codex-mini — every one with the same
  *             message: "The '<id>' model is not supported when using Codex
  *             with a ChatGPT account."
+ * RE-CONFIRMED 2026-09-03 on codex-cli 0.153.0: terra and luna both still
+ * reach the API (luna answered the effort probe below; terra answered every
+ * bridge call). sol and the rejected ids were NOT re-tested on 0.153.0 —
+ * the lines above stand on the 0.146.0 sweep.
  * The CLI binary embeds more names than the plan accepts, so presence in the
  * binary is not enough. Re-verify when Codex auto-updates.
  *
@@ -34,10 +38,19 @@
  * bench Pro for sol is vendor-reported. GPQA Diamond, HLE, ARC-AGI-2 and AIME
  * are NOT published per 5.6 sub-tier — do not invent them on the next sweep.
  *
- * Effort is NOT part of the id (unlike agy): it is `model_reasoning_effort`,
- * a separate config knob, so this catalog owns the EFFORTS allowlist. The
- * five values below are the ones the 0.146.0 binary names; `none`/`max` were
- * mentioned in research but are unverified for the CLI and are left out.
+ * EFFORT is NOT part of the id (unlike agy): it is `model_reasoning_effort`,
+ * a separate config knob, so this catalog owns the EFFORTS allowlist. The six
+ * values below are the API's OWN list, quoted back by its rejection message:
+ * "Supported values are: 'none', 'low', 'medium', 'high', 'xhigh', and
+ * 'max'". VERIFIED LIVE 2026-09-03 (codex-cli 0.153.0, gpt-5.6-terra):
+ * `none`, `max` and `xhigh` each answered normally.
+ *   `minimal` is GONE — refused by every model in this catalog with an HTTP
+ *   400 (`unsupported_value` on reasoning.effort), on terra and on luna, with
+ *   or without --ignore-user-config. It was in this list because the previous
+ *   sweep read the effort names out of the 0.146.0 BINARY's strings. THE
+ *   LESSON FOR THE NEXT SWEEP: what the binary embeds is not what the API
+ *   accepts — probe each value with a real one-shot, exactly as the model ids
+ *   above are probed.
  *
  * Zero deps. Plain ESM (.js).
  */
@@ -109,8 +122,8 @@ export const CODEX_MODELS = [
   },
 ];
 
-/** Reasoning-effort allowlist (`model_reasoning_effort`), as the 0.146.0 binary names them. */
-export const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+/** Reasoning-effort allowlist (`model_reasoning_effort`) — the API's own list; see the header. */
+export const EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export const DEFAULT_MODEL = '';
 
@@ -138,7 +151,7 @@ export const GUIDE =
   'read-only sandbox (Terminal-Bench 2.1 87.4, ~91% recall across 1M context); gpt-5.6-luna (medium)=the fast ' +
   'cheap tier for single-file questions, lookups, routing and short summaries — NOT for multi-file work or long ' +
   'inputs (retrieval collapses past ~200K) and not for prohibition-heavy briefs (drifts on "do not"). Use `effort` ' +
-  'to trade depth for speed on terra: minimal/low for sweeps, high (default) for review, xhigh only for ' +
+  'to trade depth for speed on terra: none/low for sweeps, high (default) for review, xhigh/max only for ' +
   'architecture, proofs, or root-cause hunts; gpt-5.6-sol (high)=the flagship for the hardest of those, but it is ' +
   'PLAN-GATED to ChatGPT Pro/Enterprise — on Plus/Team it fails fast with an explicit "not supported" error, so ' +
   'confirm your plan accepts it before routing there. Codex is the fleet\'s strongest coder but never its source ' +

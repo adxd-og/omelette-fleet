@@ -1,0 +1,27 @@
+# omelette-fleet CI — the whole promise of this package is "zero runtime
+# dependencies, no build step", so the job is literally checkout + node + test:
+# no `npm install` (there is nothing to install), no cache, no secrets. The
+# matrix is the support floor (Node 20) and the current line (Node 22) on both
+# platforms the vendor CLIs run on. Every test must pass without any vendor CLI
+# and without `claude` — the suite fakes those.
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [20, 22]
+    name: node ${{ matrix.node }} · ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test

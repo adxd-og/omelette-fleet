@@ -11,6 +11,9 @@
  * read from an explicit `status` field instead of guessed from how much text
  * came back. Guessing is what let the sibling grok bridge return narration as
  * if it were an answer. Non-JSON stdout falls open to the raw text (runAgy).
+ * A non-zero exit or a non-SUCCESS status that STILL produced text keeps the
+ * text under a visible marker (`[gemini: CLI exited N — treat the answer as
+ * partial]`); only a text-less failure throws.
  *
  * READ-ONLY POSTURE — agy has no kernel sandbox; its `--mode` is a permission
  * policy. Research runs in agy's STANDARD mode: any tool that would prompt is
@@ -19,14 +22,30 @@
  * ~/.gemini/antigravity-cli/settings.json `permissions.allow` decides what
  * needs no prompt (read_file, read_url for web research). Git/deploy intent is
  * rejected before spawn (mutateGate) and every prompt carries NO_GIT_PREFIX.
+ *   DOCUMENTED LIMITATION: this posture RESTS ON THE OPERATOR'S settings.json.
+ *   The CLI has no allow/deny flags to pin it from here — the only
+ *   permission-shaped flags it accepts are `--mode accept-edits|plan`,
+ *   `--dangerously-skip-permissions` (never passed) and
+ *   `--disable-slash-commands` (checked against agy 1.1.25's own --help,
+ *   2026-09-03). There is no equivalent of Codex's kernel sandbox.
+ *   `--disable-slash-commands` IS passed on every spawn: without it, prompt
+ *   text containing `/something` gets slash-command and skill expansion in
+ *   print mode — a prompt-injection path into agy's own command surface, for
+ *   a feature no headless run needs.
+ *   `--mode plan` (agy's read-only planning mode) was evaluated live on
+ *   2026-09-03 and NOT adopted: it adds nothing demonstrable over headless
+ *   auto-deny — the model reached for the shell `command` tool and was denied
+ *   either way. The hook where a research-mode flag would go is marked in
+ *   runAgy.
  *   workspace-write (fleet ceiling open + mode set) maps to `--mode
  *   accept-edits` for research: file edits are auto-approved by agy's OWN
  *   permission layer inside the process cwd. That is WEAKER than Codex's
  *   kernel sandbox and is documented as such. agy's `skip` / `sandbox` modes
  *   are never used by this unit.
  *   gemini_image always runs with `--mode accept-edits` regardless of mode —
- *   the image tool must save its artifact, and agy saves into its own scratch
- *   dir OUTSIDE every project; the operator imports the file by hand.
+ *   the image tool must save its artifact — and it runs in a TEMP CWD so even
+ *   a cwd-relative save lands outside every project; the operator imports the
+ *   file by hand.
  *
  * QUOTA — Antigravity exhaustion is detected ONLY on failed turns (non-zero
  * exit / empty output / hard-kill): a successful answer can legitimately
@@ -51,6 +70,9 @@
  * sweep never leaves a stale id behind (the old bridge hard-coded one and
  * silently ran on agy's default after 3.5 Flash was retired).
  */
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
 import { GEMINI_MODELS, GUIDE } from './models.js';
@@ -131,10 +153,15 @@ export function interpretAgy(res, { timeoutS }) {
   if (code !== 0 && !answer) throw new Error(`agy exited ${code}: ${errBuf.trim().slice(-500) || '(no stderr)'}`);
   // agy says the run did not finish cleanly. Partial text is often the useful
   // part, so keep it — but never let the caller read it as a whole answer.
+  const notes = [];
   if (status && status !== 'SUCCESS') {
-    if (answer) return { ...result, text: `${answer}\n\n[agy: run ended early — status=${status}]` };
-    throw new Error(`agy run ended with no answer (status=${status})`);
+    if (!answer) throw new Error(`agy run ended with no answer (status=${status})`);
+    notes.push(`[gemini: run ended early — status=${status}]`);
   }
+  // A non-zero exit with text: same deal — annotated, never thrown away and
+  // never passed off as a clean answer.
+  if (code !== 0 && answer) notes.push(`[gemini: CLI exited ${code} — treat the answer as partial]`);
+  if (notes.length) return { ...result, text: [answer, ...notes].join('\n\n') };
   // Exit 0 with NO output but a talkative stderr: agy "succeeded" without
   // producing anything, and the cause (typically a headless permission
   // auto-deny: 'a tool required the "read_url" permission...') is sitting on
@@ -151,16 +178,22 @@ const isDeterministic = (e) => /quota exhausted|permission|hard-killed|not found
 
 /**
  * One agy one-shot through the runtime.
- * @param {{prompt:string, model?:string, acceptEdits?:boolean, schema?:object}} a
+ * @param {{prompt:string, model?:string, acceptEdits?:boolean, schema?:object, cwd?:string}} a
  */
-async function runAgy(ctx, { prompt, model, acceptEdits = false, schema }) {
+async function runAgy(ctx, { prompt, model, acceptEdits = false, schema, cwd }) {
   const timeoutS = ctx.cfg.timeoutS;
-  const args = ['-p', prompt, '--output-format', 'json', '--print-timeout', `${timeoutS}s`];
+  const args = [
+    '-p', prompt, '--output-format', 'json', '--print-timeout', `${timeoutS}s`,
+    // No headless run needs slash-command / skill expansion of prompt text,
+    // and leaving it on makes the prompt an injection path (see header).
+    '--disable-slash-commands',
+  ];
+  // RESEARCH-MODE HOOK: a read-only research flag (`--mode plan`) would go here — evaluated 2026-09-03, not adopted; see header.
   if (typeof model === 'string' && model.trim()) args.push('--model', model.trim());
   if (acceptEdits) args.push('--mode', 'accept-edits');
   if (schema) args.push('--json-schema', JSON.stringify(schema));
-  ctx.log(`agy spawn · model=${model || '(agy default)'} · acceptEdits=${acceptEdits} · schema=${schema ? 'yes' : 'no'}`);
-  const res = await ctx.spawn({ args, hardKillMs: timeoutS * 1000 + HARD_KILL_GRACE_MS });
+  ctx.log(`agy spawn · model=${model || '(agy default)'} · acceptEdits=${acceptEdits} · schema=${schema ? 'yes' : 'no'} · cwd=${cwd || '(process cwd)'}`);
+  const res = await ctx.spawn({ args, cwd, hardKillMs: timeoutS * 1000 + HARD_KILL_GRACE_MS });
   const r = interpretAgy(res, { timeoutS });
   if (r.usage) ctx.log(`agy done · status=${r.status} · tokens in=${r.usage.input ?? '?'} out=${r.usage.output ?? '?'}`);
   return r;
@@ -271,6 +304,10 @@ export default defineUnit({
   label: 'Gemini',
   bin: { env: 'AGY_BIN', default: 'agy' },
   billingRiskEnv: BILLING_RISK_ENV,
+  // agy's own knobs (AGY_BIN/AGY_*), plus the GEMINI_*/GOOGLE_* namespaces the
+  // CLI reads for project + region; the billing scrub runs after this and
+  // removes GEMINI_API_KEY / GOOGLE_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY.
+  envPassthrough: ['AGY_*', 'GEMINI_*', 'GOOGLE_*'],
   envMap: { model: 'AGY_DEFAULT_MODEL', timeoutS: 'AGY_TIMEOUT_S' },
   builtin: { timeoutS: 300 },
   supportedModes: { 'read-only': true, 'workspace-write': true },
@@ -299,7 +336,7 @@ export default defineUnit({
       },
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
-        if (!prompt) return { text: 'Error: "prompt" is required.' };
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         const acceptEdits = ctx.mode === 'workspace-write';
         const r = await runAgyWithRetry(ctx, { prompt: NO_GIT_PREFIX + prompt, model: ctx.model, acceptEdits });
         return { text: r.text, usage: r.usage };
@@ -310,9 +347,10 @@ export default defineUnit({
       kind: 'image',
       description:
         'Ask Gemini (via the local agy CLI) to generate an image from a text description. ' +
-        'Returns the absolute path to the saved image file (agy saves into its own ' +
-        'scratch dir — copy the file where you need it). Use ONLY for image ' +
-        'generation. Optionally choose a model with `model` (omit for the default).',
+        'Returns the absolute path to the saved image file — the run happens in a ' +
+        'throwaway temp directory, OUTSIDE every project, so copy the file where ' +
+        'you need it. Use ONLY for image generation. Optionally choose a model ' +
+        'with `model` (omit for the default).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -323,13 +361,19 @@ export default defineUnit({
       },
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
-        if (!prompt) return { text: 'Error: "prompt" is required.' };
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
+        // accept-edits + the MCP server's process cwd would mean a cwd-relative
+        // save lands inside whatever project the server was started from. Give
+        // the run its own temp directory instead, created before the spawn.
+        const cwd = mkdtempSync(join(tmpdir(), 'omelette-gemini-image-'));
+        ctx.log(`gemini_image · temp cwd=${cwd}`);
         const r = await runAgyWithRetry(ctx, {
           prompt:
             'Generate an image from the description below and save it to a file, ' +
             'then print the absolute path to the saved file.\n\nDescription: ' + prompt,
           model: ctx.model,
           acceptEdits: true,
+          cwd,
         });
         return { text: r.text, usage: r.usage };
       },
@@ -369,7 +413,7 @@ export default defineUnit({
       },
       async run(args, ctx) {
         const question = String(args.question || '').trim();
-        if (!question) return { text: 'Error: "question" is required.' };
+        if (!question) return { text: 'Error: "question" is required.', isError: true };
         const report = await runDeepResearch(ctx, { question, maxSubquestions: args.maxSubquestions, model: ctx.model || undefined });
         return { text: report || '(empty deep-research report)' };
       },

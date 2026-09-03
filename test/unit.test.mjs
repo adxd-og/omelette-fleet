@@ -21,6 +21,9 @@ function fakeUnit(overrides = {}) {
     label: 'Fake',
     bin: { env: 'FAKE_BIN', default: node },
     billingRiskEnv: ['FAKE_API_KEY'],
+    // The child env is an ALLOWLIST (core/spawn.mjs), so a unit that wants to see
+    // its own vars must declare them — and the billing scrub still runs after.
+    envPassthrough: ['FAKE_*'],
     envMap: { timeoutS: 'FAKE_TIMEOUT_S', model: 'FAKE_DEFAULT_MODEL' },
     supportedModes: { 'read-only': true, 'workspace-write': true },
     auth: { detect: (stderr) => /not signed in/i.test(stderr), help: 'run `fake login`' },
@@ -30,7 +33,7 @@ function fakeUnit(overrides = {}) {
         name: 'fake_research', kind: 'research', mutateGate: true,
         description: 'd', inputSchema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
         async run(args, ctx) {
-          const r = await ctx.spawn({ args: ['-e', `process.stdout.write(${JSON.stringify(`mode=${ctx.mode};model=${ctx.model};effort=${ctx.effort};key=` )} + String(process.env.FAKE_API_KEY))`] });
+          const r = await ctx.spawn({ args: ['-e', `process.stdout.write(${JSON.stringify(`mode=${ctx.mode};model=${ctx.model};effort=${ctx.effort};key=` )} + String(process.env.FAKE_API_KEY) + ';secret=' + String(process.env.GH_TOKEN))`] });
           return { text: r.stdout, usage: { out: 1 } };
         },
       },
@@ -41,6 +44,11 @@ function fakeUnit(overrides = {}) {
       {
         name: 'fake_slow', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
         async run(_a, ctx) { const r = await ctx.spawn({ args: ['-e', 'setTimeout(()=>{}, 20000)'] }); return r.killed ? 'killed' : 'finished'; },
+      },
+      {
+        // An adapter that refuses the call itself (bad args), the way the real ones do.
+        name: 'fake_refuse', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+        async run() { return { text: 'Error: "prompt" is required.', isError: true }; },
       },
       { name: 'fake_models', kind: 'catalog', description: 'd', inputSchema: { type: 'object', properties: {} } },
     ],
@@ -80,12 +88,14 @@ test('catalog tool answers locally with the rendered catalog', async () => {
   assert.equal(r.isError, undefined);
 });
 
-test('a full research call: config model + effort reach ctx, billing env is scrubbed, usage lands in status', async () => {
-  const { dir, env: e } = env({ units: { fake: { model: 'm-fast', effort: 'high' } } }, { FAKE_API_KEY: 'leak' });
+test('a full research call: config model + effort reach ctx, the child env is an allowlist, usage lands in status', async () => {
+  const { dir, env: e } = env({ units: { fake: { model: 'm-fast', effort: 'high' } } }, { FAKE_API_KEY: 'leak', GH_TOKEN: 'ghp_leak' });
   const rt = createUnitRuntime(fakeUnit(), { env: e });
   const r = await rt.callTool('fake_research', { prompt: 'what is up' });
   assert.equal(r.isError, undefined);
-  assert.equal(r.text, 'mode=read-only;model=m-fast;effort=high;key=undefined');
+  // key: passed the unit's envPassthrough, then deleted by the billing scrub.
+  // secret: never on the allowlist at all — a read-only run cannot read GH_TOKEN.
+  assert.equal(r.text, 'mode=read-only;model=m-fast;effort=high;key=undefined;secret=undefined');
   const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.deepEqual(snap.lastEvent.usage, { out: 1 });
@@ -156,4 +166,15 @@ test('boundedRetry retries once on empty output and skips deterministic failures
   let m = 0;
   await assert.rejects(boundedRetry(async () => { m++; throw new Error('quota exhausted'); }, { skipIf: (e) => /quota/.test(e.message), delayMs: 1 }));
   assert.equal(m, 1);
+});
+
+test('an adapter that refuses the call surfaces isError and records "error" in the status feed', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  const r = await rt.callTool('fake_refuse', {});
+  assert.equal(r.isError, true);
+  assert.match(r.text, /"prompt" is required/);
+  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'error');
+  assert.match(snap.lastEvent.error, /"prompt" is required/);
 });

@@ -162,6 +162,12 @@ export function unitConfig({ unit, envMap = {}, builtin = {}, extraSchema = {}, 
   const fileDefaults = config && isObj(config.defaults) ? config.defaults : {};
   const fileUnit = config && isObj(config.units) && isObj(config.units[unit]) ? config.units[unit] : {};
 
+  // A typo in `defaults` is just as silent as one in `units.<unit>`, and it
+  // disappoints harder: the operator expects it to apply to the WHOLE fleet.
+  // (extraSchema is per unit, so a key valid for another unit warns here.)
+  for (const key of Object.keys(fileDefaults)) {
+    if (!(key in schema)) warnings.push(`fleet config: defaults.${key} is not a known key — ignored`);
+  }
   for (const key of Object.keys(fileUnit)) {
     if (!(key in schema)) warnings.push(`fleet config: units.${unit}.${key} is not a known key — ignored`);
   }

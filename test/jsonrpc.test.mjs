@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHandler, createLineSplitter, DEFAULT_PROTOCOL } from '../core/jsonrpc.mjs';
+import { createHandler, createLineSplitter, DEFAULT_PROTOCOL, MAX_FRAME_BYTES } from '../core/jsonrpc.mjs';
 
 const tools = [{ name: 'echo', description: 'echo', inputSchema: { type: 'object', properties: {} } }];
 const handler = createHandler({
@@ -58,4 +58,21 @@ test('line splitter reassembles frames across chunk boundaries and drops blanks'
   assert.deepEqual(seen, ['{"a":1}', '{"b":2}']);
   feed('\n');
   assert.deepEqual(seen, ['{"a":1}', '{"b":2}', '{"c":3}']);
+});
+
+test('line splitter caps one un-terminated frame instead of growing until V8 dies', () => {
+  const seen = [];
+  const overflows = [];
+  const feed = createLineSplitter((l) => seen.push(l), (n) => overflows.push(n));
+  const half = 'x'.repeat(MAX_FRAME_BYTES / 2 + 1);
+  feed(half);
+  assert.deepEqual(overflows, []); // still under the cap
+  feed(half);
+  assert.equal(overflows.length, 1);
+  assert.ok(overflows[0] > MAX_FRAME_BYTES);
+  feed('x'.repeat(1000)); // more of the same frame: reported once, not per chunk
+  assert.equal(overflows.length, 1);
+  // The tail of the dropped frame is discarded with it, and the loop lives on.
+  feed('garbage-tail\n{"a":1}\n');
+  assert.deepEqual(seen, ['{"a":1}']);
 });

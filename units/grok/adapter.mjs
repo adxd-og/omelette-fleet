@@ -31,11 +31,13 @@
  *       mode). BEST-EFFORT redundancy: if a future CLI version ever injects a
  *       shell/edit tool past L1/L2, the permission engine still denies it.
  *   L5 `--max-turns <N>` — runaway-loop cap (config maxTurns, default 30).
- *   L6 Prompt level: the fleet's MUTATE_RE gate on grok_research prompts +
- *       a read-only preamble on every research/review prompt. Weakest layer;
- *       L1/L2 are what actually guarantee read-only. NOT applied to
- *       grok_code_review prompts — "review the last git commit" is a
- *       legitimate read-only ask there; L1-L5 still hold.
+ *   L6 Prompt level, two separate things. (a) The read-only preamble
+ *       (NO_MUTATE_PREFIX) is on BOTH research and review prompts. (b) The
+ *       fleet's MUTATE_RE intent GATE runs on grok_research prompts only — it
+ *       is deliberately skipped for grok_code_review, where "review the last
+ *       git commit" is a legitimate read-only ask. Weakest layer either way;
+ *       L1/L2 are what actually guarantee read-only, and L1-L5 hold for
+ *       review exactly as they do for research.
  *
  * Web search stays ENABLED on purpose (research bridge) unless the fleet
  * config sets `webSearch: false`, which drops web_search/web_fetch from L1 and
@@ -55,9 +57,13 @@
  *      meta-tools + Agent, and deny > allow keeps the Bash/Edit/Write deny
  *      rules winning — these allows can only un-prompt the two web tools.
  *   2. `--output-format json` — the one-shot result object carries the final
- *      `text` and a `stopReason`; interpretGrok extracts the text and
- *      surfaces any "Cancelled"/early stop as a real error instead of a
- *      silent truncation. stopReason spelling CHANGED across CLI generations
+ *      `text` and a `stopReason`; interpretGrok extracts the text and makes
+ *      any "Cancelled"/early stop VISIBLE instead of a silent truncation: text
+ *      that arrived before the stop is returned with a marker line appended
+ *      (`[grok: run ended early — stopReason=...]`, plus `[grok: CLI exited N
+ *      — treat the answer as partial]` on a non-zero exit), and only a run
+ *      with NO text at all throws. Partial work is kept, never passed off as
+ *      a clean answer. stopReason spelling CHANGED across CLI generations
  *      (v0.2.x "EndTurn"/"Cancelled", v1.0.x "end_turn"/"cancelled") — it is
  *      compared case/underscore-insensitively (regression caught 2026-08-13).
  *      CLI-level failures arrive as {"type":"error","message":...} on STDOUT
@@ -207,7 +213,11 @@ export function interpretGrok(res, { jsonMode, timeoutS }) {
   const { stdout: out, stderr: errBuf, code, killed } = res;
   if (killed) throw new Error(`grok hard-killed after ${timeoutS}s (raise grok.timeoutS in the fleet config)`);
   if (code !== 0 && !out.trim()) throw new Error(`grok exited ${code}: ${errBuf.trim().slice(-500) || '(no stderr)'}`);
-  if (!jsonMode) return out.trim();
+  // A non-zero exit that still produced text: keep the text — the run is paid
+  // for and it is usually the useful part — but mark it, in every mode, so it
+  // can never be read as a completed answer.
+  const partial = (text) => (code !== 0 && text ? `${text}\n\n[grok: CLI exited ${code} — treat the answer as partial]` : text);
+  if (!jsonMode) return partial(out.trim());
   let r = null;
   try { r = JSON.parse(out); } catch { /* truncated/foreign — fall back */ }
   if (r && r.type === 'error') {
@@ -217,8 +227,8 @@ export function interpretGrok(res, { jsonMode, timeoutS }) {
     const text = r.text.trim();
     const stop = typeof r.stopReason === 'string' ? r.stopReason : '';
     const stopNorm = stop.toLowerCase().replace(/[_\s]/g, '');
-    if (text && (!stop || stopNorm === 'endturn')) return text;
-    if (text) return `${text}\n\n[grok: run ended early — stopReason=${stop}]`;
+    if (text && (!stop || stopNorm === 'endturn')) return partial(text);
+    if (text) return partial(`${text}\n\n[grok: run ended early — stopReason=${stop}]`);
     throw new Error(
       `grok run ended with no answer (stopReason=${stop || 'unknown'})` +
       (stopNorm === 'cancelled' ? ' — a tool call needed interactive approval and the headless run was cancelled' : ''),
@@ -226,7 +236,7 @@ export function interpretGrok(res, { jsonMode, timeoutS }) {
   }
   // Unparseable JSON (output-cap truncation / future CLI format change):
   // fail open with the raw stdout rather than dropping a real answer.
-  return out.trim();
+  return partial(out.trim());
 }
 
 async function runGrok(ctx, { prompt, cwd, tools, maxTurns }) {
@@ -270,6 +280,9 @@ export default defineUnit({
   label: 'Grok',
   bin: { env: 'GROK_BIN', default: 'grok' },
   billingRiskEnv: BILLING_RISK_ENV,
+  // grok's own knobs (GROK_BIN, GROK_WEB_FETCH, XAI_*); the billing scrub runs
+  // after this and removes XAI_API_KEY, which would flip billing to metered.
+  envPassthrough: ['GROK_*', 'XAI_*'],
   envMap: { model: 'GROK_DEFAULT_MODEL', timeoutS: 'GROK_TIMEOUT_S', maxTurns: 'GROK_MAX_TURNS', imageMaxTurns: 'GROK_IMAGE_MAX_TURNS' },
   builtin: { timeoutS: 300, maxTurns: 30 },
   extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },
@@ -300,7 +313,7 @@ export default defineUnit({
       },
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
-        if (!prompt) return { text: 'Error: "prompt" is required.' };
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         return ctx.retry(() => runGrok(ctx, { prompt: NO_MUTATE_PREFIX + prompt, tools: researchTools(ctx), maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
       },
     },
@@ -333,9 +346,9 @@ export default defineUnit({
       },
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
-        if (!prompt) return { text: 'Error: "prompt" is required.' };
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         const c = checkCwd(args.cwd);
-        if (c.error) return { text: c.error };
+        if (c.error) return { text: c.error, isError: true };
         return ctx.retry(() => runGrok(ctx, { prompt: NO_MUTATE_PREFIX + prompt, cwd: c.cwd, tools: researchTools(ctx), maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
       },
     },
@@ -360,7 +373,7 @@ export default defineUnit({
       },
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
-        if (!prompt) return { text: 'Error: "prompt" is required.' };
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         const text = await runGrok(ctx, { prompt: IMAGE_GEN_PREFIX + prompt, tools: IMAGE_GEN_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
         const artifact = extractImagePath(text);
         if (!artifact) throw new Error('image run finished without a saved image path on disk. Raw output: ' + ((text || '(empty)').slice(-1000)));
@@ -390,12 +403,12 @@ export default defineUnit({
       },
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
-        if (!prompt) return { text: 'Error: "prompt" is required.' };
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         const imagePath = typeof args.imagePath === 'string' ? args.imagePath.trim() : '';
-        if (!imagePath || !isAbsolute(imagePath)) return { text: `Error: "imagePath" must be an absolute path (got ${JSON.stringify(args.imagePath)}).` };
+        if (!imagePath || !isAbsolute(imagePath)) return { text: `Error: "imagePath" must be an absolute path (got ${JSON.stringify(args.imagePath)}).`, isError: true };
         let st;
         try { st = statSync(imagePath); } catch { st = null; }
-        if (!st || !st.isFile()) return { text: `Error: "imagePath" is not an existing file: ${imagePath}` };
+        if (!st || !st.isFile()) return { text: `Error: "imagePath" is not an existing file: ${imagePath}`, isError: true };
         const text = await runGrok(ctx, { prompt: imageEditPrompt(imagePath, prompt), tools: IMAGE_EDIT_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
         const artifact = extractImagePath(text, imagePath);
         if (!artifact) throw new Error('image run finished without a saved image path on disk. Raw output: ' + ((text || '(empty)').slice(-1000)));

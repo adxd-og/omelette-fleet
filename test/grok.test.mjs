@@ -52,6 +52,22 @@ test('interpretGrok: plain mode returns raw text; unparseable json fails open; k
   assert.throws(() => interpretGrok(ok({ code: 1, stderr: 'bad' }), { jsonMode: true, timeoutS: 300 }), /grok exited 1: bad/);
 });
 
+test('interpretGrok: a non-zero exit WITH text keeps the text under a partial marker, in both modes', () => {
+  const j = (o) => JSON.stringify(o);
+  const plain = interpretGrok(ok({ stdout: 'half an answer', code: 1, stderr: 'wobble' }), { jsonMode: false, timeoutS: 300 });
+  assert.match(plain, /^half an answer/);
+  assert.match(plain, /\[grok: CLI exited 1 — treat the answer as partial\]/);
+  const json = interpretGrok(ok({ stdout: j({ text: 'hi', stopReason: 'end_turn' }), code: 2 }), { jsonMode: true, timeoutS: 300 });
+  assert.match(json, /^hi/);
+  assert.match(json, /CLI exited 2/);
+  // An early stop AND a non-zero exit: both markers, answer still returned.
+  const both = interpretGrok(ok({ stdout: j({ text: 'partial', stopReason: 'cancelled' }), code: 1 }), { jsonMode: true, timeoutS: 300 });
+  assert.match(both, /run ended early — stopReason=cancelled/);
+  assert.match(both, /CLI exited 1/);
+  // Unparseable json on a failed exit still fails open — with the marker.
+  assert.match(interpretGrok(ok({ stdout: '{not json', code: 1 }), { jsonMode: true, timeoutS: 300 }), /CLI exited 1/);
+});
+
 test('extractImagePath: last existing file wins, source path is excluded, prose yields nothing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-img-'));
   const src = join(dir, 'src.jpg'); const out = join(dir, 'out.jpg');
@@ -88,6 +104,10 @@ test('runtime with a fake grok: env GROK_WEB_FETCH set, research stays read-only
   assert.match(r.text, /WEBFETCH=1/);
   const bad = await rt.callTool('grok_image_edit', { prompt: 'x', imagePath: 'nope.jpg' });
   assert.match(bad.text, /must be an absolute path/);
+  assert.equal(bad.isError, true); // a refusal must never be reported to MCP as a success
   const gone = await rt.callTool('grok_image_edit', { prompt: 'x', imagePath: join(dir, 'missing.jpg') });
   assert.match(gone.text, /not an existing file/);
+  assert.equal(gone.isError, true);
+  const noPrompt = await rt.callTool('grok_research', { prompt: '' });
+  assert.equal(noPrompt.isError, true);
 });

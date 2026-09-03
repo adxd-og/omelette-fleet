@@ -25,10 +25,11 @@ const FAILED_RUN = [
   '{"type":"turn.failed","error":{"message":"{\\"type\\":\\"error\\",\\"status\\":400,\\"error\\":{\\"type\\":\\"invalid_request_error\\",\\"message\\":\\"The \'no-such\' model is not supported when using Codex with a ChatGPT account.\\"}}"}}',
 ].join('\n') + '\n';
 
-test('argv: read-only sandbox, json, web search toggle, effort as TOML string, prompt on stdin', () => {
+test('argv: isolation flags, read-only sandbox, json, web search toggle, effort as TOML string, prompt on stdin', () => {
   const a = buildArgs({ model: 'gpt-5.6-terra', effort: 'high', cwd: '/tmp/x', mode: 'read-only', webSearch: true });
   assert.deepEqual(a, [
-    'exec', '--json', '--skip-git-repo-check', '-s', 'read-only', '-c', 'notify=[]',
+    'exec', '--json', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules',
+    '-s', 'read-only', '-c', 'notify=[]',
     '-c', 'tools.web_search=true', '-C', '/tmp/x', '-m', 'gpt-5.6-terra', '-c', 'model_reasoning_effort="high"', '-',
   ]);
   const b = buildArgs({ mode: 'workspace-write', webSearch: false });
@@ -36,6 +37,9 @@ test('argv: read-only sandbox, json, web search toggle, effort as TOML string, p
   assert.ok(b.includes('tools.web_search=false'));
   assert.ok(!b.includes('-m'));
   assert.ok(!b.some((x) => /dangerously/.test(x)));
+  // The operator's ~/.codex/config.toml (MCP servers, plugins, hooks) and the
+  // execpolicy .rules files are ignored on EVERY spawn, both modes.
+  for (const argv of [a, b]) assert.ok(argv.includes('--ignore-user-config') && argv.includes('--ignore-rules'));
 });
 
 test('extractResult: the LAST agent_message is the answer, usage and search count are reported', () => {
@@ -60,11 +64,20 @@ test('extractResult: hard-kill, silent exit, and missing turn.completed are all 
   assert.match(partial.text, /treat as partial/);
 });
 
+test('extractResult: a non-zero exit WITH an answer keeps the answer under a partial marker', () => {
+  const r = extractResult({ stdout: OK_RUN, stderr: 'something went sideways', code: 1, killed: false });
+  assert.match(r.text, /^v26\.8\.1/);
+  assert.match(r.text, /\[codex: CLI exited 1 — treat the answer as partial\]/);
+  assert.deepEqual(r.usage, { input: 60835, cachedInput: 45312, output: 236, reasoning: 103 });
+});
+
 test('unit contract: three tools, catalog non-empty, efforts fixed, tools/list is clean', () => {
   assert.equal(unit.name, 'codex');
   assert.deepEqual(unit.tools.map((t) => t.name), ['codex_research', 'codex_code_review', 'codex_models']);
   assert.ok(catalog.models.length >= 1);
-  assert.deepEqual(catalog.effortEnum(), ['minimal', 'low', 'medium', 'high', 'xhigh']);
+  // The API's own list (its rejection message names them); 'minimal' was dropped 2026-09-03.
+  assert.deepEqual(catalog.effortEnum(), ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.ok(!catalog.isAllowedEffort('minimal'));
   assert.deepEqual(unit.billingRiskEnv, ['OPENAI_API_KEY', 'CODEX_API_KEY']);
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': true });
 });
@@ -96,4 +109,39 @@ test('runtime with a fake codex: research goes read-only even when the ceiling i
   assert.match(reviewNoCwd.text, /sandbox=read-only/);
   const badCwd = await rt.callTool('codex_code_review', { prompt: 'look', cwd: 'relative/path' });
   assert.match(badCwd.text, /must be an absolute path/);
+  assert.equal(badCwd.isError, true); // a refusal must never be reported to MCP as a success
+  const noPrompt = await rt.callTool('codex_research', { prompt: '   ' });
+  assert.equal(noPrompt.isError, true);
+});
+
+test('runtime: the child env is an allowlist — a secret in the parent env never reaches the CLI', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-env-'));
+  const { writeFileSync } = await import('node:fs');
+  // A "codex" that reports the secrets it can see, in codex's own JSONL shape.
+  const fake = join(dir, 'fake-codex-env.mjs');
+  writeFileSync(fake, [
+    'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
+    '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
+    '  const a=process.argv.slice(2);',
+    '  const seen="GH_TOKEN="+process.env.GH_TOKEN+";OPENAI_API_KEY="+process.env.OPENAI_API_KEY+";CODEX_HOME="+process.env.CODEX_HOME+";PATH="+(process.env.PATH?"set":"missing")+";model="+a[a.indexOf("-m")+1];',
+    '  line({type:"item.completed",item:{type:"agent_message",text:seen}});',
+    '  line({type:"turn.completed",usage:{input_tokens:1,output_tokens:1}});',
+    '});',
+  ].join('\n'));
+  const env = {
+    ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath,
+    GH_TOKEN: 'leak', OPENAI_API_KEY: 'sk-leak', CODEX_HOME: join(dir, 'codex-home'),
+  };
+  const rt = createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+    { env },
+  );
+  const r = await rt.callTool('codex_research', { prompt: 'who am i' });
+  assert.match(r.text, /GH_TOKEN=undefined/);        // not on the allowlist
+  assert.match(r.text, /OPENAI_API_KEY=undefined/);  // never allowlisted, and on the billing scrub list
+  assert.match(r.text, new RegExp(`CODEX_HOME=${join(dir, 'codex-home')}`)); // envPassthrough: ['CODEX_*']
+  assert.match(r.text, /PATH=set/);
+  // --ignore-user-config killed the operator's configured default, so an
+  // unconfigured run pins the catalog head explicitly instead of drifting.
+  assert.match(r.text, new RegExp(`model=${catalog.ids[0]}$`));
 });

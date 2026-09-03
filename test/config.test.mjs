@@ -68,6 +68,14 @@ test('invalid values warn and fall through to the next-lower layer; unknown keys
   assert.ok(c.warnings.some((w) => /GROK_MAX_TURNS = "lots" is invalid/.test(w)));
 });
 
+test('an unknown key in `defaults` warns too — a fleet-wide typo is the quietest one', () => {
+  const env = { OMELETTE_HOME: home({ defaults: { webSerch: false, timeoutS: 42 } }) };
+  const c = unitConfig({ unit: 'grok', supportedModes: MODES_GROK, env });
+  assert.ok(c.warnings.some((w) => /defaults\.webSerch is not a known key/.test(w)));
+  assert.ok(!c.warnings.some((w) => /defaults\.timeoutS/.test(w)));
+  assert.equal(c.values.timeoutS, 42);
+});
+
 test('malformed file: warning, defaults stay in force, and never throws', () => {
   const env = { OMELETTE_HOME: home('{ not json') };
   const c = unitConfig({ unit: 'codex', supportedModes: MODES_CODEX, env });

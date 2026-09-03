@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit, { interpretAgy, parseSubquestions, stageModels, catalog } from '../units/gemini/adapter.mjs';
@@ -28,6 +28,16 @@ test('interpretAgy: failed turns — quota, hard-kill, silent stderr-only, non-z
   assert.throws(() => interpretAgy(ok({ stdout: envelope({}), killed: true }), { timeoutS: 300 }), /hard-killed after 360s/);
   assert.throws(() => interpretAgy(ok({ stdout: '', stderr: 'a tool required the "read_url" permission' }), { timeoutS: 300 }), /produced no output: a tool required/);
   assert.throws(() => interpretAgy(ok({ stdout: '', stderr: 'boom', code: 2 }), { timeoutS: 300 }), /agy exited 2: boom/);
+});
+
+test('interpretAgy: a non-zero exit WITH text keeps the text under a partial marker', () => {
+  const r = interpretAgy(ok({ stdout: envelope({}), code: 1, stderr: 'wobble' }), { timeoutS: 300 });
+  assert.match(r.text, /^answer/);
+  assert.match(r.text, /\[gemini: CLI exited 1 — treat the answer as partial\]/);
+  // Both annotations land when the turn also reported a non-SUCCESS status.
+  const both = interpretAgy(ok({ stdout: envelope({ status: 'TIMEOUT' }), code: 1 }), { timeoutS: 300 });
+  assert.match(both.text, /run ended early — status=TIMEOUT/);
+  assert.match(both.text, /CLI exited 1/);
 });
 
 test('interpretAgy: non-JSON stdout fails OPEN to the raw text', () => {
@@ -61,7 +71,7 @@ test('unit contract: four tools, billing scrub list, both modes declared', () =>
 test('runtime with a fake agy: argv per mode — research standard, workspace-write accept-edits, image always accept-edits', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-'));
   const fake = join(dir, 'fake-agy.mjs');
-  writeFileSync(fake, 'process.stdout.write(JSON.stringify({status:"SUCCESS",response:"ARGS "+process.argv.slice(2).join(" ")}))');
+  writeFileSync(fake, 'process.stdout.write(JSON.stringify({status:"SUCCESS",response:"ARGS "+process.argv.slice(2).join(" ")+" CWD "+process.cwd()}))');
   const wrap = (env) => createUnitRuntime(
     { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
     { env },
@@ -83,6 +93,21 @@ test('runtime with a fake agy: argv per mode — research standard, workspace-wr
   const open = await wrap({ ...base, OMELETTE_ALLOW_WRITE: 'gemini' }).callTool('gemini_research', { prompt: 'q' });
   assert.match(open.text, /--mode accept-edits/);
 
+  // Every spawn disables slash-command / skill expansion of the prompt text.
+  assert.match(ro.text, /--disable-slash-commands/);
+
   const img = await wrap(base).callTool('gemini_image', { prompt: 'a cat' });
   assert.match(img.text, /--mode accept-edits/);
+  assert.match(img.text, /--disable-slash-commands/);
+  // F8: the image run gets its OWN temp cwd, so even a cwd-relative save by agy
+  // lands outside every project — never in whatever repo the server was started in.
+  const imgCwd = /CWD (.+)$/.exec(img.text)[1];
+  assert.ok(imgCwd.startsWith(realpathSync(tmpdir())), `${imgCwd} is not under ${realpathSync(tmpdir())}`);
+  assert.match(imgCwd, /omelette-gemini-image-/);
+  assert.notEqual(imgCwd, process.cwd());
+  // Research keeps the process cwd — only image runs are relocated.
+  assert.match(ro.text, new RegExp(`CWD ${realpathSync(process.cwd())}$`));
+
+  const noPrompt = await wrap(base).callTool('gemini_research', { prompt: '  ' });
+  assert.equal(noPrompt.isError, true);
 });
