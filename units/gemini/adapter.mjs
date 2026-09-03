@@ -45,7 +45,10 @@
  *   gemini_image always runs with `--mode accept-edits` regardless of mode —
  *   the image tool must save its artifact — and it runs in a TEMP CWD so even
  *   a cwd-relative save lands outside every project; the operator imports the
- *   file by hand.
+ *   file by hand. Its prompt carries the same "no terminal commands" hardening
+ *   as the research preamble (IMAGE_PREFIX): the first live image call was lost
+ *   to the model reaching for the shell `command` tool, which headless agy
+ *   auto-denies.
  *
  * QUOTA — Antigravity exhaustion is detected ONLY on failed turns (non-zero
  * exit / empty output / hard-kill): a successful answer can legitimately
@@ -108,6 +111,18 @@ const NO_GIT_PREFIX =
   'You are a read-only research assistant. Use ONLY web search and page reading ' +
   '(read_url) — do NOT run terminal commands, they are unavailable. Do NOT run ' +
   'git, deploy, publish, or modify project files. Answer in plain text.\n\n';
+
+// Same lesson as NO_GIT_PREFIX, learned on the image path (live, 2026-09-03):
+// the first gemini_image call died with `a tool required the "command"
+// permission that headless mode cannot prompt for` — the model reached for the
+// shell instead of its own image tool — and only succeeded on the retry, whose
+// prompt spelled out that the shell is not available. The instruction is part
+// of the prompt now rather than a thing a retry gets lucky with.
+const IMAGE_PREFIX =
+  'Use ONLY your built-in image generation tool and save the image directly ' +
+  'with it. Do NOT run terminal commands — they are unavailable. Generate an ' +
+  'image from the description below and save it to a file, then print the ' +
+  'absolute path to the saved file.\n\nDescription: ';
 
 const HARD_KILL_GRACE_MS = 60000;
 
@@ -371,10 +386,8 @@ export default defineUnit({
         // the run its own temp directory instead, created before the spawn.
         const cwd = mkdtempSync(join(tmpdir(), 'omelette-gemini-image-'));
         ctx.log(`gemini_image · temp cwd=${cwd}`);
-        const r = await runAgyWithRetry(ctx, {
-          prompt:
-            'Generate an image from the description below and save it to a file, ' +
-            'then print the absolute path to the saved file.\n\nDescription: ' + prompt,
+        const r = await runAgy(ctx, {
+          prompt: IMAGE_PREFIX + prompt,
           model: ctx.model,
           acceptEdits: true,
           cwd,

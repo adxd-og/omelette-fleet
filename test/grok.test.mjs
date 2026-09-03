@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit, {
-  buildArgs, interpretGrok, extractImagePath, catalog,
+  buildArgs, interpretGrok, catalog,
   READONLY_TOOLS, READONLY_TOOLS_NOWEB, IMAGE_GEN_TOOLS,
 } from '../units/grok/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
@@ -66,16 +66,6 @@ test('interpretGrok: a non-zero exit WITH text keeps the text under a partial ma
   assert.match(both, /CLI exited 1/);
   // Unparseable json on a failed exit still fails open — with the marker.
   assert.match(interpretGrok(ok({ stdout: '{not json', code: 1 }), { jsonMode: true, timeoutS: 300 }), /CLI exited 1/);
-});
-
-test('extractImagePath: last existing file wins, source path is excluded, prose yields nothing', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-img-'));
-  const src = join(dir, 'src.jpg'); const out = join(dir, 'out.jpg');
-  writeFileSync(src, 'x'); writeFileSync(out, 'y');
-  assert.equal(extractImagePath(`saved to ${src}, then ${out}.`), out);
-  assert.equal(extractImagePath(`only ${src} here`, src), '');
-  assert.equal(extractImagePath(`Saved ${out} and ${src}`, src), out);
-  assert.equal(extractImagePath('no paths at all'), '');
 });
 
 test('unit contract: five tools, efforts from the catalog, workspace-write declared unsupported', () => {

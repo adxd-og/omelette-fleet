@@ -112,6 +112,7 @@ import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
+import { extractImagePath } from '../../core/artifact.mjs';
 import { GROK_MODELS, EFFORTS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -168,22 +169,6 @@ function imageEditPrompt(imagePath, prompt) {
     'path) — no markdown, no quotes, no other text.\n\n' +
     'Transformation: ' + prompt
   );
-}
-
-/**
- * Pull the saved-artifact path out of an image run's stdout: scan for
- * absolute-path tokens, keep the LAST one that exists as a regular file (the
- * final answer wins), never return `excludePath` (the edit source). Returns ''
- * when nothing on disk matches. Exported for tests.
- */
-export function extractImagePath(text, excludePath = '') {
-  const tokens = (text || '').match(/\/[^\s"'`)\]]+/g) || [];
-  for (let i = tokens.length - 1; i >= 0; i--) {
-    const p = tokens[i].replace(/[.,;:]+$/, '');
-    if (!p || p === excludePath) continue;
-    try { if (statSync(p).isFile()) return p; } catch { /* not on disk */ }
-  }
-  return '';
 }
 
 const isResearchToolset = (tools) => tools === READONLY_TOOLS || tools === READONLY_TOOLS_NOWEB;

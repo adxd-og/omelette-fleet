@@ -43,6 +43,7 @@ import { runProcess } from './spawn.mjs';
 import { createStatus } from './status.mjs';
 import { unitConfig } from './config.mjs';
 import { makeLog, makeOnceLog } from './log.mjs';
+import { VERSION, announceUpdate } from './update.mjs';
 
 export const TOOL_KINDS = new Set(['research', 'review', 'image', 'pipeline', 'catalog']);
 
@@ -65,7 +66,10 @@ export function defineUnit(spec) {
   }
   if (typeof spec.catalog.isAllowedModel !== 'function') throw new Error(`${where}: catalog must come from makeCatalog()`);
   return {
-    version: '0.1.0',
+    // The package's own version (core/update.mjs reads package.json once at
+    // load): `initialize` must not keep reporting a number that was frozen into
+    // this file at some earlier release. An adapter may still override it.
+    version: VERSION,
     label: spec.name,
     serverName: `omelette-${spec.name}`,
     billingRiskEnv: [],
@@ -216,6 +220,17 @@ export function startUnit(unit, opts = {}) {
     ` · hard-kill=${cfg.values.timeoutS}s · default-model=${cfg.values.model || '(vendor default)'}` +
     ` · status=${cfg.values.status ? cfg.home : 'off'} · config=${cfg.configPath}`,
   );
+  // "There is a newer fleet" is worth one stderr line and nothing more: the
+  // check is fire-and-forget (the server is serving before it answers), capped
+  // at 2.5s, cached for a day, and skipped entirely when it is switched off.
+  // `.then` only — core/update.mjs guarantees this promise cannot reject, and a
+  // rejection here would take down a live MCP server for a version string.
+  announceUpdate({
+    home: cfg.home,
+    current: VERSION,
+    env: opts.env || process.env,
+    log: rt.log,
+  }).then(() => {});
   serve({ serverInfo: { name: unit.serverName, version: unit.version }, tools: rt.tools, callTool: rt.callTool, log: rt.log });
   return rt;
 }

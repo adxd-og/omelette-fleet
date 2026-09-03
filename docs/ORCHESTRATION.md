@@ -32,7 +32,7 @@ Two practical rules that follow: give each delegate one job and the context to d
 | Math / STEM cross-check | **Grok** (AIME 93–100%, GPQA Diamond 84.6–88%) or **Gemini** → `GPT-OSS 120B (Medium)` | Two independent non-Google/non-OpenAI voices for the same check |
 | Strongest code review, agentic terminal analysis | **Codex** → `codex_code_review` with an absolute `cwd` | Terminal-Bench 2.1 87.4 on `gpt-5.6-terra`; reads, greps and runs read-only shell commands inside an OS sandbox |
 | Research where the answer depends on running things | **Codex** → `codex_research` | Same sandbox, plus web search, and it reports real token usage per call |
-| Image generation | **Gemini** → `gemini_image` or **Grok** → `grok_image` | Both save outside your project and return an absolute path you import by hand |
+| Image generation | **Gemini** → `gemini_image`, **Grok** → `grok_image`, or **Codex** → `codex_image` (gpt-image-2) | All three save outside your project — a temp directory, or Grok's session directory — and return an absolute path you import by hand |
 | Image-to-image editing | **Grok** → `grok_image_edit` | The only unit in the fleet that edits images |
 | Architecture, planning, UI/front-end taste, long-horizon engineering | **Claude** (your session, or its sub-agents) | Grok is explicitly contraindicated for architecture and UI; Codex is a strong reviewer but not a source of record |
 | Any file edit, git operation, deploy or publish | **Claude**, under your approval | The only mutating path. Units reject git/deploy intent before spawn and mostly cannot act on it anyway |
@@ -78,6 +78,8 @@ tail -f ~/.omelette/fleet-log.ndjson | jq -r '"\(.ts) \(.unit) \(.event) \(.tool
 What to watch for: an `active` entry whose `startedAt` is older than that unit's `timeoutS` (something is stuck and will be hard-killed); a run of `end` events with `status: "error"` (usually auth, quota, or a CLI that auto-updated under you); and `usage` on Codex and Gemini events, which is where the fleet reports what a call actually cost (Grok reports none).
 
 In the answers themselves, watch for a trailing `[… treat the answer as partial]` or `[… run ended early …]` marker. The unit kept the text because the call was paid for, but it did not finish — re-run it or narrow the question rather than acting on it. Full schema in [STATUS-FEED.md](STATUS-FEED.md).
+
+The vendor CLIs update themselves; this package deliberately does not — a fleet that rewrote its own code under a running session would be one more thing to distrust when something breaks. `doctor` shows both sides of that: each unit's `version` line is whatever the vendor CLI has become, and the header's `version … · latest …` is where the fleet itself stands. Bringing it forward is your call: `omelette-fleet update`, then restart Claude Code.
 
 If a unit regresses for no apparent reason, suspect a vendor CLI auto-update first — these CLIs update themselves, and a flag or output format changing under a working adapter is the most common cause of sudden breakage.
 

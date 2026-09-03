@@ -9,13 +9,14 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 ~/.omelette/fleet.config.json         # default
 ```
 
-`OMELETTE_HOME` also holds the status feed (`status-<unit>.json`, `fleet-log.ndjson`). The file is optional: with no file at all, every unit runs on built-in defaults, read-only, with no warnings. `omelette-fleet set` writes it atomically (temp file + rename) with mode `0600` and `"version": 1`.
+`OMELETTE_HOME` also holds the status feed (`status-<unit>.json`, `fleet-log.ndjson`) and the update-check cache (`update-check.json`). The file is optional: with no file at all, every unit runs on built-in defaults, read-only, with no warnings. `omelette-fleet set` writes it atomically (temp file + rename) with mode `0600` and `"version": 1`.
 
 ## Shape
 
 ```json
 {
   "version": 1,
+  "updateCheck": true,
   "defaults": { "status": true },
   "units": {
     "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
@@ -26,6 +27,16 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 ```
 
 `defaults` applies to every unit; `units.<unit>` overrides it for one unit. Both accept the same keys. A `version` higher than 1 is accepted with a warning — known keys still apply, unknown ones are ignored.
+
+### Top-level settings
+
+Some keys describe the fleet rather than any one unit, so they sit at the top level next to `defaults` and `units` and are resolved on their own:
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `updateCheck` | boolean | `true` | Whether a unit server may check for a newer release at startup, and whether `doctor` / `update` report the latest version. See [Update check](#update-check) |
+
+An invalid value is a warning and the built-in default stays in force, exactly as for a unit's keys.
 
 ## Keys
 
@@ -149,11 +160,33 @@ Fleet-wide:
 | `OMELETTE_ALLOW_WRITE` | Comma-separated list of units whose `workspace-write` request is honoured. **The second key of the write ceiling** — see [SECURITY.md](SECURITY.md) |
 | `ORION_ALLOW_GEMINI_MUTATE=1` | Legacy alias: opens the ceiling for `gemini` only |
 | `OMELETTE_ENV_PASSTHROUGH` | Comma-separated exact names or `PREFIX_*` patterns added to the child-environment allowlist for **every** unit. The escape hatch for a CLI that needs one more variable; add narrowly, and note the billing scrub still runs after it |
+| `OMELETTE_UPDATE_CHECK` | `0`/`false`/`off`/`no` switches the release check off for every unit and for the CLI. It can only turn the check **off**: it is the machine-local kill switch, so setting it to `1` does not re-enable a config file that says `"updateCheck": false` |
 | `CLAUDE_CONFIG_DIR` | Not a fleet setting, but `doctor` honours it: it looks for `.claude.json` there before `~/`, and prints which file it read |
+| `OMELETTE_PKG_ROOT` | A **test hook**, documented as such in the CLI: it makes `update` (and the git-vs-npm install detection it uses) treat that directory as the package root instead of the real checkout, so the whole flow can be exercised against a throwaway fixture repo. Nothing else honours it — server paths, the shipped example config and `doctor` all still come from the real root, and a running MCP server keeps reporting its own version |
 
 Binary location, if a CLI is not on `PATH`: `AGY_BIN`, `GROK_BIN`, `CODEX_BIN`.
 
 These are the only variables a vendor CLI sees beyond the fixed allowlist and its own `PREFIX_*` patterns — the child environment is built, not inherited. Full list and ordering in [SECURITY.md](SECURITY.md#the-environment-allowlist). If a unit ignores a variable you set, check that it survives the allowlist before assuming the config layer dropped it.
+
+## Update check
+
+`updateCheck` (top level) and `OMELETTE_UPDATE_CHECK` (environment) govern one thing: whether this package may ask GitHub for its own latest release number. Nothing is downloaded and nothing is executed — the answer is a version string.
+
+The answer is cached in `<home>/update-check.json`, written atomically with mode `0600`:
+
+```json
+{
+  "checkedAt": 1756900000000,
+  "latest": "0.2.0",
+  "url": "https://github.com/adxd-og/omelette-fleet/releases/tag/v0.2.0"
+}
+```
+
+`checkedAt` is a millisecond timestamp; the entry is reused for **24 hours** and then refreshed on the next check. A cache stamped in the future — a clock that moved — counts as stale rather than eternal, an unreadable or malformed file simply counts as no cache, and a failed request leaves the previous cache in place (a rate limit at 09:00 must not cost the answer that was already good at 08:00). Delete the file to force a fresh check.
+
+Precedence is deliberately asymmetric. The environment variable is the hard switch, set on the machine outside every project, and it can only *disable*; the config key is the soft one. So `"updateCheck": false` in the file turns the check off everywhere, and `OMELETTE_UPDATE_CHECK=0` turns it off even where the file says `true` — but `OMELETTE_UPDATE_CHECK=1` does not turn a disabled config back on.
+
+With the check off, `doctor` prints `latest check disabled` and `omelette-fleet update` still works: the release number is advisory, and it is `git` that decides whether a checkout can be fast-forwarded.
 
 ## The ceiling, in config terms
 

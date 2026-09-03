@@ -112,6 +112,37 @@ export function loadFleetConfig(env = process.env) {
   }
 }
 
+/**
+ * Fleet-wide keys that live at the TOP level of the config file, next to
+ * `defaults` and `units` — they describe the fleet itself, not any one unit, so
+ * they are resolved here instead of through `unitConfig`.
+ */
+export const SETTINGS_SCHEMA = {
+  updateCheck: { type: 'boolean', default: true },
+};
+
+/**
+ * The config file's top-level settings, validated. Never throws: a malformed
+ * file or an invalid value is a warning and the built-in default stays in
+ * force, exactly as it does for a unit's keys.
+ * @returns {{updateCheck:boolean, warnings:string[], configPath:string}}
+ */
+export function fleetSettings(env = process.env) {
+  const { config, error, path } = loadFleetConfig(env);
+  const warnings = [];
+  if (error) warnings.push(`fleet config: ${error}`);
+  const src = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+  const values = {};
+  for (const [key, spec] of Object.entries(SETTINGS_SCHEMA)) {
+    values[key] = spec.default;
+    if (src[key] === undefined) continue;
+    const c = coerce(spec, src[key]);
+    if (c.ok) values[key] = c.value;
+    else warnings.push(`fleet config: ${key} = ${JSON.stringify(src[key])} is invalid — ignored`);
+  }
+  return { ...values, warnings, configPath: path };
+}
+
 /** Units the machine environment allows past read-only. */
 export function allowWriteUnits(env = process.env) {
   const set = new Set(

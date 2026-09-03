@@ -99,6 +99,11 @@ test('runtime with a fake agy: argv per mode — research standard, workspace-wr
   const img = await wrap(base).callTool('gemini_image', { prompt: 'a cat' });
   assert.match(img.text, /--mode accept-edits/);
   assert.match(img.text, /--disable-slash-commands/);
+  // The prompt that actually reaches agy carries the "no shell" hardening: the
+  // first live image call was lost to the model reaching for the `command`
+  // tool, which headless agy auto-denies (2026-09-03).
+  assert.match(img.text, /Use ONLY your built-in image generation tool and save the image directly with it\./);
+  assert.match(img.text, /Do NOT run terminal commands — they are unavailable\./);
   // F8: the image run gets its OWN temp cwd, so even a cwd-relative save by agy
   // lands outside every project — never in whatever repo the server was started in.
   const imgCwd = /CWD (.+)$/.exec(img.text)[1];

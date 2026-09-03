@@ -1,8 +1,8 @@
 /**
  * omelette-fleet :: units/codex/adapter.mjs
- * OpenAI Codex CLI as a fleet unit — three tools: `codex_research`,
- * `codex_code_review`, `codex_models`. Every call is one headless
- * `codex exec` run, billed to the operator's ChatGPT subscription.
+ * OpenAI Codex CLI as a fleet unit — four tools: `codex_research`,
+ * `codex_code_review`, `codex_image`, `codex_models`. Every call is one
+ * headless `codex exec` run, billed to the operator's ChatGPT subscription.
  *
  * READ-ONLY POSTURE — one real layer, not six:
  *   `-s read-only` is Codex's own OS-level sandbox (Seatbelt on macOS, Landlock
@@ -12,10 +12,10 @@
  *   Never passed: `--dangerously-bypass-approvals-and-sandbox`,
  *   `--dangerously-bypass-hook-trust`.
  *   `workspace-write` (the only wider mode this unit implements) is scoped by
- *   the kernel to the `-C <dir>` you pass — and this adapter grants it ONLY to
- *   `codex_code_review` with an explicit `cwd`; research runs are read-only
- *   regardless of the fleet config. The fleet ceiling (OMELETTE_ALLOW_WRITE)
- *   still has to be open for it to reach the spawn at all.
+ *   the kernel to the `-C <dir>` you pass — and this adapter grants it to
+ *   `codex_code_review` with an explicit `cwd` (fleet ceiling required) and to
+ *   `codex_image` in a throwaway temp directory (see IMAGE below); research
+ *   runs are read-only regardless of the fleet config.
  *
  * OUTPUT — `--json` emits JSONL and it is honest: the answer is the LAST
  * `item.completed` of type `agent_message`; a failure is a `turn.failed`
@@ -59,14 +59,40 @@
  * with an API key present Codex bills the metered API instead of the ChatGPT
  * plan. Real money. The `--oss` local-provider path is never used.
  *
+ * IMAGE — `codex_image` drives the CLI's BUILT-IN image generation tool
+ * (gpt-image-2). Verified live (codex-cli 0.153.0, ChatGPT plan, 2026-09-03):
+ * the tool is present headless under `--ignore-user-config --ignore-rules`,
+ * behind no feature flag; it saves its output under
+ * `~/.codex/generated_images/<uuid>/…` and the model then uses shell (`cp`,
+ * `sips`) to place a copy where it was asked to. That copy is what needs a
+ * writable cwd.
+ *   WHY THIS BYPASSES THE FLEET CEILING, deliberately: the run is spawned
+ *   `-s workspace-write` with `-C <mkdtemp under os.tmpdir()>` regardless of
+ *   the unit's configured mode and of OMELETTE_ALLOW_WRITE. The kernel sandbox
+ *   scopes every write to that ONE throwaway directory the adapter just
+ *   created — outside every project, outside $HOME's working trees — so the
+ *   power being granted is not "codex may write your repo", it is "codex may
+ *   write the scratch dir it was handed". The ceiling exists to keep a unit out
+ *   of the operator's code; it is not what makes an artifact contract possible,
+ *   and an image tool that cannot produce a file is not a tool. Same posture as
+ *   `gemini_image`'s temp cwd; the operator copies the file out by hand.
+ *   `tools.web_search=false` on image runs (nothing to search), no `effort`
+ *   (the reasoning budget does not reach the image model), and NO retry — a
+ *   re-issued generation bills image quota twice. The result is preferred from
+ *   disk (`<tmpdir>/image.png`) and only then from the final message, via
+ *   core/artifact.mjs's shared `extractImagePath`: a path the model asserts but
+ *   never wrote is not an artifact.
+ *
  * AUTH — `codex login status` prints "Logged in using ChatGPT" when fine; a
  * signed-out run fails with a login hint on stderr and nothing on stdout,
  * which the runtime turns into an actionable message (never a retry).
  */
-import { statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { mkdtempSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
+import { extractImagePath } from '../../core/artifact.mjs';
 import { CODEX_MODELS, EFFORTS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -87,6 +113,18 @@ const WORKSPACE_WRITE_PREFIX =
   'within the working directory. Never run git commands that change history or ' +
   'remotes (commit, push, merge, rebase, reset, tag), never deploy or publish. ' +
   'Explain every change you make. Answer in plain text.\n\n';
+
+/**
+ * The image tool saves where IT wants (~/.codex/generated_images/<uuid>/…), so
+ * the run is told to land a copy at a fixed name in its own temp cwd: that is
+ * the path the adapter can check on disk instead of trusting the prose.
+ */
+const IMAGE_PREFIX =
+  'Generate exactly ONE image with your image generation tool from the ' +
+  'description below and save it as image.png in the current working ' +
+  'directory (use a shell copy if the tool saves elsewhere). Then reply with ' +
+  'ONLY the absolute path of the saved file — no markdown, no other text.\n\n' +
+  'Image description: ';
 
 const AUTH_RE = /not (?:logged|signed) in|run ['`]?codex login|login required|unauthorized|\b401\b/i;
 const AUTH_HELP =
@@ -192,13 +230,19 @@ function checkCwd(raw) {
 
 const isDeterministic = (e) => /not authenticated|turn failed|hard-killed|not found in PATH/i.test((e && e.message) || '');
 
-async function runOnce(ctx, { prompt, cwd, mode }) {
+/**
+ * One `codex exec` run. `webSearch` / `effort` default to the resolved config
+ * and may be overridden per tool (image runs pass web=false and no effort).
+ */
+async function runOnce(ctx, { prompt, cwd, mode, webSearch, effort }) {
   // --ignore-user-config removed the operator's configured default, so an
   // unpinned run would take whatever the CLI hard-codes. Pin the catalog head.
   const model = ctx.model || catalog.ids[0];
   if (!ctx.model) ctx.log(`no model configured — pinning the catalog default ${model} (--ignore-user-config means ~/.codex/config.toml is not consulted)`);
-  const args = buildArgs({ model, effort: ctx.effort, cwd, mode, webSearch: ctx.cfg.webSearch });
-  ctx.log(`codex exec · sandbox=${mode} · model=${model}${ctx.model ? '' : ' (catalog default)'} · effort=${ctx.effort || '(default)'} · web=${ctx.cfg.webSearch} · cwd=${cwd || '(process cwd)'}`);
+  const web = webSearch === undefined ? ctx.cfg.webSearch : webSearch;
+  const eff = effort === undefined ? ctx.effort : effort;
+  const args = buildArgs({ model, effort: eff, cwd, mode, webSearch: web });
+  ctx.log(`codex exec · sandbox=${mode} · model=${model}${ctx.model ? '' : ' (catalog default)'} · effort=${eff || '(default)'} · web=${web} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd: cwd || undefined, stdinText: prompt });
   const out = extractResult(res, { timeoutS: ctx.cfg.timeoutS });
   if (out.usage) ctx.log(`codex done · tokens in=${out.usage.input} (cached ${out.usage.cachedInput}) out=${out.usage.output} reasoning=${out.usage.reasoning} · web_search=${out.searches}`);
@@ -304,12 +348,65 @@ export default defineUnit({
       },
     },
     {
+      name: 'codex_image',
+      kind: 'image',
+      description:
+        'Generate an image from a text description with OpenAI Codex (local ' +
+        'codex CLI) via its built-in gpt-image-2 tool. Returns the ABSOLUTE ' +
+        'PATH of the saved PNG as plain text. The file lands under the OS temp ' +
+        'directory, OUTSIDE every project — copy it where you need it, and do ' +
+        'not treat it as durable storage (temp dirs may be cleaned by the OS). ' +
+        'One image per call. Each call spends image quota and is NOT retried. ' +
+        'To edit/restyle an EXISTING image use grok_image_edit instead.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'The image description.' },
+          model: MODEL_PROP,
+        },
+        required: ['prompt'],
+      },
+      async run(args, ctx) {
+        const prompt = String(args.prompt || '').trim();
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
+        // The sandbox is opened for exactly one directory, created here, empty,
+        // and outside every project — see IMAGE in the header for why this is
+        // deliberately not routed through the fleet write ceiling.
+        const cwd = mkdtempSync(join(tmpdir(), 'omelette-codex-image-'));
+        ctx.log(`codex_image · temp cwd=${cwd}`);
+        // No retry: a re-issued generation bills image quota twice.
+        const out = await runOnce(ctx, {
+          prompt: IMAGE_PREFIX + prompt,
+          cwd,
+          mode: 'workspace-write',
+          webSearch: false,
+          effort: '',
+        });
+        // Disk first: the fixed name the prompt asked for is the only claim
+        // that needs no parsing. Then the model's own answer, still stat-ed.
+        const wanted = join(cwd, 'image.png');
+        let artifact = '';
+        try { if (statSync(wanted).isFile()) artifact = wanted; } catch { /* the model saved elsewhere */ }
+        if (!artifact) artifact = extractImagePath(out.text);
+        if (!artifact) {
+          return {
+            text: 'Error: codex_image finished without a saved image on disk (temp dir ' + cwd + '). Raw output: '
+              + ((out.text || '(empty)').slice(-1000)),
+            isError: true,
+          };
+        }
+        ctx.log(`codex_image · artifact=${artifact}`);
+        return { text: artifact, usage: out.usage };
+      },
+    },
+    {
       name: 'codex_models',
       kind: 'catalog',
       description:
         'List the Codex models you can pass as `model` to codex_research / ' +
-        'codex_code_review, the allowed `effort` levels, and a "route to / route ' +
-        'AWAY" cheat-sheet. No arguments, no spawn — local catalog read.',
+        'codex_code_review / codex_image, the allowed `effort` levels, and a ' +
+        '"route to / route AWAY" cheat-sheet. No arguments, no spawn — local ' +
+        'catalog read.',
       inputSchema: { type: 'object', properties: {} },
     },
   ],

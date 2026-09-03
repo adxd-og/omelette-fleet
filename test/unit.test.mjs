@@ -69,6 +69,8 @@ test('defineUnit validates the contract loudly', () => {
   const u = defineUnit({ name: 'x', bin: 'xbin', tools: [{ name: 't', description: 'd', inputSchema: {}, kind: 'catalog' }], catalog });
   assert.deepEqual(u.bin, { env: null, default: 'xbin' });
   assert.equal(u.serverName, 'omelette-x');
+  // serverInfo.version is the PACKAGE version — not a number frozen into core/unit.mjs.
+  assert.equal(u.version, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
 });
 
 test('tools/list shape hides run/kind/mutateGate', () => {

@@ -75,13 +75,37 @@ A variable absent from the parent environment is absent from the child; empty st
 
 `omelette-fleet doctor` runs its version and login probes in the *same* environment a real tool call would get, allowlist and scrub included, so it cannot report a unit healthy that the server would then fail on — or quietly bill a metered key while probing.
 
+## Network
+
+**The only outbound request this package makes on its own is the update check.** One unauthenticated `GET` to the GitHub releases API for this repository:
+
+```
+GET https://api.github.com/repos/adxd-og/omelette-fleet/releases/latest
+Accept: application/vnd.github+json
+User-Agent: omelette-fleet/<version>
+```
+
+Those two headers are everything it sends. No token, no cookie, no query string, nothing about your machine, your config, your prompts or your usage — the package has no telemetry of any kind. Nothing is downloaded and nothing is executed: the response's release tag is compared against this checkout's `package.json` version, and the result is a string and a boolean.
+
+It runs in three places:
+
+- **A unit server's startup**, fire-and-forget — the server is already answering before the request is sent, the whole exchange is capped at 2.5 s, and every failure (no network, DNS, a rate limit, a proxy answering HTML) resolves silently. At most one line of stderr comes out of it, and only when there really is a newer release.
+- **`doctor`**, for the `version … · latest …` header line. An unreachable GitHub is never one of doctor's findings.
+- **`omelette-fleet update`**, which asks fresh rather than reusing the cache — it is the one moment the answer has to be current.
+
+The first two share a 24-hour cache (`<home>/update-check.json`), so a busy day of tool calls is still at most one request. Switch it off entirely with `OMELETTE_UPDATE_CHECK=0` in the MCP server's env block, or `"updateCheck": false` in the fleet config; the env switch is the one a project cannot reach.
+
+`omelette-fleet update` also touches the network through `git`, and only in ways that cannot cost you work: it refuses to run at all when `git status --porcelain` is non-empty (it lists the dirty paths instead), it only ever fast-forwards (`git pull --ff-only`), and a diverged branch fails with the reconciliation command rather than a merge. `--check` stops after `git fetch`, which writes refs and no working-tree file. MCP registrations are never rewritten — they hold absolute paths a pull does not move.
+
+Everything else that reaches the network is the vendor CLI's own traffic, made with its own credentials: this package neither proxies nor inspects it.
+
 ## Per-unit enforcement matrix
 
 These are not equivalent mechanisms. Be honest with yourself about which unit you are trusting with what.
 
 | Unit | Read-only enforced by | Strength | `workspace-write` |
 |---|---|---|---|
-| **codex** | `-s read-only` — Codex's own OS-level sandbox (Seatbelt on macOS, Landlock/seccomp on Linux) — plus `--ignore-user-config --ignore-rules` | **Kernel-enforced.** The model's shell commands physically cannot write | Implemented. Kernel-scoped to the `-C <dir>` passed, and granted **only** to `codex_code_review` with an explicit absolute `cwd` |
+| **codex** | `-s read-only` — Codex's own OS-level sandbox (Seatbelt on macOS, Landlock/seccomp on Linux) — plus `--ignore-user-config --ignore-rules` | **Kernel-enforced.** The model's shell commands physically cannot write | Implemented. Kernel-scoped to the `-C <dir>` passed. Granted to `codex_code_review` with an explicit absolute `cwd` (ceiling required), and to `codex_image` in a throwaway temp dir the adapter creates (ceiling **not** consulted — see below) |
 | **grok** | Six layers on the spawn argv (below) | **Toolset-level.** The write/shell tools do not exist in the process's toolset | **Declared unsupported** — refused even with the ceiling open |
 | **gemini** | your agy `settings.json` permission policy (headless auto-deny) plus a prompt preamble | **Weakest.** No kernel sandbox; `--mode` is a permission policy | Maps to `--mode accept-edits`: edits auto-approved by agy's own permission layer inside the process cwd |
 
@@ -92,6 +116,8 @@ These are not equivalent mechanisms. Be honest with yourself about which unit yo
 **Isolation.** Every spawn also passes `--ignore-user-config --ignore-rules`. Without them a fleet run inherits the whole of your `~/.codex/config.toml` — MCP servers, plugins, hooks, the `notify` command — and the filesystem sandbox does not bound a configured MCP tool, so a "read-only" research call could reach an MCP server that mutates an external system. `--ignore-rules` drops user and project execpolicy `.rules` files for the same reason. Auth is unaffected: it resolves through `CODEX_HOME`, verified live with ChatGPT auth on 0.153.0. `-c notify=[]` stays as a belt-and-braces silencer in case a future version reads `notify` from somewhere else.
 
 **The consequence:** "the vendor default model" no longer means *your* configured default, because that default lives in the ignored file. When nothing is configured — no `model` argument, no `codex.model` in the fleet config — the adapter pins the first catalog entry explicitly and logs that it did, rather than running on whatever the binary hard-codes.
+
+**Image runs are the one place this unit opens `workspace-write` without the ceiling.** `codex_image` spawns `-s workspace-write -C <a fresh directory under the OS temp dir>` whatever the config and `OMELETTE_ALLOW_WRITE` say. The kernel still scopes every write to that one directory — created empty by the adapter moments earlier, outside every project — so what is being granted is "Codex may write its own scratch directory", not "Codex may write your repository". The ceiling exists to keep a unit out of your code; it is not what makes an artifact contract possible, and an image tool that cannot leave a file behind is not a tool. The built-in gpt-image-2 tool saves under `~/.codex/generated_images/<uuid>/` and the model then copies the file into the working directory with a shell command, which is the part that needs the sandbox open (verified live, codex-cli 0.153.0, 2026-09-03). Same posture as `gemini_image`'s temp cwd: the tool returns the absolute path, you copy the file out, and temp directories may be cleaned by the OS. Image runs also drop web search and are never retried.
 
 One smaller hardening: the prompt is fed on **stdin** (`codex exec -`), so a prompt beginning with `-` can never be read as a flag and argv stays short.
 
@@ -137,7 +163,7 @@ What the unit does enforce:
 - **Git/deploy intent is rejected before spawn** (`mutateGate`), and every prompt carries a read-only preamble.
 - **agy's `skip` and `sandbox` modes are never used.** `--mode plan` (agy's read-only planning mode) was evaluated live on 2026-09-03 and **not** adopted: it adds nothing demonstrable over headless auto-deny — the model reached for the shell `command` tool and was denied either way. The hook where such a flag would go is marked in the adapter.
 
-`gemini_image` always runs with `--mode accept-edits`, because the image tool has to save its artifact. It is given a **freshly created temp directory under the OS temp dir as its cwd**, so even a cwd-relative save lands outside every project. The tool returns the absolute path; you import the file by hand.
+`gemini_image` always runs with `--mode accept-edits`, because the image tool has to save its artifact. It is given a **freshly created temp directory under the OS temp dir as its cwd**, so even a cwd-relative save lands outside every project. The tool returns the absolute path; you import the file by hand. Its prompt carries the same "do not run terminal commands — they are unavailable" instruction as the research preamble: the first live image call was lost to the model reaching for the shell `command` tool, which headless agy auto-denies. That instruction is in the prompt rather than something a retry gets lucky with — this run is not retried.
 
 ## Partial answers are never passed off as clean ones
 
@@ -152,13 +178,13 @@ Refusals the adapter makes itself — a missing `prompt`, a relative or non-exis
 
 ## What this package never does
 
-- **It never writes into a project on its own.** Grok's generated images land under `~/.grok/sessions/…`; Gemini's image runs happen in a throwaway temp directory. Either way the tool returns an absolute path and you copy the file where you want it.
+- **It never writes into a project on its own.** Image artifacts land in a temp directory or the vendor's own session directory and nowhere else: Grok's under `~/.grok/sessions/…`, Gemini's and Codex's in a throwaway directory under the OS temp dir. Either way the tool returns an absolute path and you copy the file where you want it.
 - **It never passes `--dangerously-*` flags,** in any unit, in any mode: not `--dangerously-bypass-approvals-and-sandbox`, not `--dangerously-bypass-hook-trust`, not `--dangerously-skip-permissions`.
 - **It never passes `--always-approve`.** Grok's image tools were verified to auto-approve headless without it; if a future CLI version starts prompting, the run cancels and the adapter surfaces the raw-output error rather than the flag being added silently.
 - **It never uses API keys.** Subscription auth only; billing-risk keys are scrubbed from the child env.
 - **It never hands a vendor CLI the parent environment.** The allowlist is the only path in.
 - **It never lets Codex read your `~/.codex/config.toml`** — the pattern to follow for any future unit whose config file can carry executable behaviour.
-- **It never retries an image run or a write-mode run.** The one bounded retry on empty output exists because re-issuing a read-only one-shot is safe. Re-issuing a generation bills image quota twice, and re-issuing a run that may already have written something is not idempotent — both paths skip the retry. Deterministic failures (auth, quota, hard-kill, missing binary, CLI error) are never retried either.
+- **It never retries an image run or a write-mode run.** The one bounded retry on empty output exists because re-issuing a read-only one-shot is safe. Re-issuing a generation bills image quota twice, and re-issuing a run that may already have written something is not idempotent — both paths skip the retry. That covers **every** image tool in the fleet: `grok_image`, `grok_image_edit`, `codex_image` and `gemini_image` each run exactly once. Deterministic failures (auth, quota, hard-kill, missing binary, CLI error) are never retried either.
 - **It never writes Claude Code's config.** `~/.claude.json` is parsed for `doctor`; the only writer of that file is `claude` itself.
 
 ## What is best-effort

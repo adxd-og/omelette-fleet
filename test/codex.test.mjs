@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import unit, { buildArgs, extractResult, catalog } from '../units/codex/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -71,9 +71,14 @@ test('extractResult: a non-zero exit WITH an answer keeps the answer under a par
   assert.deepEqual(r.usage, { input: 60835, cachedInput: 45312, output: 236, reasoning: 103 });
 });
 
-test('unit contract: three tools, catalog non-empty, efforts fixed, tools/list is clean', () => {
+test('unit contract: four tools, catalog non-empty, efforts fixed, tools/list is clean', () => {
   assert.equal(unit.name, 'codex');
-  assert.deepEqual(unit.tools.map((t) => t.name), ['codex_research', 'codex_code_review', 'codex_models']);
+  assert.deepEqual(unit.tools.map((t) => t.name), ['codex_research', 'codex_code_review', 'codex_image', 'codex_models']);
+  // Image runs must never be retried (quota) and never carry the git intent gate.
+  const image = unit.tools.find((t) => t.name === 'codex_image');
+  assert.equal(image.kind, 'image');
+  assert.ok(!image.mutateGate);
+  assert.deepEqual(Object.keys(image.inputSchema.properties), ['prompt', 'model']);
   assert.ok(catalog.models.length >= 1);
   // The API's own list (its rejection message names them); 'minimal' was dropped 2026-09-03.
   assert.deepEqual(catalog.effortEnum(), ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
@@ -144,4 +149,109 @@ test('runtime: the child env is an allowlist — a secret in the parent env neve
   // --ignore-user-config killed the operator's configured default, so an
   // unconfigured run pins the catalog head explicitly instead of drifting.
   assert.match(r.text, new RegExp(`model=${catalog.ids[0]}$`));
+});
+
+// --- codex_image ------------------------------------------------------------
+
+/**
+ * A fake `codex` for image runs: records the argv it received to `argvLog`,
+ * optionally writes `image.png` into the -C directory, and answers with
+ * `answer` (which may name a path). Same JSONL shape as the real CLI.
+ */
+function fakeImageCodex({ dir, name, argvLog, writeImage, answer }) {
+  const fake = join(dir, name);
+  writeFileSync(fake, [
+    'import { writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
+    '  const args=process.argv.slice(2);',
+    `  writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args));`,
+    '  const cwd=args[args.indexOf("-C")+1];',
+    `  const answer=${JSON.stringify(answer)}.replace("<CWD>", cwd).replace("<STDIN>", s.trim().slice(-24));`,
+    `  if (${writeImage ? 'true' : 'false'}) writeFileSync(join(cwd, "image.png"), "\x89PNG fake");`,
+    '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
+    '  line({type:"item.completed",item:{type:"agent_message",text:answer}});',
+    '  line({type:"turn.completed",usage:{input_tokens:7,output_tokens:2}});',
+    '});',
+  ].join('\n'));
+  return fake;
+}
+
+const wrapCodex = (env, fake) => createUnitRuntime(
+  { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+  { env },
+);
+
+test('codex_image: workspace-write kernel-scoped to a fresh temp dir, web search off, artifact taken from disk', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img-'));
+  const argvLog = join(dir, 'argv.json');
+  const fake = fakeImageCodex({ dir, name: 'fake-img.mjs', argvLog, writeImage: true, answer: '<CWD>/image.png' });
+  // The fleet ceiling is CLOSED and the unit is configured read-only: an image
+  // run opens workspace-write anyway, because the only writable path is the
+  // throwaway directory the adapter just created (see IMAGE in the adapter header).
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { mode: 'read-only', effort: 'high', webSearch: true, timeoutS: 30 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath };
+
+  const r = await wrapCodex(env, fake).callTool('codex_image', { prompt: 'a small flat red circle' });
+  assert.ok(!r.isError, r.text);
+
+  const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
+  assert.equal(argv[argv.indexOf('-s') + 1], 'workspace-write');
+  assert.ok(argv.includes('-c') && argv.includes('tools.web_search=false'));
+  assert.ok(!argv.includes('tools.web_search=true'));
+  // No effort flag: the reasoning budget does not reach the image model, and a
+  // configured `effort: high` must not ride along.
+  assert.ok(!argv.some((x) => /model_reasoning_effort/.test(x)));
+  assert.ok(argv.includes('--ignore-user-config') && argv.includes('--ignore-rules'));
+
+  const cwd = argv[argv.indexOf('-C') + 1];
+  const real = realpathSync(cwd); // macOS: /var/folders/… is a symlink to /private/var/folders/…
+  assert.ok(real.startsWith(realpathSync(tmpdir())), `${real} is not under ${realpathSync(tmpdir())}`);
+  assert.match(cwd, /omelette-codex-image-/);
+  assert.notEqual(cwd, process.cwd());
+  // The returned path is the file on disk, not merely what the model claimed.
+  assert.equal(r.text, join(cwd, 'image.png'));
+  assert.equal(readFileSync(r.text, 'utf8').slice(0, 4), '\x89PNG');
+});
+
+test('codex_image: falls back to the last existing path in the final message when image.png is absent', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img2-'));
+  const elsewhere = join(dir, 'generated.png');
+  writeFileSync(elsewhere, 'x');
+  const fake = fakeImageCodex({
+    dir, name: 'fake-img2.mjs', argvLog: join(dir, 'argv.json'), writeImage: false,
+    answer: `The tool saved it here instead: ${elsewhere}`,
+  });
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 30 } } }));
+  const r = await wrapCodex({ ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake).callTool('codex_image', { prompt: 'x' });
+  assert.ok(!r.isError, r.text);
+  assert.equal(r.text, elsewhere);
+});
+
+test('codex_image: every call gets its OWN temp dir — a second run can never return the first run\'s artifact', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img4-'));
+  const argvLog = join(dir, 'argv.json');
+  const fake = fakeImageCodex({ dir, name: 'fake-img4.mjs', argvLog, writeImage: true, answer: '<CWD>/image.png' });
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 30 } } }));
+  const rt = wrapCodex({ ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake);
+  const a = await rt.callTool('codex_image', { prompt: 'one' });
+  const b = await rt.callTool('codex_image', { prompt: 'two' });
+  assert.ok(!a.isError && !b.isError);
+  assert.notEqual(a.text, b.text);
+});
+
+test('codex_image: prose with no file on disk is an error, not a success', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img3-'));
+  const fake = fakeImageCodex({
+    dir, name: 'fake-img3.mjs', argvLog: join(dir, 'argv.json'), writeImage: false,
+    answer: 'I was unable to generate the image, sorry about that.',
+  });
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 30 } } }));
+  const rt = wrapCodex({ ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake);
+  const r = await rt.callTool('codex_image', { prompt: 'x' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /without a saved image on disk/);
+  assert.match(r.text, /unable to generate the image/); // the raw tail is kept
+  const noPrompt = await rt.callTool('codex_image', { prompt: '  ' });
+  assert.equal(noPrompt.isError, true);
 });

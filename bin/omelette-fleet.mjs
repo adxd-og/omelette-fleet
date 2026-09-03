@@ -29,8 +29,14 @@
  *
  * READ-ONLY ABOUT THE MACHINE: Claude Code's config — $CLAUDE_CONFIG_DIR/
  * .claude.json if that is set, else ~/.claude.json — is parsed, never written.
- * The only writer of it is `claude` itself. The only file this CLI writes is
- * <home>/fleet.config.json.
+ * The only writer of it is `claude` itself. The files this CLI writes are
+ * <home>/fleet.config.json and <home>/update-check.json.
+ *
+ * TEST HOOK — OMELETTE_PKG_ROOT: `update` (and the install-kind detection it
+ * uses) treats that directory as the package root instead of this checkout, so
+ * the whole git flow can be exercised against a throwaway fixture repo. It is
+ * honoured NOWHERE else: server paths, the shipped example config and doctor
+ * all still come from the real ROOT below.
  */
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -39,6 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { KEY_SCHEMA, coerce, configPath, fleetHome, unitConfig, writeFleetConfig } from '../core/config.mjs';
+import { cachedCheck, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
 import { resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -98,6 +105,18 @@ const COMMANDS = {
       'one that IS registered exits 1.',
     ],
   },
+  update: {
+    args: '[--check]',
+    body: [
+      'Say what the latest released version is, then bring THIS install up',
+      'to date. A git checkout is fast-forwarded (`git pull --ff-only`) —',
+      'a dirty tree or a diverged branch is refused, never overwritten. An',
+      'npm install is not touched: the exact `npm i -g` line is printed.',
+      '--check pulls nothing and only reports — exit 3 when an update is',
+      'available, 0 when there is none, so a script can branch on it.',
+      'Registrations are never rewritten: server paths survive a pull.',
+    ],
+  },
   doctor: {
     args: '[--prefix <name>] [--probe-models]',
     body: [
@@ -152,6 +171,7 @@ const HELP = [
   '  OMELETTE_HOME         fleet home (default ~/.omelette): config + status feed',
   '  OMELETTE_ALLOW_WRITE  comma-separated units allowed past read-only (the ceiling)',
   '  OMELETTE_STATUS       0/1 — status feed off/on for every unit',
+  '  OMELETTE_UPDATE_CHECK 0 to switch the daily "newer release" check off entirely',
   '  CLAUDE_CONFIG_DIR     where doctor looks for .claude.json before ~/',
   '  AGY_BIN GROK_BIN CODEX_BIN',
   '                        point a unit at a specific vendor binary',
@@ -571,6 +591,139 @@ async function cmdUninstall(argv) {
   return failed.length ? 1 : 0;
 }
 
+// ─── update ──────────────────────────────────────────────────────────────────
+
+/**
+ * `git` is the OPERATOR's own tool, exactly like `claude` above, so it is the
+ * other child that runs with `inheritEnv` (core/spawn.mjs): a pull has to see
+ * the ssh agent, the credential helper, the proxy and every GIT_* variable the
+ * operator set. There is no model reading this environment either.
+ *
+ * WHAT THIS COMMAND WILL NOT DO: write the working tree over local changes
+ * (a dirty tree is refused with the list), merge (--ff-only only), or touch the
+ * MCP registrations — `install` writes absolute paths into ~/.claude.json and a
+ * pull moves none of them. The one exception it will TELL you about is a
+ * registered server file that is gone after the pull.
+ *
+ * --check DOES fetch. It cannot answer "is there an update" for a checkout
+ * without asking the remote, and `git fetch` writes nothing but refs — no
+ * working-tree file changes, no merge. It stops before the pull, which is the
+ * step that changes what is installed.
+ */
+const runGit = (bin, root, args) => runProcess({ bin, args: ['-C', root, ...args], inheritEnv: true, hardKillMs: 120000 })
+  .catch((e) => ({ code: -1, stdout: '', stderr: (e && e.message) || String(e) }));
+
+/** origin's default branch, or `main` when the remote never told us which it is. */
+async function originBranch(gitBin, root) {
+  const r = await runGit(gitBin, root, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
+  const m = /^refs\/remotes\/origin\/(.+)$/.exec(firstLine(r.stdout));
+  return r.code === 0 && m ? m[1] : 'main';
+}
+
+async function cmdUpdate(argv) {
+  const { flags, positional, errors } = parseArgv(argv, { booleans: ['check'] });
+  if (positional.length) errors.push(`unexpected argument: ${positional[0]}`);
+  if (errors.length) { errors.forEach((e) => err(`omelette-fleet update: ${e}`)); return 1; }
+
+  const checkOnly = !!flags.check;
+  const root = packageRoot();
+  const current = currentVersion(root);
+  const kind = detectInstall(root);
+
+  out(`FLEET UPDATE · omelette-fleet ${current} · ${kind} install`);
+  out(`install       ${root}`);
+  // The release check is ADVISORY in both directions: it never decides whether
+  // the pull happens (git does), and an unreachable GitHub is no reason to
+  // refuse to fast-forward a checkout that is demonstrably behind its origin.
+  let remote = null;
+  if (!updateCheckEnabled({})) {
+    out('latest        update check disabled (OMELETTE_UPDATE_CHECK / updateCheck in the fleet config)');
+  } else {
+    remote = await cachedCheck({ home: fleetHome(), current, ttlMs: 0 });
+    out(remote.latest
+      ? `latest        ${remote.latest} — ${remote.behind ? 'NEWER than this install' : 'this install is current'}`
+      : `latest        unknown (${remote.error})`);
+  }
+  out();
+
+  if (kind === 'npm') {
+    out('Installed from npm — there is no checkout to pull. Upgrade with:');
+    out();
+    out('  npm i -g omelette-fleet@latest');
+    out();
+    out('(Nothing to install if you run it through npx: `npx omelette-fleet@latest <command>`');
+    out(' always fetches the latest release.)');
+    out('Restart Claude Code afterwards to load the new servers.');
+    return checkOnly && remote && remote.behind ? 3 : 0;
+  }
+
+  const gitBin = whichBin('git');
+  if (!gitBin) {
+    err('omelette-fleet update: git not found in PATH — this is a git checkout and cannot be updated without it.');
+    return 1;
+  }
+
+  const status = await runGit(gitBin, root, ['status', '--porcelain']);
+  if (status.code !== 0) {
+    err(`omelette-fleet update: git status failed (exit ${status.code}): ${lastLine(status) || 'no output'}`);
+    return 1;
+  }
+  const dirty = status.stdout.split('\n').map((l) => l.trimEnd()).filter(Boolean);
+  if (dirty.length) {
+    out(`The checkout has ${dirty.length} local change(s) — a pull would overwrite them:`);
+    for (const l of dirty.slice(0, 20)) out(`  ${l}`);
+    if (dirty.length > 20) out(`  … and ${dirty.length - 20} more`);
+    out();
+    out('Commit, stash or discard them first, then run `omelette-fleet update` again.');
+    return 1;
+  }
+
+  const branch = await originBranch(gitBin, root);
+  const fetched = await runGit(gitBin, root, ['fetch', '--quiet', 'origin']);
+  if (fetched.code !== 0) {
+    err(`omelette-fleet update: git fetch origin failed (exit ${fetched.code}): ${lastLine(fetched) || 'no output'}`);
+    return 1;
+  }
+  const counted = await runGit(gitBin, root, ['rev-list', '--count', `HEAD..origin/${branch}`]);
+  const behind = Number(firstLine(counted.stdout));
+  if (counted.code !== 0 || !Number.isFinite(behind)) {
+    err(`omelette-fleet update: git rev-list HEAD..origin/${branch} failed (exit ${counted.code}): ${lastLine(counted) || 'no output'}`);
+    return 1;
+  }
+  if (behind === 0) {
+    out(`already up to date — HEAD matches origin/${branch}.`);
+    return 0;
+  }
+  out(`behind        ${behind} commit(s) behind origin/${branch}`);
+  if (checkOnly) {
+    out('Run `omelette-fleet update` to fast-forward (--check changed nothing).');
+    return 3;
+  }
+
+  const pull = await runGit(gitBin, root, ['pull', '--ff-only', 'origin', branch]);
+  if (pull.code !== 0) {
+    err(`omelette-fleet update: git pull --ff-only origin ${branch} failed (exit ${pull.code}): ${lastLine(pull) || 'no output'}`);
+    err(`This checkout has diverged from origin/${branch} — a fast-forward is not possible, and`);
+    err('nothing was changed. Inspect it and reconcile by hand:');
+    err(`  git -C ${root} log --oneline HEAD...origin/${branch}`);
+    err('or install the released package instead: npm i -g omelette-fleet@latest');
+    return 1;
+  }
+
+  const after = currentVersion(root);
+  out(`pulled        ${current} → ${after}${after === current ? ' (version unchanged)' : ''}`);
+  // Registrations are absolute paths that a pull does not move — the only thing
+  // worth saying is when one of them no longer points at a file that exists.
+  const claude = readClaudeConfig();
+  const missing = UNIT_ORDER.filter((n) => {
+    const reg = findRegistration(claude.config, `${DEFAULT_PREFIX}-${n}`, join(root, 'servers', `${n}.mjs`));
+    return reg && !reg.exists;
+  });
+  if (missing.length) out(`The registered server file is missing for: ${missing.join(', ')} — run \`omelette-fleet install\`.`);
+  out('Restart Claude Code to load the new servers.');
+  return 0;
+}
+
 // ─── doctor ──────────────────────────────────────────────────────────────────
 
 /**
@@ -630,6 +783,10 @@ async function cmdDoctor(argv) {
   const claudePath = whichBin('claude');
 
   out(`FLEET DOCTOR · omelette-fleet ${PKG.version} · node ${process.version} · ${process.platform}`);
+  // Fail-soft, and cached for a day: doctor is a diagnosis of THIS machine, and
+  // "GitHub was unreachable" is never one of its findings.
+  const upd = updateCheckEnabled({}) ? await cachedCheck({ home: fleetHome(), current: PKG.version }) : null;
+  out(`version       ${PKG.version} · latest ${upd ? (upd.latest || 'unknown') : 'check disabled'}${upd && upd.behind ? '   [run: omelette-fleet update]' : ''}`);
   out(`fleet home    ${home.dir}`);
   out(`fleet config  ${configPath()}${existsSync(configPath()) ? '' : ' (absent — built-in defaults in force)'}`);
   out(`claude CLI    ${claudePath || 'not found in PATH'}`);
@@ -869,13 +1026,14 @@ async function main(argv) {
   switch (cmd) {
     case 'install': return cmdInstall(rest);
     case 'uninstall': return cmdUninstall(rest);
+    case 'update': return cmdUpdate(rest);
     case 'doctor': return cmdDoctor(rest);
     case 'show': return cmdShow(rest);
     case 'set': return cmdSet(rest);
     case 'call': return cmdCall(rest);
     default:
       err(`omelette-fleet: unknown command "${cmd}"`);
-      err('commands: install, uninstall, doctor, show, set, call — `omelette-fleet --help` for the full usage.');
+      err('commands: install, uninstall, update, doctor, show, set, call — `omelette-fleet --help` for the full usage.');
       return 1;
   }
 }

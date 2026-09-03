@@ -17,8 +17,10 @@ core/                  everything that is not vendor-specific
 | `catalog.mjs` | `makeCatalog()` — the model/effort allowlist and the rendered cheat-sheet behind every `<unit>_models` tool. |
 | `spawn.mjs` | One bounded child process: own process group, wall-clock SIGKILL, output caps, the **child-environment allowlist** and billing scrub, actionable ENOENT. |
 | `status.mjs` | The schema-1 status feed (per-unit snapshot + shared NDJSON log), fail-soft. |
+| `artifact.mjs` | `extractImagePath()` — the shared scan behind every image tool: return a path that exists **on disk**, never one the model merely asserted. |
 | `jsonrpc.mjs` | Newline-delimited JSON-RPC 2.0 over stdin/stdout — the MCP stdio transport. `createHandler` is pure and testable; `serve` wires it to the process. |
 | `client.mjs` | The other side of the same transport: drive one unit server the way a real client does. Behind `omelette-fleet call`, `scripts/mcp-call.mjs` and the end-to-end tests. Every way a call can die is a rejection that does not wait out the timeout — a JSON-RPC `error` reply to any of the three requests, a child that exits, a stdin that closes under an unanswered request — and the timeout itself is clamped to 1–86400 s, because Node's int32 timers turn a larger value into an instant false "no answer". |
+| `update.mjs` | "Is there a newer fleet?" — one unauthenticated GitHub releases call, cached on disk for 24 h, capped at 2.5 s, and never in the way of a tool call. Also owns the package version every server reports in `initialize`, the semver comparison, and the git-vs-npm install detection behind `omelette-fleet update`. |
 | `log.mjs` | stderr-only logging. stdout belongs to JSON-RPC; one stray byte there and the client shows the server as offline. |
 
 A unit adapter never touches stdin/stdout, never reads the config file, never spawns directly, and never writes the status feed. It declares what is vendor-specific and receives everything else through `ctx`.
@@ -73,6 +75,8 @@ Defaults filled in by `defineUnit`: `version: '0.1.0'`, `serverName: 'omelette-<
 12. **Auth check.** Only on a run with empty stdout: if `auth.detect(stderr)` matches, the adapter's `auth.help` becomes the error. A real answer that merely mentions signing in can never false-positive.
 13. **Vendor parse.** The adapter turns the raw run into text — Codex reads the last `agent_message` from its event stream and the usage from `turn.completed`; Gemini reads `status`/`response` from agy's JSON envelope; Grok reads `text`/`stopReason` from the one-shot result object. A run that finished badly but produced text keeps the text under a visible partial marker; only a text-less failure throws.
 14. **Status end.** `status.end()` closes the entry with `ok`/`error`, duration, truncated error text, and any `usage` the adapter returned; the result goes back over stdout as MCP `content`, carrying `isError` when the adapter or the runtime said so.
+
+Nothing in that path waits on the network. The startup update announcement is fire-and-forget: `startUnit` hands it off without awaiting, the server is already serving before the request leaves, and `core/update.mjs` guarantees the promise cannot reject — at worst one stderr line arrives late, and a call in flight never notices.
 
 ## Why three servers, not one
 

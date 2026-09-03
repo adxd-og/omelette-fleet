@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  unitConfig, effectiveMode, allowWriteUnits, loadFleetConfig, writeFleetConfig, fleetHome, coerce, CONFIG_VERSION,
+  unitConfig, effectiveMode, allowWriteUnits, loadFleetConfig, writeFleetConfig, fleetHome, fleetSettings,
+  coerce, CONFIG_VERSION,
 } from '../core/config.mjs';
 
 function home(config) {
@@ -131,6 +132,25 @@ test('the file is re-read when it changes (live toggles), and cached otherwise',
   const { utimesSync } = await import('node:fs');
   utimesSync(join(dir, 'fleet.config.json'), new Date(), new Date(Date.now() + 5000));
   assert.equal(unitConfig({ unit: 'codex', supportedModes: MODES_CODEX, env }).values.enabled, false);
+});
+
+test('fleetSettings: top-level keys, validated, defaulted, and never fatal', () => {
+  // absent file → the built-in default
+  assert.equal(fleetSettings({ OMELETTE_HOME: home() }).updateCheck, true);
+  // an explicit value, in either notation coerce understands
+  assert.equal(fleetSettings({ OMELETTE_HOME: home({ version: 1, updateCheck: false }) }).updateCheck, false);
+  assert.equal(fleetSettings({ OMELETTE_HOME: home({ updateCheck: 'off' }) }).updateCheck, false);
+  // an invalid value warns and leaves the default in force — never throws
+  const bad = fleetSettings({ OMELETTE_HOME: home({ updateCheck: 'maybe' }) });
+  assert.equal(bad.updateCheck, true);
+  assert.ok(bad.warnings.some((w) => /updateCheck = "maybe" is invalid/.test(w)));
+  // a malformed file is a warning too, and the unit layer is untouched by any of this
+  const broken = fleetSettings({ OMELETTE_HOME: home('{ not json') });
+  assert.equal(broken.updateCheck, true);
+  assert.ok(broken.warnings.some((w) => /fleet config:/.test(w)));
+  assert.match(broken.configPath, /fleet\.config\.json$/);
+  const dir = home({ updateCheck: false, units: { codex: { timeoutS: 7 } } });
+  assert.equal(unitConfig({ unit: 'codex', supportedModes: MODES_CODEX, env: { OMELETTE_HOME: dir } }).values.timeoutS, 7);
 });
 
 test('writeFleetConfig writes atomically with version and 0600', () => {

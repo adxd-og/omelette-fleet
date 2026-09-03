@@ -9,6 +9,12 @@
  * resolve inside the sandbox. The vendor CLIs are a single fake node script
  * that answers `--version`, `models` and `login status`; `claude` itself is
  * never required — install is only ever tested with --dry-run.
+ *
+ * NO TEST REACHES THE NETWORK: OMELETTE_UPDATE_CHECK=0 is part of the default
+ * environment below, so the release check never fires from here. The `update`
+ * command is exercised against a real but throwaway git fixture (a bare
+ * "origin" plus two clones) through OMELETTE_PKG_ROOT — everything git does
+ * there is local file I/O.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,10 +38,68 @@ function home() {
 function cli(args, { dir, env = {} } = {}) {
   const r = spawnSync(process.execPath, [BIN, ...args], {
     encoding: 'utf8',
-    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, ...env },
+    // The update check is OFF for every run: a unit test that quietly calls
+    // GitHub is a flaky test and a slow one. `env` can still switch it back on.
+    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', ...env },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
+
+const gitAvailable = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
+
+/** git inside a fixture: our own identity, no user/system config, no network. */
+function git(cwd, args) {
+  const r = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      PATH: process.env.PATH,
+      HOME: cwd,
+      GIT_CONFIG_GLOBAL: join(cwd, 'no-such-gitconfig'),
+      GIT_CONFIG_SYSTEM: join(cwd, 'no-such-gitconfig'),
+      GIT_AUTHOR_NAME: 'Fleet Test', GIT_AUTHOR_EMAIL: 'test@example.invalid',
+      GIT_COMMITTER_NAME: 'Fleet Test', GIT_COMMITTER_EMAIL: 'test@example.invalid',
+    },
+  });
+  assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
+  return r.stdout;
+}
+
+const writePkg = (root, version) => writeFileSync(
+  join(root, 'package.json'),
+  JSON.stringify({ name: 'omelette-fleet', version }, null, 2) + '\n',
+);
+
+/**
+ * A real git install to update: a bare `origin`, a `work` clone that publishes
+ * commits to it, and `clone` — the "installed" checkout the CLI is pointed at
+ * with OMELETTE_PKG_ROOT. Nothing here talks to a remote host.
+ */
+function gitFixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-git-'));
+  const origin = join(dir, 'origin.git');
+  const work = join(dir, 'work');
+  const clone = join(dir, 'clone');
+  git(dir, ['init', '--bare', '-b', 'main', origin]);
+  git(dir, ['clone', origin, work]);
+  writePkg(work, '0.1.0');
+  mkdirSync(join(work, 'servers'), { recursive: true });
+  writeFileSync(join(work, 'servers', 'codex.mjs'), '// fixture server\n');
+  git(work, ['add', '-A']);
+  git(work, ['commit', '-m', 'v0.1.0']);
+  git(work, ['push', '-u', 'origin', 'main']);
+  git(dir, ['clone', origin, clone]);
+  return { dir, origin, work, clone };
+}
+
+/** One new released commit on origin, so the clone falls behind. */
+function bump(work, version) {
+  writePkg(work, version);
+  git(work, ['commit', '-am', `v${version}`]);
+  git(work, ['push', 'origin', 'main']);
+}
+
+const pkgVersion = (root) => JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 
 /**
  * A stand-in vendor CLI: the shebang is this very node binary, so the script
@@ -108,7 +172,8 @@ test('--help (and no args) print the usage; --version prints the package version
     const r = cli(args, { dir });
     assert.equal(r.code, 0);
     assert.match(r.out, /USAGE/);
-    for (const cmd of ['install', 'uninstall', 'doctor', 'show', 'set', 'call']) assert.match(r.out, new RegExp(`omelette-fleet ${cmd}`));
+    for (const cmd of ['install', 'uninstall', 'update', 'doctor', 'show', 'set', 'call']) assert.match(r.out, new RegExp(`omelette-fleet ${cmd}`));
+    assert.match(r.out, /OMELETTE_UPDATE_CHECK/);
   }
   const v = cli(['--version'], { dir });
   assert.equal(v.code, 0);
@@ -228,6 +293,7 @@ test('doctor with fake vendor binaries: one block per unit, everything resolved,
   assert.match(r.out, /login\s+OK — Logged in using ChatGPT/); // codex answers on stderr, like the real CLI
   assert.match(r.out, /login\s+OK — grok models listed 2 line\(s\)/);
   assert.match(r.out, /login\s+OK — agy models listed 2 line\(s\)/);
+  assert.match(r.out, /^version\s+\d+\.\d+\.\d+ · latest check disabled$/m); // opted out → never a network call
   assert.match(r.out, /zzz-test-codex not registered/); // ~/.claude.json is absent under the temp HOME
   assert.match(r.out, /status feed .* is writable/);
   assert.match(r.out, /effective mode: read-only/);
@@ -354,7 +420,7 @@ test('call drives a real server over stdio and maps the answer to an exit code',
   const ok = cli(['call', 'codex', 'codex_models', '{}'], { dir });
   assert.equal(ok.code, 0, ok.err);
   assert.match(ok.out, /initialize → omelette-codex/);
-  assert.match(ok.out, /tools\/list → codex_research, codex_code_review, codex_models/);
+  assert.match(ok.out, /tools\/list → codex_research, codex_code_review, codex_image, codex_models/);
   assert.match(ok.out, /tools\/call → ok/);
   assert.match(ok.out, /CODEX MODEL CATALOG/);
 
@@ -372,7 +438,7 @@ test('call drives a real server over stdio and maps the answer to an exit code',
 
 test('per-command help: `<cmd> --help`, `-h` and `help <cmd>` all print that command\'s page', () => {
   const dir = home();
-  for (const cmd of ['install', 'uninstall', 'doctor', 'show', 'set', 'call']) {
+  for (const cmd of ['install', 'uninstall', 'update', 'doctor', 'show', 'set', 'call']) {
     for (const argv of [[cmd, '--help'], [cmd, '-h'], ['help', cmd]]) {
       const r = cli(argv, { dir });
       assert.equal(r.code, 0, `${argv.join(' ')} → ${r.err}`);
@@ -450,6 +516,80 @@ test('uninstall --dry-run marks the units that are not registered, and claude mi
   assert.equal(noClaude.code, 0);
   assert.match(noClaude.out, /NOTHING WAS CHANGED/);
   assert.match(noClaude.out, /claude mcp remove -s user omelette-codex/);
+});
+
+// ─── update ──────────────────────────────────────────────────────────────────
+
+test('update (git): up to date, --check on a behind clone (exit 3), a dirty tree (exit 1), then the fast-forward', { skip: !gitAvailable && 'git is not installed' }, () => {
+  const fx = gitFixture();
+  const dir = home();
+  const env = { OMELETTE_PKG_ROOT: fx.clone };
+
+  // Nothing new on origin yet.
+  const level = cli(['update'], { dir, env });
+  assert.equal(level.code, 0, level.out + level.err);
+  assert.match(level.out, /omelette-fleet 0\.1\.0 · git install/);
+  assert.match(level.out, /update check disabled/); // opted out — no network in tests
+  assert.match(level.out, /already up to date — HEAD matches origin\/main/);
+  assert.equal(cli(['update', '--check'], { dir, env }).code, 0);
+
+  // A release lands on origin: --check reports it, exits 3, and changes nothing.
+  bump(fx.work, '0.2.0');
+  const check = cli(['update', '--check'], { dir, env });
+  assert.equal(check.code, 3, check.out + check.err);
+  assert.match(check.out, /behind\s+1 commit\(s\) behind origin\/main/);
+  assert.match(check.out, /--check changed nothing/);
+  assert.equal(pkgVersion(fx.clone), '0.1.0');
+
+  // A dirty checkout is refused with the list — nothing is pulled over it.
+  writeFileSync(join(fx.clone, 'servers', 'codex.mjs'), '// locally edited\n');
+  const dirty = cli(['update'], { dir, env });
+  assert.equal(dirty.code, 1, dirty.out);
+  assert.match(dirty.out, /1 local change\(s\) — a pull would overwrite them/);
+  assert.match(dirty.out, /servers\/codex\.mjs/);
+  assert.match(dirty.out, /Commit, stash or discard them first/);
+  assert.equal(pkgVersion(fx.clone), '0.1.0');
+  assert.equal(cli(['update', '--check'], { dir, env }).code, 1); // --check refuses it too
+
+  // Clean again → the fast-forward happens and the version line proves it.
+  git(fx.clone, ['checkout', '--', '.']);
+  const pulled = cli(['update'], { dir, env });
+  assert.equal(pulled.code, 0, pulled.out + pulled.err);
+  assert.match(pulled.out, /pulled\s+0\.1\.0 → 0\.2\.0/);
+  assert.match(pulled.out, /Restart Claude Code to load the new servers\./);
+  assert.equal(pkgVersion(fx.clone), '0.2.0');
+  assert.match(cli(['update'], { dir, env }).out, /already up to date/);
+});
+
+test('update (git): a diverged checkout is never merged — exit 1 with what to do about it', { skip: !gitAvailable && 'git is not installed' }, () => {
+  const fx = gitFixture();
+  const dir = home();
+  const env = { OMELETTE_PKG_ROOT: fx.clone };
+  bump(fx.work, '0.2.0');
+  // A committed local change on the same branch: clean tree, but --ff-only cannot apply.
+  writeFileSync(join(fx.clone, 'servers', 'codex.mjs'), '// a local fix\n');
+  git(fx.clone, ['commit', '-am', 'local work']);
+  const r = cli(['update'], { dir, env });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.err, /git pull --ff-only origin main failed/);
+  assert.match(r.err, /diverged from origin\/main/);
+  assert.equal(pkgVersion(fx.clone), '0.1.0'); // untouched
+});
+
+test('update (npm): nothing is pulled — the exact upgrade command, exit 0', () => {
+  const dir = home();
+  const root = mkdtempSync(join(tmpdir(), 'omelette-npm-'));
+  writePkg(root, '0.1.0');
+  const env = { OMELETTE_PKG_ROOT: root };
+  const r = cli(['update'], { dir, env });
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /omelette-fleet 0\.1\.0 · npm install/);
+  assert.match(r.out, /^ {2}npm i -g omelette-fleet@latest$/m);
+  assert.match(r.out, /npx omelette-fleet@latest/);
+  assert.equal(cli(['update', '--check'], { dir, env }).code, 0); // no release check → nothing to report
+  const bad = cli(['update', '--nope'], { dir, env });
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /unknown flag: --nope/);
 });
 
 // ─── core/client.mjs, driven directly: the transport's own failure modes ─────
