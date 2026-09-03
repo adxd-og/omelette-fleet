@@ -1,0 +1,6 @@
+node_modules/
+.omelette/
+fleet.config.json
+!examples/fleet.config.json
+*.tmp
+.DS_Store

@@ -1,0 +1,38 @@
+{
+  "name": "omelette-fleet",
+  "version": "0.1.0",
+  "description": "Plug Gemini, Grok and Codex into Claude Code as read-only research and review units — on the subscriptions you already pay for, fail-closed by design.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "bin",
+    "core",
+    "units",
+    "servers",
+    "docs",
+    "examples",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adxd-og/omelette-fleet.git"
+  },
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "gemini",
+    "grok",
+    "codex",
+    "agents",
+    "read-only",
+    "fleet"
+  ]
+}
