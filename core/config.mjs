@@ -129,7 +129,7 @@ export function allowWriteUnits(env = process.env) {
 export function effectiveMode({ unit, requested, supported, env = process.env }) {
   const warnings = [];
   let mode = requested || 'read-only';
-  const ceilingOpen = allowWriteUnits(env).has(unit);
+  const ceilingOpen = allowWriteUnits(env).has(String(unit).toLowerCase());
   if (mode !== 'read-only') {
     if (!supported || !supported[mode]) {
       warnings.push(`mode "${mode}" is not supported by unit "${unit}" — staying read-only`);
