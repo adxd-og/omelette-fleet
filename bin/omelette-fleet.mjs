@@ -21,17 +21,20 @@
  * install flow can be exercised in CI with no vendor CLI and no `claude`.
  *
  * DOCTOR NEVER GUESSES. A probe whose output it cannot read is "unknown", not
- * "signed out" — a wrong diagnosis costs more than no diagnosis. And only the
- * combination enabled-in-config AND registered AND broken sets exit 1: a unit
- * you deliberately never wired up is not a fault.
+ * "signed out" — a wrong diagnosis costs more than no diagnosis, and a
+ * non-zero exit with nothing to read is exactly that. Only the combination
+ * enabled-in-config AND registered AND broken (no binary, signed out, or a
+ * registration pointing at a file that is gone) sets exit 1: a unit you
+ * deliberately never wired up is not a fault.
  *
- * READ-ONLY ABOUT THE MACHINE: ~/.claude.json is parsed, never written — the
- * only writer of Claude Code's config is `claude` itself. The only file this
- * CLI writes is <home>/fleet.config.json.
+ * READ-ONLY ABOUT THE MACHINE: Claude Code's config — $CLAUDE_CONFIG_DIR/
+ * .claude.json if that is set, else ~/.claude.json — is parsed, never written.
+ * The only writer of it is `claude` itself. The only file this CLI writes is
+ * <home>/fleet.config.json.
  */
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, dirname, join, resolve as resolvePath } from 'node:path';
+import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
@@ -48,12 +51,18 @@ const UNIT_ORDER = ['gemini', 'grok', 'codex'];
 const DEFAULT_PREFIX = 'omelette';
 const EXAMPLE_CONFIG = join(ROOT, 'examples', 'fleet.config.json');
 
+const pad = (s, n) => String(s).padEnd(n);
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s = '') => process.stderr.write(s + '\n');
 const serverPathFor = (name) => join(ROOT, 'servers', `${name}.mjs`);
 const isObj = (o) => o && typeof o === 'object' && !Array.isArray(o);
 const schemaFor = (name) => ({ ...KEY_SCHEMA, ...(UNITS[name].extraSchema || {}) });
 const firstLine = (s) => String(s || '').trim().split('\n')[0].trim();
+/** The most informative line of a finished probe: the tail, where CLIs put the reason. */
+const lastLine = (r) => {
+  const all = `${r.stdout || ''}\n${r.stderr || ''}`.split('\n').map((x) => x.trim()).filter(Boolean);
+  return (all[all.length - 1] || '').slice(0, 160);
+};
 
 /** Resolve one unit's config through the same layers the running server sees. */
 const cfgFor = (name, env = process.env) => {
@@ -64,56 +73,107 @@ const cfgFor = (name, env = process.env) => {
   });
 };
 
-const HELP = `omelette-fleet ${PKG.version} — plug Gemini, Grok and Codex into Claude Code as read-only units.
+/**
+ * Every command's help lives WITH the command, so `omelette-fleet --help` and
+ * `omelette-fleet <cmd> --help` can never disagree — the global listing is
+ * assembled from the same bodies the per-command pages print.
+ */
+const COMMANDS = {
+  install: {
+    args: '[--prefix <name>] [--units <a,b,c>] [--dry-run] [--force]',
+    body: [
+      'Register one MCP server per unit with `claude mcp add -s user`',
+      'as <prefix>-<unit>, and create <home>/fleet.config.json from the',
+      'shipped example if it does not exist yet (never overwritten).',
+      'A unit whose vendor CLI is not in PATH is skipped unless --force.',
+      '--dry-run prints every command and every write, and runs nothing.',
+    ],
+  },
+  uninstall: {
+    args: '[--prefix <name>] [--units <a,b,c>] [--dry-run]',
+    body: [
+      'Remove those servers again (`claude mcp remove -s user`). The',
+      'fleet config and the status files are never touched. Removing a',
+      'server that is not registered is a no-op; a removal that FAILS for',
+      'one that IS registered exits 1.',
+    ],
+  },
+  doctor: {
+    args: '[--prefix <name>] [--probe-models]',
+    body: [
+      'Per unit: the vendor binary, its --version, the login state, the',
+      'resolved fleet config with sources, the MCP registration and',
+      'whether the status feed is writable. Exits 1 when a unit that is',
+      'enabled AND registered has a missing binary, is signed out, or is',
+      'registered against a server file that no longer exists.',
+      '--probe-models spends real Codex calls to test every catalog id.',
+    ],
+  },
+  show: {
+    args: '[<unit>]',
+    body: [
+      'Every config key for one unit or all of them: value, where it came',
+      'from (default / file:defaults / file / env:NAME), and the ceiling.',
+    ],
+  },
+  set: {
+    args: '<unit>.<key>=<value> [...]',
+    body: [
+      'Change keys in <home>/fleet.config.json. Unknown units, unknown',
+      'keys and invalid values are refused; the rest of the file is kept.',
+    ],
+  },
+  call: {
+    args: '<unit> <tool> [json-args] [--timeout <seconds>]',
+    body: [
+      "Drive a unit's MCP server over real stdio (initialize →",
+      'tools/list → tools/call) and print the result. Exit 2 = the tool',
+      'answered with an error, 1 = the server never answered.',
+    ],
+  },
+};
 
-USAGE
-  omelette-fleet install   [--prefix <name>] [--units <a,b,c>] [--dry-run] [--force]
-  omelette-fleet uninstall [--prefix <name>] [--units <a,b,c>] [--dry-run]
-  omelette-fleet doctor    [--prefix <name>] [--probe-models]
-  omelette-fleet show      [<unit>]
-  omelette-fleet set       <unit>.<key>=<value> [...]
-  omelette-fleet call      <unit> <tool> [json-args] [--timeout <seconds>]
-  omelette-fleet --help | --version
+const HELP = [
+  `omelette-fleet ${PKG.version} — plug Gemini, Grok and Codex into Claude Code as read-only units.`,
+  '',
+  'USAGE',
+  ...Object.entries(COMMANDS).map(([n, c]) => `  omelette-fleet ${pad(n, 9)} ${c.args}`),
+  '  omelette-fleet --help | --version',
+  '',
+  'COMMANDS',
+  ...Object.entries(COMMANDS).flatMap(([n, c]) => c.body.map((l, i) => (i ? `             ${l}` : `  ${pad(n, 10)} ${l}`))),
+  '',
+  'UNITS',
+  '  gemini  Google Gemini via the Antigravity CLI (agy)',
+  '  grok    xAI Grok via the grok CLI',
+  '  codex   OpenAI Codex via the codex CLI',
+  '',
+  'ENVIRONMENT',
+  '  OMELETTE_HOME         fleet home (default ~/.omelette): config + status feed',
+  '  OMELETTE_ALLOW_WRITE  comma-separated units allowed past read-only (the ceiling)',
+  '  OMELETTE_STATUS       0/1 — status feed off/on for every unit',
+  '  CLAUDE_CONFIG_DIR     where doctor looks for .claude.json before ~/',
+  '  AGY_BIN GROK_BIN CODEX_BIN',
+  '                        point a unit at a specific vendor binary',
+  '',
+  'EXAMPLES',
+  '  omelette-fleet install --dry-run',
+  '  omelette-fleet install --units codex,gemini',
+  '  omelette-fleet doctor',
+  '  omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"',
+  "  omelette-fleet call codex codex_models '{}'",
+].join('\n');
 
-COMMANDS
-  install    Register one MCP server per unit with \`claude mcp add -s user\`
-             as <prefix>-<unit>, and create <home>/fleet.config.json from the
-             shipped example if it does not exist yet (never overwritten).
-             A unit whose vendor CLI is not in PATH is skipped unless --force.
-             --dry-run prints every command and every write, and runs nothing.
-  uninstall  Remove those servers again (\`claude mcp remove -s user\`). The
-             fleet config and the status files are never touched.
-  doctor     Per unit: the vendor binary, its --version, the login state, the
-             resolved fleet config with sources, the MCP registration and
-             whether the status feed is writable. Exits 1 when a unit that is
-             enabled AND registered has a missing binary or is signed out.
-             --probe-models spends real Codex calls to test every catalog id.
-  show       Every config key for one unit or all of them: value, where it came
-             from (default / file:defaults / file / env:NAME), and the ceiling.
-  set        Change keys in <home>/fleet.config.json. Unknown units, unknown
-             keys and invalid values are refused; the rest of the file is kept.
-  call       Drive a unit's MCP server over real stdio (initialize →
-             tools/list → tools/call) and print the result. Exit 2 = the tool
-             answered with an error, 1 = the server never answered.
-
-UNITS
-  gemini  Google Gemini via the Antigravity CLI (agy)
-  grok    xAI Grok via the grok CLI
-  codex   OpenAI Codex via the codex CLI
-
-ENVIRONMENT
-  OMELETTE_HOME         fleet home (default ~/.omelette): config + status feed
-  OMELETTE_ALLOW_WRITE  comma-separated units allowed past read-only (the ceiling)
-  OMELETTE_STATUS       0/1 — status feed off/on for every unit
-  AGY_BIN GROK_BIN CODEX_BIN
-                        point a unit at a specific vendor binary
-
-EXAMPLES
-  omelette-fleet install --dry-run
-  omelette-fleet install --units codex,gemini
-  omelette-fleet doctor
-  omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"
-  omelette-fleet call codex codex_models '{}'`;
+const commandHelp = (name) => [
+  `omelette-fleet ${name}`,
+  '',
+  'USAGE',
+  `  omelette-fleet ${name} ${COMMANDS[name].args}`,
+  '',
+  ...COMMANDS[name].body.map((l) => `  ${l}`),
+  '',
+  '(`omelette-fleet --help` for every command, the units and the environment.)',
+].join('\n');
 
 // ─── argv ────────────────────────────────────────────────────────────────────
 
@@ -190,18 +250,23 @@ async function probeVersion(unit, binPath) {
   try { r = await runProcess({ bin: binPath, args: ['--version'], hardKillMs: 10000, ...probeEnv(unit) }); }
   catch (e) { return `unknown (${(e && e.message) || e})`; }
   if (r.killed) return 'timeout (no answer in 10s)';
+  // A CLI that exits non-zero is not reporting its version — it is failing, and
+  // its first line of complaint printed as `version` reads like one.
+  if (r.code !== 0) return `unknown (exit ${r.code}${lastLine(r) ? `: ${lastLine(r)}` : ''})`;
   const line = firstLine(r.stdout) || firstLine(r.stderr);
-  if (line) return line.slice(0, 120);
-  return r.code === 0 ? 'unknown (no output)' : `unknown (exit ${r.code})`;
+  return line ? line.slice(0, 120) : 'unknown (no output)';
 }
 
 /**
  * Login state per vendor, each with its own honest signal:
- *   codex  `codex login status` → stdout contains "Logged in"
+ *   codex  `codex login status` → exit 0 + "Logged in" on EITHER stream
  *   grok   `grok models`        → /not authenticated|not signed in/ = signed out
  *   agy    `agy models`         → exit 0 with at least one line = OK
- * Anything else is `unknown`. 20s ceiling: these are local calls or a cheap
- * API round-trip, never a model run.
+ * SIGNED OUT is only ever an EXPLICIT phrase. A non-zero exit on its own is
+ * `unknown (exit N)` with the tail as the detail — a CLI can fail for a dozen
+ * reasons that are not "no session", and telling an operator to run `codex
+ * login` when the real problem is a broken install wastes their afternoon.
+ * 20s ceiling: these are local calls or a cheap API round-trip, never a model run.
  */
 async function probeLogin(unit, binPath) {
   const name = unit.name;
@@ -213,58 +278,94 @@ async function probeLogin(unit, binPath) {
   if (r.killed) return { state: 'unknown', detail: `${cmd}: timeout (no answer in 20s)` };
   const both = `${r.stdout}\n${r.stderr}`;
   const lines = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  const unknown = {
+    state: 'unknown',
+    label: `unknown (exit ${r.code})`,
+    detail: lastLine(r) || `${cmd}: no output`,
+  };
   if (name === 'codex') {
     // `codex login status` writes its answer to stderr in some builds and to
     // stdout in others, so read BOTH streams — looking at only one is how this
     // reported "unknown — exit 0, Logged in using ChatGPT". The "not logged in"
     // guard earns its keep because that phrase contains "logged in" too.
-    const loggedIn = both.split('\n').map((s) => s.trim())
-      .find((s) => /logged in/i.test(s) && !/not logged in/i.test(s));
+    const loggedIn = both.split('\n').map((x) => x.trim())
+      .find((x) => /logged in/i.test(x) && !/not logged in/i.test(x));
     if (r.code === 0 && loggedIn) return { state: 'in', detail: loggedIn };
-    // A non-zero exit is codex's own way of saying "no session" — take it as one.
-    if (r.code !== 0 || /not logged in|login required/i.test(both)) {
-      return { state: 'out', detail: 'signed out — run `codex login`' };
-    }
-    return { state: 'unknown', detail: `${cmd}: exit ${r.code}, ${firstLine(both) || 'no output'}` };
+    if (/not logged in|login required|logged out/i.test(both)) return { state: 'out', detail: 'signed out — run `codex login`' };
+    return unknown;
   }
   if (name === 'grok') {
     if (/not authenticated|not signed in/i.test(both)) return { state: 'out', detail: 'signed out — run `grok login`' };
     if (r.code === 0 && lines.length) return { state: 'in', detail: `${cmd} listed ${lines.length} line(s)` };
-    return { state: 'unknown', detail: `${cmd}: exit ${r.code}, ${firstLine(both) || 'no output'}` };
+    return unknown;
   }
   // agy: exit 0 with output is the only positive signal, and only an explicit
   // phrase is a negative one — "login" appearing in prose proves nothing.
   if (r.code === 0 && lines.length) return { state: 'in', detail: `${cmd} listed ${lines.length} line(s)` };
   if (/not authenticated|not signed in|not logged in/i.test(both)) return { state: 'out', detail: 'signed out — run `agy` once and sign in' };
-  return { state: 'unknown', detail: `${cmd}: exit ${r.code}, ${firstLine(both) || 'no output'}` };
+  return unknown;
 }
 
-/** Claude Code's own config — parsed, never written. Absence is normal, not an error. */
-function readClaudeConfig() {
-  const path = join(homedir(), '.claude.json');
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    return { path, config: isObj(parsed) ? parsed : null, error: isObj(parsed) ? null : 'top-level is not an object' };
-  } catch (e) {
-    return { path, config: null, error: e && e.code === 'ENOENT' ? 'absent' : (e && e.message) || String(e) };
+/**
+ * Claude Code's own config — parsed, NEVER written; the only thing that writes
+ * it is `claude`. CLAUDE_CONFIG_DIR relocates the whole config, so look there
+ * FIRST and fall back to ~/.claude.json; doctor prints which file it read,
+ * because "not registered" against the wrong file is a lie. Absence is normal.
+ */
+function readClaudeConfig(env = process.env) {
+  const dir = String(env.CLAUDE_CONFIG_DIR || '').trim();
+  const candidates = [
+    ...(dir ? [{ path: join(dir, '.claude.json'), source: 'CLAUDE_CONFIG_DIR' }] : []),
+    { path: join(homedir(), '.claude.json'), source: 'home' },
+  ];
+  for (const c of candidates) {
+    let raw;
+    try { raw = readFileSync(c.path, 'utf8'); }
+    catch (e) {
+      if (e && e.code === 'ENOENT') continue; // try the next candidate
+      return { ...c, config: null, error: (e && e.message) || String(e) };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      return isObj(parsed)
+        ? { ...c, config: parsed, error: null }
+        : { ...c, config: null, error: 'top-level is not an object' };
+    } catch (e) {
+      return { ...c, config: null, error: (e && e.message) || String(e) };
+    }
   }
+  return { ...candidates[0], config: null, error: 'absent' };
 }
 
-/** Find <prefix>-<unit> in the user scope, then in any project scope. */
-function findRegistration(config, serverName) {
+/**
+ * Find <prefix>-<unit> in the user scope, then in any project scope — and say
+ * whether it is OURS. The name alone proves nothing: another clone of this
+ * package, or something else entirely, can own it. `ours` means the command is
+ * node AND the args path is exactly THIS checkout's servers/<unit>.mjs; short
+ * of that doctor reports where it actually points instead of claiming it.
+ */
+function findRegistration(config, serverName, expected) {
   if (!isObj(config)) return null;
   const buckets = [];
   if (isObj(config.mcpServers)) buckets.push(['user', config.mcpServers]);
   if (isObj(config.projects)) {
     for (const [dir, p] of Object.entries(config.projects)) if (isObj(p) && isObj(p.mcpServers)) buckets.push([`project ${dir}`, p.mcpServers]);
   }
+  const samePath = (a, b) => {
+    try { return !!a && !!b && resolvePath(a) === resolvePath(b); } catch { return false; }
+  };
   for (const [scope, servers] of buckets) {
     const entry = servers[serverName];
-    if (isObj(entry)) {
-      const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
-      const target = args.find((a) => a.endsWith('.mjs')) || args[args.length - 1] || '';
-      return { scope, entry, target, exists: !!target && existsSync(target) };
-    }
+    if (!isObj(entry)) continue;
+    const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
+    const target = args.find((a) => a.endsWith('.mjs')) || args[args.length - 1] || '';
+    const command = typeof entry.command === 'string' ? entry.command : '';
+    const isNode = command === process.execPath || /^node(\.exe)?$/i.test(basename(command));
+    return {
+      scope, entry, command, target,
+      exists: !!target && existsSync(target),
+      ours: isNode && samePath(target, expected),
+    };
   }
   return null;
 }
@@ -285,7 +386,6 @@ function probeHome(env = process.env) {
 
 // ─── shared rendering ────────────────────────────────────────────────────────
 
-const pad = (s, n) => String(s).padEnd(n);
 const fmtValue = (v) => (v === '' ? '(unset)' : String(v));
 
 /**
@@ -437,25 +537,38 @@ async function cmdUninstall(argv) {
 
   const dry = !!flags.dryRun;
   const claudePath = whichBin('claude');
+  // The registry decides what a failed remove MEANS: removing a name that was
+  // never there is idempotence working, removing one that IS there and failing
+  // is a real failure the operator has to hear about.
+  const claude = readClaudeConfig();
+  const registered = (n) => !!findRegistration(claude.config, `${prefix}-${n}`, serverPathFor(n));
+
   out(`FLEET UNINSTALL · prefix "${prefix}"`);
   out();
   if (!claudePath && !dry) {
-    out('claude not found in PATH — nothing was removed. Run these yourself:');
+    out('claude not found in PATH — NOTHING WAS CHANGED. Run these yourself:');
     out();
     for (const n of names) out(`  claude mcp remove -s user ${prefix}-${n}`);
     out();
     out('The fleet config and the status files were not touched.');
     return 0;
   }
+  const failed = [];
   for (const n of names) {
     const cmd = ['claude', 'mcp', 'remove', '-s', 'user', `${prefix}-${n}`];
-    if (dry) { out(`${pad(n, 7)} would run: ${cmd.join(' ')}`); continue; }
+    const was = registered(n);
+    if (dry) { out(`${pad(n, 7)} would run: ${cmd.join(' ')}${was ? '' : '   (not registered — a no-op)'}`); continue; }
     const res = await runClaude(claudePath, cmd);
-    out(`${pad(n, 7)} ${res.code === 0 ? `removed ${prefix}-${n}` : `not removed (exit ${res.code}): ${firstLine(res.stderr) || firstLine(res.stdout) || 'no output'}`}`);
+    if (res.code === 0) { out(`${pad(n, 7)} removed ${prefix}-${n}`); continue; }
+    const why = firstLine(res.stderr) || firstLine(res.stdout) || 'no output';
+    if (!was) { out(`${pad(n, 7)} ${prefix}-${n} was not registered — nothing to remove`); continue; }
+    failed.push(n);
+    out(`${pad(n, 7)} FAILED to remove ${prefix}-${n} (exit ${res.code}): ${why}`);
   }
   out();
+  if (failed.length) out(`Still registered: ${failed.map((n) => `${prefix}-${n}`).join(', ')}.`);
   out(`${dry ? 'Nothing was changed (--dry-run). ' : ''}The fleet config and the status files were not touched.`);
-  return 0;
+  return failed.length ? 1 : 0;
 }
 
 // ─── doctor ──────────────────────────────────────────────────────────────────
@@ -495,6 +608,17 @@ async function probeCodexModels(binPath) {
   return lines;
 }
 
+/** What the registry says about this unit — and whether it is even ours (see findRegistration). */
+function mcpLine(name, prefix, reg, expected) {
+  const server = `${prefix}-${name}`;
+  if (!reg) return `${server} not registered — run: omelette-fleet install --units ${name}`;
+  const file = reg.exists ? '[file exists]' : '[FILE MISSING]';
+  const cmd = reg.command ? `${reg.command} ` : '';
+  return reg.ours
+    ? `${server} registered (${reg.scope}) → ${cmd}${reg.target} ${file}`
+    : `${server} registered elsewhere (${reg.scope}) → ${cmd}${reg.target || '(no args)'} ${file}\n              not this clone — install here would point it at ${expected}`;
+}
+
 async function cmdDoctor(argv) {
   const { flags, positional, errors } = parseArgv(argv, { booleans: ['probe-models'], options: ['prefix'] });
   if (positional.length) errors.push(`unexpected argument: ${positional[0]}`);
@@ -509,7 +633,7 @@ async function cmdDoctor(argv) {
   out(`fleet home    ${home.dir}`);
   out(`fleet config  ${configPath()}${existsSync(configPath()) ? '' : ' (absent — built-in defaults in force)'}`);
   out(`claude CLI    ${claudePath || 'not found in PATH'}`);
-  out(`claude config ${claude.path}${claude.error ? ` (${claude.error})` : ''}`);
+  out(`claude config ${claude.path}${claude.error ? ` (${claude.error})` : ''}${claude.source === 'CLAUDE_CONFIG_DIR' ? '   [via CLAUDE_CONFIG_DIR]' : ''}`);
   out();
 
   let faults = 0;
@@ -518,7 +642,9 @@ async function cmdDoctor(argv) {
     const bin = resolveBin(unit);
     const binPath = whichBin(bin);
     const cfg = cfgFor(name);
-    const reg = findRegistration(claude.config, `${prefix}-${name}`);
+    const server = serverPathFor(name);
+    const reg = findRegistration(claude.config, `${prefix}-${name}`, server);
+    const problems = [];
 
     out(`── ${name} (${unit.label}) ${'─'.repeat(Math.max(0, 56 - name.length - String(unit.label).length))}`);
     const binEnv = unit.bin.env ? `${unit.bin.env}=${process.env[unit.bin.env] ? process.env[unit.bin.env] : '(unset)'}` : '(no env override)';
@@ -526,20 +652,27 @@ async function cmdDoctor(argv) {
     if (binPath) {
       out(`  version     ${await probeVersion(unit, binPath)}`);
       const login = await probeLogin(unit, binPath);
-      out(`  login       ${login.state === 'in' ? 'OK' : login.state === 'out' ? 'SIGNED OUT' : 'unknown'} — ${login.detail}`);
-      if (login.state === 'out' && cfg.values.enabled && reg) faults++;
+      const label = login.label || (login.state === 'in' ? 'OK' : login.state === 'out' ? 'SIGNED OUT' : 'unknown');
+      out(`  login       ${label} — ${login.detail}`);
+      if (login.state === 'out') problems.push('signed out');
     } else {
       out('  version     — (no binary)');
       out('  login       unknown (no binary)');
-      if (cfg.values.enabled && reg) faults++;
+      problems.push(`${bin} not found in PATH`);
     }
     out(`  config      ${ceilingLine(name, cfg)}`);
     for (const line of configRows(name, cfg, '              ')) out(line);
     for (const w of cfg.warnings) out(`  warning     ${w}`);
-    out(`  mcp         ${reg
-      ? `${prefix}-${name} registered (${reg.scope}) → ${reg.target || '(no args)'} ${reg.exists ? '[file exists]' : '[FILE MISSING]'}`
-      : `${prefix}-${name} not registered — run: omelette-fleet install --units ${name}`}`);
+    // A registration whose server file is gone cannot start at all — that is a
+    // fault in its own right, however healthy the vendor CLI looks.
+    if (reg && !reg.exists) problems.push(`the registered server file is missing (${reg.target || 'no args'})`);
+    out(`  mcp         ${mcpLine(name, prefix, reg, server)}`);
     out(`  status feed ${cfg.values.status ? '' : '(disabled in config) '}${home.writable ? `${home.dir} is writable` : `${home.dir} is NOT writable — ${home.error}`}`);
+    // Enabled AND registered AND broken. A unit you never wired up is not a fault.
+    if (cfg.values.enabled && reg && problems.length) {
+      faults++;
+      out(`  FAULT       enabled and registered, but: ${problems.join('; ')}`);
+    }
     out();
   }
 
@@ -552,7 +685,7 @@ async function cmdDoctor(argv) {
   }
 
   out(faults
-    ? `${faults} unit(s) enabled AND registered are broken (missing binary or signed out) — see above.`
+    ? `${faults} unit(s) enabled AND registered are broken — see the FAULT lines above.`
     : 'No faults in units that are both enabled and registered.');
   return faults ? 1 : 0;
 }
@@ -601,6 +734,19 @@ function readConfigRaw(env = process.env) {
   }
 }
 
+/** What a JSON value IS, for a refusal message that tells the operator what to fix. */
+const jsonKind = (v) => (v === null ? 'null' : Array.isArray(v) ? 'an array' : `a ${typeof v}`);
+
+/**
+ * Write keys into <home>/fleet.config.json, merging into what is already there
+ * so nothing else in the file is lost — and refusing outright when the shape it
+ * would have to merge into is not an object, because silently replacing an
+ * operator's data is worse than any error message.
+ *
+ * KNOWN LIMITATION: two concurrent `set` runs are a read-modify-write race —
+ * the file itself is written atomically (tmp + rename), but the merge is not
+ * serialized; this is an operator tool run by one person at a keyboard.
+ */
 function cmdSet(argv) {
   const { positional, errors } = parseArgv(argv, {});
   if (!positional.length) errors.push('nothing to set — usage: omelette-fleet set <unit>.<key>=<value> [...]');
@@ -627,6 +773,22 @@ function cmdSet(argv) {
   const file = readConfigRaw();
   if (file.config === null) {
     err(`omelette-fleet set: ${file.path} is not valid JSON (${file.error}) — fix or remove it first; refusing to overwrite it.`);
+    return 1;
+  }
+  // The merge targets have to BE objects. Anything else and we would be
+  // deleting whatever is there, not editing it.
+  const shape = [];
+  if (file.config.units !== undefined && !isObj(file.config.units)) {
+    shape.push(`"units" is ${jsonKind(file.config.units)}, not an object`);
+  } else if (isObj(file.config.units)) {
+    for (const name of [...new Set(assignments.map((a) => a.name))]) {
+      const entry = file.config.units[name];
+      if (entry !== undefined && !isObj(entry)) shape.push(`"units.${name}" is ${jsonKind(entry)}, not an object`);
+    }
+  }
+  if (shape.length) {
+    for (const m of shape) err(`omelette-fleet set: ${file.path}: ${m}`);
+    err('omelette-fleet set: fix the file by hand first — refusing to replace it.');
     return 1;
   }
 
@@ -670,7 +832,11 @@ async function cmdCall(argv) {
   const timeoutS = flags.timeout === undefined ? 900 : Number(flags.timeout);
   if (!Number.isFinite(timeoutS) || timeoutS <= 0) errors.push(`--timeout must be a positive number of seconds (got ${JSON.stringify(flags.timeout)})`);
   let args = {};
-  try { args = JSON.parse(argsJson); } catch (e) { errors.push(`bad json args: ${(e && e.message) || e}`); }
+  let parsed = false;
+  try { args = JSON.parse(argsJson); parsed = true; } catch (e) { errors.push(`bad json args: ${(e && e.message) || e}`); }
+  // MCP tool arguments are an object. A bare scalar or an array would be sent
+  // as-is and rejected by the server with a far less useful message.
+  if (parsed && !isObj(args)) errors.push(`json args must be a JSON object like '{"prompt":"…"}' — got ${jsonKind(args)}`);
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet call: ${e}`)); return 1; }
 
   try {
@@ -695,8 +861,11 @@ async function cmdCall(argv) {
 
 async function main(argv) {
   const [cmd, ...rest] = argv;
+  if (cmd === 'help' && COMMANDS[rest[0]]) { out(commandHelp(rest[0])); return 0; }
   if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') { out(HELP); return 0; }
   if (cmd === '--version' || cmd === '-v') { out(PKG.version); return 0; }
+  // `install --help` asks a question; answering it with "unknown flag" is rude.
+  if (COMMANDS[cmd] && (rest.includes('--help') || rest.includes('-h'))) { out(commandHelp(cmd)); return 0; }
   switch (cmd) {
     case 'install': return cmdInstall(rest);
     case 'uninstall': return cmdUninstall(rest);

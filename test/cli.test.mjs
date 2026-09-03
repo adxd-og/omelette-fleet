@@ -13,10 +13,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { callUnitServer, MAX_TIMEOUT_S } from '../core/client.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -52,6 +53,49 @@ function fakeBin(dir, { name = 'fake-cli', login = 'Logged in using ChatGPT', lo
     `if (a[0] === 'login' && a[1] === 'status') { process.${loginStream}.write(${JSON.stringify(login + '\n')}); process.exit(${loginCode}); }`,
     "console.error('unexpected argv: ' + a.join(' '));",
     'process.exit(1);',
+  ].join('\n'));
+  chmodSync(p, 0o755);
+  return p;
+}
+
+/**
+ * A fake `claude` on PATH — the real binary is never required by any test.
+ * It records its argv and answers with the exit code we ask for.
+ */
+function fakeClaude(dir, { exitCode = 0, name = 'pathdir' } = {}) {
+  const bindir = join(dir, name);
+  mkdirSync(bindir, { recursive: true });
+  const p = join(bindir, 'claude');
+  writeFileSync(p, [
+    `#!${process.execPath}`,
+    `require('fs').appendFileSync(${JSON.stringify(join(dir, 'claude.log'))}, process.argv.slice(2).join(' ') + '\\n');`,
+    `console.error('claude says ${exitCode === 0 ? 'ok' : 'no'}');`,
+    `process.exit(${exitCode});`,
+  ].join('\n'));
+  chmodSync(p, 0o755);
+  return bindir;
+}
+
+/** A scriptable MCP server: `handler` is the body that answers one parsed frame `m`. */
+function fakeServer(dir, name, handler) {
+  const p = join(dir, name);
+  writeFileSync(p, [
+    `#!${process.execPath}`,
+    'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
+    'const INIT = { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "0" } };',
+    'const TOOLS = [{ name: "t", description: "d", inputSchema: { type: "object" } }];',
+    'let buf = "";',
+    'process.stdin.setEncoding("utf8");',
+    'process.stdin.on("data", (c) => {',
+    '  buf += c; let nl;',
+    '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+    '    const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);',
+    '    if (!line) continue;',
+    '    const m = JSON.parse(line);',
+    '    if (m.id === undefined) continue;',
+    handler,
+    '  }',
+    '});',
   ].join('\n'));
   chmodSync(p, 0o755);
   return p;
@@ -201,9 +245,25 @@ test('doctor reads the codex login answer off EITHER stream and never calls exit
   };
   assert.match(state({ loginStream: 'stderr' }, 'c-err'), /^OK — Logged in using ChatGPT/); // the real shape
   assert.match(state({ loginStream: 'stdout' }, 'c-out'), /^OK — Logged in using ChatGPT/);
-  assert.match(state({ loginCode: 1, login: '' }, 'c-exit'), /^SIGNED OUT/); // non-zero exit = no session
+  // Only an EXPLICIT phrase is a negative: a CLI can exit non-zero for a dozen
+  // reasons that are not "no session", and "run `codex login`" would be a lie.
+  assert.match(state({ loginCode: 1, login: 'connect ECONNREFUSED' }, 'c-exit'), /^unknown \(exit 1\) — connect ECONNREFUSED/);
   assert.match(state({ login: 'You are not logged in' }, 'c-not'), /^SIGNED OUT/); // contains "logged in"
+  assert.match(state({ login: 'Logged out' }, 'c-out2'), /^SIGNED OUT/);
   assert.match(state({ login: 'something else entirely' }, 'c-huh'), /^unknown/); // never guessed
+});
+
+test('doctor never prints a failing --version probe as if it were a version', () => {
+  const dir = home();
+  const bin = join(dir, 'broken-version');
+  writeFileSync(bin, [
+    `#!${process.execPath}`,
+    "console.error('error: could not load config'); process.exit(2);",
+  ].join('\n'));
+  chmodSync(bin, 0o755);
+  const r = cli(['doctor'], { dir, env: { AGY_BIN: join(dir, 'x'), GROK_BIN: join(dir, 'x'), CODEX_BIN: bin } });
+  assert.match(r.out, /version\s+unknown \(exit 2: error: could not load config\)/);
+  assert.doesNotMatch(r.out, /version\s+error: could not load config$/m);
 });
 
 test('doctor reports a missing binary as not found, and still exits 0 while the unit is unregistered', () => {
@@ -216,7 +276,7 @@ test('doctor reports a missing binary as not found, and still exits 0 while the 
   assert.match(r.out, /login\s+unknown \(no binary\)/);
 });
 
-test('doctor surfaces a registered server whose file is missing, and honours enabled=false in the config', () => {
+test('doctor will not claim a registration that is not this clone, and a disabled unit is never a fault', () => {
   const dir = home();
   const fake = fakeBin(dir);
   // A hand-made ~/.claude.json: doctor only ever reads it.
@@ -225,9 +285,55 @@ test('doctor surfaces a registered server whose file is missing, and honours ena
   }));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { enabled: false } } }));
   const r = cli(['doctor'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: join(dir, 'no-such-codex') } });
-  assert.match(r.out, /omelette-codex registered \(user\) → .*gone.*codex\.mjs \[FILE MISSING\]/);
+  assert.match(r.out, /omelette-codex registered elsewhere \(user\) → node .*gone.*codex\.mjs \[FILE MISSING\]/);
+  assert.match(r.out, new RegExp(`not this clone — install here would point it at ${join(ROOT, 'servers', 'codex.mjs')}`));
   assert.equal(r.code, 0); // registered + broken, but disabled in config → not a fault
+  assert.doesNotMatch(r.out, /FAULT/);
   assert.match(r.out, /^\s+enabled\s+false\s+file$/m);
+});
+
+test('doctor: a registration owned by something else is never counted as ours', () => {
+  const dir = home();
+  const fake = fakeBin(dir);
+  const server = join(ROOT, 'servers', 'codex.mjs');
+  // Right path, wrong runner — some other launcher owns this name.
+  writeFileSync(join(dir, '.claude.json'), JSON.stringify({
+    mcpServers: { 'omelette-codex': { command: 'bunx', args: [server] } },
+  }));
+  const r = cli(['doctor'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake } });
+  assert.match(r.out, /omelette-codex registered elsewhere \(user\) → bunx .*servers.*codex\.mjs \[file exists\]/);
+});
+
+test('doctor: an ENABLED unit registered against a server file that is gone is a fault (exit 1)', () => {
+  const dir = home();
+  const fake = fakeBin(dir);
+  writeFileSync(join(dir, '.claude.json'), JSON.stringify({
+    mcpServers: { 'omelette-codex': { command: 'node', args: [join(dir, 'gone', 'codex.mjs')] } },
+  }));
+  // Everything else about codex is healthy — the dead registration alone is the fault.
+  const r = cli(['doctor'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake } });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /FAULT\s+enabled and registered, but: the registered server file is missing/);
+  assert.match(r.out, /1 unit\(s\) enabled AND registered are broken/);
+});
+
+test('doctor reads .claude.json from CLAUDE_CONFIG_DIR first and says so', () => {
+  const dir = home();
+  const fake = fakeBin(dir);
+  const alt = join(dir, 'alt-config');
+  mkdirSync(alt, { recursive: true });
+  writeFileSync(join(alt, '.claude.json'), JSON.stringify({
+    mcpServers: { 'omelette-codex': { command: 'node', args: [join(ROOT, 'servers', 'codex.mjs')] } },
+  }));
+  // The home copy would say "not registered" — proving which file was read.
+  writeFileSync(join(dir, '.claude.json'), JSON.stringify({ mcpServers: {} }));
+  const r = cli(['doctor'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake, CLAUDE_CONFIG_DIR: alt } });
+  assert.match(r.out, new RegExp(`claude config ${join(alt, '.claude.json')}\\s+\\[via CLAUDE_CONFIG_DIR\\]`));
+  assert.match(r.out, /omelette-codex registered \(user\) → node .*servers.*codex\.mjs \[file exists\]/);
+  // Absent there → falls back to ~/.claude.json, which has no servers.
+  const back = cli(['doctor'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake, CLAUDE_CONFIG_DIR: join(dir, 'nowhere') } });
+  assert.match(back.out, new RegExp(`claude config ${join(dir, '.claude.json')}`));
+  assert.match(back.out, /omelette-codex not registered/);
 });
 
 test('doctor exits 1 when a unit is enabled AND registered AND its binary is gone', () => {
@@ -239,7 +345,8 @@ test('doctor exits 1 when a unit is enabled AND registered AND its binary is gon
   const r = cli(['doctor'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: join(dir, 'no-such-codex') } });
   assert.equal(r.code, 1);
   assert.match(r.out, /1 unit\(s\) enabled AND registered are broken/);
-  assert.match(r.out, /omelette-codex registered \(user\) → .*servers.*codex\.mjs \[file exists\]/);
+  assert.match(r.out, /FAULT\s+enabled and registered, but: .*no-such-codex not found in PATH/);
+  assert.match(r.out, /omelette-codex registered \(user\) → node .*servers.*codex\.mjs \[file exists\]/);
 });
 
 test('call drives a real server over stdio and maps the answer to an exit code', () => {
@@ -261,4 +368,143 @@ test('call drives a real server over stdio and maps the answer to an exit code',
   assert.equal(cli(['call', 'nope', 'x', '{}'], { dir }).code, 1);
   assert.equal(cli(['call', 'codex', 'codex_models', '{oops'], { dir }).code, 1);
   assert.match(cli(['call', 'codex', 'codex_models', '{}', '--timeout', '0'], { dir }).err, /--timeout must be a positive number/);
+});
+
+test('per-command help: `<cmd> --help`, `-h` and `help <cmd>` all print that command\'s page', () => {
+  const dir = home();
+  for (const cmd of ['install', 'uninstall', 'doctor', 'show', 'set', 'call']) {
+    for (const argv of [[cmd, '--help'], [cmd, '-h'], ['help', cmd]]) {
+      const r = cli(argv, { dir });
+      assert.equal(r.code, 0, `${argv.join(' ')} → ${r.err}`);
+      assert.match(r.out, new RegExp(`^omelette-fleet ${cmd}$`, 'm'));
+      assert.match(r.out, new RegExp(`^  omelette-fleet ${cmd} `, 'm'));
+      assert.equal(r.err, ''); // never a parse error
+    }
+  }
+  // The per-command body is the same text the global listing is built from.
+  assert.ok(cli(['doctor', '--help'], { dir }).out.includes('--probe-models spends real Codex calls'));
+  assert.ok(cli([], { dir }).out.includes('--probe-models spends real Codex calls'));
+});
+
+test('set refuses to replace a "units" (or a unit entry) that is not an object', () => {
+  const dir = home();
+  const cfg = join(dir, 'fleet.config.json');
+  writeFileSync(cfg, JSON.stringify({ version: 1, units: ['codex'] }));
+  const arr = cli(['set', 'codex.timeoutS=42'], { dir });
+  assert.equal(arr.code, 1);
+  assert.match(arr.err, /"units" is an array, not an object/);
+  assert.equal(readFileSync(cfg, 'utf8'), JSON.stringify({ version: 1, units: ['codex'] })); // untouched
+
+  writeFileSync(cfg, JSON.stringify({ version: 1, units: { codex: 'read-only' } }));
+  const str = cli(['set', 'codex.timeoutS=42'], { dir });
+  assert.equal(str.code, 1);
+  assert.match(str.err, /"units\.codex" is a string, not an object/);
+  // a DIFFERENT unit's broken entry is not in the way of this write
+  writeFileSync(cfg, JSON.stringify({ version: 1, units: { grok: 7, codex: { timeoutS: 1 } } }));
+  assert.equal(cli(['set', 'codex.timeoutS=42'], { dir }).code, 0);
+  assert.equal(JSON.parse(readFileSync(cfg, 'utf8')).units.grok, 7); // and it is preserved
+});
+
+test('call refuses json args that are not an object', () => {
+  const dir = home();
+  for (const bad of ['[]', 'null', '3', '"hi"']) {
+    const r = cli(['call', 'codex', 'codex_models', bad], { dir });
+    assert.equal(r.code, 1, bad);
+    assert.match(r.err, /json args must be a JSON object/);
+  }
+  assert.equal(cli(['call', 'codex', 'codex_models', '{}'], { dir }).code, 0);
+});
+
+test('uninstall: a failed remove of a REGISTERED server is a failure (exit 1); an unregistered one is a no-op', () => {
+  const dir = home();
+  const server = join(ROOT, 'servers', 'codex.mjs');
+  writeFileSync(join(dir, '.claude.json'), JSON.stringify({
+    mcpServers: { 'omelette-codex': { command: 'node', args: [server] } },
+  }));
+  const PATH = `${fakeClaude(dir, { exitCode: 3 })}:${process.env.PATH}`;
+
+  const both = cli(['uninstall', '--units', 'codex,grok'], { dir, env: { PATH } });
+  assert.equal(both.code, 1, both.out);
+  assert.match(both.out, /FAILED to remove omelette-codex \(exit 3\): claude says no/);
+  assert.match(both.out, /omelette-grok was not registered — nothing to remove/); // idempotent
+  assert.match(both.out, /Still registered: omelette-codex\./);
+
+  // Nothing that was registered → nothing that can fail.
+  const clean = cli(['uninstall', '--units', 'grok'], { dir, env: { PATH } });
+  assert.equal(clean.code, 0);
+  assert.match(clean.out, /config and the status files were not touched/);
+
+  // A claude that succeeds removes it and exits 0.
+  const okPath = `${fakeClaude(dir, { exitCode: 0, name: 'okdir' })}:${process.env.PATH}`;
+  const done = cli(['uninstall', '--units', 'codex'], { dir, env: { PATH: okPath } });
+  assert.equal(done.code, 0);
+  assert.match(done.out, /removed omelette-codex/);
+});
+
+test('uninstall --dry-run marks the units that are not registered, and claude missing changes nothing', () => {
+  const dir = home();
+  const r = cli(['uninstall', '--dry-run', '--units', 'codex'], { dir });
+  assert.equal(r.code, 0);
+  assert.match(r.out, /would run: claude mcp remove -s user omelette-codex   \(not registered — a no-op\)/);
+  const noClaude = cli(['uninstall', '--units', 'codex'], { dir, env: { PATH: join(dir, 'empty') } });
+  assert.equal(noClaude.code, 0);
+  assert.match(noClaude.out, /NOTHING WAS CHANGED/);
+  assert.match(noClaude.out, /claude mcp remove -s user omelette-codex/);
+});
+
+// ─── core/client.mjs, driven directly: the transport's own failure modes ─────
+
+test('client: a JSON-RPC error reply is a REJECTION, never a silent empty success', async () => {
+  const dir = home();
+  const boom = fakeServer(dir, 'boom.mjs', [
+    'if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: INIT });',
+    'else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: TOOLS } });',
+    'else send({ jsonrpc: "2.0", id: 3, error: { code: -32603, message: "tool exploded" } });',
+  ].join('\n'));
+  await assert.rejects(
+    callUnitServer({ serverPath: boom, tool: 't', timeoutS: 20 }),
+    /server error on tools\/call: tool exploded \(code -32603\)/,
+  );
+  // …and the same for the earlier requests.
+  const early = fakeServer(dir, 'early.mjs', 'send({ jsonrpc: "2.0", id: m.id, error: { message: "no handshake" } });');
+  await assert.rejects(callUnitServer({ serverPath: early, tool: 't', timeoutS: 20 }), /server error on initialize: no handshake/);
+});
+
+test('client: a child that exits after tools/list fails at once, not after the timeout', async () => {
+  const dir = home();
+  const quitter = fakeServer(dir, 'quit.mjs', [
+    'if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: INIT });',
+    'else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: TOOLS } });',
+    'else process.exit(7);',
+  ].join('\n'));
+  const t0 = Date.now();
+  await assert.rejects(callUnitServer({ serverPath: quitter, tool: 't', timeoutS: 30 }), /server exited early \(code 7\)/);
+  assert.ok(Date.now() - t0 < 5000, 'must not wait out the timeout');
+});
+
+test('client: a server that dies BEFORE tools/list fails the call at once too', async () => {
+  const dir = home();
+  // The other half of the same guard: whichever of exit / stdin-close arrives
+  // first must fail the request instead of leaving it to the timeout.
+  const bailer = fakeServer(dir, 'bail.mjs', 'if (m.id === 1) { send({ jsonrpc: "2.0", id: 1, result: INIT }); process.exit(0); }');
+  const t0 = Date.now();
+  await assert.rejects(
+    callUnitServer({ serverPath: bailer, tool: 't', timeoutS: 30 }),
+    /server (exited early|stdin failed|closed its stdin)/,
+  );
+  assert.ok(Date.now() - t0 < 5000, 'must not wait out the timeout');
+});
+
+test('client: an absurd timeout is clamped instead of overflowing into an instant false timeout', async () => {
+  const dir = home();
+  const good = fakeServer(dir, 'good.mjs', [
+    'if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: INIT });',
+    'else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: TOOLS } });',
+    'else send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: "hello" }] } });',
+  ].join('\n'));
+  // 1e12 s overflows Node's int32 timer and used to fire on the next tick.
+  const r = await callUnitServer({ serverPath: good, tool: 't', timeoutS: 1e12 });
+  assert.equal(r.text, 'hello');
+  assert.equal(r.isError, false);
+  assert.equal(MAX_TIMEOUT_S, 86400);
 });
