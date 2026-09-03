@@ -1,0 +1,148 @@
+# omelette-fleet
+
+Plug Google Gemini, xAI Grok and OpenAI Codex into Claude Code as MCP **units** — read-only research and code-review peers. Each unit is its own stdio MCP server that spawns the vendor's own CLI headless (`agy`, `grok`, `codex`), so every call rides the subscription you already pay for. The child environment is built from a small allowlist rather than inherited, and API keys that would silently switch a CLI to metered billing are scrubbed on top of it. Claude Code stays the manager: **units propose, the manager applies.** A single config file with a two-key write ceiling keeps a unit from becoming a foot-gun, and a status feed reports what each unit is doing right now — for `tail -f`, a HUD, or a menu-bar app.
+
+Zero runtime dependencies. Node core only, no build step.
+
+## Requirements
+
+- **Node ≥ 20**
+- **Claude Code** (the MCP client that will host the units)
+- **Any subset** of the vendor CLIs, installed and logged in: `agy` (Antigravity, for Gemini), `grok` (Grok Build), `codex` (Codex CLI).
+
+A partial fleet is normal and expected. `install` skips units whose CLI is not on `PATH`; the units you do have work exactly the same.
+
+## Quickstart
+
+```bash
+git clone https://github.com/adxd-og/omelette-fleet.git
+cd omelette-fleet
+./bin/omelette-fleet.mjs install
+```
+
+`install` registers one MCP server per available unit with `claude mcp add -s user`, named `<prefix>-<unit>` (default prefix `omelette`, so `omelette-gemini`, `omelette-grok`, `omelette-codex`), and creates `~/.omelette/fleet.config.json` from `examples/fleet.config.json` if you don't have one.
+
+Restart Claude Code. The tools appear as `mcp__<prefix>-<unit>__<tool>` — for example `mcp__omelette-codex__codex_code_review`.
+
+Then check the install:
+
+```bash
+./bin/omelette-fleet.mjs doctor
+```
+
+`doctor` reports the binaries and versions it found, login state, the resolved config with sources, the effective mode and write ceiling per unit, MCP registration, and whether the status-feed directory is writable. It exits 1 only when a unit that is **both enabled and registered** is broken — a unit you deliberately never wired up is not a fault.
+
+Once published, the same commands work as `npx omelette-fleet …`.
+
+### CLI
+
+| Command | What it does |
+|---|---|
+| `install [--prefix <name>] [--units <a,b,c>] [--dry-run] [--force]` | Registers one MCP server per unit as `<prefix>-<unit>` with `claude mcp add -s user`, and creates `<home>/fleet.config.json` from the shipped example if it does not exist yet (an existing file is never overwritten). A unit whose vendor CLI is not in `PATH` is skipped unless `--force`. `--dry-run` prints every command and every write and runs nothing. Exits 1 if a `claude mcp add` fails |
+| `uninstall [--prefix <name>] [--units <a,b,c>] [--dry-run]` | `claude mcp remove -s user` for those servers. The fleet config and the status files are never touched |
+| `doctor [--prefix <name>] [--probe-models]` | Per unit: binary, `--version`, login state, resolved config with sources, ceiling, MCP registration, status-feed writability. `--probe-models` spends real Codex calls to test every catalog id |
+| `show [<unit>]` | Every config key for one unit or all of them: value, where it came from, and the ceiling |
+| `set <unit>.<key>=<value> [...]` | Changes keys in the config file. Unknown units, unknown keys and invalid values are refused; the rest of the file is kept |
+| `call <unit> <tool> [json-args] [--timeout <seconds>]` | Drives a unit's server over real stdio (initialize → tools/list → tools/call). Exit 0 = ok, 2 = the tool answered with an error, 1 = the server never answered. Default timeout 900 s |
+| `--help`, `--version` | |
+
+If `claude` is not in `PATH`, `install` still writes the fleet config and prints the exact `claude mcp add` commands to run later. Neither the CLI nor the servers ever shell out — every child is `spawn(bin, [args])`, so a path or a value containing a space is data, not shell syntax. The only file the CLI writes is `<home>/fleet.config.json`; Claude Code's own config is parsed, never written.
+
+`call` is the way to test a unit without a client: `./bin/omelette-fleet.mjs call codex codex_models '{}'`.
+
+## Units
+
+| Unit | CLI | Log in with | Tools | Good for | Do not trust it with |
+|---|---|---|---|---|---|
+| **gemini** | `agy` (Antigravity) | agy has no `login` subcommand — sign in through the OAuth flow on your first interactive `agy` run; credentials land under `~/.gemini/` | `gemini_research`, `gemini_deep_research`, `gemini_image`, `gemini_models` | Grounded web research and fact synthesis; multi-source deep research; reading local files **including images and PDFs** (give an absolute path); heavy reasoning via `Gemini 3.1 Pro (High)`; a non-Google second opinion via `GPT-OSS 120B (Medium)`; image generation | Writing anything. agy has no kernel sandbox — read-only here rests on your own agy `settings.json` permission policy plus a prompt preamble, the weakest posture in the fleet. Deep-research sources are **asserted by the model**; verify them. Anything it read off the web is untrusted input |
+| **grok** | `grok` (Grok Build) | `grok login`, or `grok login --device-code` | `grok_research`, `grok_code_review`, `grok_image`, `grok_image_edit`, `grok_models` | A cheap, fast second opinion; mechanical code analysis; math/STEM checks (AIME 93–100%, GPQA Diamond 84.6–88%); high-volume research sweeps; image generation **and image-to-image editing** — the only unit in the fleet that edits images | Fact-critical claims. Grok 4.5 measured **~54% hallucination** on AA-Omniscience and is overconfident; 4.6 ships RL abstention fixes with no post-fix measurement as of 2026-08-13. Never the sole source of a fact. Also: architecture calls, long-horizon engineering (DeepSWE 1.1 65.9), UI/front-end taste. Prompt-injection susceptible; `workspace-write` is **declared unsupported** and refused even with the ceiling open |
+| **codex** | `codex` (Codex CLI) | `codex login` (ChatGPT account) | `codex_research`, `codex_code_review`, `codex_models` | The strongest code review in the fleet and agentic terminal analysis (Terminal-Bench 2.1 87.4 on `gpt-5.6-terra`); directory-scoped review with an explicit `cwd`; grounded research with web search; reports the fullest token usage in the fleet (input, cached, output, reasoning) | Being a source of record — verify factual claims. `gpt-5.6-luna` on anything multi-file or past ~200K tokens. `gpt-5.6-sol` unless your plan is ChatGPT Pro/Enterprise (Plus/Team gets an explicit rejection). `effort: xhigh` or `max` on routine work |
+
+Model ids, benchmark numbers and routing advice live in `units/<unit>/models.js` and are served by each unit's `<unit>_models` tool — call it when you are unsure which model a task belongs on.
+
+## Configuration
+
+One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.json`), read fresh on every call. `examples/fleet.config.json`:
+
+```json
+{
+  "version": 1,
+  "defaults": {
+    "status": true
+  },
+  "units": {
+    "gemini": {
+      "enabled": true,
+      "mode": "read-only",
+      "model": "Gemini 3.8 Flash (High)",
+      "timeoutS": 300
+    },
+    "grok": {
+      "enabled": true,
+      "mode": "read-only",
+      "timeoutS": 900,
+      "maxTurns": 30
+    },
+    "codex": {
+      "enabled": true,
+      "mode": "read-only",
+      "model": "gpt-5.6-terra",
+      "effort": "high",
+      "webSearch": true,
+      "timeoutS": 600
+    }
+  }
+}
+```
+
+One consequence worth knowing: because the Codex unit runs with `--ignore-user-config`, leaving `codex.model` unset does **not** fall back to your `~/.codex/config.toml` default — the adapter pins the first catalog entry (`gpt-5.6-terra`) instead and logs that it did.
+
+Every key, its default, the resolution order, and the per-unit environment overrides: **[docs/CONFIG.md](docs/CONFIG.md)**.
+
+## Security
+
+- Units are read-only by default; the mutating path stays in Claude Code, under your approval.
+- Write mode needs **two keys**: `mode: "workspace-write"` in the config file *and* the unit listed in `OMELETTE_ALLOW_WRITE` in the MCP server's env block. The config can only narrow, never widen.
+- Enforcement strength differs by vendor: Codex is an OS-level kernel sandbox (plus `--ignore-user-config --ignore-rules`, so your `~/.codex/config.toml` — MCP servers, plugins, hooks — never reaches a fleet run), Grok is a spawn-arg tool allowlist (and refuses write mode outright), Gemini is the CLI's own permission policy — the weakest of the three.
+- The child environment is **built from an allowlist**, not inherited: a review run cannot read your `GH_TOKEN` or cloud credentials. Billing-risk API keys are scrubbed on top of that, and `--dangerously-*` / `--always-approve` flags are never passed.
+- Everything a unit reads from the web or from a repository is untrusted input.
+
+Threat model, the per-unit enforcement matrix, and what is only best-effort: **[docs/SECURITY.md](docs/SECURITY.md)**.
+
+## Status feed
+
+Every unit writes what it is doing to `$OMELETTE_HOME` (default `~/.omelette`): a per-unit snapshot `status-<unit>.json` with the calls running right now and the last finished event, and a shared append-only `fleet-log.ndjson` with one compact JSON line per start and end. Writes are atomic, mode 0600, fail-soft (an fs error can never break a tool call), and the log self-trims. Any menu-bar app, HUD or `tail -f` can read it. Schema and field lists: **[docs/STATUS-FEED.md](docs/STATUS-FEED.md)**.
+
+## Orchestration
+
+How to actually run a session with a fleet — who decides, who proposes, which unit gets which task, and when to escalate a model or effort level: **[docs/ORCHESTRATION.md](docs/ORCHESTRATION.md)**. The adapter contract and internals: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**. Adding a fourth unit: **[docs/ADAPTERS.md](docs/ADAPTERS.md)**.
+
+## FAQ
+
+**Why CLIs instead of API keys?**
+Two reasons. Billing: each vendor CLI authenticates against the subscription you already pay for, and an API key present in the environment would silently flip it to metered API billing — so every key that could do that is deleted from the child process env. Safety: each CLI ships its own sandbox and permission machinery (Codex's OS sandbox, Grok's `--tools` allowlist and permission rules, agy's permission policy), and this package drives those instead of reimplementing them against a raw API.
+
+The flip side is that a CLI run is a program with an environment, so the child env is built from an allowlist rather than inherited — a unit running read-only shell commands would otherwise be able to read every secret in your shell. Details in [docs/SECURITY.md](docs/SECURITY.md).
+
+**Why read-only?**
+Because a review peer that can also write is a review peer you have to supervise twice. Units read, search, analyse and propose; Claude Code applies the change, where your normal approval flow already sits. It also contains the blast radius of prompt injection: a unit that ingests a hostile web page or repository can only report back, not act.
+
+**Can I let a unit write?**
+Only deliberately, and only where it is actually enforceable. Write mode takes two keys: `mode: "workspace-write"` for that unit in the config file, **and** the unit named in `OMELETTE_ALLOW_WRITE` in the server's env block — which lives outside every project and cannot be edited by a read-only unit. Then the unit itself has to implement the mode:
+
+- **Codex** does. Writes are kernel-scoped to the `cwd` you pass, and the adapter grants it only to `codex_code_review` with an explicit absolute `cwd` — `codex_research` is read-only whatever the config says.
+- **Grok** does not. `workspace-write` is declared unsupported and refused even with the ceiling open.
+- **Gemini** maps it to agy's `--mode accept-edits`, which is agy's own permission layer inside the process cwd — real, but not kernel-enforced. `ORION_ALLOW_GEMINI_MUTATE=1` is honoured as a legacy alias for opening the ceiling for `gemini` only.
+
+**What if my ChatGPT plan rejects `gpt-5.6-sol`?**
+The Codex catalog lists what exists in the current generation, not what one account happens to accept. `gpt-5.6-sol` is plan-gated to ChatGPT Pro/Enterprise; on a Plus or Team plan the call fails fast, before any work, with `The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account`. Use `gpt-5.6-terra` — it is the fleet default and trails sol by ~1.4 points on Terminal-Bench 2.1 at roughly half the compute. `omelette-fleet doctor --probe-models` tells you exactly which ids your account accepts.
+
+**How do I add a unit?**
+Three files and a test: `units/<unit>/models.js` (the model allowlist and cheat-sheet), `units/<unit>/adapter.mjs` (a `defineUnit({...})` call), `servers/<unit>.mjs` (a two-line entrypoint). The runtime gives you config, the ceiling, catalog validation, the mutate gate, the status feed, bounded spawn with the env allowlist and billing scrub, and JSON-RPC. Step by step, with a skeleton and the fake-binary test pattern: [docs/ADAPTERS.md](docs/ADAPTERS.md).
+
+**Why three servers instead of one?**
+Failure isolation and stable names. A missing CLI, a hung vendor process, or an adapter bug takes down one server, not the fleet — the other units keep answering. Each server also owns a fixed tool list, so installing or removing a unit never reshuffles the tools of the others, and you can enable, disable, time-out and configure each vendor independently. It costs one idle Node process per unit.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
