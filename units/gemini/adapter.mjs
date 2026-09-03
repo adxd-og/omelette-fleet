@@ -101,9 +101,13 @@ const EXHAUSTED_PATTERNS = [
   /\b(exceeded|exhausted|reached)\b.*\bquota\b/i,
 ];
 
+// "no terminal commands" is not decoration: headless agy auto-denies the shell
+// `command` tool, and a model that reaches for curl instead of read_url ends
+// the run with no output (seen live 2026-09-03 on a web-research prompt).
 const NO_GIT_PREFIX =
-  'You are a read-only research assistant. Do NOT run git, deploy, publish, or ' +
-  'modify project files. Answer in plain text.\n\n';
+  'You are a read-only research assistant. Use ONLY web search and page reading ' +
+  '(read_url) — do NOT run terminal commands, they are unavailable. Do NOT run ' +
+  'git, deploy, publish, or modify project files. Answer in plain text.\n\n';
 
 const HARD_KILL_GRACE_MS = 60000;
 
