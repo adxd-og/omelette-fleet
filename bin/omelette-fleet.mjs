@@ -46,11 +46,11 @@ import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
-import { KEY_SCHEMA, coerce, configPath, fleetHome, unitConfig, writeFleetConfig } from '../core/config.mjs';
+import { AGENT_SETTINGS_SCHEMA, KEY_SCHEMA, coerce, configPath, fleetHome, unitConfig, writeFleetConfig } from '../core/config.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
 import {
-  AGENT_FILES, RULES_FILE_NAME, agentsTarget, parseAgentMarker, parseRulesMarker, renderAgentFile,
-  renderRulesFile, rulesTarget,
+  AGENT_FILES, RULES_FILE_NAME, agentSettings, agentsTarget, parseAgentMarker, parseRulesMarker,
+  renderAgentFile, renderRulesFile, rulesTarget,
 } from '../core/rules.mjs';
 import { resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
@@ -150,17 +150,20 @@ const COMMANDS = {
     ],
   },
   show: {
-    args: '[<unit>]',
+    args: '[<unit> | agents]',
     body: [
       'Every config key for one unit or all of them: value, where it came',
       'from (default / file:defaults / file / env:NAME), and the ceiling.',
+      '`agents` is the sub-agent block `rules --agents` renders from.',
     ],
   },
   set: {
-    args: '<unit>.<key>=<value> [...]',
+    args: '<unit>.<key>=<value> | agents.<agent>.<key>=<value> [...]',
     body: [
-      'Change keys in <home>/fleet.config.json. Unknown units, unknown',
-      'keys and invalid values are refused; the rest of the file is kept.',
+      'Change keys in <home>/fleet.config.json. Unknown units, agents,',
+      'unknown keys and invalid values are refused; the rest of the file',
+      'is kept. An agent setting reaches a session on the next',
+      '`omelette-fleet rules --agents`, which re-renders the definitions.',
     ],
   },
   call: {
@@ -204,6 +207,7 @@ const HELP = [
   '  omelette-fleet rules            # this project',
   '  omelette-fleet rules --global',
   '  omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"',
+  '  omelette-fleet set agents.tester.maxTurns=120 && omelette-fleet rules --agents',
   "  omelette-fleet call codex codex_models '{}'",
 ].join('\n');
 
@@ -447,6 +451,22 @@ function configRows(name, cfg, indent = '  ') {
   const lines = [`${indent}${pad('KEY', w)}  ${pad('VALUE', vw)}  SOURCE`];
   for (const k of keys) lines.push(`${indent}${pad(k, w)}  ${pad(shown(k), vw)}  ${cfg.sources[k]}`);
   return lines;
+}
+
+/**
+ * The `agents` block for `show`, in the same `key value source` shape as a
+ * unit's — one row per setting, `<role>.<key>`, so the whole block reads as one
+ * table however many roles ship.
+ */
+function agentRows(settings, indent = '  ') {
+  const rows = Object.entries(AGENT_SETTINGS_SCHEMA).flatMap(([role, schema]) => Object.keys(schema)
+    .map((key) => [`${role}.${key}`, fmtValue(settings[role][key]), settings.sources[role][key]]));
+  const w = Math.max(...rows.map((r) => r[0].length), 5);
+  const vw = Math.max(...rows.map((r) => r[1].length), 5);
+  return [
+    `${indent}${pad('KEY', w)}  ${pad('VALUE', vw)}  SOURCE`,
+    ...rows.map(([key, value, source]) => `${indent}${pad(key, w)}  ${pad(value, vw)}  ${source}`),
+  ];
 }
 
 function ceilingLine(name, cfg) {
@@ -891,7 +911,7 @@ function syncManagedFile({ path, next, parse, marker, version, force = false, dr
  * first, then — with --agents — one entry per shipped sub-agent definition.
  * The whole command is this list plus syncManagedFile.
  */
-function managedFiles({ global = false, agents = false, version } = {}) {
+function managedFiles({ global = false, agents = false, version, settings } = {}) {
   const files = [{
     name: RULES_FILE_NAME,
     path: rulesTarget({ global }).path,
@@ -901,11 +921,15 @@ function managedFiles({ global = false, agents = false, version } = {}) {
   }];
   if (agents) {
     const { dir } = agentsTarget({ global });
+    // Always an explicit settings object: `renderAgentFile`'s own default would
+    // read the config a second time, and a caller that forgot the argument
+    // would render defaults with nothing to show for it.
+    const resolved = settings || agentSettings();
     for (const name of AGENT_FILES) {
       files.push({
         name,
         path: join(dir, name),
-        next: renderAgentFile(name, version),
+        next: renderAgentFile(name, version, resolved),
         parse: parseAgentMarker,
         marker: 'no marker on line 2',
       });
@@ -920,7 +944,14 @@ async function cmdRules(argv) {
   if (flags.print && flags.remove) errors.push('--print and --remove ask for opposite things — pick one');
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet rules: ${e}`)); return 1; }
 
-  const files = managedFiles({ global: !!flags.global, agents: !!flags.agents, version: PKG.version });
+  // The definitions render from the CURRENT agent settings, so a `set` shows up
+  // in the next `rules --agents` as a content change at the same version. A
+  // broken value never stops the write — it is a warning, and the default is
+  // written — but it is said out loud, or the operator reads the default back
+  // as their own value.
+  const settings = flags.agents ? agentSettings() : undefined;
+  if (settings && !flags.remove) settings.warnings.forEach((w) => err(`omelette-fleet rules: ${w}`));
+  const files = managedFiles({ global: !!flags.global, agents: !!flags.agents, version: PKG.version, settings });
 
   // --print touches nothing at all. Each rendered file already ends in a
   // newline, so out() must not add a second one.
@@ -1159,28 +1190,47 @@ function cmdShow(argv) {
   const { positional, errors } = parseArgv(argv, {});
   if (positional.length > 1) errors.push(`unexpected argument: ${positional[1]}`);
   const only = positional[0];
-  if (only && !UNITS[only]) errors.push(`unknown unit "${only}" — known units: ${UNIT_ORDER.join(', ')}`);
+  if (only && only !== 'agents' && !UNITS[only]) {
+    errors.push(`unknown unit "${only}" — known units: ${UNIT_ORDER.join(', ')} (or "agents" for the sub-agent block)`);
+  }
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet show: ${e}`)); return 1; }
 
   const path = configPath();
   out(`fleet config  ${path}${existsSync(path) ? '' : ' (absent — built-in defaults in force)'}`);
   out();
-  for (const name of only ? [only] : UNIT_ORDER) {
-    const cfg = cfgFor(name);
-    out(`${name}`);
-    for (const line of configRows(name, cfg, '  ')) out(line);
-    out(`  ceiling  ${ceilingLine(name, cfg)}`);
-    for (const w of cfg.warnings) out(`  warning  ${w}`);
+  if (only !== 'agents') {
+    for (const name of only ? [only] : UNIT_ORDER) {
+      const cfg = cfgFor(name);
+      out(`${name}`);
+      for (const line of configRows(name, cfg, '  ')) out(line);
+      out(`  ceiling  ${ceilingLine(name, cfg)}`);
+      for (const w of cfg.warnings) out(`  warning  ${w}`);
+      out();
+    }
+  }
+  // The sub-agent definitions are config too, and the one thing that is not
+  // obvious about them is that a value here only reaches a session once the
+  // definitions are re-rendered — so the block says it.
+  if (!only || only === 'agents') {
+    const settings = agentSettings();
+    out('agents');
+    for (const line of agentRows(settings, '  ')) out(line);
+    for (const w of settings.warnings) out(`  warning  ${w}`);
+    out('  note     `omelette-fleet rules --agents` renders these into .claude/agents/.');
     out();
   }
   return 0;
 }
 
+/** Both dotted forms `set` accepts, in one place: the usage line and every refusal quote it. */
+const SET_SHAPE = '<unit>.<key>=<value> or agents.<agent>.<key>=<value>';
+
 const describeSpec = (spec) => (
   spec.type === 'enum' ? spec.values.join(' | ')
     : spec.type === 'posint' ? 'a positive integer'
       : spec.type === 'boolean' ? 'true | false'
-        : 'a string');
+        : spec.type === 'line' ? 'a single printable line (no newline, tab or other control character)'
+          : 'a string');
 
 /** Read the config file as bytes, not through the cache: `set` rewrites it and must not lose keys. */
 function readConfigRaw(env = process.env) {
@@ -1212,18 +1262,31 @@ const jsonKind = (v) => (v === null ? 'null' : Array.isArray(v) ? 'an array' : `
  */
 function cmdSet(argv) {
   const { positional, errors } = parseArgv(argv, {});
-  if (!positional.length) errors.push('nothing to set — usage: omelette-fleet set <unit>.<key>=<value> [...]');
+  if (!positional.length) errors.push(`nothing to set — usage: omelette-fleet set ${SET_SHAPE}`);
 
-  const assignments = [];
+  const assignments = [];      // units.<unit>.<key>
+  const agentAssignments = []; // agents.<role>.<key>
   for (const a of positional) {
     const eq = a.indexOf('=');
-    if (eq < 0) { errors.push(`"${a}" is not <unit>.<key>=<value>`); continue; }
-    const lhs = a.slice(0, eq).trim();
+    if (eq < 0) { errors.push(`"${a}" is not ${SET_SHAPE}`); continue; }
+    const parts = a.slice(0, eq).trim().split('.').map((p) => p.trim());
     const raw = a.slice(eq + 1);
-    const dot = lhs.indexOf('.');
-    if (dot < 0) { errors.push(`"${a}" is not <unit>.<key>=<value>`); continue; }
-    const name = lhs.slice(0, dot).trim().toLowerCase();
-    const key = lhs.slice(dot + 1).trim();
+    // `agents` is a top-level block, not a unit, and it is one level deeper.
+    if (parts[0].toLowerCase() === 'agents') {
+      if (parts.length !== 3 || parts.some((p) => !p)) { errors.push(`"${a}" is not agents.<agent>.<key>=<value>`); continue; }
+      const role = parts[1].toLowerCase();
+      const key = parts[2];
+      const schema = AGENT_SETTINGS_SCHEMA[role];
+      if (!schema) { errors.push(`unknown agent "${role}" — known agents: ${Object.keys(AGENT_SETTINGS_SCHEMA).join(', ')}`); continue; }
+      if (!(key in schema)) { errors.push(`unknown key "${key}" for agent "${role}" — known keys: ${Object.keys(schema).join(', ')}`); continue; }
+      const c = coerce(schema[key], raw);
+      if (!c.ok) { errors.push(`invalid value for agents.${role}.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(schema[key])}`); continue; }
+      agentAssignments.push({ role, key, value: c.value });
+      continue;
+    }
+    if (parts.length !== 2 || parts.some((p) => !p)) { errors.push(`"${a}" is not ${SET_SHAPE}`); continue; }
+    const name = parts[0].toLowerCase();
+    const key = parts[1];
     if (!UNITS[name]) { errors.push(`unknown unit "${name}" — known units: ${UNIT_ORDER.join(', ')}`); continue; }
     const schema = schemaFor(name);
     if (!(key in schema)) { errors.push(`unknown key "${key}" for unit "${name}" — known keys: ${Object.keys(schema).join(', ')}`); continue; }
@@ -1241,12 +1304,24 @@ function cmdSet(argv) {
   // The merge targets have to BE objects. Anything else and we would be
   // deleting whatever is there, not editing it.
   const shape = [];
-  if (file.config.units !== undefined && !isObj(file.config.units)) {
-    shape.push(`"units" is ${jsonKind(file.config.units)}, not an object`);
-  } else if (isObj(file.config.units)) {
-    for (const name of [...new Set(assignments.map((a) => a.name))]) {
-      const entry = file.config.units[name];
-      if (entry !== undefined && !isObj(entry)) shape.push(`"units.${name}" is ${jsonKind(entry)}, not an object`);
+  if (assignments.length) {
+    if (file.config.units !== undefined && !isObj(file.config.units)) {
+      shape.push(`"units" is ${jsonKind(file.config.units)}, not an object`);
+    } else if (isObj(file.config.units)) {
+      for (const name of [...new Set(assignments.map((a) => a.name))]) {
+        const entry = file.config.units[name];
+        if (entry !== undefined && !isObj(entry)) shape.push(`"units.${name}" is ${jsonKind(entry)}, not an object`);
+      }
+    }
+  }
+  if (agentAssignments.length) {
+    if (file.config.agents !== undefined && !isObj(file.config.agents)) {
+      shape.push(`"agents" is ${jsonKind(file.config.agents)}, not an object`);
+    } else if (isObj(file.config.agents)) {
+      for (const role of [...new Set(agentAssignments.map((a) => a.role))]) {
+        const entry = file.config.agents[role];
+        if (entry !== undefined && !isObj(entry)) shape.push(`"agents.${role}" is ${jsonKind(entry)}, not an object`);
+      }
     }
   }
   if (shape.length) {
@@ -1256,12 +1331,22 @@ function cmdSet(argv) {
   }
 
   // Old values are the EFFECTIVE ones a unit would see, so a shadowing env var stays visible.
-  const before = new Map(UNIT_ORDER.map((n) => [n, cfgFor(n)]));
+  const before = assignments.length ? new Map(UNIT_ORDER.map((n) => [n, cfgFor(n)])) : null;
+  const beforeAgents = agentAssignments.length ? agentSettings() : null;
   const next = JSON.parse(JSON.stringify(file.config));
-  next.units = isObj(next.units) ? next.units : {};
-  for (const a of assignments) {
-    next.units[a.name] = isObj(next.units[a.name]) ? next.units[a.name] : {};
-    next.units[a.name][a.key] = a.value;
+  if (assignments.length) {
+    next.units = isObj(next.units) ? next.units : {};
+    for (const a of assignments) {
+      next.units[a.name] = isObj(next.units[a.name]) ? next.units[a.name] : {};
+      next.units[a.name][a.key] = a.value;
+    }
+  }
+  if (agentAssignments.length) {
+    next.agents = isObj(next.agents) ? next.agents : {};
+    for (const a of agentAssignments) {
+      next.agents[a.role] = isObj(next.agents[a.role]) ? next.agents[a.role] : {};
+      next.agents[a.role][a.key] = a.value;
+    }
   }
   const written = writeFleetConfig(next);
 
@@ -1279,6 +1364,12 @@ function cmdSet(argv) {
       }
     }
   }
+  for (const a of agentAssignments) {
+    out(`agents.${a.role}.${a.key}  ${fmtValue(beforeAgents[a.role][a.key])} [${beforeAgents.sources[a.role][a.key]}] → ${fmtValue(a.value)} [file]`);
+  }
+  // The definitions on disk were rendered from the OLD value: until they are
+  // re-rendered, the config and what the session reads disagree.
+  if (agentAssignments.length) out('  note: `omelette-fleet rules --agents` re-renders the definitions with the new value.');
   out();
   out(`wrote ${written}`);
   return 0;

@@ -4,6 +4,8 @@
  *
  * FILE: <home>/fleet.config.json, home = $OMELETTE_HOME or ~/.omelette.
  *   { "version": 1,
+ *     "updateCheck": true,
+ *     "agents": { "coder": { model, effort }, "tester": { model, effort, maxTurns } },
  *     "defaults": { ...keys applied to every unit... },
  *     "units": { "<unit>": { enabled, mode, model, effort, timeoutS, maxTurns, webSearch, status, ... } } }
  *
@@ -79,6 +81,17 @@ export function coerce(spec, raw) {
       return typeof raw === 'string' && spec.values.includes(raw) ? { ok: true, value: raw } : { ok: false };
     case 'string':
       return typeof raw === 'string' ? { ok: true, value: raw.trim() } : { ok: false };
+    // A string that gets RENDERED into a managed file, so it has to be exactly
+    // one printable line. A newline in an agent's `model` would close the
+    // definition's frontmatter early and push the rest of it —
+    // `disallowedTools: Agent` included — into the body, where the harness
+    // enforces nothing, in a file whose marker still says it is ours. Blank is
+    // out for the same reason: it would ship a `model:` with no value.
+    case 'line': {
+      if (typeof raw !== 'string') return { ok: false };
+      const value = raw.trim();
+      return value && !/[\u0000-\u001f\u007f]/.test(value) ? { ok: true, value } : { ok: false };
+    }
     default:
       return { ok: false };
   }
@@ -119,6 +132,34 @@ export function loadFleetConfig(env = process.env) {
  */
 export const SETTINGS_SCHEMA = {
   updateCheck: { type: 'boolean', default: true },
+};
+
+/** Claude Code's own effort ladder — what a sub-agent definition's `effort:` accepts. */
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/**
+ * The sub-agent definitions `omelette-fleet rules --agents` writes, as config:
+ * a nested top-level `agents` block, one entry per shipped role, resolved and
+ * rendered into the templates by core/rules.mjs (`agentSettings`,
+ * `renderAgentFile`). The schema lives here, beside every other key's, because
+ * these are ordinary `coerce` specs and validate exactly like the rest — an
+ * invalid value is a warning and the default, never a throw and never a file
+ * the harness cannot read.
+ *
+ * `model` is passed through verbatim (an alias like `opus`, or a full model
+ * id, spaces and all), so it is only checked for being one printable line —
+ * see the `line` case in `coerce` for why that check is not cosmetic.
+ */
+export const AGENT_SETTINGS_SCHEMA = {
+  coder: {
+    model: { type: 'line', default: 'opus' },
+    effort: { type: 'enum', values: EFFORT_LEVELS, default: 'xhigh' },
+  },
+  tester: {
+    model: { type: 'line', default: 'sonnet' },
+    effort: { type: 'enum', values: EFFORT_LEVELS, default: 'xhigh' },
+    maxTurns: { type: 'posint', default: 80 },
+  },
 };
 
 /**

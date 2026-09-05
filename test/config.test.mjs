@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   unitConfig, effectiveMode, allowWriteUnits, loadFleetConfig, writeFleetConfig, fleetHome, fleetSettings,
-  coerce, CONFIG_VERSION,
+  coerce, AGENT_SETTINGS_SCHEMA, CONFIG_VERSION,
 } from '../core/config.mjs';
 
 function home(config) {
@@ -27,6 +27,37 @@ test('coerce accepts env-style strings for booleans and ints', () => {
   assert.deepEqual(coerce({ type: 'posint' }, '900'), { ok: true, value: 900 });
   assert.deepEqual(coerce({ type: 'posint' }, '-1'), { ok: false });
   assert.deepEqual(coerce({ type: 'enum', values: ['a'] }, 'b'), { ok: false });
+});
+
+test('coerce: a `line` spec is one printable line — no blank, no control character, no smuggled newline', () => {
+  // The type exists for values that get RENDERED into a managed file: a newline
+  // would close a definition's frontmatter early and push the rest of it,
+  // `disallowedTools: Agent` included, into the body of a file still marked ours.
+  assert.deepEqual(coerce({ type: 'line' }, '   '), { ok: false });
+  assert.deepEqual(coerce({ type: 'line' }, ''), { ok: false });
+  assert.deepEqual(coerce({ type: 'line' }, ' opus '), { ok: true, value: 'opus' });
+  assert.deepEqual(coerce({ type: 'line' }, 'Gemini 3.8 Flash (High)'), { ok: true, value: 'Gemini 3.8 Flash (High)' });
+  for (const bad of ['opus\n---\ninjected: 1', 'opus\r\nx', 'opus\tx', 'opus\u000bx', 'opus\fx', 'opus\u0000x', 'opus\u001b[0m']) {
+    assert.deepEqual(coerce({ type: 'line' }, bad), { ok: false }, JSON.stringify(bad));
+  }
+  // the unit keys are unaffected: '' is how a plain string key says "unset"
+  assert.deepEqual(coerce({ type: 'string' }, ''), { ok: true, value: '' });
+});
+
+test('AGENT_SETTINGS_SCHEMA: the two shipped roles, their keys and the defaults the templates render', () => {
+  assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA), ['coder', 'tester']);
+  assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.coder), ['model', 'effort']);
+  assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.tester), ['model', 'effort', 'maxTurns']);
+  assert.equal(AGENT_SETTINGS_SCHEMA.coder.model.default, 'opus');
+  assert.equal(AGENT_SETTINGS_SCHEMA.coder.effort.default, 'xhigh');
+  assert.equal(AGENT_SETTINGS_SCHEMA.tester.model.default, 'sonnet');
+  assert.equal(AGENT_SETTINGS_SCHEMA.tester.effort.default, 'xhigh');
+  assert.equal(AGENT_SETTINGS_SCHEMA.tester.maxTurns.default, 80);
+  assert.deepEqual(AGENT_SETTINGS_SCHEMA.tester.effort.values, ['low', 'medium', 'high', 'xhigh', 'max']);
+  // and the specs are ordinary `coerce` specs, so a turn limit of 0 is not a value
+  assert.deepEqual(coerce(AGENT_SETTINGS_SCHEMA.tester.maxTurns, '0'), { ok: false });
+  assert.deepEqual(coerce(AGENT_SETTINGS_SCHEMA.coder.model, ''), { ok: false });
+  assert.deepEqual(coerce(AGENT_SETTINGS_SCHEMA.coder.model, 'opus\n---'), { ok: false }, 'a rendered value can never carry a newline');
 });
 
 test('no file: built-in defaults, no warnings, read-only', () => {

@@ -1,13 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+
 import {
-  AGENT_FILES, AGENT_MARKER, FLEET_CONTRACT, RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH,
-  agentsTarget, parseAgentMarker, parseRulesMarker, renderAgentFile, renderRulesFile, rulesTarget,
+  AGENT_FILES, AGENT_MARKER, AGENT_ROLES, FLEET_CONTRACT, RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH,
+  agentSettings, agentsTarget, parseAgentMarker, parseRulesMarker, renderAgentFile, renderRulesFile, rulesTarget,
   unitInstructions,
 } from '../core/rules.mjs';
+
+// renderAgentFile() falls back to the machine's fleet config for its settings
+// (read at call time, never at import), so every default-argument render in this
+// file is pointed at an empty throwaway home: the built-in defaults, whatever the
+// operator's own ~/.omelette happens to hold.
+process.env.OMELETTE_HOME = mkdtempSync(join(tmpdir(), 'omelette-rules-'));
+
+/** A throwaway fleet home, optionally with a config file in it. */
+function home(config) {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-agentcfg-'));
+  if (config !== undefined) writeFileSync(join(dir, 'fleet.config.json'), typeof config === 'string' ? config : JSON.stringify(config));
+  return dir;
+}
 
 test('FLEET_CONTRACT is short plain text that names the two rules that matter', () => {
   assert.ok(FLEET_CONTRACT.length < 1800, `contract is ${FLEET_CONTRACT.length} chars — keep it under one screen`);
@@ -111,4 +125,110 @@ test('parseAgentMarker demands the EXACT generated marker line, not a prefix of 
 test('agentsTarget mirrors rulesTarget', () => {
   assert.deepEqual(agentsTarget({ cwd: '/w/p', env: {} }), { dir: '/w/p/.claude/agents', scope: 'project' });
   assert.equal(agentsTarget({ global: true, env: { CLAUDE_CONFIG_DIR: '/cfg' } }).dir, '/cfg/agents');
+});
+
+// ─── agent settings (fleet config → template) ────────────────────────────────
+
+test('agentSettings: no file at all is the built-in defaults, sourced "default", with no warnings', () => {
+  const s = agentSettings({ OMELETTE_HOME: home() });
+  assert.deepEqual(s.coder, { model: 'opus', effort: 'xhigh' });
+  assert.deepEqual(s.tester, { model: 'sonnet', effort: 'xhigh', maxTurns: 80 });
+  assert.deepEqual(s.warnings, []);
+  assert.equal(s.sources.tester.maxTurns, 'default');
+  assert.equal(s.sources.coder.model, 'default');
+  assert.match(s.configPath, /fleet\.config\.json$/);
+});
+
+test('agentSettings: the file wins key by key, and the source says so', () => {
+  const s = agentSettings({ OMELETTE_HOME: home({ version: 1, agents: { tester: { maxTurns: 120, model: 'haiku' } } }) });
+  assert.equal(s.tester.maxTurns, 120);
+  assert.equal(s.sources.tester.maxTurns, 'file');
+  assert.equal(s.tester.model, 'haiku');
+  assert.equal(s.tester.effort, 'xhigh');
+  assert.equal(s.sources.tester.effort, 'default', 'a key the file does not set stays the default');
+  assert.deepEqual(s.coder, { model: 'opus', effort: 'xhigh' });
+  assert.deepEqual(s.warnings, []);
+});
+
+test('agentSettings: an invalid value is a warning and the default stays in force — never a throw', () => {
+  const s = agentSettings({ OMELETTE_HOME: home({ agents: { coder: { effort: 'turbo', model: '' }, tester: { maxTurns: 0, nope: 1 } } }) });
+  assert.equal(s.coder.effort, 'xhigh');
+  assert.equal(s.coder.model, 'opus');
+  assert.equal(s.tester.maxTurns, 80);
+  assert.ok(s.warnings.some((w) => /agents\.coder\.effort = "turbo" is invalid/.test(w)));
+  assert.ok(s.warnings.some((w) => /agents\.coder\.model = "" is invalid/.test(w)));
+  assert.ok(s.warnings.some((w) => /agents\.tester\.maxTurns = 0 is invalid/.test(w)));
+  assert.ok(s.warnings.some((w) => /agents\.tester\.nope is not a known key/.test(w)));
+});
+
+test('agentSettings: a block of the wrong shape, an unknown role and a malformed file all warn and default', () => {
+  const arr = agentSettings({ OMELETTE_HOME: home({ agents: ['coder'] }) });
+  assert.equal(arr.coder.model, 'opus');
+  assert.ok(arr.warnings.some((w) => /agents is not an object/.test(w)));
+
+  const str = agentSettings({ OMELETTE_HOME: home({ agents: { tester: 'sonnet', reviewer: { model: 'x' } } }) });
+  assert.equal(str.tester.maxTurns, 80);
+  assert.ok(str.warnings.some((w) => /agents\.tester is not an object/.test(w)));
+  assert.ok(str.warnings.some((w) => /agents\.reviewer is not a known agent/.test(w)));
+
+  const broken = agentSettings({ OMELETTE_HOME: home('{ not json') });
+  assert.equal(broken.tester.maxTurns, 80);
+  assert.ok(broken.warnings.some((w) => /fleet config:/.test(w)));
+});
+
+test('renderAgentFile renders the settings it is given, and leaves no placeholder behind', () => {
+  const s = agentSettings({
+    OMELETTE_HOME: home({ agents: { coder: { model: 'opus-4', effort: 'max' }, tester: { model: 'haiku', effort: 'low', maxTurns: 120 } } }),
+  });
+  const coder = renderAgentFile('omelette-coder.md', '1.2.3', s);
+  assert.match(coder, /^model: opus-4$/m);
+  assert.match(coder, /^effort: max$/m);
+  const tester = renderAgentFile('omelette-tester.md', '1.2.3', s);
+  assert.match(tester, /^model: haiku$/m);
+  assert.match(tester, /^effort: low$/m);
+  assert.match(tester, /^maxTurns: 120$/m);
+  // Every template placeholder is accounted for — a stray `{{` would ship a
+  // definition Claude Code reads as a literal.
+  for (const text of [coder, tester]) assert.ok(!text.includes('{{'), 'no placeholder survives rendering');
+});
+
+test('renderAgentFile without a settings argument reads the fleet config, so `rules --agents` renders what `set` wrote', () => {
+  const previous = process.env.OMELETTE_HOME;
+  process.env.OMELETTE_HOME = home({ agents: { tester: { maxTurns: 140 } } });
+  try {
+    assert.match(renderAgentFile('omelette-tester.md', '1.2.3'), /^maxTurns: 140$/m);
+  } finally { process.env.OMELETTE_HOME = previous; }
+  assert.match(renderAgentFile('omelette-tester.md', '1.2.3'), /^maxTurns: 80$/m);
+});
+
+test('renderAgentFile: a partial settings object still renders a usable definition', () => {
+  const text = renderAgentFile('omelette-tester.md', '1.2.3', { tester: { maxTurns: 200 } });
+  assert.match(text, /^maxTurns: 200$/m);
+  assert.match(text, /^model: sonnet$/m);
+  assert.match(text, /^effort: xhigh$/m);
+  assert.ok(!renderAgentFile('omelette-coder.md', '1.2.3', {}).includes('{{'));
+});
+
+test('AGENT_ROLES ties each shipped definition to the agents block it renders from', () => {
+  assert.deepEqual(AGENT_ROLES, { 'omelette-coder.md': 'coder', 'omelette-tester.md': 'tester' });
+  assert.deepEqual(Object.keys(AGENT_ROLES), AGENT_FILES, 'AGENT_FILES is the map\'s keys — one source, one order');
+});
+
+test('agentSettings + renderAgentFile: a model smuggling a newline cannot break out of the frontmatter', () => {
+  // The frontmatter is what makes `disallowedTools: Agent` binding. A value that
+  // closed it early would leave the rest of the definition in the BODY — prose
+  // the harness does not enforce — in a file whose marker still says it is ours.
+  const s = agentSettings({ OMELETTE_HOME: home({ agents: { coder: { model: 'opus\n---\ninjected: 1' } } }) });
+  assert.equal(s.coder.model, 'opus');
+  assert.equal(s.sources.coder.model, 'default');
+  assert.ok(s.warnings.some((w) => /agents\.coder\.model = "opus\\n---\\ninjected: 1" is invalid/.test(w)));
+
+  const text = renderAgentFile('omelette-coder.md', '1.2.3', s);
+  assert.ok(!text.includes('injected'));
+  const lines = text.split('\n');
+  assert.equal(lines.filter((l) => l === '---').length, 2, 'the frontmatter opens once and closes once');
+  const close = lines.indexOf('---', 1);
+  assert.ok(lines.slice(1, close).includes('disallowedTools: Agent'), 'the guard stays INSIDE the frontmatter');
+  assert.ok(lines.slice(1, close).includes('model: opus'));
+  assert.equal(lines[close + 1], '', 'the closing --- is followed by the body');
 });

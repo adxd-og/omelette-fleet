@@ -3,6 +3,17 @@
   "defaults": {
     "status": true
   },
+  "agents": {
+    "coder": {
+      "model": "opus",
+      "effort": "xhigh"
+    },
+    "tester": {
+      "model": "sonnet",
+      "effort": "xhigh",
+      "maxTurns": 80
+    }
+  },
   "units": {
     "gemini": {
       "enabled": true,

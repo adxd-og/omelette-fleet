@@ -30,11 +30,21 @@
  * Their marker is a YAML COMMENT on line 2 (line 1 must be the frontmatter's
  * `---`) and it means exactly what the rules-file marker means: ours to refresh
  * and to remove, and anything without it is the operator's own file.
+ *
+ * WHAT A ROLE IS SET TO — model, effort, and the tester's turn limit — is the
+ * operator's, not ours: it lives in the fleet config's `agents` block and the
+ * templates carry `{{model}}`, `{{effort}}`, `{{maxTurns}}` where the values go.
+ * `rules --agents` re-renders from the CURRENT config, so raising a limit is
+ * `omelette-fleet set agents.tester.maxTurns=<n> && omelette-fleet rules
+ * --agents` — a config change the orchestrator can make mid-plan, not a code
+ * change. The marker stays the proof of ownership; a changed value simply makes
+ * the content differ, and the file is rewritten at the same version.
  */
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AGENT_SETTINGS_SCHEMA, coerce, loadFleetConfig } from './config.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -111,16 +121,80 @@ export function rulesTarget({ global = false, cwd = process.cwd(), env = process
   return { path: join(dir || join(homedir(), '.claude'), 'rules', RULES_FILE_NAME), scope: 'global' };
 }
 
+/**
+ * Which `agents.<role>` block of the fleet config each shipped definition
+ * renders from. One map, and AGENT_FILES is its keys, so a role can never be
+ * half-added: a template with no settings block, or settings with no template.
+ */
+export const AGENT_ROLES = { 'omelette-coder.md': 'coder', 'omelette-tester.md': 'tester' };
+
 /** The sub-agent definitions `rules --agents` ships, in the order they are written. */
-export const AGENT_FILES = ['omelette-coder.md', 'omelette-tester.md'];
+export const AGENT_FILES = Object.keys(AGENT_ROLES);
 export const AGENT_TEMPLATE_DIR = join(ROOT, 'agents');
 
-/** One agent definition's full text for this package version. */
-export function renderAgentFile(name, version) {
+const isObj = (o) => o && typeof o === 'object' && !Array.isArray(o);
+
+/**
+ * The `agents` block of the fleet config, validated, with where every value
+ * came from. Never throws and never refuses to answer: a typo in the block is a
+ * warning and the built-in default — exactly as `fleetSettings` treats the
+ * fleet-wide keys — because the alternative is `rules --agents` failing to
+ * write a definition the session needs.
+ *
+ * @returns {{coder:object, tester:object, sources:object, warnings:string[], configPath:string}}
+ */
+export function agentSettings(env = process.env) {
+  const { config, error, path } = loadFleetConfig(env);
+  const warnings = [];
+  if (error) warnings.push(`fleet config: ${error}`);
+
+  const raw = isObj(config) ? config.agents : undefined;
+  if (raw !== undefined && !isObj(raw)) warnings.push('fleet config: agents is not an object — ignored');
+  const block = isObj(raw) ? raw : {};
+  for (const role of Object.keys(block)) {
+    if (!(role in AGENT_SETTINGS_SCHEMA)) warnings.push(`fleet config: agents.${role} is not a known agent — ignored`);
+  }
+
+  const values = {};
+  const sources = {};
+  for (const [role, schema] of Object.entries(AGENT_SETTINGS_SCHEMA)) {
+    if (block[role] !== undefined && !isObj(block[role])) warnings.push(`fleet config: agents.${role} is not an object — ignored`);
+    const fromFile = isObj(block[role]) ? block[role] : {};
+    values[role] = {};
+    sources[role] = {};
+    for (const [key, spec] of Object.entries(schema)) {
+      values[role][key] = spec.default;
+      sources[role][key] = 'default';
+      if (fromFile[key] === undefined) continue;
+      const c = coerce(spec, fromFile[key]);
+      if (c.ok) { values[role][key] = c.value; sources[role][key] = 'file'; }
+      else warnings.push(`fleet config: agents.${role}.${key} = ${JSON.stringify(fromFile[key])} is invalid — ignored`);
+    }
+    for (const key of Object.keys(fromFile)) {
+      if (!(key in schema)) warnings.push(`fleet config: agents.${role}.${key} is not a known key — ignored`);
+    }
+  }
+  return { ...values, sources, warnings, configPath: path };
+}
+
+/**
+ * One agent definition's full text for this package version and the operator's
+ * agent settings. The settings default to the live fleet config, so every
+ * caller that just wants "the file as it should be right now" gets it; a
+ * partial object is filled in from the schema, so no placeholder can render as
+ * `undefined`.
+ */
+export function renderAgentFile(name, version, settings = agentSettings()) {
   if (!AGENT_FILES.includes(name)) throw new Error(`unknown agent template: ${name}`);
-  const body = readFileSync(join(AGENT_TEMPLATE_DIR, name), 'utf8')
+  const role = AGENT_ROLES[name];
+  const schema = AGENT_SETTINGS_SCHEMA[role];
+  const given = isObj(settings) && isObj(settings[role]) ? settings[role] : {};
+  let body = readFileSync(join(AGENT_TEMPLATE_DIR, name), 'utf8')
     .replaceAll('{{marker}}', AGENT_MARKER(String(version)))
     .replaceAll('{{version}}', String(version));
+  for (const [key, spec] of Object.entries(schema)) {
+    body = body.replaceAll(`{{${key}}}`, String(given[key] === undefined ? spec.default : given[key]));
+  }
   return body.endsWith('\n') ? body : body + '\n';
 }
 

@@ -536,6 +536,104 @@ test('set refuses to replace a "units" (or a unit entry) that is not an object',
   assert.equal(JSON.parse(readFileSync(cfg, 'utf8')).units.grok, 7); // and it is preserved
 });
 
+test('set writes the agents block, show reads it back with sources, and the note points at rules --agents', () => {
+  const dir = home();
+  const s = cli(['set', 'agents.tester.maxTurns=120'], { dir });
+  assert.equal(s.code, 0, s.err);
+  assert.match(s.out, /agents\.tester\.maxTurns\s+80 \[default\] → 120 \[file\]/);
+  assert.match(s.out, /rules --agents/, 'a changed setting is only in the definitions after a re-render');
+  // exactly the nested shape the spec names — merged into the file, top level
+  const written = JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8'));
+  assert.deepEqual(written.agents, { tester: { maxTurns: 120 } });
+  assert.equal(written.version, 1);
+
+  const shown = cli(['show', 'agents'], { dir });
+  assert.equal(shown.code, 0, shown.err);
+  assert.match(shown.out, /^agents$/m);
+  assert.match(shown.out, /^\s+tester\.maxTurns\s+120\s+file$/m);
+  assert.match(shown.out, /^\s+coder\.model\s+opus\s+default$/m);
+  assert.match(shown.out, /^\s+coder\.effort\s+xhigh\s+default$/m);
+  assert.match(shown.out, /^\s+tester\.model\s+sonnet\s+default$/m);
+  assert.doesNotMatch(shown.out, /^codex$/m, 'show agents shows the block and nothing else');
+  // a bare `show` lists it after the units, and a unit selection never does
+  assert.match(cli(['show'], { dir }).out, /^agents$/m);
+  assert.doesNotMatch(cli(['show', 'codex'], { dir }).out, /^agents$/m);
+  // a second set merges instead of replacing the block
+  assert.equal(cli(['set', 'agents.coder.model=opus-4'], { dir }).code, 0);
+  const both = JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8'));
+  assert.deepEqual(both.agents, { tester: { maxTurns: 120 }, coder: { model: 'opus-4' } });
+});
+
+test('set refuses an unknown agent, an unknown agent key and an out-of-range value — exit 1, nothing written', () => {
+  const dir = home();
+  const role = cli(['set', 'agents.nope.model=x'], { dir });
+  assert.equal(role.code, 1);
+  assert.match(role.err, /unknown agent "nope" — known agents: coder, tester/);
+  const key = cli(['set', 'agents.tester.turns=1'], { dir });
+  assert.equal(key.code, 1);
+  assert.match(key.err, /unknown key "turns" for agent "tester" — known keys: model, effort, maxTurns/);
+  const zero = cli(['set', 'agents.tester.maxTurns=0'], { dir });
+  assert.equal(zero.code, 1);
+  assert.match(zero.err, /invalid value for agents\.tester\.maxTurns: "0" — expected a positive integer/);
+  const effort = cli(['set', 'agents.coder.effort=turbo'], { dir });
+  assert.equal(effort.code, 1);
+  assert.match(effort.err, /invalid value for agents\.coder\.effort: "turbo" — expected low \| medium \| high \| xhigh \| max/);
+  const blank = cli(['set', 'agents.coder.model='], { dir });
+  assert.equal(blank.code, 1);
+  const shape = cli(['set', 'agents.tester=120'], { dir });
+  assert.equal(shape.code, 1);
+  assert.equal(existsSync(join(dir, 'fleet.config.json')), false);
+});
+
+test('set refuses a model that is not one printable line — a newline would escape the frontmatter', () => {
+  const dir = home();
+  const cfg = join(dir, 'fleet.config.json');
+  const original = JSON.stringify({ version: 1, agents: { coder: { model: 'opus' } } });
+  writeFileSync(cfg, original);
+  for (const value of ['opus\n---\ninjected: 1', 'opus\ttabbed', '\u001b[0mopus']) {
+    const r = cli(['set', `agents.coder.model=${value}`], { dir });
+    assert.equal(r.code, 1, JSON.stringify(value));
+    assert.match(r.err, /invalid value for agents\.coder\.model: .* — expected a single printable line/);
+    assert.equal(readFileSync(cfg, 'utf8'), original, 'a refused set never touches the file');
+  }
+  // a name with ordinary spaces is still a name
+  assert.equal(cli(['set', 'agents.coder.model=Claude Opus 5'], { dir }).code, 0);
+  assert.equal(JSON.parse(readFileSync(cfg, 'utf8')).agents.coder.model, 'Claude Opus 5');
+});
+
+test('set agents.* is not blocked by a broken "units" block it never touches (and the reverse)', () => {
+  const dir = home();
+  const cfg = join(dir, 'fleet.config.json');
+  writeFileSync(cfg, JSON.stringify({ version: 1, units: 'broken' }));
+  const r = cli(['set', 'agents.tester.maxTurns=120'], { dir });
+  assert.equal(r.code, 0, r.err);
+  const written = JSON.parse(readFileSync(cfg, 'utf8'));
+  assert.deepEqual(written.agents, { tester: { maxTurns: 120 } });
+  assert.equal(written.units, 'broken', 'the block it did not touch is preserved, not repaired');
+  // and the mirror image: a unit key is not blocked by a broken agents block
+  writeFileSync(cfg, JSON.stringify({ version: 1, agents: 'broken' }));
+  assert.equal(cli(['set', 'codex.timeoutS=42'], { dir }).code, 0);
+  assert.equal(JSON.parse(readFileSync(cfg, 'utf8')).agents, 'broken');
+});
+
+test('set refuses to replace an "agents" block (or one agent entry) that is not an object', () => {
+  const dir = home();
+  const cfg = join(dir, 'fleet.config.json');
+  writeFileSync(cfg, JSON.stringify({ version: 1, agents: ['tester'] }));
+  const arr = cli(['set', 'agents.tester.maxTurns=120'], { dir });
+  assert.equal(arr.code, 1);
+  assert.match(arr.err, /"agents" is an array, not an object/);
+  assert.equal(readFileSync(cfg, 'utf8'), JSON.stringify({ version: 1, agents: ['tester'] })); // untouched
+
+  writeFileSync(cfg, JSON.stringify({ version: 1, agents: { tester: 120 } }));
+  const num = cli(['set', 'agents.tester.maxTurns=120'], { dir });
+  assert.equal(num.code, 1);
+  assert.match(num.err, /"agents\.tester" is a number, not an object/);
+  // a unit write is not blocked by a broken agents block it does not touch
+  assert.equal(cli(['set', 'codex.timeoutS=42'], { dir }).code, 0);
+  assert.equal(JSON.parse(readFileSync(cfg, 'utf8')).agents.tester, 120); // and it is preserved
+});
+
 test('call refuses json args that are not an object', () => {
   const dir = home();
   for (const bad of ['[]', 'null', '3', '"hi"']) {
@@ -892,6 +990,45 @@ test('rules --agents writes both managed agent definitions, refreshes them, and 
   assert.equal(r5.status, 0);
   assert.ok(!existsSync(join(proj, '.claude', 'agents', 'omelette-coder.md')));
   assert.ok(!existsSync(join(proj, '.claude', 'rules', 'omelette-fleet.md')), '--remove --agents removes the rules file as well');
+});
+
+test('rules --agents renders the configured agent settings, and a later `set` makes it rewrite the file', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const rules = () => spawnSync(process.execPath, [BIN, 'rules', '--agents'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  const testerFile = join(proj, '.claude', 'agents', 'omelette-tester.md');
+  const coderFile = join(proj, '.claude', 'agents', 'omelette-coder.md');
+
+  const r1 = rules();
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.match(readFileSync(testerFile, 'utf8'), /^maxTurns: 80$/m, 'the built-in default with no config');
+  assert.match(readFileSync(coderFile, 'utf8'), /^model: opus$/m);
+
+  assert.equal(cli(['set', 'agents.tester.maxTurns=120'], { dir }).code, 0);
+  const r2 = rules();
+  assert.equal(r2.status, 0, r2.stderr);
+  // same version on both sides: it is the CONTENT that changed, so it is rewritten
+  assert.match(r2.stdout, /written .*omelette-tester\.md \(v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?), was \1\)/);
+  assert.match(r2.stdout, /up to date .*omelette-coder\.md/, 'the coder file is untouched by a tester setting');
+  assert.match(readFileSync(testerFile, 'utf8'), /^maxTurns: 120$/m);
+  assert.match(rules().stdout, /up to date .*omelette-tester\.md/, 'and it settles again');
+  assert.ok(!readFileSync(testerFile, 'utf8').includes('{{'));
+
+  // a second round: the file on disk is the evidence, not the "written" line
+  assert.equal(cli(['set', 'agents.tester.maxTurns=97'], { dir }).code, 0);
+  assert.equal(rules().status, 0);
+  assert.match(readFileSync(testerFile, 'utf8'), /^maxTurns: 97$/m);
+  assert.doesNotMatch(readFileSync(testerFile, 'utf8'), /^maxTurns: 120$/m);
+});
+
+test('rules --agents warns about an invalid agent setting on stderr and still writes the default', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, agents: { tester: { maxTurns: 'lots' } } }));
+  const r = spawnSync(process.execPath, [BIN, 'rules', '--agents'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /agents\.tester\.maxTurns = "lots" is invalid/);
+  assert.match(readFileSync(join(proj, '.claude', 'agents', 'omelette-tester.md'), 'utf8'), /^maxTurns: 80$/m);
 });
 
 test('doctor reports the rules files: absent, ours with version, foreign', () => {
