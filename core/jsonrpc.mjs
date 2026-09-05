@@ -10,10 +10,14 @@ export const DEFAULT_PROTOCOL = '2024-11-05';
 
 /**
  * @param {{serverInfo:{name:string,version:string}, tools:object[],
- *          callTool:(name:string,args:object)=>Promise<{text:string,isError?:boolean}>}} o
+ *          callTool:(name:string,args:object)=>Promise<{text:string,isError?:boolean}>,
+ *          instructions?:string}} o
+ *   `instructions` is MCP's `InitializeResult.instructions`: text the client puts
+ *   in the model's context at connect time. Blank or absent → the key is omitted.
  * @returns {(msg:object)=>Promise<object|null>} null = notification, nothing to send
  */
-export function createHandler({ serverInfo, tools, callTool }) {
+export function createHandler({ serverInfo, tools, callTool, instructions }) {
+  const ins = typeof instructions === 'string' && instructions.trim() ? instructions : null;
   return async function handle(msg) {
     const { id, method, params } = msg || {};
     const hasId = id !== undefined && id !== null;
@@ -26,6 +30,7 @@ export function createHandler({ serverInfo, tools, callTool }) {
             protocolVersion: (params && params.protocolVersion) || DEFAULT_PROTOCOL,
             capabilities: { tools: {} },
             serverInfo,
+            ...(ins ? { instructions: ins } : {}),
           },
         };
       case 'notifications/initialized':
@@ -97,9 +102,12 @@ export function createLineSplitter(onLine, onOverflow = () => {}) {
   };
 }
 
-/** Attach a handler to this process's stdin/stdout and never let a stray error kill the loop. */
-export function serve({ serverInfo, tools, callTool, log = () => {} }) {
-  const handle = createHandler({ serverInfo, tools, callTool });
+/**
+ * Attach a handler to this process's stdin/stdout and never let a stray error kill the loop.
+ * `instructions` is passed straight through to `createHandler`.
+ */
+export function serve({ serverInfo, tools, callTool, instructions, log = () => {} }) {
+  const handle = createHandler({ serverInfo, tools, callTool, instructions });
   const send = (m) => { process.stdout.write(JSON.stringify(m) + '\n'); };
   process.on('uncaughtException', (e) => log('uncaught: ' + ((e && e.stack) || e)));
   process.on('unhandledRejection', (e) => log('unhandledRejection: ' + ((e && e.stack) || e)));

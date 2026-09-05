@@ -122,9 +122,13 @@ export const GEMINI_MODELS = [
     effort: 'Low',
     tier: 'heavy',
     useFor:
-      'Pro-grade reasoning at a balanced cost, and the 2M context window — the one capability no Flash generation has (3.8 Flash caps at 1M in / 64K out). A middle ground when Flash isn\'t enough but Pro High is overkill.',
+      'The Pro-grade 2M window at balanced cost — the one capability no Flash generation has (3.8 Flash caps at 1M in / 64K out). ' +
+      'Same two niches as Pro (High): inputs past 1M tokens, and formal / scientific reasoning where 3.8 Flash has no published ' +
+      'numbers. NOT for code or agentic work.',
     avoid:
-      'Quick/cheap lookups and routine agentic loops (Flash is faster, cheaper, and wins those suites) and the very hardest analysis (use Pro High). Note 128K retrieval is not a reason to reach for Pro — MRCR v2 128K is unpublished for 3.8, but the last measured Flash generation (3.7) scored 97.0 against Pro\'s 84.9, and 3.8 is built on it.',
+      'Code and agentic work (3.8 Flash leads 68.1 vs 46.2 coding and 67.6 vs 40.1 agentic at roughly a third of the price), ' +
+      'quick/cheap lookups and routine loops (Flash is faster and cheaper), and the very hardest formal reasoning (use Pro High). ' +
+      'Note 128K retrieval is not a reason to reach for Pro — the Flash line led MRCR v2 128K 97.0 vs 84.9.',
   },
   {
     id: 'Gemini 3.1 Pro (High)',
@@ -133,9 +137,13 @@ export const GEMINI_MODELS = [
     effort: 'High',
     tier: 'heavy',
     useFor:
-      'Deepest analysis and hardest reasoning — expert/novel scientific and formal-math problems (GPQA Diamond 94.3; ARC-AGI-2 77.1 — BOTH unpublished for 3.8 Flash, and 3.7 scored 90.4 on GPQA) and anything needing the 2M context window. The pick when correctness on hard problems outranks speed.',
+      'Two niches only: inputs past 1M tokens (the 2M context window), and formal / scientific reasoning where 3.8 Flash has ' +
+      'no published numbers (GPQA Diamond 94.3, ARC-AGI-2 77.1 — both unpublished for 3.8). Also the fleet\'s TIE-BREAKER when ' +
+      'Grok and Flash disagree. Cards dated February 2026 — seven months older than Flash.',
     avoid:
-      'Anything latency-sensitive or routine — slowest and priciest; overkill for lookups, summaries, or agentic tool loops (Flash wins those, often outright). Plain 128K retrieval too: the 3.7-generation Flash led MRCR v2 128K 97.0 vs 84.9 (unpublished for 3.8), so Pro earns its cost on depth and context SIZE, not on long-context accuracy per se.',
+      'Code and agentic work — 3.8 Flash beats 3.1 Pro on public coding (68.1 vs 46.2) and agentic (67.6 vs 40.1) lanes with ' +
+      'non-overlapping intervals at roughly a third of the price, so Pro is NOT the heavy-reasoning upgrade any more. ' +
+      'Latency-sensitive or routine work, lookups, summaries, and plain 128K retrieval (the Flash line led MRCR v2 128K 97.0 vs 84.9).',
   },
   {
     id: 'Claude Opus 4.6 (Thinking)',
@@ -242,11 +250,10 @@ export const GUIDE =
   '$0.75/$3.75 per Mtok in/out through 2026-12-31, then $1.50/$7.50); ' +
   '3.8 Flash (Medium)=when High-effort latency or token overhead is unwanted (the fleet default ' +
   'is High); ' +
-  'Gemini 3.1 Pro (Low)=Pro-grade reasoning + the 2M context window at balanced cost; ' +
-  'Pro (High)=deepest/hardest scientific & formal reasoning (GPQA 94.3, ARC-AGI-2 77.1 — both ' +
-  'unpublished for 3.8 Flash; 3.7 scored 90.4 on GPQA) and 1M+ context, but slowest & priciest — ' +
-  'use only when correctness on hard problems beats speed; plain 128K retrieval is NOT a reason ' +
-  '(the 3.7-generation Flash led MRCR v2 128K 97.0 vs 84.9; unpublished for 3.8); ' +
+  'Gemini 3.1 Pro (Low)=the same two niches at balanced cost, on the 2M context window; ' +
+  'Pro (High)=ONLY for >1M-token inputs, formal/scientific reasoning where Flash has no numbers ' +
+  '(GPQA 94.3, ARC-AGI-2 77.1), and as the tie-breaker when Grok and Flash disagree — NOT a code ' +
+  'or agentic model any more (3.8 Flash 68.1 vs 46.2 coding, 67.6 vs 40.1 agentic); ' +
   'Claude Opus 4.6 (Thinking)=heavy-reasoning delegation on Antigravity\'s SEPARATE Claude quota ' +
   'bucket — deep analysis and Opus-grade second opinions without touching the Gemini pool or the ' +
   'native session; the bucket is restrictive, spend it on hard problems, and prefer Gemini for ' +

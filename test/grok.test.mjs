@@ -48,7 +48,7 @@ test('interpretGrok: json mode — end_turn in any spelling is clean, early stop
 test('interpretGrok: plain mode returns raw text; unparseable json fails open; kills and empty exits are loud', () => {
   assert.equal(interpretGrok(ok({ stdout: ' /a/b.jpg \n' }), { jsonMode: false, timeoutS: 300 }), '/a/b.jpg');
   assert.equal(interpretGrok(ok({ stdout: '{not json' }), { jsonMode: true, timeoutS: 300 }), '{not json');
-  assert.throws(() => interpretGrok(ok({ killed: true }), { jsonMode: true, timeoutS: 900 }), /hard-killed after 900s/);
+  assert.throws(() => interpretGrok(ok({ killed: true }), { jsonMode: true, timeoutS: 900 }), /hard-killed after 900s/); // nothing captured
   assert.throws(() => interpretGrok(ok({ code: 1, stderr: 'bad' }), { jsonMode: true, timeoutS: 300 }), /grok exited 1: bad/);
 });
 
@@ -66,6 +66,24 @@ test('interpretGrok: a non-zero exit WITH text keeps the text under a partial ma
   assert.match(both, /CLI exited 1/);
   // Unparseable json on a failed exit still fails open — with the marker.
   assert.match(interpretGrok(ok({ stdout: '{not json', code: 1 }), { jsonMode: true, timeoutS: 300 }), /CLI exited 1/);
+});
+
+test('interpretGrok: a hard kill with captured output returns the answer under a partial marker', () => {
+  const j = (o) => JSON.stringify(o);
+  // A 15-minute review killed by timeoutS used to throw away everything the CLI
+  // had already printed. The salvage reads the SAME payload the clean path does.
+  const fromJson = interpretGrok(ok({ stdout: j({ text: 'half a review', stopReason: 'end_turn' }), code: null, killed: true }), { jsonMode: true, timeoutS: 900 });
+  assert.equal(fromJson.partial, true);
+  assert.match(fromJson.text, /^half a review/);
+  assert.match(fromJson.text, /\[grok: hard-killed after 900s — treat the answer as partial; raise grok\.timeoutS in the fleet config\]/);
+  const fromPlain = interpretGrok(ok({ stdout: ' half an answer \n', code: null, killed: true }), { jsonMode: false, timeoutS: 900 });
+  assert.equal(fromPlain.partial, true);
+  assert.match(fromPlain.text, /^half an answer/);
+  // Truncated JSON is salvaged raw, exactly as the clean path fails open.
+  assert.match(interpretGrok(ok({ stdout: '{not json', code: null, killed: true }), { jsonMode: true, timeoutS: 900 }).text, /^\{not json/);
+  // Nothing captured at all: the kill is still an error, not an empty success.
+  assert.throws(() => interpretGrok(ok({ stdout: '   ', code: null, killed: true }), { jsonMode: false, timeoutS: 900 }), /hard-killed after 900s/);
+  assert.throws(() => interpretGrok(ok({ stdout: j({ text: '', stopReason: 'cancelled' }), code: null, killed: true }), { jsonMode: true, timeoutS: 900 }), /hard-killed after 900s/);
 });
 
 test('unit contract: five tools, efforts from the catalog, workspace-write declared unsupported', () => {

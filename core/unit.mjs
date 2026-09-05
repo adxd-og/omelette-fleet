@@ -14,6 +14,7 @@
  * defineUnit({
  *   name: 'codex',                       // [a-z][a-z0-9-]*; also the config key and status unit
  *   label: 'Codex',                      // human name in error messages
+ *   instructions: 'This unit: Codex …',  // one line appended to the fleet contract in initialize.instructions
  *   bin: { env: 'CODEX_BIN', default: 'codex' },
  *   billingRiskEnv: ['OPENAI_API_KEY'],  // deleted from every child env
  *   envPassthrough: ['CODEX_*'],         // added to core/spawn.mjs's ALLOWED_ENV for this unit's
@@ -32,13 +33,17 @@
  * tool.kind: research | review | image | pipeline | catalog. `catalog` tools
  * never spawn and are answered by the runtime. Every other kind gets
  * `run(args, ctx)` with ctx = { cfg, mode, model, effort, spawn, retry, log,
- * catalog, home } and returns a string or { text, usage?, isError? }.
+ * catalog, home } and returns a string or { text, usage?, isError?, partial? }.
+ * `partial: true` marks an answer whose run did not finish (a hard kill whose
+ * captured text was kept): still a success, still `isError: false`, and the
+ * flag travels to the status feed's `end()` extra next to `usage`.
  * `isError: true` is how an adapter reports a REFUSAL it handled itself
  * (missing prompt, bad cwd, bad imagePath): the text is the error, MCP is told
  * so, and the status feed records "error" — a run that returns `Error: ...`
  * text without the flag would be reported to the caller as a success.
  */
 import { serve } from './jsonrpc.mjs';
+import { unitInstructions } from './rules.mjs';
 import { runProcess } from './spawn.mjs';
 import { createStatus } from './status.mjs';
 import { unitConfig } from './config.mjs';
@@ -71,6 +76,7 @@ export function defineUnit(spec) {
     // this file at some earlier release. An adapter may still override it.
     version: VERSION,
     label: spec.name,
+    instructions: '',
     serverName: `omelette-${spec.name}`,
     billingRiskEnv: [],
     envPassthrough: [],
@@ -194,7 +200,12 @@ export function createUnitRuntime(unit, { env = process.env } = {}) {
     try {
       const r = await tool.run(args, ctx);
       const text = typeof r === 'string' ? r : (r && r.text) || '';
-      const extra = r && typeof r === 'object' && r.usage ? { usage: r.usage } : undefined;
+      // `partial: true` — a hard-killed run whose captured answer we kept — is a
+      // SUCCESS that says so: the status stays "ok" and the marker in the text
+      // is what a reader acts on; the feed carries the flag for a supervisor.
+      const extra = r && typeof r === 'object' && (r.usage || r.partial)
+        ? { ...(r.usage ? { usage: r.usage } : {}), ...(r.partial ? { partial: true } : {}) }
+        : undefined;
       // An adapter that refused the call itself says so with isError — otherwise
       // MCP would report "prompt is required" as a successful answer.
       const isError = !!(r && typeof r === 'object' && r.isError);
@@ -231,6 +242,12 @@ export function startUnit(unit, opts = {}) {
     env: opts.env || process.env,
     log: rt.log,
   }).then(() => {});
-  serve({ serverInfo: { name: unit.serverName, version: unit.version }, tools: rt.tools, callTool: rt.callTool, log: rt.log });
+  serve({
+    serverInfo: { name: unit.serverName, version: unit.version },
+    instructions: unitInstructions(unit),
+    tools: rt.tools,
+    callTool: rt.callTool,
+    log: rt.log,
+  });
   return rt;
 }

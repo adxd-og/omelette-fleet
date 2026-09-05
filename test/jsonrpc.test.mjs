@@ -76,3 +76,13 @@ test('line splitter caps one un-terminated frame instead of growing until V8 die
   feed('garbage-tail\n{"a":1}\n');
   assert.deepEqual(seen, ['{"a":1}']);
 });
+
+test('initialize carries `instructions` when given and omits the key when not', async () => {
+  const withIt = createHandler({ serverInfo: { name: 't', version: '0' }, tools, callTool: async () => ({ text: '' }), instructions: 'Be careful.' });
+  const r = await withIt({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+  assert.equal(r.result.instructions, 'Be careful.');
+  const without = await handler({ jsonrpc: '2.0', id: 2, method: 'initialize', params: {} });
+  assert.ok(!('instructions' in without.result));
+  const empty = createHandler({ serverInfo: { name: 't', version: '0' }, tools, callTool: async () => ({ text: '' }), instructions: '   ' });
+  assert.ok(!('instructions' in (await empty({ jsonrpc: '2.0', id: 3, method: 'initialize', params: {} })).result));
+});

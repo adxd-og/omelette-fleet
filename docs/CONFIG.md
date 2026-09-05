@@ -20,8 +20,8 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
   "defaults": { "status": true },
   "units": {
     "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
-    "grok":   { "enabled": true, "mode": "read-only", "timeoutS": 900, "maxTurns": 30 },
-    "codex":  { "enabled": true, "mode": "read-only", "model": "gpt-5.6-terra", "effort": "high", "webSearch": true, "timeoutS": 600 }
+    "grok":   { "enabled": true, "mode": "read-only", "timeoutS": 1800, "maxTurns": 30 },
+    "codex":  { "enabled": true, "mode": "read-only", "model": "gpt-6-astra", "effort": "high", "webSearch": true, "timeoutS": 600 }
   }
 }
 ```
@@ -77,7 +77,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 
 Keys that a unit ignores are still valid config — they are simply never read. An unknown key *name* warns and is ignored, in `defaults` as well as in `units.<unit>`. One consequence of `defaults` being checked per unit: a key that is valid for one unit only (`imageMaxTurns`) warns for the units that do not know it, so put unit-specific extras under `units.<unit>`.
 
-Leaving `model` unset means "the vendor's own default" for Gemini and Grok. **Not for Codex**: that unit runs with `--ignore-user-config`, so it pins the first catalog entry (`gpt-5.6-terra`) instead and logs that it did.
+Leaving `model` unset means "the vendor's own default" for Gemini and Grok. **Not for Codex**: that unit runs with `--ignore-user-config`, so it pins the first catalog entry (`gpt-6-astra`) instead and logs that it did.
 
 ## Resolution order
 
@@ -177,8 +177,8 @@ The answer is cached in `<home>/update-check.json`, written atomically with mode
 ```json
 {
   "checkedAt": 1756900000000,
-  "latest": "0.2.0",
-  "url": "https://github.com/adxd-og/omelette-fleet/releases/tag/v0.2.0"
+  "latest": "0.3.0",
+  "url": "https://github.com/adxd-og/omelette-fleet/releases/tag/v0.3.0"
 }
 ```
 
@@ -213,7 +213,7 @@ To remove the tools from the client entirely, use `omelette-fleet uninstall` (or
 | Unit | Behaviour |
 |---|---|
 | **gemini** | The value is handed to the CLI as `--print-timeout <timeoutS>s`, and the process-group SIGKILL sits **60 s above it** — so agy gets to report its own timeout first, and a hard kill means agy itself hung. The hard-kill error therefore names `timeoutS + 60`. Default 300 s |
-| **grok** | No CLI-side timeout flag exists, so the process-group SIGKILL at `timeoutS` is the only wall-clock bound. Default 300 s; the example config raises it to 900 s |
+| **grok** | No CLI-side timeout flag exists, so the process-group SIGKILL at `timeoutS` is the only wall-clock bound. Default 300 s; the example config raises it to 1800 s — a thorough `grok_code_review` has been observed running 15 minutes, and a kill now returns the partial answer rather than nothing |
 | **codex** | Same — hard kill only, at `timeoutS`. Default 600 s, because `codex_code_review` over a directory is a long call |
 
 A hard kill is always reported as an error naming the unit and the limit, e.g. `codex hard-killed after 600s (raise codex.timeoutS in the fleet config)`. `gemini_deep_research` runs several stages (decompose, parallel gathers, synthesis) and each stage is bounded by `timeoutS` separately — the whole pipeline commonly takes 3–10 minutes.

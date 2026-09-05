@@ -144,7 +144,7 @@ export function parseAgyResult(out) {
 
 /**
  * Interpret one finished agy run. Exported for tests.
- * @returns {{text:string, structured:*, usage:*, status:string}}
+ * @returns {{text:string, structured:*, usage:*, status:string, partial?:boolean}}
  */
 export function interpretAgy(res, { timeoutS }) {
   const { stdout: out, stderr: errBuf, code, killed } = res;
@@ -168,7 +168,19 @@ export function interpretAgy(res, { timeoutS }) {
   if (EXHAUSTED_PATTERNS.some((re) => re.test(`${errBuf}\n${out}`))) {
     throw new Error('Gemini quota exhausted — the Antigravity bucket is empty; try after the window resets.');
   }
-  if (killed) throw new Error(`agy hard-killed after ${timeoutS + HARD_KILL_GRACE_MS / 1000}s (raise gemini.timeoutS in the fleet config)`);
+  // A hard kill discards nothing it had already produced: `answer` came out of
+  // the same envelope reading the clean path uses, so it is returned marked.
+  if (killed) {
+    const after = timeoutS + HARD_KILL_GRACE_MS / 1000;
+    if (answer) {
+      return {
+        ...result,
+        text: `${answer}\n\n[gemini: hard-killed after ${after}s — treat the answer as partial; raise gemini.timeoutS in the fleet config]`,
+        partial: true,
+      };
+    }
+    throw new Error(`agy hard-killed after ${after}s (raise gemini.timeoutS in the fleet config)`);
+  }
   if (code !== 0 && !answer) throw new Error(`agy exited ${code}: ${errBuf.trim().slice(-500) || '(no stderr)'}`);
   // agy says the run did not finish cleanly. Partial text is often the useful
   // part, so keep it — but never let the caller read it as a whole answer.
@@ -321,6 +333,7 @@ const MODEL_PROP = {
 export default defineUnit({
   name: 'gemini',
   label: 'Gemini',
+  instructions: 'This unit: Gemini via the Antigravity CLI (agy). Web-grounded research (gemini_research), multi-source deep research (gemini_deep_research — about 5 CLI runs and minutes per call, use deliberately), multimodal reads of local images and PDFs (absolute path, and say "view the file directly, no terminal commands" — shell tools are auto-denied), image generation. The weakest sandbox in the fleet: its read-only posture is a permission policy, not a kernel.',
   bin: { env: 'AGY_BIN', default: 'agy' },
   billingRiskEnv: BILLING_RISK_ENV,
   // agy's own knobs (AGY_BIN/AGY_*), plus the GEMINI_*/GOOGLE_* namespaces the
@@ -358,7 +371,7 @@ export default defineUnit({
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         const acceptEdits = ctx.mode === 'workspace-write';
         const r = await runAgyWithRetry(ctx, { prompt: NO_GIT_PREFIX + prompt, model: ctx.model, acceptEdits });
-        return { text: r.text, usage: r.usage };
+        return { text: r.text, usage: r.usage, ...(r.partial ? { partial: true } : {}) };
       },
     },
     {
@@ -392,7 +405,7 @@ export default defineUnit({
           acceptEdits: true,
           cwd,
         });
-        return { text: r.text, usage: r.usage };
+        return { text: r.text, usage: r.usage, ...(r.partial ? { partial: true } : {}) };
       },
     },
     {

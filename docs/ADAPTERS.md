@@ -66,8 +66,13 @@ export function buildArgs({ model, effort }) {
 
 /** Turn a finished run into text, or throw a clear error. Exported for tests. */
 export function interpretAcme(res, { timeoutS }) {
-  if (res.killed) throw new Error(`acme hard-killed after ${timeoutS}s (raise acme.timeoutS in the fleet config)`);
-  const answer = (JSON.parse(res.stdout || '{}').text || '').trim();
+  // One parser for both paths: what a finished run returns is also what a
+  // killed run salvages — a second parser for the failure path is how they drift.
+  const answer = (() => { try { return (JSON.parse(res.stdout || '{}').text || '').trim(); } catch { return ''; } })();
+  if (res.killed) {
+    if (answer) return { text: `${answer}\n\n[acme: hard-killed after ${timeoutS}s — treat the answer as partial; raise acme.timeoutS in the fleet config]`, partial: true };
+    throw new Error(`acme hard-killed after ${timeoutS}s with no output (raise acme.timeoutS in the fleet config)`);
+  }
   if (!answer) throw new Error(`acme exited ${res.code}: ${res.stderr.trim().slice(-500) || '(no stderr)'}`);
   return answer;
 }
@@ -119,7 +124,7 @@ export default defineUnit({
 });
 ```
 
-`ctx` gives you `{ cfg, mode, model, effort, spawn, retry, log, catalog, home }`. `spawn(o)` accepts `{ args, cwd, stdinText, extraEnv, hardKillMs, outputCap }` and resolves `{ stdout, stderr, code, signal, killed }` — it does **not** reject on a non-zero exit, because only you know what an exit code means for this CLI. A refusal you make yourself returns `{ text, isError: true }`; returning an `Error: …` string without the flag reports a failure to MCP as a success.
+`ctx` gives you `{ cfg, mode, model, effort, spawn, retry, log, catalog, home }`. `spawn(o)` accepts `{ args, cwd, stdinText, extraEnv, hardKillMs, outputCap }` and resolves `{ stdout, stderr, code, signal, killed }` — it does **not** reject on a non-zero exit, because only you know what an exit code means for this CLI. A refusal you make yourself returns `{ text, isError: true }`; returning an `Error: …` string without the flag reports a failure to MCP as a success. `{ text, partial: true }` is the third shape: an answer the run did not finish (today, a hard kill whose captured text was kept) — a success, with the flag carried into the status feed.
 
 Export `buildArgs` and the result interpreter. Everything worth testing about an adapter lives in those two pure functions.
 
@@ -185,7 +190,7 @@ Also worth a test each: an unknown model is rejected before any spawn, a disable
 - [ ] **Auth detection** — a regex on stderr plus a `help` string that names the exact command to run. The runtime only checks it on runs with **empty stdout**, so a real answer that mentions signing in cannot false-positive. Make sure `isDeterministic` treats an auth failure as unretryable.
 - [ ] **`supportedModes` honesty** — declare `workspace-write: null` unless the unit actually implements a mode you would defend in [SECURITY.md](SECURITY.md). A unit that declares it and then relies on a prompt to stay read-only is worse than one that refuses. If you do implement it, say precisely what scopes the write, and prefer granting it to one tool with an explicit `cwd`.
 - [ ] **Retry only when re-issuing is safe.** `ctx.retry` re-runs on empty output. That is fine for a read-only one-shot; it is not fine for anything that spends metered quota per call (image generation), anything that may already have written, or a deterministic failure. Pass `skipIf` for auth, quota, hard-kill, missing-binary and CLI-error cases.
-- [ ] **Fail loudly, never blankly.** An empty answer with a talkative stderr is a bug report, not a shrug — surface the stderr. A run that produced text but exited non-zero or stopped early keeps the text and appends a marker (`[<unit>: CLI exited N — treat the answer as partial]`); only a text-less failure throws. Refusals you handle yourself return `isError: true`.
+- [ ] **Fail loudly, never blankly.** An empty answer with a talkative stderr is a bug report, not a shrug — surface the stderr. A run that produced text but exited non-zero, stopped early, or was hard-killed keeps the text and appends a marker (`[<unit>: CLI exited N — treat the answer as partial]`, `[<unit>: hard-killed after <N>s — … raise <unit>.timeoutS …]`); only a text-less failure throws. A salvaged kill also returns `partial: true`, which the runtime puts in the status feed's `end` event while the status stays `"ok"`. Extract that text with the SAME parsing the success path uses — a second parser for the failure path is how the two drift. Refusals you handle yourself return `isError: true`.
 - [ ] **stdout is JSON-RPC only.** Log through `ctx.log`.
 - [ ] **`mutateGate`** on prompt-driven research tools; leave it off where git-reading is a legitimate ask, and off for image prompts.
 - [ ] **Add the unit to the CLI's install list** and to `doctor`, so a missing CLI is skipped rather than registered broken.

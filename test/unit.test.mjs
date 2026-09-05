@@ -50,6 +50,12 @@ function fakeUnit(overrides = {}) {
         name: 'fake_refuse', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
         async run() { return { text: 'Error: "prompt" is required.', isError: true }; },
       },
+      {
+        // A run that was hard-killed but had already produced text: an answer,
+        // flagged, the way all three real adapters report a salvaged kill.
+        name: 'fake_partial', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+        async run() { return { text: 'half an answer\n\n[fake: hard-killed]', usage: { out: 2 }, partial: true }; },
+      },
       { name: 'fake_models', kind: 'catalog', description: 'd', inputSchema: { type: 'object', properties: {} } },
     ],
     ...overrides,
@@ -179,4 +185,28 @@ test('an adapter that refuses the call surfaces isError and records "error" in t
   const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
   assert.equal(snap.lastEvent.status, 'error');
   assert.match(snap.lastEvent.error, /"prompt" is required/);
+});
+
+test('a partial result is a successful answer that says so: status ok, isError false, partial in the feed', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  const r = await rt.callTool('fake_partial', {});
+  assert.equal(r.isError, undefined, 'a hard-killed run that produced text is not an MCP error');
+  assert.match(r.text, /^half an answer/);
+  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'ok');
+  assert.equal(snap.lastEvent.partial, true);
+  assert.deepEqual(snap.lastEvent.usage, { out: 2 }, 'usage and partial travel together');
+  const line = readFileSync(join(dir, 'fleet-log.ndjson'), 'utf8').split('\n').filter(Boolean).map(JSON.parse).at(-1);
+  assert.equal(line.event, 'end');
+  assert.equal(line.partial, true);
+  // …and a normal answer carries no `partial` key at all.
+  const plain = createUnitRuntime(fakeUnit(), { env: e });
+  await plain.callTool('fake_refuse', {});
+  assert.equal('partial' in JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8')).lastEvent, false);
+});
+
+test('defineUnit keeps an `instructions` line and defaults it to empty', () => {
+  assert.equal(fakeUnit().instructions, '');
+  assert.equal(fakeUnit({ instructions: 'This unit: Fake.' }).instructions, 'This unit: Fake.');
 });

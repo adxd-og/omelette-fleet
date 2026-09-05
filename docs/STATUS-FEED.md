@@ -51,9 +51,12 @@ One file per unit, rewritten on every event.
 | `lastEvent.durationMs` | Wall-clock milliseconds |
 | `lastEvent.error` | Error text, truncated to **500** characters, or `null` |
 | `lastEvent.usage` | Present only when the unit reports token usage — Codex: `{input, cachedInput, output, reasoning}`; Gemini: `{input, output}`; Grok: absent |
+| `lastEvent.partial` | `true` only when the answer is incomplete — today: the run outlived `timeoutS`, was SIGKILLed, and the text it had already produced was kept. `status` stays `"ok"` (there IS an answer) and the text carries a matching `[<unit>: hard-killed after <N>s …]` marker. Absent on a normal call — never `false` |
 | `updatedAt` | When this snapshot was written |
 
 Only tools that **spawn a CLI** are tracked. `<unit>_models` and any other local catalog read never appear.
+
+A hard-killed run that had already produced text is **not** an error: it ends `"ok"` with `partial: true`, because there is an answer to read — just not a finished one. A hard kill with nothing captured is an error like any other failed run.
 
 `status: "error"` covers everything that did not return a clean answer: a failed run, a rejected model or effort, a prompt the mutate gate refused, and a refusal the adapter made itself (a missing `prompt`, a `cwd` that is not an absolute existing directory). A call rejected after the config check — an unknown model, a gated prompt — still produces a matching `start`/`end` pair even though nothing spawned. A disabled unit and an unknown tool name are refused earlier and never reach the feed.
 
@@ -67,7 +70,7 @@ One compact JSON object per line, all units appending to the same file, one `O_A
 ```
 
 **`start`** carries `schema, ts, unit, event, id, tool, model, promptPreview`.
-**`end`** carries `schema, ts, unit, event, id, tool, status, durationMs`, plus `error` when there was one, plus any extra the unit reported (`usage`).
+**`end`** carries `schema, ts, unit, event, id, tool, status, durationMs`, plus `error` when there was one, plus any extra the unit reported (`usage`, `partial`).
 
 `id` joins the pair. `effort` appears in the snapshot but not in the log line.
 

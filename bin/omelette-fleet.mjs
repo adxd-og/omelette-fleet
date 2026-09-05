@@ -30,7 +30,9 @@
  * READ-ONLY ABOUT THE MACHINE: Claude Code's config — $CLAUDE_CONFIG_DIR/
  * .claude.json if that is set, else ~/.claude.json — is parsed, never written.
  * The only writer of it is `claude` itself. The files this CLI writes are
- * <home>/fleet.config.json and <home>/update-check.json.
+ * <home>/fleet.config.json, <home>/update-check.json and, on request,
+ * .claude/rules/omelette-fleet.md (and .claude/agents/omelette-*.md with
+ * `rules --agents`) — each of those only when it carries our marker.
  *
  * TEST HOOK — OMELETTE_PKG_ROOT: `update` (and the install-kind detection it
  * uses) treats that directory as the package root instead of this checkout, so
@@ -38,14 +40,18 @@
  * honoured NOWHERE else: server paths, the shipped example config and doctor
  * all still come from the real ROOT below.
  */
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { KEY_SCHEMA, coerce, configPath, fleetHome, unitConfig, writeFleetConfig } from '../core/config.mjs';
-import { cachedCheck, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
+import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
+import {
+  AGENT_FILES, RULES_FILE_NAME, agentsTarget, parseAgentMarker, parseRulesMarker, renderAgentFile,
+  renderRulesFile, rulesTarget,
+} from '../core/rules.mjs';
 import { resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -117,6 +123,21 @@ const COMMANDS = {
       'Registrations are never rewritten: server paths survive a pull.',
     ],
   },
+  rules: {
+    args: '[--global] [--agents] [--print] [--remove] [--force] [--dry-run]',
+    body: [
+      'Write the fleet\'s operating rules (units propose, this session applies;',
+      'tester flow; routing table) to <cwd>/.claude/rules/omelette-fleet.md,',
+      'which Claude Code loads like CLAUDE.md. --global writes it under',
+      '$CLAUDE_CONFIG_DIR or ~/.claude instead. The file carries a version',
+      'marker on line 1: re-running refreshes a file with the marker, and a',
+      'file WITHOUT it is never touched (--force replaces it). --print sends',
+      'the text to stdout; --remove deletes only a file with the marker.',
+      '--agents also writes two sub-agent definitions (omelette-coder:',
+      'Opus xhigh; omelette-tester: Sonnet xhigh, both disallowedTools:',
+      'Agent) into .claude/agents, where their effort is set.',
+    ],
+  },
   doctor: {
     args: '[--prefix <name>] [--probe-models]',
     body: [
@@ -180,6 +201,8 @@ const HELP = [
   '  omelette-fleet install --dry-run',
   '  omelette-fleet install --units codex,gemini',
   '  omelette-fleet doctor',
+  '  omelette-fleet rules            # this project',
+  '  omelette-fleet rules --global',
   '  omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"',
   "  omelette-fleet call codex codex_models '{}'",
 ].join('\n');
@@ -646,6 +669,37 @@ async function cmdUpdate(argv) {
   }
   out();
 
+  // A managed file older than the install it belongs to is worth one line and
+  // NOTHING else: `update` never writes the rules file or an agent definition —
+  // `omelette-fleet rules` does, when the operator asks. --check says it before
+  // it stops at the pull.
+  // The two scopes can be the SAME path (cwd is the home directory, no
+  // CLAUDE_CONFIG_DIR), and one file deserves one hint — the project scope
+  // comes first, so the plain command wins over `--global`. Identity is the
+  // RESOLVED path: process.cwd() is already real, `~` from the environment may
+  // still run through a symlink (/var → /private/var on macOS).
+  const realOrSelf = (p) => { try { return realpathSync(p); } catch { return p; } };
+  const rulesHints = (version) => {
+    const seen = new Set();
+    for (const r of rulesReport(version)) {
+      const key = realOrSelf(r.path);
+      if (r.state !== 'ours' || !r.behind || seen.has(key)) continue;
+      seen.add(key);
+      out(`rules file ${r.path} is v${r.version} (this install is v${version}) — refresh: omelette-fleet rules${r.scope === 'global' ? ' --global' : ''}`);
+    }
+    // One line per SCOPE, not per file: the two definitions are refreshed
+    // together — and only when the whole scope is ours. A scope holding a file
+    // that is not ours would refuse that refresh, so pointing at it is worse
+    // than saying nothing.
+    for (const r of agentsReport(version)) {
+      const key = realOrSelf(r.dir);
+      if (r.state !== 'ours' || !r.behind || seen.has(key)) continue;
+      seen.add(key);
+      out(`agent files under ${r.dir} are v${r.version} (this install is v${version}) — refresh: omelette-fleet rules --agents${r.scope === 'global' ? ' --global' : ''}`);
+    }
+  };
+  if (checkOnly) rulesHints(current);
+
   if (kind === 'npm') {
     out('Installed from npm — there is no checkout to pull. Upgrade with:');
     out();
@@ -653,6 +707,7 @@ async function cmdUpdate(argv) {
     out();
     out('(Nothing to install if you run it through npx: `npx omelette-fleet@latest <command>`');
     out(' always fetches the latest release.)');
+    if (!checkOnly) rulesHints(current);
     out('Restart Claude Code afterwards to load the new servers.');
     return checkOnly && remote && remote.behind ? 3 : 0;
   }
@@ -692,6 +747,7 @@ async function cmdUpdate(argv) {
   }
   if (behind === 0) {
     out(`already up to date — HEAD matches origin/${branch}.`);
+    if (!checkOnly) rulesHints(current);
     return 0;
   }
   out(`behind        ${behind} commit(s) behind origin/${branch}`);
@@ -720,8 +776,254 @@ async function cmdUpdate(argv) {
     return reg && !reg.exists;
   });
   if (missing.length) out(`The registered server file is missing for: ${missing.join(', ')} — run \`omelette-fleet install\`.`);
+  // The pull may have brought a newer rules text with it — compare against what
+  // is installed NOW, not against the version this command started at.
+  rulesHints(after);
   out('Restart Claude Code to load the new servers.');
   return 0;
+}
+
+// ─── rules ───────────────────────────────────────────────────────────────────
+
+/**
+ * Every path component this command touches has to be the real thing it looks
+ * like. `<base>/.claude`, `<base>/.claude/{rules,agents}` and the target file
+ * are lstat'ed — never followed — so a link planted anywhere along the way
+ * cannot redirect a write, or a `--remove`, at a file the operator never named.
+ * A missing component is fine: mkdirSync creates it, as before.
+ *
+ * @returns {string|null} the refusal's reason, or null when the path is clean.
+ */
+function unsafeManagedPath(path) {
+  const fileDir = dirname(path); //        .claude/rules | .claude/agents
+  const claudeDir = dirname(fileDir); //   .claude
+  for (const p of [claudeDir, fileDir, path]) {
+    let st;
+    try { st = lstatSync(p); } catch { continue; } // absent — nothing to redirect through
+    if (st.isSymbolicLink()) return `${p} is a symlink`;
+    if (p !== path && !st.isDirectory()) return `${p} is not a directory`;
+    // The target itself: a FIFO would park readFileSync forever waiting for a
+    // writer, and a device or a directory is not something we own either.
+    if (p === path && !st.isFile()) return `${p} is not a regular file`;
+  }
+  return null;
+}
+
+/**
+ * ONE implementation for every file `rules` manages — the rules file and each
+ * agent definition go through this and nothing else, so "refuse a file that is
+ * not ours" cannot be true of one of them and false of another.
+ *
+ * THE MARKER IS THE ONLY PROOF OF OWNERSHIP. A file we cannot parse a marker
+ * out of is someone's own work: it is never written over (only --force does
+ * that, explicitly) and never removed. Absent is not foreign — an ENOENT is
+ * "write it", any other read error is a refusal rather than a guess.
+ *
+ * The write is tmp + rename: a half-written rules file is a file Claude Code
+ * would happily load on the next session start.
+ *
+ * @param {{path:string, next:string, parse:(t:string)=>string|null, marker:string,
+ *          version:string, force?:boolean, dryRun?:boolean, remove?:boolean}} o
+ * @returns {{code:number, line:string|null, error:string|null}} `line` → stdout, `error` → stderr.
+ */
+function syncManagedFile({ path, next, parse, marker, version, force = false, dryRun = false, remove = false }) {
+  // FIRST, before the file is even read — a symlink must not be read through,
+  // and a FIFO at the target would block readFileSync forever. Also ahead of
+  // the --force decision: --force replaces a foreign FILE, never a link.
+  const unsafe = unsafeManagedPath(path);
+  if (unsafe) return { code: 1, line: null, error: `omelette-fleet rules: refusing ${path}: ${unsafe}` };
+
+  let text = null;
+  try { text = readFileSync(path, 'utf8'); }
+  catch (e) {
+    if (!e || e.code !== 'ENOENT') return { code: 1, line: null, error: `omelette-fleet rules: cannot read ${path}: ${(e && e.message) || e}` };
+  }
+  const existing = text === null ? null : parse(text);
+  const foreign = text !== null && existing === null;
+
+  if (remove) {
+    if (text === null) return { code: 0, line: `nothing to remove — ${path} does not exist`, error: null };
+    if (foreign) return { code: 1, line: null, error: `omelette-fleet rules: ${path} exists but is not managed by omelette-fleet (${marker}) — not removed; delete it by hand if you mean it` };
+    if (dryRun) return { code: 0, line: `would remove ${path} (v${existing})`, error: null };
+    // A directory we may not write into, a vanished file: one refusal line like
+    // every other one, and the caller still processes the remaining files.
+    try { unlinkSync(path); }
+    catch (e) { return { code: 1, line: null, error: `omelette-fleet rules: cannot remove ${path}: ${(e && e.message) || e}` }; }
+    return { code: 0, line: `removed ${path} (v${existing})`, error: null };
+  }
+
+  if (foreign && !force) return { code: 1, line: null, error: `omelette-fleet rules: ${path} exists and is not managed by omelette-fleet (${marker}) — leaving it alone; use --force to replace it` };
+  if (existing !== null && text === next) return { code: 0, line: `up to date — ${path} (v${existing})`, error: null };
+  const was = text === null ? 'absent' : (foreign ? 'foreign' : existing);
+  if (dryRun) return { code: 0, line: `would write ${path} (v${version}, was ${was})`, error: null };
+  // A directory we may not write, a full disk: one refusal line like every other
+  // one — never a stack trace, and never a stray .tmp left in the operator's
+  // .claude directory.
+  //
+  // The tmp name is predictable (one process, one pid), so it is created with
+  // O_EXCL: anything already sitting there — a leftover, or a link planted to
+  // catch the write — makes the open fail instead of being followed and
+  // truncated. And a file we did not create is a file we do not clean up.
+  const tmp = `${path}.${process.pid}.tmp`;
+  let ours = false;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    // The fd is OURS from the moment the exclusive open returns, so `ours` is
+    // set there and not after the write: a failure in the write, the close or
+    // the rename must still take the tmp file away with it.
+    const fd = openSync(tmp, 'wx', 0o644);
+    ours = true;
+    try {
+      const buf = Buffer.from(next, 'utf8');
+      for (let off = 0; off < buf.length;) off += writeSync(fd, buf, off, buf.length - off);
+    } finally { closeSync(fd); }
+    renameSync(tmp, path);
+  } catch (e) {
+    if (ours) { try { unlinkSync(tmp); } catch { /* already gone */ } }
+    const why = e && e.code === 'EEXIST' ? 'temporary file already exists' : (e && e.message) || e;
+    return { code: 1, line: null, error: `omelette-fleet rules: cannot write ${path}: ${why}` };
+  }
+  return { code: 0, line: `written ${path} (v${version}, was ${was})`, error: null };
+}
+
+/**
+ * Every file this command manages, in the order it handles them: the rules file
+ * first, then — with --agents — one entry per shipped sub-agent definition.
+ * The whole command is this list plus syncManagedFile.
+ */
+function managedFiles({ global = false, agents = false, version } = {}) {
+  const files = [{
+    name: RULES_FILE_NAME,
+    path: rulesTarget({ global }).path,
+    next: renderRulesFile(version),
+    parse: parseRulesMarker,
+    marker: 'no marker on line 1',
+  }];
+  if (agents) {
+    const { dir } = agentsTarget({ global });
+    for (const name of AGENT_FILES) {
+      files.push({
+        name,
+        path: join(dir, name),
+        next: renderAgentFile(name, version),
+        parse: parseAgentMarker,
+        marker: 'no marker on line 2',
+      });
+    }
+  }
+  return files;
+}
+
+async function cmdRules(argv) {
+  const { flags, positional, errors } = parseArgv(argv, { booleans: ['global', 'agents', 'print', 'remove', 'force', 'dry-run'] });
+  if (positional.length) errors.push(`unexpected argument: ${positional[0]}`);
+  if (flags.print && flags.remove) errors.push('--print and --remove ask for opposite things — pick one');
+  if (errors.length) { errors.forEach((e) => err(`omelette-fleet rules: ${e}`)); return 1; }
+
+  const files = managedFiles({ global: !!flags.global, agents: !!flags.agents, version: PKG.version });
+
+  // --print touches nothing at all. Each rendered file already ends in a
+  // newline, so out() must not add a second one.
+  if (flags.print) {
+    files.forEach((f, i) => {
+      if (i) out(`\n===== ${f.name} =====\n`);
+      out(f.next.replace(/\n$/, ''));
+    });
+    return 0;
+  }
+
+  let code = 0;
+  let wrote = false;
+  for (const f of files) {
+    const r = syncManagedFile({
+      path: f.path, next: f.next, parse: f.parse, marker: f.marker, version: PKG.version,
+      force: !!flags.force, dryRun: !!flags.dryRun, remove: !!flags.remove,
+    });
+    if (r.line) out(r.line);
+    if (r.error) err(r.error);
+    // One refused file is enough to exit 1 — and never a reason to skip the rest.
+    if (r.code) code = 1;
+    if (r.line && r.line.startsWith('written ')) wrote = true;
+  }
+  if (wrote) out('Rules load on the next session start; agent definitions are picked up within seconds (restart if .claude/agents did not exist before).');
+  return code;
+}
+
+/**
+ * What `doctor` and `update` REPORT about the managed files. These only ever
+ * read: a stale rules file is something the operator is told about and never
+ * something a diagnosis or a pull silently rewrites. A file we cannot read at
+ * all reads as absent — this is a report line, not a fault.
+ *
+ * @returns {{path:string, state:'absent'|'foreign'|'ours', version:string|null}}
+ */
+function rulesState({ global = false, cwd = process.cwd(), env = process.env } = {}) {
+  const { path } = rulesTarget({ global, cwd, env });
+  let text;
+  try { text = readFileSync(path, 'utf8'); } catch { return { path, state: 'absent', version: null }; }
+  const version = parseRulesMarker(text);
+  return version ? { path, state: 'ours', version } : { path, state: 'foreign', version: null };
+}
+
+/**
+ * Both scopes at once, with "this file is not the one this install ships"
+ * already decided. The test is string inequality, not compareSemver: the
+ * comparison ignores a prerelease tail, so a v0.3.0-rc.1 file next to a 0.3.0
+ * install compares EQUAL and would otherwise be reported as current forever.
+ */
+function rulesReport(current) {
+  return [
+    { scope: 'project', ...rulesState({}) },
+    { scope: 'global', ...rulesState({ global: true }) },
+  ].map((r) => ({ ...r, behind: r.state === 'ours' && r.version !== current }));
+}
+
+/**
+ * The agent definitions at one scope, as one verdict: ours only when EVERY file
+ * is there and marked, `partial` when some are missing, and `foreign` as soon as
+ * one of them is not ours — the version shown is the OLDEST marker, because that
+ * is the one a refresh would move.
+ */
+function agentsState({ current, global = false, cwd = process.cwd(), env = process.env } = {}) {
+  const { dir } = agentsTarget({ global, cwd, env });
+  const found = AGENT_FILES.map((name) => {
+    let text;
+    try { text = readFileSync(join(dir, name), 'utf8'); } catch { return { name, state: 'absent', version: null }; }
+    const version = parseAgentMarker(text);
+    return version ? { name, state: 'ours', version } : { name, state: 'foreign', version: null };
+  });
+  const ours = found.filter((f) => f.state === 'ours');
+  const oldest = ours.reduce((a, f) => (a === null || compareSemver(f.version, a) < 0 ? f.version : a), null);
+  const state = found.some((f) => f.state === 'foreign') ? 'foreign'
+    : !ours.length ? 'absent'
+      : ours.length < AGENT_FILES.length ? 'partial' : 'ours';
+  return {
+    dir, state, version: oldest, present: ours.length, total: AGENT_FILES.length,
+    // Any marked file that is not this install's own version is a scope worth
+    // refreshing — string inequality, not compareSemver, so a prerelease marker
+    // beside the matching release is reported rather than read as current.
+    behind: ours.some((f) => f.version !== current),
+  };
+}
+
+/** One scope's rules file in doctor's summary line, with the refresh hint when it is old. */
+const rulesLabel = (r) => (
+  r.state === 'absent' ? 'absent'
+    : r.state === 'foreign' ? 'foreign (no marker)'
+      : `v${r.version}${r.behind ? ` [run: omelette-fleet rules${r.scope === 'global' ? ' --global' : ''}]` : ''}`);
+
+/** One scope's agent definitions in the same line: how many are ours, at which version. */
+const agentsLabel = (r) => (
+  r.state === 'absent' ? 'absent'
+    : r.state === 'foreign' ? 'foreign (no marker)'
+      : `${r.state === 'partial' ? `partial (${r.present}/${r.total})` : `v${r.version} (${r.present})`}${r.behind ? ` [run: omelette-fleet rules --agents${r.scope === 'global' ? ' --global' : ''}]` : ''}`);
+
+/** Both scopes of agent definitions, for doctor's one-line summary and update's hint. */
+function agentsReport(current) {
+  return [
+    { scope: 'project', ...agentsState({ current }) },
+    { scope: 'global', ...agentsState({ current, global: true }) },
+  ];
 }
 
 // ─── doctor ──────────────────────────────────────────────────────────────────
@@ -791,6 +1093,10 @@ async function cmdDoctor(argv) {
   out(`fleet config  ${configPath()}${existsSync(configPath()) ? '' : ' (absent — built-in defaults in force)'}`);
   out(`claude CLI    ${claudePath || 'not found in PATH'}`);
   out(`claude config ${claude.path}${claude.error ? ` (${claude.error})` : ''}${claude.source === 'CLAUDE_CONFIG_DIR' ? '   [via CLAUDE_CONFIG_DIR]' : ''}`);
+  // The managed files, both scopes, read-only and never a fault: a project
+  // without them is a perfectly healthy project.
+  out(`rules         ${rulesReport(PKG.version).map((r) => `${r.scope}: ${rulesLabel(r)}`).join(' · ')}`);
+  out(`agents        ${agentsReport(PKG.version).map((r) => `${r.scope}: ${agentsLabel(r)}`).join(' · ')}`);
   out();
 
   let faults = 0;
@@ -1027,13 +1333,14 @@ async function main(argv) {
     case 'install': return cmdInstall(rest);
     case 'uninstall': return cmdUninstall(rest);
     case 'update': return cmdUpdate(rest);
+    case 'rules': return cmdRules(rest);
     case 'doctor': return cmdDoctor(rest);
     case 'show': return cmdShow(rest);
     case 'set': return cmdSet(rest);
     case 'call': return cmdCall(rest);
     default:
       err(`omelette-fleet: unknown command "${cmd}"`);
-      err('commands: install, uninstall, update, doctor, show, set, call — `omelette-fleet --help` for the full usage.');
+      err('commands: install, uninstall, update, rules, doctor, show, set, call — `omelette-fleet --help` for the full usage.');
       return 1;
   }
 }

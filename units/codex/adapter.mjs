@@ -175,7 +175,9 @@ function errorText(raw) {
 }
 
 /**
- * Turn a finished run into { text, usage } or throw a clear error. Exported for tests.
+ * Turn a finished run into { text, usage } — `partial: true` when the run was
+ * hard-killed and the answer is what it had already emitted — or throw a clear
+ * error. Exported for tests.
  * @param {{stdout:string, stderr:string, code:number|null, killed:boolean}} res
  * @param {{timeoutS?:number}} o
  */
@@ -197,7 +199,18 @@ export function extractResult(res, { timeoutS } = {}) {
     reasoning: u.reasoning_output_tokens ?? null,
   } : null;
 
+  // A hard kill at timeoutS used to discard every item the run had already
+  // completed. The messages above were parsed from what WAS captured, so if the
+  // answer is among them it comes back marked instead of being thrown away.
   if (res.killed) {
+    if (messages.length) {
+      return {
+        text: `${messages.at(-1)}\n\n[codex: hard-killed after ${timeoutS ?? '?'}s — treat the answer as partial; raise codex.timeoutS in the fleet config]`,
+        usage,
+        searches,
+        partial: true,
+      };
+    }
     throw new Error(`codex hard-killed after ${timeoutS ?? '?'}s (raise codex.timeoutS in the fleet config)`);
   }
   if (failed) {
@@ -270,6 +283,7 @@ const EFFORT_PROP = {
 export default defineUnit({
   name: 'codex',
   label: 'Codex',
+  instructions: 'This unit: Codex via the codex CLI, inside a kernel-enforced read-only sandbox. The fleet\'s strongest code review and agentic terminal analysis (codex_code_review needs an absolute cwd), research that depends on running things (codex_research), image generation (codex_image). Reports real token usage per call. Route the final pre-release security audit here on gpt-6-astra.',
   bin: { env: 'CODEX_BIN', default: 'codex' },
   billingRiskEnv: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
   // CODEX_HOME (where auth lives, still read under --ignore-user-config) and the

@@ -18,12 +18,13 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { callUnitServer, MAX_TIMEOUT_S } from '../core/client.mjs';
+import { AGENT_MARKER, RULES_MARKER } from '../core/rules.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -37,6 +38,10 @@ function home() {
 /** Run the CLI with a clean-ish env (PATH kept: `claude` may or may not exist — no test depends on it). */
 function cli(args, { dir, env = {} } = {}) {
   const r = spawnSync(process.execPath, [BIN, ...args], {
+    // cwd is the sandbox, never this checkout: `doctor` and `update` read the
+    // PROJECT's .claude/rules and .claude/agents, and an operator who installed
+    // ours here would otherwise change what these tests see.
+    cwd: dir,
     encoding: 'utf8',
     // The update check is OFF for every run: a unit test that quietly calls
     // GitHub is a flaky test and a slow one. `env` can still switch it back on.
@@ -172,7 +177,7 @@ test('--help (and no args) print the usage; --version prints the package version
     const r = cli(args, { dir });
     assert.equal(r.code, 0);
     assert.match(r.out, /USAGE/);
-    for (const cmd of ['install', 'uninstall', 'update', 'doctor', 'show', 'set', 'call']) assert.match(r.out, new RegExp(`omelette-fleet ${cmd}`));
+    for (const cmd of ['install', 'uninstall', 'update', 'rules', 'doctor', 'show', 'set', 'call']) assert.match(r.out, new RegExp(`omelette-fleet ${cmd}`));
     assert.match(r.out, /OMELETTE_UPDATE_CHECK/);
   }
   const v = cli(['--version'], { dir });
@@ -436,9 +441,69 @@ test('call drives a real server over stdio and maps the answer to an exit code',
   assert.match(cli(['call', 'codex', 'codex_models', '{}', '--timeout', '0'], { dir }).err, /--timeout must be a positive number/);
 });
 
+/**
+ * Send `initialize` to a real unit server and return its result.
+ *
+ * Every way this can go wrong has to SETTLE, or a broken server turns into a
+ * hung suite with no diagnostic (`node:test` has no default per-test timeout):
+ *   - a server that dies before answering → reject with its exit code and stderr,
+ *   - a server that answers nothing at all → reject on the timeout, child killed.
+ * And only a COMPLETE line (one terminated by '\n') is ever parsed: the ~2 KB
+ * initialize frame can arrive across several `data` events, and parsing a
+ * fragment would fail a perfectly healthy server.
+ */
+function initializeServer(serverPath, env, { timeoutMs = 10_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(process.execPath, [serverPath], { env: { PATH: process.env.PATH, HOME: env.dir, OMELETTE_HOME: env.dir, OMELETTE_UPDATE_CHECK: '0', OMELETTE_STATUS: '0' } });
+    let buf = '';
+    let err = '';
+    let done = false;
+    const settle = (fn, v) => { if (done) return; done = true; clearTimeout(timer); p.kill(); fn(v); };
+    const timer = setTimeout(
+      () => settle(reject, new Error(`${serverPath}: no initialize answer in ${timeoutMs}ms · stderr: ${err.trim() || '(none)'}`)),
+      timeoutMs,
+    );
+    p.stderr.setEncoding('utf8');
+    p.stderr.on('data', (c) => { err += c; });
+    p.stdout.setEncoding('utf8');
+    p.stdout.on('data', (c) => {
+      buf += c;
+      // Consume complete lines until one has content: a blank line before the
+      // frame must not park the parser until the next `data` event.
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue; // a partial frame never gets here: only whole lines are parsed
+        try { settle(resolve, JSON.parse(line).result); } catch (e) { settle(reject, e); }
+        return;
+      }
+    });
+    p.on('error', (e) => settle(reject, e));
+    // A child that exits before reading turns the write below into EPIPE, and an
+    // unhandled 'error' on stdin would take the test runner down with it.
+    p.stdin.on('error', () => {});
+    p.on('close', (code, signal) => settle(
+      reject,
+      new Error(`${serverPath}: exited (code ${code}, signal ${signal}) before answering initialize · stderr: ${err.trim() || '(none)'}`),
+    ));
+    p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) + '\n');
+  });
+}
+
+test('every unit server returns the fleet contract plus its own line from initialize', async () => {
+  const dir = home();
+  for (const unit of ['gemini', 'grok', 'codex']) {
+    const res = await initializeServer(join(ROOT, 'servers', `${unit}.mjs`), { dir });
+    assert.ok(res.instructions.startsWith('omelette-fleet: this server is one read-only unit'), `${unit}: contract first`);
+    assert.match(res.instructions, /run `omelette-fleet rules`/);
+    assert.match(res.instructions, /\n\nThis unit: /, `${unit}: has its own line`);
+  }
+});
+
 test('per-command help: `<cmd> --help`, `-h` and `help <cmd>` all print that command\'s page', () => {
   const dir = home();
-  for (const cmd of ['install', 'uninstall', 'update', 'doctor', 'show', 'set', 'call']) {
+  for (const cmd of ['install', 'uninstall', 'update', 'rules', 'doctor', 'show', 'set', 'call']) {
     for (const argv of [[cmd, '--help'], [cmd, '-h'], ['help', cmd]]) {
       const r = cli(argv, { dir });
       assert.equal(r.code, 0, `${argv.join(' ')} → ${r.err}`);
@@ -590,6 +655,322 @@ test('update (npm): nothing is pulled — the exact upgrade command, exit 0', ()
   const bad = cli(['update', '--nope'], { dir, env });
   assert.equal(bad.code, 1);
   assert.match(bad.err, /unknown flag: --nope/);
+});
+
+// ─── rules ───────────────────────────────────────────────────────────────────
+
+/**
+ * The marker lines exactly as the CLI generates them: a fixture that only
+ * STARTS like the marker is not ours, so hand-truncated ones would be testing
+ * a file the CLI is right to refuse.
+ */
+const MARKED_RULES = (v, body = '') => `${RULES_MARKER(v)}\n${body}`;
+const MARKED_AGENT = (v, name) => `---\n${AGENT_MARKER(v)}\nname: ${name}\n---\nold\n`;
+
+test('rules: writes the managed file into <cwd>/.claude/rules, is idempotent, refreshes an older marker', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const target = join(proj, '.claude', 'rules', 'omelette-fleet.md');
+  const r1 = spawnSync(process.execPath, [BIN, 'rules'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.match(r1.stdout, /^written .*omelette-fleet\.md \(v\d+\.\d+\.\d+, was absent\)/m);
+  // True for --global and for --agents too: it never names one location, and it
+  // says how each kind of file actually reaches a session.
+  assert.match(r1.stdout, /^Rules load on the next session start; agent definitions are picked up within seconds \(restart if \.claude\/agents did not exist before\)\.$/m);
+  const text = readFileSync(target, 'utf8');
+  assert.ok(text.startsWith('<!-- omelette-fleet rules v'));
+  assert.match(text, /Tester flow/);
+  const r2 = spawnSync(process.execPath, [BIN, 'rules'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  assert.equal(r2.status, 0);
+  assert.match(r2.stdout, /^up to date/m);
+  writeFileSync(target, text.replace(/rules v\d+\.\d+\.\d+/, 'rules v0.0.1'));
+  const r3 = spawnSync(process.execPath, [BIN, 'rules'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  assert.match(r3.stdout, /was 0\.0\.1\)/);
+  assert.equal(readFileSync(target, 'utf8'), text);
+});
+
+test('rules: a foreign file is never touched without --force, and --remove refuses it too', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(join(proj, '.claude', 'rules'), { recursive: true });
+  const target = join(proj, '.claude', 'rules', 'omelette-fleet.md');
+  writeFileSync(target, '# mine\n');
+  const run = (args) => spawnSync(process.execPath, [BIN, 'rules', ...args], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  const r1 = run([]);
+  assert.equal(r1.status, 1); assert.match(r1.stderr, /not managed by omelette-fleet/); assert.equal(readFileSync(target, 'utf8'), '# mine\n');
+  const r2 = run(['--remove']);
+  assert.equal(r2.status, 1); assert.ok(existsSync(target));
+  const r3 = run(['--force']);
+  assert.equal(r3.status, 0); assert.match(r3.stdout, /was foreign\)/); assert.ok(readFileSync(target, 'utf8').startsWith('<!-- omelette-fleet rules v'));
+  const r4 = run(['--remove']);
+  assert.equal(r4.status, 0); assert.match(r4.stdout, /^removed /m); assert.ok(!existsSync(target));
+  const r5 = run(['--remove']);
+  assert.equal(r5.status, 0); assert.match(r5.stdout, /nothing to remove/);
+});
+
+test('rules: a write it cannot do is one refusal line — no stack, no .tmp, no partial file', { skip: (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) && 'directory permissions are not enforced here' }, () => {
+  const dir = home();
+  const proj = join(dir, 'proj');
+  const rulesDir = join(proj, '.claude', 'rules');
+  mkdirSync(rulesDir, { recursive: true });
+  chmodSync(rulesDir, 0o500); // readable, listable, NOT writable
+  const r = spawnSync(process.execPath, [BIN, 'rules'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  const left = readdirSync(rulesDir);
+  chmodSync(rulesDir, 0o700); // leave the temp tree removable
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /^omelette-fleet rules: cannot write .*omelette-fleet\.md: /m);
+  assert.doesNotMatch(r.stderr, /at .*omelette-fleet\.mjs/); // a refusal, never a stack
+  assert.deepEqual(left, [], `nothing may be left behind, found ${left.join(', ')}`);
+});
+
+// Symlink games are POSIX-only here: on Windows an unprivileged symlinkSync throws.
+const symlinksWork = process.platform !== 'win32';
+
+/** Directory permissions and mkfifo need a real POSIX box and a non-root user. */
+const posixPerms = !(process.platform === 'win32' || (process.getuid && process.getuid() === 0));
+
+
+/** The rules command, run inside a project dir, with an env we can extend. */
+const rulesIn = (proj, dir, args = [], env = {}) => spawnSync(process.execPath, [BIN, 'rules', ...args], {
+  cwd: proj, encoding: 'utf8',
+  env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', ...env },
+});
+
+test('rules: a pre-existing temporary file is refused, never followed or truncated', { skip: !symlinksWork && 'symlinks need privileges here' }, () => {
+  const dir = home();
+  const proj = join(dir, 'proj');
+  const rulesDir = join(proj, '.claude', 'rules');
+  mkdirSync(rulesDir, { recursive: true });
+  const target = join(rulesDir, 'omelette-fleet.md');
+  const victim = join(dir, 'victim.txt');
+  writeFileSync(victim, 'precious\n');
+  // The tmp name carries the CLI's OWN pid, so the trap has to be laid from
+  // inside that process: a --require preload runs before the bin's first line.
+  const preload = join(dir, 'plant.cjs');
+  writeFileSync(preload, `require('fs').symlinkSync(${JSON.stringify(victim)}, ${JSON.stringify(target)} + '.' + process.pid + '.tmp');\n`);
+  const r = rulesIn(proj, dir, [], { NODE_OPTIONS: `--require ${preload}` });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /^omelette-fleet rules: cannot write .*omelette-fleet\.md: temporary file already exists$/m);
+  assert.equal(readFileSync(victim, 'utf8'), 'precious\n', 'the link was not written through');
+  assert.equal(existsSync(target), false, 'no rules file was created');
+  const left = readdirSync(rulesDir);
+  assert.deepEqual(left.filter((f) => !f.endsWith('.tmp')), [], `unexpected files: ${left.join(', ')}`);
+  assert.equal(left.length, 1, `the planted link and nothing else, found ${left.join(', ')}`);
+  assert.ok(lstatSync(join(rulesDir, left[0])).isSymbolicLink(), 'somebody else\'s tmp file is left exactly as it was');
+});
+
+test('rules: a write that fails AFTER the tmp file is open still leaves nothing behind', () => {
+  const dir = home();
+  const proj = join(dir, 'proj');
+  const rulesDir = join(proj, '.claude', 'rules');
+  mkdirSync(rulesDir, { recursive: true });
+  // The failure has to happen between the O_EXCL open and the rename — the one
+  // window where a tmp file exists AND is ours. A --require preload fails the
+  // write for exactly that fd and nothing else.
+  const preload = join(dir, 'failwrite.cjs');
+  writeFileSync(preload, [
+    "const fs = require('fs');",
+    'const realOpen = fs.openSync;',
+    'const doomed = new Set();',
+    "fs.openSync = (p, ...rest) => { const fd = realOpen(p, ...rest); if (String(p).endsWith('.tmp')) doomed.add(fd); return fd; };",
+    'const realWrite = fs.writeSync;',
+    "fs.writeSync = (fd, ...rest) => { if (doomed.has(fd)) throw new Error('injected write failure'); return realWrite(fd, ...rest); };",
+    '',
+  ].join('\n'));
+  const r = rulesIn(proj, dir, [], { NODE_OPTIONS: `--require ${preload}` });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /^omelette-fleet rules: cannot write .*omelette-fleet\.md: injected write failure$/m);
+  assert.doesNotMatch(r.stderr, /at .*omelette-fleet\.mjs/); // a refusal, never a stack
+  assert.deepEqual(readdirSync(rulesDir), [], `the half-written tmp must be gone: ${readdirSync(rulesDir).join(', ')}`);
+});
+
+test('rules --remove: a directory it may not write is one refusal line, and the other files are still processed', { skip: !posixPerms && 'directory permissions are not enforced here' }, () => {
+  const dir = home();
+  const proj = join(dir, 'proj');
+  const rulesDir = join(proj, '.claude', 'rules');
+  const agentsDir = join(proj, '.claude', 'agents');
+  mkdirSync(rulesDir, { recursive: true });
+  mkdirSync(agentsDir, { recursive: true });
+  const rulesPath = join(rulesDir, 'omelette-fleet.md');
+  const coderPath = join(agentsDir, 'omelette-coder.md');
+  writeFileSync(rulesPath, MARKED_RULES(pkgVersion(ROOT), 'old\n'));
+  writeFileSync(coderPath, MARKED_AGENT(pkgVersion(ROOT), 'omelette-coder'));
+  chmodSync(rulesDir, 0o500); // readable, listable, NOT writable: unlink will fail
+  const r = rulesIn(proj, dir, ['--remove', '--agents']);
+  chmodSync(rulesDir, 0o700); // leave the temp tree removable
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /^omelette-fleet rules: cannot remove .*omelette-fleet\.md: /m);
+  assert.doesNotMatch(r.stderr, /at .*omelette-fleet\.mjs/); // a refusal, never a stack
+  assert.ok(existsSync(rulesPath), 'the file it could not remove is still there');
+  assert.equal(existsSync(coderPath), false, 'one refusal never skips the remaining files');
+  assert.match(r.stdout, /^removed .*omelette-coder\.md/m);
+});
+
+test('rules: a symlinked .claude or .claude/rules is refused — no write escapes through it', { skip: !symlinksWork && 'symlinks need privileges here' }, () => {
+  const dir = home();
+  const proj = join(dir, 'proj');
+  const elsewhere = join(dir, 'elsewhere');
+  mkdirSync(join(proj, '.claude'), { recursive: true });
+  mkdirSync(elsewhere);
+  symlinkSync(elsewhere, join(proj, '.claude', 'rules'));
+  const r = rulesIn(proj, dir);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /^omelette-fleet rules: refusing .*omelette-fleet\.md: .*[/\\]rules is a symlink$/m);
+  assert.deepEqual(readdirSync(elsewhere), [], 'nothing was written through the link');
+  // --force replaces a foreign FILE; it never follows a link.
+  assert.equal(rulesIn(proj, dir, ['--force']).status, 1);
+  assert.deepEqual(readdirSync(elsewhere), []);
+
+  // …and the same one directory up, where .claude itself is the link.
+  const proj2 = join(dir, 'proj2');
+  const config = join(dir, 'foreign-config');
+  mkdirSync(proj2); mkdirSync(config);
+  symlinkSync(config, join(proj2, '.claude'));
+  const r2 = rulesIn(proj2, dir, ['--agents']);
+  assert.equal(r2.status, 1, r2.stdout + r2.stderr);
+  assert.match(r2.stderr, /refusing .*: .*[/\\]\.claude is a symlink/);
+  assert.deepEqual(readdirSync(config), []);
+});
+
+test('rules: a symlinked target file is refused for write, for --force and for --remove', { skip: !symlinksWork && 'symlinks need privileges here' }, () => {
+  const dir = home();
+  const proj = join(dir, 'proj');
+  const rulesDir = join(proj, '.claude', 'rules');
+  mkdirSync(rulesDir, { recursive: true });
+  const target = join(rulesDir, 'omelette-fleet.md');
+  const victim = join(dir, 'someone-elses.md');
+  writeFileSync(victim, '# not ours\n');
+  symlinkSync(victim, target);
+  const stillALink = () => {
+    assert.ok(lstatSync(target).isSymbolicLink(), 'the link itself is never removed');
+    assert.equal(readFileSync(victim, 'utf8'), '# not ours\n', 'the file behind it is never written');
+  };
+  for (const args of [[], ['--force'], ['--remove'], ['--remove', '--force']]) {
+    const r = rulesIn(proj, dir, args);
+    assert.equal(r.status, 1, `rules ${args.join(' ')} should refuse: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /^omelette-fleet rules: refusing .*omelette-fleet\.md: .*omelette-fleet\.md is a symlink$/m);
+    stillALink();
+  }
+});
+
+test('rules: --global honours CLAUDE_CONFIG_DIR; --print and --dry-run write nothing', () => {
+  const dir = home();
+  const cfg = join(dir, 'cfgdir');
+  const r1 = cli(['rules', '--global'], { dir, env: { CLAUDE_CONFIG_DIR: cfg } });
+  assert.equal(r1.code, 0, r1.err);
+  assert.ok(existsSync(join(cfg, 'rules', 'omelette-fleet.md')));
+  const r2 = cli(['rules', '--global'], { dir });
+  assert.ok(existsSync(join(dir, '.claude', 'rules', 'omelette-fleet.md')), 'HOME/.claude/rules without CLAUDE_CONFIG_DIR');
+  const proj = join(dir, 'p2'); mkdirSync(proj);
+  const p = spawnSync(process.execPath, [BIN, 'rules', '--print'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  assert.equal(p.status, 0); assert.ok(p.stdout.startsWith('<!-- omelette-fleet rules v')); assert.ok(!existsSync(join(proj, '.claude')));
+  const d = spawnSync(process.execPath, [BIN, 'rules', '--dry-run'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  assert.equal(d.status, 0); assert.match(d.stdout, /^would write /m); assert.ok(!existsSync(join(proj, '.claude')));
+  const bad = cli(['rules', '--print', '--remove'], { dir });
+  assert.equal(bad.code, 1);
+  const help = cli(['rules', '--help'], { dir });
+  assert.match(help.out, /omelette-fleet rules \[--global\]/);
+});
+
+test('rules --agents writes both managed agent definitions, refreshes them, and --remove --agents takes them away', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const run = (args) => spawnSync(process.execPath, [BIN, 'rules', ...args], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  const r1 = run(['--agents']);
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.ok(existsSync(join(proj, '.claude', 'rules', 'omelette-fleet.md')), 'the rules file is written too');
+  for (const f of ['omelette-coder.md', 'omelette-tester.md']) assert.ok(existsSync(join(proj, '.claude', 'agents', f)), f);
+  assert.match(r1.stdout, /written .*agents\/omelette-coder\.md/);
+  const r2 = run(['--agents']);
+  assert.match(r2.stdout, /up to date .*omelette-tester\.md/);
+  writeFileSync(join(proj, '.claude', 'agents', 'omelette-coder.md'), '---\nname: omelette-coder\n---\nmine\n');
+  const r3 = run(['--agents']);
+  assert.equal(r3.status, 1, 'a foreign agent file is refused');
+  assert.match(r3.stderr, /not managed by omelette-fleet/);
+  const r4 = run(['--agents', '--force']);
+  assert.equal(r4.status, 0);
+  const r5 = run(['--remove', '--agents']);
+  assert.equal(r5.status, 0);
+  assert.ok(!existsSync(join(proj, '.claude', 'agents', 'omelette-coder.md')));
+  assert.ok(!existsSync(join(proj, '.claude', 'rules', 'omelette-fleet.md')), '--remove --agents removes the rules file as well');
+});
+
+test('doctor reports the rules files: absent, ours with version, foreign', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(join(proj, '.claude', 'rules'), { recursive: true });
+  const run = () => spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
+  assert.match(run(), /^rules {9}project: absent · global: absent/m);
+  writeFileSync(join(proj, '.claude', 'rules', 'omelette-fleet.md'), MARKED_RULES('0.0.1'));
+  assert.match(run(), /^rules {9}project: v0\.0\.1 \[run: omelette-fleet rules\] · global: absent/m);
+  writeFileSync(join(proj, '.claude', 'rules', 'omelette-fleet.md'), '# mine\n');
+  assert.match(run(), /^rules {9}project: foreign \(no marker\) · global: absent/m);
+});
+
+test('a PRERELEASE marker next to the same release reads as behind, in doctor and in update --check', () => {
+  const dir = home();
+  const proj = join(dir, 'proj');
+  mkdirSync(join(proj, '.claude', 'rules'), { recursive: true });
+  mkdirSync(join(proj, '.claude', 'agents'), { recursive: true });
+  const installed = pkgVersion(ROOT);
+  const rules = (v) => MARKED_RULES(v, 'old\n');
+  const agent = (v) => MARKED_AGENT(v, 'omelette-coder');
+  const rulesPath = join(proj, '.claude', 'rules', 'omelette-fleet.md');
+  // compareSemver ignores the prerelease tail, so 0.3.0-rc.1 and 0.3.0 compare
+  // EQUAL: only "the marker is not this install's string" catches it.
+  writeFileSync(rulesPath, rules(`${installed}-rc.1`));
+  for (const f of ['omelette-coder.md', 'omelette-tester.md']) writeFileSync(join(proj, '.claude', 'agents', f), agent(`${installed}-rc.1`));
+  const d = spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
+  assert.ok(d.stdout.includes(`project: v${installed}-rc.1 [run: omelette-fleet rules]`), d.stdout);
+  assert.match(d.stdout, /^agents {8}project: v.*-rc\.1 \(2\) \[run: omelette-fleet rules --agents\]/m);
+
+  // …and the same file under an npm-kind install of exactly that release is hinted, not rewritten.
+  const pkgRoot = mkdtempSync(join(tmpdir(), 'omelette-npm-pre-'));
+  writeFileSync(join(pkgRoot, 'package.json'), JSON.stringify({ name: 'omelette-fleet', version: '0.9.0' }, null, 2));
+  writeFileSync(rulesPath, rules('0.9.0-rc.1'));
+  const u = spawnSync(process.execPath, [BIN, 'update', '--check'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', OMELETTE_PKG_ROOT: pkgRoot } });
+  assert.equal(u.status, 0, u.stderr);
+  assert.match(u.stdout, /rules file .*omelette-fleet\.md is v0\.9\.0-rc\.1 \(this install is v0\.9\.0\) — refresh: omelette-fleet rules/);
+  assert.equal(readFileSync(rulesPath, 'utf8'), rules('0.9.0-rc.1'), 'a hint is never a rewrite');
+});
+
+test('update --check: a scope with one FOREIGN agent file gets no refresh hint, and one path in both scopes is hinted once', () => {
+  const dir = home();
+  // HOME is the project too, so <cwd>/.claude and ~/.claude are the SAME path:
+  // two scopes, one file, and the hint must not be printed twice.
+  const rulesPath = join(dir, '.claude', 'rules', 'omelette-fleet.md');
+  mkdirSync(join(dir, '.claude', 'rules'), { recursive: true });
+  mkdirSync(join(dir, '.claude', 'agents'), { recursive: true });
+  writeFileSync(rulesPath, MARKED_RULES('0.0.1', 'old\n'));
+  // A mixed scope: one file of ours (stale) next to one that is not ours at all.
+  // A refresh hint here would send the operator at a command that then refuses.
+  writeFileSync(join(dir, '.claude', 'agents', 'omelette-coder.md'), '---\nname: mine\n---\n');
+  writeFileSync(join(dir, '.claude', 'agents', 'omelette-tester.md'), MARKED_AGENT('0.0.1', 'omelette-tester'));
+  const pkgRoot = mkdtempSync(join(tmpdir(), 'omelette-npm-hints-'));
+  writePkg(pkgRoot, '0.2.0');
+  const r = cli(['update', '--check'], { dir, env: { OMELETTE_PKG_ROOT: pkgRoot } });
+  assert.equal(r.code, 0, r.err);
+  const hints = r.out.split('\n').filter((l) => /^rules file /.test(l));
+  assert.equal(hints.length, 1, `one file, one hint — got:\n${hints.join('\n')}`);
+  assert.doesNotMatch(hints[0], /--global/, 'the project scope names the plain command');
+  assert.doesNotMatch(r.out, /agent files under /, 'a scope that is partly foreign is not hinted for refresh');
+});
+
+test('update --check mentions a rules file whose marker is behind, and never rewrites it', { skip: !gitAvailable && 'git is not installed' }, () => {
+  const fx = gitFixture();
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(join(proj, '.claude', 'rules'), { recursive: true });
+  mkdirSync(join(proj, '.claude', 'agents'), { recursive: true });
+  const rulesPath = join(proj, '.claude', 'rules', 'omelette-fleet.md');
+  writeFileSync(rulesPath, MARKED_RULES('0.0.1', 'old\n'));
+  const agentText = (v) => MARKED_AGENT(v, 'omelette-coder');
+  const agentPaths = ['omelette-coder.md', 'omelette-tester.md'].map((f) => join(proj, '.claude', 'agents', f));
+  for (const p of agentPaths) writeFileSync(p, agentText('0.0.1'));
+  const r = spawnSync(process.execPath, [BIN, 'update', '--check'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', OMELETTE_PKG_ROOT: fx.clone } });
+  assert.match(r.stdout, /rules file .*omelette-fleet\.md is v0\.0\.1 \(this install is v0\.1\.0\) — refresh: omelette-fleet rules/);
+  // one line per SCOPE for the agent files, not one per file
+  assert.match(r.stdout, /agent files under .*\.claude\/agents are v0\.0\.1 \(this install is v0\.1\.0\) — refresh: omelette-fleet rules --agents/);
+  assert.equal((r.stdout.match(/agent files under /g) || []).length, 1);
+  assert.equal(readFileSync(rulesPath, 'utf8'), MARKED_RULES('0.0.1', 'old\n'));
+  for (const p of agentPaths) assert.equal(readFileSync(p, 'utf8'), agentText('0.0.1'));
 });
 
 // ─── core/client.mjs, driven directly: the transport's own failure modes ─────

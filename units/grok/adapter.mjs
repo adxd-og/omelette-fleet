@@ -193,35 +193,61 @@ export function buildArgs({ prompt, model, effort, cwd, tools, maxTurns }) {
   return args;
 }
 
-/** Interpret one finished grok run → answer text, or throw. Exported for tests. */
+/**
+ * The answer inside one finished run's stdout — the ONE reading of a grok
+ * payload. The clean path and the hard-kill salvage both go through it, so a
+ * killed run's text is extracted exactly the way a finished one's would be.
+ * `parsed` says the JSON envelope was understood: an envelope with an empty
+ * `text` is a run that produced no answer, not a reason to return raw stdout.
+ * @returns {{text:string, stop:string, parsed:boolean, error:string|null}}
+ */
+function grokAnswer(out, jsonMode) {
+  const raw = String(out || '');
+  if (!jsonMode) return { text: raw.trim(), stop: '', parsed: false, error: null };
+  let r = null;
+  try { r = JSON.parse(raw); } catch { /* truncated/foreign — fall back */ }
+  if (r && r.type === 'error') return { text: '', stop: '', parsed: true, error: r.message || JSON.stringify(r).slice(0, 300) };
+  if (r && typeof r.text === 'string') {
+    return { text: r.text.trim(), stop: typeof r.stopReason === 'string' ? r.stopReason : '', parsed: true, error: null };
+  }
+  // Unparseable JSON (output-cap truncation / future CLI format change):
+  // fail open with the raw stdout rather than dropping a real answer.
+  return { text: raw.trim(), stop: '', parsed: false, error: null };
+}
+
+/**
+ * Interpret one finished grok run → the answer text, `{ text, partial: true }`
+ * for a salvaged hard kill, or throw. Exported for tests.
+ */
 export function interpretGrok(res, { jsonMode, timeoutS }) {
   const { stdout: out, stderr: errBuf, code, killed } = res;
-  if (killed) throw new Error(`grok hard-killed after ${timeoutS}s (raise grok.timeoutS in the fleet config)`);
+  const a = grokAnswer(out, jsonMode);
+  // A hard kill at timeoutS used to discard everything the CLI had printed —
+  // on a long review that is a paid-for hour thrown away. Keep what was
+  // captured, marked; only a kill with nothing to show is still an error.
+  if (killed) {
+    if (a.text) {
+      return {
+        text: `${a.text}\n\n[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`,
+        partial: true,
+      };
+    }
+    throw new Error(`grok hard-killed after ${timeoutS}s (raise grok.timeoutS in the fleet config)`);
+  }
   if (code !== 0 && !out.trim()) throw new Error(`grok exited ${code}: ${errBuf.trim().slice(-500) || '(no stderr)'}`);
   // A non-zero exit that still produced text: keep the text — the run is paid
   // for and it is usually the useful part — but mark it, in every mode, so it
   // can never be read as a completed answer.
   const partial = (text) => (code !== 0 && text ? `${text}\n\n[grok: CLI exited ${code} — treat the answer as partial]` : text);
-  if (!jsonMode) return partial(out.trim());
-  let r = null;
-  try { r = JSON.parse(out); } catch { /* truncated/foreign — fall back */ }
-  if (r && r.type === 'error') {
-    throw new Error(`grok CLI error: ${r.message || JSON.stringify(r).slice(0, 300)}`);
-  }
-  if (r && typeof r.text === 'string') {
-    const text = r.text.trim();
-    const stop = typeof r.stopReason === 'string' ? r.stopReason : '';
-    const stopNorm = stop.toLowerCase().replace(/[_\s]/g, '');
-    if (text && (!stop || stopNorm === 'endturn')) return partial(text);
-    if (text) return partial(`${text}\n\n[grok: run ended early — stopReason=${stop}]`);
-    throw new Error(
-      `grok run ended with no answer (stopReason=${stop || 'unknown'})` +
-      (stopNorm === 'cancelled' ? ' — a tool call needed interactive approval and the headless run was cancelled' : ''),
-    );
-  }
-  // Unparseable JSON (output-cap truncation / future CLI format change):
-  // fail open with the raw stdout rather than dropping a real answer.
-  return partial(out.trim());
+  if (a.error) throw new Error(`grok CLI error: ${a.error}`);
+  if (!a.parsed) return partial(a.text);
+  const stopNorm = a.stop.toLowerCase().replace(/[_\s]/g, '');
+  if (a.text && (!a.stop || stopNorm === 'endturn')) return partial(a.text);
+  if (a.text) return partial(`${a.text}\n\n[grok: run ended early — stopReason=${a.stop}]`);
+  throw new Error(
+    `grok run ended with no answer (stopReason=${a.stop || 'unknown'})` +
+    (stopNorm === 'cancelled' ? ' — a tool call needed interactive approval and the headless run was cancelled' : ''),
+  );
 }
 
 async function runGrok(ctx, { prompt, cwd, tools, maxTurns }) {
@@ -231,6 +257,9 @@ async function runGrok(ctx, { prompt, cwd, tools, maxTurns }) {
   const res = await ctx.spawn({ args, cwd: cwd || undefined, extraEnv: { GROK_WEB_FETCH: '1' } });
   return interpretGrok(res, { jsonMode, timeoutS: ctx.cfg.timeoutS });
 }
+
+/** The text of a run, whether it came back plain or as a salvaged-kill result. */
+const runText = (r) => (typeof r === 'string' ? r : (r && r.text) || '');
 
 const isDeterministic = (e) => /not authenticated|hard-killed|CLI error|not found in PATH/i.test((e && e.message) || '');
 const researchTools = (ctx) => (ctx.cfg.webSearch ? READONLY_TOOLS : READONLY_TOOLS_NOWEB);
@@ -263,6 +292,7 @@ const EFFORT_PROP = {
 export default defineUnit({
   name: 'grok',
   label: 'Grok',
+  instructions: 'This unit: Grok via the grok CLI. Inexpensive per token — volume sweeps, mechanical review, second opinions, math/STEM cross-checks, image generation and the fleet\'s only image editing (grok_image_edit). It is overconfident and measured roughly one factual answer in three wrong on independent testing: never a sole source, verify every claim. Write mode is unsupported by design.',
   bin: { env: 'GROK_BIN', default: 'grok' },
   billingRiskEnv: BILLING_RISK_ENV,
   // grok's own knobs (GROK_BIN, GROK_WEB_FETCH, XAI_*); the billing scrub runs
@@ -359,7 +389,7 @@ export default defineUnit({
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
-        const text = await runGrok(ctx, { prompt: IMAGE_GEN_PREFIX + prompt, tools: IMAGE_GEN_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
+        const text = runText(await runGrok(ctx, { prompt: IMAGE_GEN_PREFIX + prompt, tools: IMAGE_GEN_TOOLS, maxTurns: ctx.cfg.imageMaxTurns }));
         const artifact = extractImagePath(text);
         if (!artifact) throw new Error('image run finished without a saved image path on disk. Raw output: ' + ((text || '(empty)').slice(-1000)));
         return artifact;
@@ -394,7 +424,7 @@ export default defineUnit({
         let st;
         try { st = statSync(imagePath); } catch { st = null; }
         if (!st || !st.isFile()) return { text: `Error: "imagePath" is not an existing file: ${imagePath}`, isError: true };
-        const text = await runGrok(ctx, { prompt: imageEditPrompt(imagePath, prompt), tools: IMAGE_EDIT_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
+        const text = runText(await runGrok(ctx, { prompt: imageEditPrompt(imagePath, prompt), tools: IMAGE_EDIT_TOOLS, maxTurns: ctx.cfg.imageMaxTurns }));
         const artifact = extractImagePath(text, imagePath);
         if (!artifact) throw new Error('image run finished without a saved image path on disk. Raw output: ' + ((text || '(empty)').slice(-1000)));
         return artifact;

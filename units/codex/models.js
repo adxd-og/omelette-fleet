@@ -18,6 +18,15 @@
  * reach the API (luna answered the effort probe below; terra answered every
  * bridge call). sol and the rejected ids were NOT re-tested on 0.153.0 —
  * the lines above stand on the 0.146.0 sweep.
+ * VERIFIED LIVE 2026-09-05 (codex-cli 0.153.4, same ChatGPT-plan account):
+ *   ACCEPTED  gpt-6-astra — at effort low, high, xhigh AND max (four
+ *             one-shot probes, each answering "OK"), so `doctor
+ *             --probe-models` (effort low) is verified for it too.
+ *   REJECTED  gpt-6-astra-pro · gpt-6-pro · gpt-6 — same "not supported when
+ *             using Codex with a ChatGPT account" message as sol.
+ *   Also on 0.153.4: the CLI made gpt-6-astra its OWN bundled default when no
+ *   model is configured (0.153.1 added it as configurable only). This fleet
+ *   still pins explicitly — the catalog head, which is now astra too.
  * The CLI binary embeds more names than the plan accepts, so presence in the
  * binary is not enough. Re-verify when Codex auto-updates.
  *
@@ -69,13 +78,37 @@
 /** @type {CodexModel[]} */
 export const CODEX_MODELS = [
   {
+    id: 'gpt-6-astra',
+    label: 'GPT-6 Astra',
+    family: 'gpt',
+    effort: 'high',
+    tier: 'heavy',
+    useFor:
+      'THE FLEET DEFAULT (operator decision 2026-09-05) and, since codex-cli 0.153.4, the CLI\'s own bundled default. GPT-6 generation, ' +
+      'released 2026-09-03; ACCEPTED on a ChatGPT Plus plan — VERIFIED LIVE 2026-09-05 on codex-cli 0.153.4 at effort low, high, xhigh and max. ' +
+      'AA Intelligence Index 55 vs sol 51 / terra 47 (independent, 2026-09-05). Leads sol by wide margins where it matters for this fleet: ' +
+      'security and exploit research (ExploitBench 100.0 vs 78.5, ExploitGym 42.4 vs 30.3, vendor-reported) and long-context recall ' +
+      '(MRCR v2 8-needle 512K–1M 96.3 vs 73.8, vendor-reported); DeepSWE v1.1 74.1 (vendor). Code review, agentic terminal analysis, ' +
+      'grounded research, the pre-release security audit. Default effort HIGH.',
+    avoid:
+      'Cost- and latency-sensitive throughput work: API $10/$50 per Mtok (5x terra, 2.5x sol) and markedly slower — 64 tok/s vs sol\'s 83, ' +
+      'time-to-first-token 384 s vs 140 s at max effort (AA, independent) — so step DOWN to gpt-5.6-terra for sweeps and routine review, ' +
+      'and to luna for single-file questions. Do not raise effort above high by default: xhigh/max are manual escalation for the hardest ' +
+      'architecture, proof or obfuscated-code work only. No SWE-bench Pro or comparable Terminal-Bench figure is published for it — ' +
+      'do not invent one. OpenAI rates it "Critical" for cyber under its Preparedness Framework and reports reduced chain-of-thought ' +
+      'monitorability: keep it read-only and supervised, as this fleet does. `gpt-6-astra-pro`, `gpt-6-pro` and `gpt-6` are REJECTED ' +
+      'on a ChatGPT plan with the same "not supported when using Codex with a ChatGPT account" message as sol (probed 2026-09-05); only ' +
+      '`gpt-6-astra` is embedded in the CLI binary. Re-verify when Codex auto-updates.',
+  },
+  {
     id: 'gpt-5.6-terra',
     label: 'GPT-5.6 Terra',
     family: 'gpt',
     effort: 'high',
     tier: 'balanced',
     useFor:
-      'The fleet default, OpenAI\'s recommended default for Codex CLI, and Codex\'s own default in ~/.codex/config.toml. ' +
+      'The balanced tier and the step-down from gpt-6-astra when cost or latency matters (API $2/$12 vs Astra\'s $10/$50; ' +
+      'AA Intelligence Index 47 vs 55). Was the fleet default until 2026-09-05. ' +
       'Agentic terminal work, directory-scale code reading and review, grounded research with web search. ' +
       'Terminal-Bench 2.1 87.4 vs 88.8 for the Pro-only flagship sol at roughly half the compute; ' +
       'long-context recall ~91.5% across the 1.05M window (third-party). Verified live 2026-09-03: read-only sandbox ' +
@@ -146,13 +179,15 @@ export function effortEnum() {
 }
 
 export const GUIDE =
-  'Pick by task, not by name. gpt-5.6-terra (high)=the fleet default for delegated review and research on ' +
-  'Codex — agentic terminal work, directory-scale code reading and grounded web research in a kernel-enforced ' +
-  'read-only sandbox (Terminal-Bench 2.1 87.4, ~91% recall across 1M context); gpt-5.6-luna (medium)=the fast ' +
+  'Pick by task, not by name. gpt-6-astra (high)=THE FLEET DEFAULT for delegated review and research on Codex — ' +
+  'GPT-6, AA Intelligence Index 55 (sol 51, terra 47), strongest on security/exploit research and 500K+ context, ' +
+  'kernel-enforced read-only sandbox; gpt-5.6-terra (high)=the cheaper, faster balanced tier for sweeps and routine ' +
+  'review (5x cheaper per token, Terminal-Bench 2.1 87.4, ~91% recall across 1M); gpt-5.6-luna (medium)=the fast ' +
   'cheap tier for single-file questions, lookups, routing and short summaries — NOT for multi-file work or long ' +
   'inputs (retrieval collapses past ~200K) and not for prohibition-heavy briefs (drifts on "do not"). Use `effort` ' +
-  'to trade depth for speed on terra: none/low for sweeps, high (default) for review, xhigh/max only for ' +
-  'architecture, proofs, or root-cause hunts; gpt-5.6-sol (high)=the flagship for the hardest of those, but it is ' +
+  'to trade depth for speed: none/low for sweeps on terra/luna, high (the default on astra and terra) for review, ' +
+  'xhigh/max only for architecture, proofs, or root-cause hunts; gpt-5.6-sol (high)=the 5.6 flagship for the hardest ' +
+  'of those, but it is ' +
   'PLAN-GATED to ChatGPT Pro/Enterprise — on Plus/Team it fails fast with an explicit "not supported" error, so ' +
-  'confirm your plan accepts it before routing there. Codex is the fleet\'s strongest coder but never its source ' +
-  'of record — verify facts. Omit `model` to keep the fleet default.';
+  'confirm your plan accepts it before routing there (astra, unlike sol, is accepted on Plus). Codex is the fleet\'s ' +
+  'strongest coder but never its source of record — verify facts. Omit `model` to keep the fleet default.';

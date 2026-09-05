@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import unit, { buildArgs, extractResult, catalog } from '../units/codex/adapter.mjs';
+import { ALLOWLIST, CODEX_MODELS, DEFAULT_MODEL } from '../units/codex/models.js';
 import { createUnitRuntime } from '../core/unit.mjs';
 import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -57,11 +58,25 @@ test('extractResult: turn.failed becomes a clear error with the unwrapped API me
 });
 
 test('extractResult: hard-kill, silent exit, and missing turn.completed are all loud', () => {
-  assert.throws(() => extractResult({ stdout: OK_RUN, stderr: '', code: null, killed: true }, { timeoutS: 5 }), /hard-killed after 5s/);
+  assert.throws(() => extractResult({ stdout: '', stderr: '', code: null, killed: true }, { timeoutS: 5 }), /hard-killed after 5s/);
   assert.throws(() => extractResult({ stdout: '', stderr: 'boom', code: 2, killed: false }), /codex exited 2: boom/);
   assert.throws(() => extractResult({ stdout: '', stderr: '', code: 0, killed: false }), /produced no answer/);
   const partial = extractResult({ stdout: OK_RUN.split('\n').slice(0, 6).join('\n'), stderr: '', code: 0, killed: false });
   assert.match(partial.text, /treat as partial/);
+});
+
+test('extractResult: a hard kill with a captured answer returns it under a partial marker', () => {
+  const r = extractResult({ stdout: OK_RUN, stderr: '', code: null, killed: true }, { timeoutS: 600 });
+  assert.equal(r.partial, true);
+  assert.match(r.text, /^v26\.8\.1/);
+  assert.match(r.text, /\[codex: hard-killed after 600s — treat the answer as partial; raise codex\.timeoutS in the fleet config\]/);
+  // The usage the run did report is still reported.
+  assert.deepEqual(r.usage, { input: 60835, cachedInput: 45312, output: 236, reasoning: 103 });
+  // A kill with no agent_message at all stays an error.
+  assert.throws(
+    () => extractResult({ stdout: '{"type":"turn.started"}\n', stderr: '', code: null, killed: true }, { timeoutS: 600 }),
+    /hard-killed after 600s/,
+  );
 });
 
 test('extractResult: a non-zero exit WITH an answer keeps the answer under a partial marker', () => {
@@ -254,4 +269,17 @@ test('codex_image: prose with no file on disk is an error, not a success', async
   assert.match(r.text, /unable to generate the image/); // the raw tail is kept
   const noPrompt = await rt.callTool('codex_image', { prompt: '  ' });
   assert.equal(noPrompt.isError, true);
+});
+
+// --- catalog ----------------------------------------------------------------
+
+test('catalog: gpt-6-astra is the catalog head (= the fleet default) at effort high, terra second', () => {
+  const astra = CODEX_MODELS.find((m) => m.id === 'gpt-6-astra');
+  assert.ok(astra, 'gpt-6-astra missing');
+  assert.equal(astra.effort, 'high');
+  assert.match(astra.avoid, /xhigh/);
+  assert.ok(ALLOWLIST.includes('gpt-6-astra'));
+  assert.equal(DEFAULT_MODEL, '');
+  assert.equal(CODEX_MODELS[0].id, 'gpt-6-astra', 'the catalog head is what the adapter pins when no model is configured');
+  assert.equal(CODEX_MODELS[1].id, 'gpt-5.6-terra');
 });

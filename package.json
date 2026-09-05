@@ -1,6 +1,6 @@
 {
   "name": "omelette-fleet",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Plug Gemini, Grok and Codex into Claude Code as read-only research and review units — on the subscriptions you already pay for, fail-closed by design.",
   "type": "module",
   "license": "MIT",
@@ -24,7 +24,10 @@
     "units",
     "servers",
     "docs",
+    "!docs/superpowers",
     "examples",
+    "rules",
+    "agents",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

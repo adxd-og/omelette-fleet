@@ -25,9 +25,22 @@ test('interpretAgy: a successful answer ABOUT quotas is never misread as exhaust
 
 test('interpretAgy: failed turns — quota, hard-kill, silent stderr-only, non-zero exit', () => {
   assert.throws(() => interpretAgy(ok({ stdout: '', stderr: 'RESOURCE_EXHAUSTED', code: 1 }), { timeoutS: 300 }), /quota exhausted/);
-  assert.throws(() => interpretAgy(ok({ stdout: envelope({}), killed: true }), { timeoutS: 300 }), /hard-killed after 360s/);
+  assert.throws(() => interpretAgy(ok({ stdout: '', killed: true }), { timeoutS: 300 }), /hard-killed after 360s/);
   assert.throws(() => interpretAgy(ok({ stdout: '', stderr: 'a tool required the "read_url" permission' }), { timeoutS: 300 }), /produced no output: a tool required/);
   assert.throws(() => interpretAgy(ok({ stdout: '', stderr: 'boom', code: 2 }), { timeoutS: 300 }), /agy exited 2: boom/);
+});
+
+test('interpretAgy: a hard kill with a captured answer returns it under a partial marker', () => {
+  const r = interpretAgy(ok({ stdout: envelope({}), code: null, killed: true }), { timeoutS: 300 });
+  assert.equal(r.partial, true);
+  assert.match(r.text, /^answer/);
+  assert.match(r.text, /\[gemini: hard-killed after 360s — treat the answer as partial; raise gemini\.timeoutS in the fleet config\]/);
+  assert.deepEqual(r.usage, { input: 10, output: 3 });
+  // Non-JSON stdout is salvaged the same way the clean path reads it.
+  assert.match(interpretAgy(ok({ stdout: 'plain half answer', code: null, killed: true }), { timeoutS: 300 }).text, /^plain half answer/);
+  // Nothing captured: still an error, and quota exhaustion still wins over it.
+  assert.throws(() => interpretAgy(ok({ stdout: '   ', code: null, killed: true }), { timeoutS: 300 }), /hard-killed after 360s/);
+  assert.throws(() => interpretAgy(ok({ stdout: envelope({}), stderr: 'RESOURCE_EXHAUSTED', code: null, killed: true }), { timeoutS: 300 }), /quota exhausted/);
 });
 
 test('interpretAgy: a non-zero exit WITH text keeps the text under a partial marker', () => {

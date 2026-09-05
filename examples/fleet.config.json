@@ -13,13 +13,13 @@
     "grok": {
       "enabled": true,
       "mode": "read-only",
-      "timeoutS": 900,
+      "timeoutS": 1800,
       "maxTurns": 30
     },
     "codex": {
       "enabled": true,
       "mode": "read-only",
-      "model": "gpt-5.6-terra",
+      "model": "gpt-6-astra",
       "effort": "high",
       "webSearch": true,
       "timeoutS": 600
