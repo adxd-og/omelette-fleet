@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-09-06
 
 - **The operating rules reach the session by themselves.** Every unit server now returns the fleet contract from the MCP `initialize` handshake (`InitializeResult.instructions`), which Claude Code shows as "MCP Server Instructions": units propose and the session applies, absolute paths and one job per call, no unit is a source of record, and every mutation stays with Claude. It is under ten lines plus one line describing that unit, it needs no user action beyond the restart `install` already asks for, and it lives in `core/rules.mjs` next to the longer text so the two can never disagree.
 - **`omelette-fleet rules [--global] [--agents] [--print] [--remove] [--force] [--dry-run]`** — writes the full operating model (tester flow, arbitration rule, routing table) to `<cwd>/.claude/rules/omelette-fleet.md`, or under `$CLAUDE_CONFIG_DIR`/`~/.claude` with `--global`, where Claude Code loads it like CLAUDE.md. Line 1 carries a version marker, and that marker is the only proof of ownership: a marked file is refreshed in place (atomically, tmp + rename) and an identical one is left alone with "up to date", while a file *without* the marker is never written over unless you pass `--force`, and is never removed at all — `--remove` refuses it and tells you to delete it by hand. `--print` and `--dry-run` touch nothing.
