@@ -56,18 +56,53 @@
  *      already restricts the toolset to read/search/web, L2 strips MCP
  *      meta-tools + Agent, and deny > allow keeps the Bash/Edit/Write deny
  *      rules winning — these allows can only un-prompt the two web tools.
- *   2. `--output-format json` — the one-shot result object carries the final
- *      `text` and a `stopReason`; interpretGrok extracts the text and makes
- *      any "Cancelled"/early stop VISIBLE instead of a silent truncation: text
- *      that arrived before the stop is returned with a marker line appended
- *      (`[grok: run ended early — stopReason=...]`, plus `[grok: CLI exited N
- *      — treat the answer as partial]` on a non-zero exit), and only a run
- *      with NO text at all throws. Partial work is kept, never passed off as
- *      a clean answer. stopReason spelling CHANGED across CLI generations
- *      (v0.2.x "EndTurn"/"Cancelled", v1.0.x "end_turn"/"cancelled") — it is
- *      compared case/underscore-insensitively (regression caught 2026-08-13).
- *      CLI-level failures arrive as {"type":"error","message":...} on STDOUT
- *      (e.g. unknown --model) and are surfaced as errors, not answers.
+ *   2. `--output-format streaming-messages-json --include-partial-messages`
+ *      (0.3.1; before that `--output-format json`) — the run's structured
+ *      output, read by parseStream. WHY STREAMING: `json` writes NOTHING until
+ *      the run ends (0 bytes at 20s on a probe that had text in plain mode by
+ *      16s), so the hard-kill salvage below had nothing to salvage on exactly
+ *      the runs it exists for. Streaming emits NDJSON as the answer is
+ *      produced — 441 text deltas / 1513 chars survived a 30s kill on the
+ *      2026-09-06 probe.
+ *      SHAPE (verified live, grok 1.0.13, 2026-09-06 — the Anthropic Messages
+ *      wire format, one JSON object per line): {"type":"system","subtype":
+ *      "init",...}, then {"type":"stream_event","event":{...}} lines
+ *      (message_start, content_block_start, content_block_delta whose
+ *      delta.type is text_delta / thinking_delta / input_json_delta,
+ *      content_block_stop, message_delta carrying stop_reason + usage,
+ *      message_stop), then the whole {"type":"assistant","message":{content:
+ *      [...]}} and finally {"type":"result","subtype":"success","result":"<the
+ *      full answer>","stop_reason":...,"usage":{...}}.
+ *      ONE PARSER for finished and killed runs: text_delta events assemble the
+ *      running answer (thinking_delta and tool-argument input_json_delta are
+ *      never part of it), and the final whole message — the `result` line's
+ *      `result`, else the last assistant message's text blocks — wins when it
+ *      is there, being the authoritative full text. Malformed lines (a kill
+ *      truncates the last one) are skipped.
+ *      interpretGrok then makes any "cancelled"/early stop VISIBLE instead of
+ *      a silent truncation: text that arrived before the stop is returned with
+ *      a marker line appended (`[grok: run ended early — stopReason=...]`,
+ *      plus `[grok: CLI exited N — treat the answer as partial]` on a non-zero
+ *      exit), and only a run with NO text at all throws. Partial work is kept,
+ *      never passed off as a clean answer. stopReason spelling CHANGED across
+ *      CLI generations (v0.2.x "EndTurn"/"Cancelled", v1.0.x "end_turn"/
+ *      "cancelled") — it is compared case/underscore-insensitively (regression
+ *      caught 2026-08-13).
+ *      USAGE: input_tokens/output_tokens are MERGED across the lines that carry
+ *      them (a message_delta reporting only output must not erase the input
+ *      count message_start gave) and reach the fleet status feed as
+ *      `usage: { input, output }` — Grok reported none before 0.3.1.
+ *      CLI-level failures: v1.0.13 ends the stream with {"type":"result",
+ *      "is_error":true,"subtype":"error_...","errors":[...]} (verified live:
+ *      unknown --model, exit 1); older generations printed a bare
+ *      {"type":"error","message":...} line, still accepted. A failure THROWS
+ *      only when it took the answer with it — a run that failed after
+ *      producing text (error_max_turns puts the paid partial answer in
+ *      `result` with no errors[]) comes back as an early stop named by the
+ *      failure's subtype, never as its error message.
+ *      A SUCCESSFUL result line closes the run: its stop_reason is null after
+ *      a tool-use turn, and null there means end_turn — not the last turn's
+ *      "tool_use", which would stamp an early-stop marker on a complete answer.
  * Image runs keep plain mode and NO allow rules — image_gen/image_edit
  * auto-approve headless (see below), and their path-extraction contract is
  * built on plain stdout.
@@ -175,10 +210,15 @@ const isResearchToolset = (tools) => tools === READONLY_TOOLS || tools === READO
 
 /** Build the `grok -p` argv for one run. Exported for tests. */
 export function buildArgs({ prompt, model, effort, cwd, tools, maxTurns }) {
-  const jsonMode = isResearchToolset(tools);
+  // Research/review runs stream NDJSON so a hard kill still has text to
+  // salvage; image runs keep plain stdout — their path-extraction contract is
+  // built on it (see the file header).
+  const streaming = isResearchToolset(tools);
   const args = [
     '-p', prompt,
-    '--output-format', jsonMode ? 'json' : 'plain',
+    ...(streaming
+      ? ['--output-format', 'streaming-messages-json', '--include-partial-messages']
+      : ['--output-format', 'plain']),
     // Layers L1-L5 (see file header for who guarantees what):
     '--tools', tools,
     '--disallowed-tools', DENY_TOOLS,
@@ -193,31 +233,128 @@ export function buildArgs({ prompt, model, effort, cwd, tools, maxTurns }) {
   return args;
 }
 
-/**
- * The answer inside one finished run's stdout — the ONE reading of a grok
- * payload. The clean path and the hard-kill salvage both go through it, so a
- * killed run's text is extracted exactly the way a finished one's would be.
- * `parsed` says the JSON envelope was understood: an envelope with an empty
- * `text` is a run that produced no answer, not a reason to return raw stdout.
- * @returns {{text:string, stop:string, parsed:boolean, error:string|null}}
- */
-function grokAnswer(out, jsonMode) {
-  const raw = String(out || '');
-  if (!jsonMode) return { text: raw.trim(), stop: '', parsed: false, error: null };
-  let r = null;
-  try { r = JSON.parse(raw); } catch { /* truncated/foreign — fall back */ }
-  if (r && r.type === 'error') return { text: '', stop: '', parsed: true, error: r.message || JSON.stringify(r).slice(0, 300) };
-  if (r && typeof r.text === 'string') {
-    return { text: r.text.trim(), stop: typeof r.stopReason === 'string' ? r.stopReason : '', parsed: true, error: null };
-  }
-  // Unparseable JSON (output-cap truncation / future CLI format change):
-  // fail open with the raw stdout rather than dropping a real answer.
-  return { text: raw.trim(), stop: '', parsed: false, error: null };
+/** Token counts worth reporting — message_start's all-zero placeholder is not one. */
+function readUsage(u) {
+  if (!u || typeof u !== 'object') return null;
+  const input = Number.isFinite(u.input_tokens) ? u.input_tokens : null;
+  const output = Number.isFinite(u.output_tokens) ? u.output_tokens : null;
+  return input || output ? { input, output } : null;
+}
+
+/** The text blocks of one whole message, in order — tool_use and thinking blocks are not the answer. */
+function messageText(msg) {
+  if (!msg || !Array.isArray(msg.content)) return '';
+  return msg.content
+    .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text)
+    .join('\n');
 }
 
 /**
- * Interpret one finished grok run → the answer text, `{ text, partial: true }`
- * for a salvaged hard kill, or throw. Exported for tests.
+ * Read one run's NDJSON stdout — THE single parser, used by the clean path and
+ * by the hard-kill salvage alike, so a killed run's text is extracted exactly
+ * the way a finished one's is. Line shapes in the file header.
+ * `text` is what the deltas assembled; `finalText` is the authoritative whole
+ * message when the run got that far; `parsed` says at least one line was a
+ * shape we know (an understood stream with no text is a run that produced no
+ * answer, not a reason to hand back raw stdout). Exported for tests.
+ * @returns {{text:string, finalText:string, stopReason:string, usage:{input:number|null,output:number|null}|null, parsed:boolean, error:string|null}}
+ */
+export function parseStream(stdout) {
+  let text = '';
+  let finalText = '';
+  let stopReason = '';
+  let usage = null;
+  let error = null;
+  let parsed = false;
+  const takeStop = (s) => { if (typeof s === 'string' && s) stopReason = s; };
+  // MERGE, never replace: a line that reports only output_tokens must not erase
+  // the input count an earlier line already gave.
+  const takeUsage = (u) => {
+    const v = readUsage(u);
+    if (!v) return;
+    usage = { input: v.input || (usage && usage.input) || null, output: v.output || (usage && usage.output) || null };
+  };
+  const takeFinal = (t) => { if (t && t.trim()) finalText = t; };
+
+  for (const line of String(stdout || '').split('\n')) {
+    const s = line.trim();
+    if (!s || s[0] !== '{') continue;
+    let o;
+    try { o = JSON.parse(s); } catch { continue; } // a kill truncates the last line
+    if (!o || typeof o !== 'object') continue;
+    if (o.type === 'stream_event' && o.event && typeof o.event === 'object') {
+      parsed = true;
+      const e = o.event;
+      if (e.type === 'content_block_delta' && e.delta && e.delta.type === 'text_delta' && typeof e.delta.text === 'string') text += e.delta.text;
+      else if (e.type === 'message_delta') { takeStop(e.delta && e.delta.stop_reason); takeUsage(e.usage); }
+      else if (e.type === 'message_start' && e.message) takeUsage(e.message.usage);
+      continue;
+    }
+    // The whole assistant message. `assistant` is what the 1.0.13 probe emits;
+    // a top-level `message` line is accepted because that spelling is the one
+    // part of the shape the probe left uncertain.
+    if (o.type === 'assistant' || o.type === 'message') {
+      parsed = true;
+      const msg = o.type === 'assistant' ? o.message : o;
+      takeFinal(messageText(msg));
+      if (msg) { takeStop(msg.stop_reason); takeUsage(msg.usage); }
+      continue;
+    }
+    if (o.type === 'result') {
+      parsed = true;
+      takeUsage(o.usage);
+      // The `result` string is the run's answer whether the run succeeded or
+      // not — a maxTurns-capped run puts its PAID partial answer there.
+      if (typeof o.result === 'string') takeFinal(o.result);
+      if (o.is_error) {
+        error = (Array.isArray(o.errors) && o.errors.filter(Boolean).join('; ')) || String(o.result || o.subtype || 'run failed').slice(0, 300);
+        takeStop(o.subtype); // a failed result carries stop_reason null; the subtype is what names the stop
+      } else {
+        // A successful result closes the run, so a null stop_reason here means
+        // end_turn — never the last turn's "tool_use", which would stamp an
+        // early-stop marker on a complete answer.
+        takeStop(typeof o.stop_reason === 'string' && o.stop_reason ? o.stop_reason : 'end_turn');
+      }
+      continue;
+    }
+    if (o.type === 'error') { parsed = true; error = o.message || JSON.stringify(o).slice(0, 300); continue; }
+    if (o.type === 'system') parsed = true; // init line — nothing to take from it
+    // Anything else: a line shape from a future CLI. Skipped, never fatal.
+  }
+  return { text, finalText, stopReason, usage, parsed, error };
+}
+
+/**
+ * The answer inside one finished run's stdout, for both output formats.
+ * @returns {{text:string, stop:string, parsed:boolean, error:string|null, usage:object|null}}
+ */
+function grokAnswer(out, jsonMode) {
+  const raw = String(out || '');
+  if (!jsonMode) return { text: raw.trim(), stop: '', parsed: false, error: null, usage: null };
+  const s = parseStream(raw);
+  const text = (s.finalText || s.text).trim();
+  // A reported failure THROWS only when it took the answer with it. A run that
+  // failed after producing text (maxTurns capped, a mid-run error) is paid for
+  // and its text is usually the useful part: it comes back as an early stop,
+  // named by the failure's own subtype, and interpretGrok marks it.
+  if (s.error && !text) return { text: '', stop: '', parsed: true, error: s.error, usage: null };
+  // Nothing recognized (output-cap truncation / future CLI format change):
+  // fail open with the raw stdout rather than dropping a real answer.
+  if (!s.parsed) return { text: raw.trim(), stop: '', parsed: false, error: null, usage: null };
+  return { text, stop: s.error ? s.stopReason || 'error' : s.stopReason, parsed: true, error: null, usage: s.usage };
+}
+
+/** A bare string when the text is all there is to say; the object shape when usage or `partial` travel with it. */
+const answer = (text, usage, extra) =>
+  (usage || extra ? { text, ...(usage ? { usage } : {}), ...extra } : text);
+
+/**
+ * Interpret one finished grok run → the answer text, `{ text, usage? }` once
+ * the run reported tokens, `{ text, usage?, partial: true }` for a salvaged
+ * hard kill, or throw. Exported for tests.
+ * `jsonMode` selects the structured output format (since 0.3.1: the streaming
+ * NDJSON of research/review runs); false is the plain stdout of image runs.
  */
 export function interpretGrok(res, { jsonMode, timeoutS }) {
   const { stdout: out, stderr: errBuf, code, killed } = res;
@@ -227,10 +364,11 @@ export function interpretGrok(res, { jsonMode, timeoutS }) {
   // captured, marked; only a kill with nothing to show is still an error.
   if (killed) {
     if (a.text) {
-      return {
-        text: `${a.text}\n\n[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`,
-        partial: true,
-      };
+      return answer(
+        `${a.text}\n\n[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`,
+        a.usage,
+        { partial: true },
+      );
     }
     throw new Error(`grok hard-killed after ${timeoutS}s (raise grok.timeoutS in the fleet config)`);
   }
@@ -242,8 +380,8 @@ export function interpretGrok(res, { jsonMode, timeoutS }) {
   if (a.error) throw new Error(`grok CLI error: ${a.error}`);
   if (!a.parsed) return partial(a.text);
   const stopNorm = a.stop.toLowerCase().replace(/[_\s]/g, '');
-  if (a.text && (!a.stop || stopNorm === 'endturn')) return partial(a.text);
-  if (a.text) return partial(`${a.text}\n\n[grok: run ended early — stopReason=${a.stop}]`);
+  if (a.text && (!a.stop || stopNorm === 'endturn')) return answer(partial(a.text), a.usage);
+  if (a.text) return answer(partial(`${a.text}\n\n[grok: run ended early — stopReason=${a.stop}]`), a.usage);
   throw new Error(
     `grok run ended with no answer (stopReason=${a.stop || 'unknown'})` +
     (stopNorm === 'cancelled' ? ' — a tool call needed interactive approval and the headless run was cancelled' : ''),
@@ -255,7 +393,12 @@ async function runGrok(ctx, { prompt, cwd, tools, maxTurns }) {
   const args = buildArgs({ prompt, model: ctx.model, effort: ctx.effort, cwd, tools, maxTurns });
   ctx.log(`grok spawn · tools=${tools} · model=${ctx.model || '(grok default)'} · effort=${ctx.effort || '(default)'} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd: cwd || undefined, extraEnv: { GROK_WEB_FETCH: '1' } });
-  return interpretGrok(res, { jsonMode, timeoutS: ctx.cfg.timeoutS });
+  const out = interpretGrok(res, { jsonMode, timeoutS: ctx.cfg.timeoutS });
+  if (out && out.usage) {
+    const n = (v) => (v === null || v === undefined ? '?' : v); // a count the run never reported
+    ctx.log(`grok done · tokens in=${n(out.usage.input)} out=${n(out.usage.output)}`);
+  }
+  return out;
 }
 
 /** The text of a run, whether it came back plain or as a salvaged-kill result. */
