@@ -19,12 +19,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { callUnitServer, MAX_TIMEOUT_S } from '../core/client.mjs';
-import { AGENT_MARKER, RULES_MARKER } from '../core/rules.mjs';
+import { AGENT_MARKER, HOOK_MARKER, RULES_MARKER, SKILL_MARKER } from '../core/rules.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -764,6 +764,8 @@ test('update (npm): nothing is pulled — the exact upgrade command, exit 0', ()
  */
 const MARKED_RULES = (v, body = '') => `${RULES_MARKER(v)}\n${body}`;
 const MARKED_AGENT = (v, name) => `---\n${AGENT_MARKER(v)}\nname: ${name}\n---\nold\n`;
+const MARKED_SKILL = (v) => `---\n${SKILL_MARKER(v)}\nname: omelette-test\n---\nold\n`;
+const MARKED_HOOK = (v) => `${HOOK_MARKER(v)}\n// old\n`;
 
 test('rules: writes the managed file into <cwd>/.claude/rules, is idempotent, refreshes an older marker', () => {
   const dir = home();
@@ -950,6 +952,31 @@ test('rules: a symlinked target file is refused for write, for --force and for -
   }
 });
 
+test('rules --agents: a symlink anywhere under .claude/skills is refused — the whole path is checked, not just two levels', { skip: !symlinksWork && 'symlinks need privileges here' }, () => {
+  const dir = home();
+  const elsewhere = join(dir, 'elsewhere');
+  mkdirSync(elsewhere);
+  // The skill sits one directory deeper than every other managed file
+  // (.claude/skills/omelette-test/SKILL.md), so its own directory has to be
+  // checked too — a link there would carry the write straight out of the project.
+  const proj = join(dir, 'proj');
+  mkdirSync(join(proj, '.claude', 'skills'), { recursive: true });
+  symlinkSync(elsewhere, join(proj, '.claude', 'skills', 'omelette-test'));
+  const r = rulesIn(proj, dir, ['--agents']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /^omelette-fleet rules: refusing .*SKILL\.md: .*[/\\]omelette-test is a symlink$/m);
+  assert.deepEqual(readdirSync(elsewhere), [], 'nothing was written through the link');
+
+  // …and one level up, where .claude/skills itself is the link.
+  const proj2 = join(dir, 'proj2');
+  mkdirSync(join(proj2, '.claude'), { recursive: true });
+  symlinkSync(elsewhere, join(proj2, '.claude', 'skills'));
+  const r2 = rulesIn(proj2, dir, ['--agents']);
+  assert.equal(r2.status, 1, r2.stdout + r2.stderr);
+  assert.match(r2.stderr, /refusing .*SKILL\.md: .*[/\\]skills is a symlink/);
+  assert.deepEqual(readdirSync(elsewhere), []);
+});
+
 test('rules: --global honours CLAUDE_CONFIG_DIR; --print and --dry-run write nothing', () => {
   const dir = home();
   const cfg = join(dir, 'cfgdir');
@@ -1029,6 +1056,240 @@ test('rules --agents warns about an invalid agent setting on stderr and still wr
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /agents\.tester\.maxTurns = "lots" is invalid/);
   assert.match(readFileSync(join(proj, '.claude', 'agents', 'omelette-tester.md'), 'utf8'), /^maxTurns: 80$/m);
+});
+
+test('rules --agents also writes the /omelette-test skill, refreshes it, and --remove --agents takes it away', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const skill = join(proj, '.claude', 'skills', 'omelette-test', 'SKILL.md');
+  const r1 = rulesIn(proj, dir, ['--agents']);
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.ok(existsSync(skill), 'the skill lands beside the two roles it hands work to');
+  assert.match(r1.stdout, /^written .*[/\\]skills[/\\]omelette-test[/\\]SKILL\.md \(v\d+\.\d+\.\d+.*, was absent\)$/m);
+  const text = readFileSync(skill, 'utf8');
+  assert.equal(text.split('\n')[1], SKILL_MARKER(pkgVersion(ROOT)));
+  // What makes the handoff mechanical has to reach the disk untouched.
+  assert.ok(text.split('\n').includes('!`git diff HEAD`'), 'the diff injection line survives the write');
+  assert.ok(text.includes('agent: omelette-tester'));
+
+  assert.match(rulesIn(proj, dir, ['--agents']).stdout, /^up to date .*SKILL\.md/m);
+
+  writeFileSync(skill, '---\nname: mine\n---\nnot ours\n');
+  const r3 = rulesIn(proj, dir, ['--agents']);
+  assert.equal(r3.status, 1, 'a foreign skill file is refused like any other kind');
+  assert.match(r3.stderr, /SKILL\.md exists and is not managed by omelette-fleet/);
+  assert.equal(readFileSync(skill, 'utf8'), '---\nname: mine\n---\nnot ours\n');
+  assert.equal(rulesIn(proj, dir, ['--agents', '--force']).status, 0);
+  assert.equal(readFileSync(skill, 'utf8').split('\n')[1], SKILL_MARKER(pkgVersion(ROOT)));
+
+  const r5 = rulesIn(proj, dir, ['--remove', '--agents']);
+  assert.equal(r5.status, 0, r5.stderr);
+  assert.equal(existsSync(skill), false, '--remove --agents takes the skill with it');
+  for (const f of ['omelette-coder.md', 'omelette-tester.md']) assert.equal(existsSync(join(proj, '.claude', 'agents', f)), false);
+  assert.equal(existsSync(join(proj, '.claude', 'rules', 'omelette-fleet.md')), false);
+});
+
+test('rules --print --agents prints the skill too, with its own separator, and writes nothing', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const r = rulesIn(proj, dir, ['--print', '--agents']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /\n===== omelette-test\/SKILL\.md =====\n\n---\n# omelette-fleet skill v/);
+  assert.ok(r.stdout.includes('!`git diff HEAD`'), 'the injection line is printed verbatim');
+  // …after the two agent definitions: the skill is the last thing --agents ships.
+  assert.ok(r.stdout.indexOf('===== omelette-test/SKILL.md =====') > r.stdout.indexOf('===== omelette-tester.md ====='));
+  assert.equal(existsSync(join(proj, '.claude')), false, '--print must touch nothing on disk');
+});
+
+/**
+ * The settings.json snippet `rules --hooks` prints, exactly as the design fixes
+ * it — with the script path absolute and shell-quoted, because the value is a
+ * command line and an operator's path may contain spaces.
+ */
+const SNIPPET = (script) => [
+  '{ "hooks": {',
+  `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
+  `  "PreCompact": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
+].join('\n');
+
+test('rules --hooks writes the guard, prints the settings snippet, is idempotent, and --remove --hooks takes it away', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const guard = join(proj, '.claude', 'hooks', 'omelette-guard.mjs');
+  const r1 = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.ok(existsSync(guard));
+  assert.match(r1.stdout, /^written .*[/\\]hooks[/\\]omelette-guard\.mjs \(v\d+\.\d+\.\d+.*, was absent\)$/m);
+  assert.equal(readFileSync(guard, 'utf8').split('\n')[0], HOOK_MARKER(pkgVersion(ROOT)));
+  // The snippet names the script that was actually written, absolutely, and is
+  // pasteable JSON — this CLI never edits settings.json itself. The path is the
+  // one the CLI resolved: on macOS a temp dir reaches it as /private/var/…
+  const wired = join(realpathSync(proj), '.claude', 'hooks', 'omelette-guard.mjs');
+  assert.ok(r1.stdout.includes(SNIPPET(wired)), `no snippet for ${wired} in:\n${r1.stdout}`);
+  assert.doesNotMatch(r1.stdout, /written .*omelette-coder\.md/, '--hooks does not drag the agent definitions in');
+
+  // Running it again still prints the snippet: doctor's "paste the snippet from
+  // rules --hooks" has to lead somewhere even when the file is already current.
+  const r2 = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.match(r2.stdout, /^up to date .*omelette-guard\.mjs/m);
+  assert.ok(r2.stdout.includes(SNIPPET(wired)));
+
+  writeFileSync(guard, '// my own hook\n');
+  const r3 = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(r3.status, 1, 'a foreign hook script is refused');
+  assert.match(r3.stderr, /omelette-guard\.mjs exists and is not managed by omelette-fleet/);
+  assert.equal(readFileSync(guard, 'utf8'), '// my own hook\n');
+  assert.equal(rulesIn(proj, dir, ['--hooks', '--force']).status, 0);
+
+  const r5 = rulesIn(proj, dir, ['--remove', '--hooks']);
+  assert.equal(r5.status, 0, r5.stderr);
+  assert.equal(existsSync(guard), false);
+  assert.doesNotMatch(r5.stdout, /"PreToolUse"/, '--remove has no snippet to offer');
+});
+
+test('the snippet is absolute and shell-quoted: a path with spaces, and a RELATIVE CLAUDE_CONFIG_DIR', () => {
+  const dir = home();
+  // A hook command is a command LINE. An unquoted path with a space in it pastes
+  // a hook that runs `node /…/My` and fails at every tool call.
+  const proj = join(dir, 'My Projects', 'the app');
+  mkdirSync(proj, { recursive: true });
+  const spaced = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(spaced.status, 0, spaced.stderr);
+  const guard = join(realpathSync(proj), '.claude', 'hooks', 'omelette-guard.mjs');
+  assert.ok(guard.includes(' '), 'the fixture path must actually contain a space');
+  assert.ok(spaced.stdout.includes(SNIPPET(guard)), `no quoted snippet for ${guard} in:\n${spaced.stdout}`);
+  // …and what it printed is still JSON, and is still recognised as wired.
+  const lines = spaced.stdout.split('\n');
+  const snippet = JSON.parse(lines.slice(lines.indexOf('{ "hooks": {'), lines.indexOf('{ "hooks": {') + 3).join('\n'));
+  writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify(snippet, null, 2));
+  const doc = spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
+  assert.match(doc, /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact\)/m, doc);
+
+  // A relative CLAUDE_CONFIG_DIR still has to yield an absolute hook command: a
+  // hook runs from wherever the session is, not from where this command ran.
+  const proj2 = join(dir, 'proj2'); mkdirSync(proj2);
+  const rel = rulesIn(proj2, dir, ['--global', '--hooks'], { CLAUDE_CONFIG_DIR: 'cfgrel' });
+  assert.equal(rel.status, 0, rel.stderr);
+  assert.ok(existsSync(join(proj2, 'cfgrel', 'hooks', 'omelette-guard.mjs')));
+  assert.ok(rel.stdout.includes(SNIPPET(join(realpathSync(proj2), 'cfgrel', 'hooks', 'omelette-guard.mjs'))), rel.stdout);
+  assert.doesNotMatch(rel.stdout, /"command": "node 'cfgrel/, 'a relative path in a hook command is a hook that never runs');
+});
+
+test('doctor sees the guard wired in settings.local.json too, and names a settings file it could not read', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const doctor = () => spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
+  const written = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(written.status, 0, written.stderr);
+  const lines = written.stdout.split('\n');
+  const snippet = JSON.parse(lines.slice(lines.indexOf('{ "hooks": {'), lines.indexOf('{ "hooks": {') + 3).join('\n'));
+
+  // settings.local.json is where a machine's own settings go — and where a
+  // project that gitignores it keeps this wiring. It counts.
+  const local = join(proj, '.claude', 'settings.local.json');
+  writeFileSync(local, JSON.stringify(snippet, null, 2));
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact\) · global: absent$/m);
+
+  // A broken settings.json beside a working local one does not un-wire it.
+  writeFileSync(join(proj, '.claude', 'settings.json'), '{ not json');
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact\)/m);
+
+  // With nothing wired anywhere, both unreadable files are named — "not wired"
+  // about a file nobody could parse would send the operator to re-paste it.
+  writeFileSync(local, '[]');
+  const both = doctor();
+  assert.match(both, /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(settings\.json and settings\.local\.json unreadable\) — paste the snippet from rules --hooks\)/m, both);
+  assert.equal(readFileSync(local, 'utf8'), '[]', 'settings.local.json is READ, never written');
+});
+
+test('rules --agents leaves the hook alone, and rules --hooks leaves the agent files alone', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  assert.equal(rulesIn(proj, dir, ['--agents']).status, 0);
+  assert.equal(existsSync(join(proj, '.claude', 'hooks')), false);
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  assert.ok(existsSync(join(proj, '.claude', 'hooks', 'omelette-guard.mjs')));
+  const r = rulesIn(proj, dir, ['--remove', '--hooks']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(existsSync(join(proj, '.claude', 'agents', 'omelette-coder.md')), '--remove --hooks never touches an agent file');
+  assert.ok(existsSync(join(proj, '.claude', 'skills', 'omelette-test', 'SKILL.md')));
+});
+
+test('rules --dry-run --hooks and --print --hooks write nothing at all', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const d = rulesIn(proj, dir, ['--dry-run', '--hooks']);
+  assert.equal(d.status, 0, d.stderr);
+  assert.match(d.stdout, /^would write .*omelette-guard\.mjs \(v\d+\.\d+\.\d+.*, was absent\)$/m);
+  // A snippet naming a script that was never written is a snippet somebody
+  // pastes — --dry-run says it would print one instead of printing it.
+  assert.match(d.stdout, /^would print the settings snippet after writing$/m);
+  assert.doesNotMatch(d.stdout, /"PreToolUse"/, 'no pasteable snippet from a run that wrote nothing');
+  assert.equal(existsSync(join(proj, '.claude')), false, '--dry-run must touch nothing on disk');
+
+  const p = rulesIn(proj, dir, ['--print', '--hooks']);
+  assert.equal(p.status, 0, p.stderr);
+  assert.match(p.stdout, /\n===== omelette-guard\.mjs =====\n\n\/\/ omelette-fleet hook v/);
+  assert.equal(existsSync(join(proj, '.claude')), false, '--print must touch nothing on disk');
+});
+
+test('doctor reports the guard hook and whether settings.json wires it — reading that file, never writing it', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const settings = join(proj, '.claude', 'settings.json');
+  const guard = join(proj, '.claude', 'hooks', 'omelette-guard.mjs');
+  const doctor = () => spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
+  assert.match(doctor(), /^hooks {9}project: absent · global: absent$/m);
+
+  // The script alone does nothing: a hook only runs once settings.json calls it.
+  const written = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(written.status, 0, written.stderr);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired — paste the snippet from rules --hooks\) · global: absent$/m);
+
+  // The snippet the CLI printed, parsed back: what it offers has to be the very
+  // thing the wiring check then accepts.
+  const lines = written.stdout.split('\n');
+  const snippet = JSON.parse(lines.slice(lines.indexOf('{ "hooks": {'), lines.indexOf('{ "hooks": {') + 3).join('\n'));
+
+  // Half-wired is not wired, and somebody else's PreCompact hook is not ours.
+  writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: snippet.hooks.PreToolUse } }, null, 2));
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired — paste the snippet from rules --hooks\)/m);
+  writeFileSync(settings, JSON.stringify({ hooks: { ...snippet.hooks, PreCompact: [{ hooks: [{ type: 'command', command: 'node /elsewhere/other-hook.mjs' }] }] } }, null, 2));
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired — paste the snippet from rules --hooks\)/m);
+
+  const pasted = JSON.stringify(snippet, null, 2);
+  writeFileSync(settings, pasted);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact\) · global: absent$/m);
+  assert.equal(readFileSync(settings, 'utf8'), pasted, 'settings.json is READ, never written');
+
+  // A stale guard beside a working wiring still asks to be refreshed…
+  writeFileSync(guard, MARKED_HOOK('0.0.1'));
+  assert.match(doctor(), /^hooks {9}project: v0\.0\.1 \(wired: PreToolUse, PreCompact\) \[run: omelette-fleet rules --hooks\]/m);
+  // …and a script that is not ours is reported, never claimed.
+  writeFileSync(guard, '// my own hook\n');
+  assert.match(doctor(), /^hooks {9}project: foreign \(no marker\) · global: absent$/m);
+  // A settings.json that is not JSON at all is a report line, never a crash.
+  writeFileSync(settings, '{ not json');
+  writeFileSync(guard, MARKED_HOOK(pkgVersion(ROOT)));
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(settings\.json unreadable\) — paste the snippet from rules --hooks\)/m);
+  assert.equal(readFileSync(settings, 'utf8'), '{ not json');
+});
+
+test('doctor reports the skill on its own line: absent, ours with a count, foreign', () => {
+  const dir = home();
+  const proj = join(dir, 'proj');
+  const skillDir = join(proj, '.claude', 'skills', 'omelette-test');
+  mkdirSync(skillDir, { recursive: true });
+  const skill = join(skillDir, 'SKILL.md');
+  const run = () => spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
+  assert.match(run(), /^skills {8}project: absent · global: absent$/m);
+  writeFileSync(skill, MARKED_SKILL('0.0.1'));
+  assert.match(run(), /^skills {8}project: v0\.0\.1 \(1\) \[run: omelette-fleet rules --agents\] · global: absent$/m);
+  writeFileSync(skill, MARKED_SKILL(pkgVersion(ROOT)));
+  assert.match(run(), /^skills {8}project: v\d+\.\d+\.\d+.* \(1\) · global: absent$/m, 'a current skill gets no refresh hint');
+  writeFileSync(skill, '---\nname: mine\n---\n');
+  assert.match(run(), /^skills {8}project: foreign \(no marker\) · global: absent$/m);
 });
 
 test('doctor reports the rules files: absent, ours with version, foreign', () => {

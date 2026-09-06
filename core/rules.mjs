@@ -31,6 +31,15 @@
  * `---`) and it means exactly what the rules-file marker means: ours to refresh
  * and to remove, and anything without it is the operator's own file.
  *
+ * TWO MORE MANAGED KINDS join them, and KINDS at the bottom of this file is the
+ * registry of all four: the `/omelette-test` SKILL, which `rules --agents` ships
+ * beside the roles because its body's `!`git diff HEAD`` runs at invocation and
+ * so hands the forked tester a real diff instead of the coder's summary; and the
+ * HOOK script, which `rules --hooks` writes and which only runs once the
+ * operator pastes the printed snippet into settings.json — a file this package
+ * reads and never writes. Each kind has its own marker builder and its own
+ * parser derived from it; nothing else decides what "ours" means.
+ *
  * WHAT A ROLE IS SET TO — model, effort, and the tester's turn limit — is the
  * operator's, not ours: it lives in the fleet config's `agents` block and the
  * templates carry `{{model}}`, `{{effort}}`, `{{maxTurns}}` where the values go.
@@ -114,11 +123,50 @@ export function parseRulesMarker(text) {
   return m ? m[1] : null;
 }
 
-/** Where `omelette-fleet rules` writes: the project's .claude/rules, or the global one. */
-export function rulesTarget({ global = false, cwd = process.cwd(), env = process.env } = {}) {
-  if (!global) return { path: join(cwd, '.claude', 'rules', RULES_FILE_NAME), scope: 'project' };
+/**
+ * The ONE place a scope becomes a directory: the project's `.claude` under cwd,
+ * or the global one — $CLAUDE_CONFIG_DIR when it is set to something, else
+ * ~/.claude. Every managed kind hangs off this, so `--global` cannot come to
+ * mean two different places depending on which file is being written.
+ */
+function scopeRoot({ global = false, cwd = process.cwd(), env = process.env } = {}) {
+  if (!global) return { root: join(cwd, '.claude'), scope: 'project' };
   const dir = String(env.CLAUDE_CONFIG_DIR || '').trim();
-  return { path: join(dir || join(homedir(), '.claude'), 'rules', RULES_FILE_NAME), scope: 'global' };
+  return { root: dir || join(homedir(), '.claude'), scope: 'global' };
+}
+
+/** `<scope root>/<sub>` — the directory one kind of managed file lives in. */
+const scopeDir = (sub) => (o = {}) => {
+  const { root, scope } = scopeRoot(o);
+  return { dir: join(root, sub), scope };
+};
+
+/** Where `omelette-fleet rules` writes: the project's .claude/rules, or the global one. */
+export function rulesTarget(o = {}) {
+  const { dir, scope } = scopeDir('rules')(o);
+  return { path: join(dir, RULES_FILE_NAME), scope };
+}
+
+/**
+ * Claude Code's own settings.json for a scope — the file `rules --hooks` tells
+ * the operator to paste into. READ ONLY: nothing in this package writes it.
+ */
+export function settingsTarget(o = {}) {
+  const { root, scope } = scopeRoot(o);
+  return { path: join(root, 'settings.json'), scope };
+}
+
+/**
+ * BOTH settings files Claude Code reads at a scope, in that order. A hook wired
+ * in settings.local.json — where a machine's own settings go, and what a project
+ * usually gitignores — is as wired as one in settings.json, so doctor reads both
+ * or it reports a working guard as inert.
+ */
+export const SETTINGS_FILES = ['settings.json', 'settings.local.json'];
+
+export function settingsTargets(o = {}) {
+  const { root, scope } = scopeRoot(o);
+  return SETTINGS_FILES.map((name) => ({ name, path: join(root, name), scope }));
 }
 
 /**
@@ -205,8 +253,140 @@ export function parseAgentMarker(text) {
 }
 
 /** Where `rules --agents` writes: the project's .claude/agents, or the global one. */
-export function agentsTarget({ global = false, cwd = process.cwd(), env = process.env } = {}) {
-  if (!global) return { dir: join(cwd, '.claude', 'agents'), scope: 'project' };
-  const dir = String(env.CLAUDE_CONFIG_DIR || '').trim();
-  return { dir: join(dir || join(homedir(), '.claude'), 'agents'), scope: 'global' };
+export const agentsTarget = scopeDir('agents');
+
+/**
+ * THE SKILL. `/omelette-test <spec path>` is the tester handoff as a MECHANISM
+ * rather than a habit: the skill's body carries `!`git diff HEAD``, which the
+ * harness runs at INVOCATION and before the fork, so the forked tester is handed
+ * the working tree's real diff and can never be handed the coder's summary
+ * instead. It ships with `rules --agents`, beside the two roles it hands work to,
+ * and its marker is a YAML comment on line 2 exactly like theirs.
+ */
+export const SKILL_MARKER = (version) =>
+  `# omelette-fleet skill v${version} · managed by \`omelette-fleet rules --agents\` · edits are overwritten on refresh`;
+
+const SKILL_MARKER_RE = markerPattern(SKILL_MARKER, '---\\r?\\n');
+
+/** The skills `rules --agents` ships, as paths relative to <scope>/.claude/skills. */
+export const SKILL_FILES = ['omelette-test/SKILL.md'];
+export const SKILL_TEMPLATE_DIR = join(ROOT, 'skills');
+
+/**
+ * One skill's full text for this package version. Only `{{marker}}` and
+ * `{{version}}` are substituted: the body's `!`…`` lines are what the harness
+ * runs at invocation, and rewriting anything else in them would change what the
+ * tester is handed.
+ */
+export function renderSkillFile(name, version) {
+  if (!SKILL_FILES.includes(name)) throw new Error(`unknown skill template: ${name}`);
+  const body = readFileSync(join(SKILL_TEMPLATE_DIR, ...name.split('/')), 'utf8')
+    .replaceAll('{{marker}}', SKILL_MARKER(String(version)))
+    .replaceAll('{{version}}', String(version));
+  return body.endsWith('\n') ? body : body + '\n';
 }
+
+/** The version in a skill file's marker, or null when the text is not ours. */
+export function parseSkillMarker(text) {
+  const m = SKILL_MARKER_RE.exec(String(text || ''));
+  return m ? m[1] : null;
+}
+
+/** Where `rules --agents` writes the skill: the project's .claude/skills, or the global one. */
+export const skillsTarget = scopeDir('skills');
+
+/**
+ * THE GUARD. One script serves both hook events (`rules --hooks` writes it, and
+ * PRINTS the settings.json snippet that calls it — Claude Code's settings.json
+ * is read by this package and written only by the operator). Its marker is a
+ * `//` comment on LINE 1: the file is JavaScript, so there is no frontmatter to
+ * make room for, and line 1 is where a reader looks.
+ */
+export const HOOK_MARKER = (version) =>
+  `// omelette-fleet hook v${version} · managed by \`omelette-fleet rules --hooks\` · edits are overwritten on refresh`;
+
+const HOOK_MARKER_RE = markerPattern(HOOK_MARKER);
+
+/** The hook scripts `rules --hooks` ships, as paths relative to <scope>/.claude/hooks. */
+export const HOOK_FILES = ['omelette-guard.mjs'];
+export const HOOK_TEMPLATE_DIR = join(ROOT, 'hooks');
+
+/** One hook script's full text for this package version. */
+export function renderHookFile(name, version) {
+  if (!HOOK_FILES.includes(name)) throw new Error(`unknown hook template: ${name}`);
+  const body = readFileSync(join(HOOK_TEMPLATE_DIR, ...name.split('/')), 'utf8')
+    .replaceAll('{{marker}}', HOOK_MARKER(String(version)))
+    .replaceAll('{{version}}', String(version));
+  return body.endsWith('\n') ? body : body + '\n';
+}
+
+/** The version in a hook script's marker, or null when the text is not ours. */
+export function parseHookMarker(text) {
+  const m = HOOK_MARKER_RE.exec(String(text || ''));
+  return m ? m[1] : null;
+}
+
+/** Where `rules --hooks` writes: the project's .claude/hooks, or the global one. */
+export const hooksTarget = scopeDir('hooks');
+
+/** The two events the guard serves, in the order doctor reports them wired. */
+export const HOOK_EVENTS = ['PreToolUse', 'PreCompact'];
+
+/**
+ * EVERY KIND OF MANAGED FILE, in one registry. A kind is its marker builder (the
+ * only proof of ownership), the parser derived from that same builder, where its
+ * files live, which flag writes them, and how they render — and `omelette-fleet
+ * rules` is this table plus ONE syncManagedFile. Adding a kind is an entry here;
+ * it is never a second write path, and never a second idea of what "ours" means.
+ *
+ *   flag   the `rules` flag that includes this kind — null: every run writes it
+ *   noun   the word `update`'s refresh hint uses for one of these files
+ *   hint   what a file MISSING the marker is told it lacks
+ *   files  paths relative to `dir()`, in the order they are written
+ */
+export const KINDS = {
+  rules: {
+    flag: null,
+    noun: 'rules',
+    refresh: '',
+    marker: RULES_MARKER,
+    parse: parseRulesMarker,
+    hint: 'no marker on line 1',
+    dir: scopeDir('rules'),
+    files: [RULES_FILE_NAME],
+    render: (name, version) => renderRulesFile(version),
+  },
+  agents: {
+    flag: 'agents',
+    noun: 'agent',
+    refresh: '--agents',
+    marker: AGENT_MARKER,
+    parse: parseAgentMarker,
+    hint: 'no marker on line 2',
+    dir: agentsTarget,
+    files: AGENT_FILES,
+    render: (name, version, settings) => renderAgentFile(name, version, settings),
+  },
+  skills: {
+    flag: 'agents',
+    noun: 'skill',
+    refresh: '--agents',
+    marker: SKILL_MARKER,
+    parse: parseSkillMarker,
+    hint: 'no marker on line 2',
+    dir: skillsTarget,
+    files: SKILL_FILES,
+    render: (name, version) => renderSkillFile(name, version),
+  },
+  hooks: {
+    flag: 'hooks',
+    noun: 'hook',
+    refresh: '--hooks',
+    marker: HOOK_MARKER,
+    parse: parseHookMarker,
+    hint: 'no marker on line 1',
+    dir: hooksTarget,
+    files: HOOK_FILES,
+    render: (name, version) => renderHookFile(name, version),
+  },
+};

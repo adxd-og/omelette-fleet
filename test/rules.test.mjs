@@ -5,9 +5,12 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  AGENT_FILES, AGENT_MARKER, AGENT_ROLES, FLEET_CONTRACT, RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH,
-  agentSettings, agentsTarget, parseAgentMarker, parseRulesMarker, renderAgentFile, renderRulesFile, rulesTarget,
-  unitInstructions,
+  AGENT_FILES, AGENT_MARKER, AGENT_ROLES, FLEET_CONTRACT, HOOK_FILES, HOOK_MARKER, HOOK_TEMPLATE_DIR, KINDS,
+  RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH, SETTINGS_FILES, SKILL_FILES, SKILL_MARKER,
+  SKILL_TEMPLATE_DIR,
+  agentSettings, agentsTarget, hooksTarget, parseAgentMarker, parseHookMarker, parseRulesMarker, parseSkillMarker,
+  renderAgentFile, renderHookFile, renderRulesFile, renderSkillFile, rulesTarget, settingsTarget, settingsTargets,
+  skillsTarget, unitInstructions,
 } from '../core/rules.mjs';
 
 // renderAgentFile() falls back to the machine's fleet config for its settings
@@ -231,4 +234,184 @@ test('agentSettings + renderAgentFile: a model smuggling a newline cannot break 
   assert.ok(lines.slice(1, close).includes('disallowedTools: Agent'), 'the guard stays INSIDE the frontmatter');
   assert.ok(lines.slice(1, close).includes('model: opus'));
   assert.equal(lines[close + 1], '', 'the closing --- is followed by the body');
+});
+
+// ─── the managed-file kinds registry ─────────────────────────────────────────
+
+test('KINDS is the one registry every managed file goes through, with a distinct marker builder per kind', () => {
+  assert.deepEqual(Object.keys(KINDS), ['rules', 'agents', 'skills', 'hooks']);
+  const markers = new Set();
+  for (const [kind, spec] of Object.entries(KINDS)) {
+    assert.equal(typeof spec.marker, 'function', `${kind}.marker`);
+    assert.equal(typeof spec.parse, 'function', `${kind}.parse`);
+    assert.equal(typeof spec.render, 'function', `${kind}.render`);
+    assert.equal(typeof spec.hint, 'string', `${kind}.hint`);
+    assert.ok(Array.isArray(spec.files) && spec.files.length, `${kind}.files`);
+    // The flag that writes this kind: null = every `rules` run writes it.
+    assert.ok(spec.flag === null || typeof spec.flag === 'string', `${kind}.flag`);
+    assert.deepEqual(spec.dir({ cwd: '/w/p', env: {} }), { dir: `/w/p/.claude/${kind}`, scope: 'project' }, `${kind}.dir`);
+    markers.add(spec.marker('1.2.3'));
+  }
+  assert.equal(markers.size, Object.keys(KINDS).length, 'two kinds sharing a marker line would share an owner');
+});
+
+test('every kind renders a file its OWN parser accepts and every other kind rejects', () => {
+  for (const [kind, spec] of Object.entries(KINDS)) {
+    for (const name of spec.files) {
+      const text = spec.render(name, '1.2.3');
+      assert.equal(spec.parse(text), '1.2.3', `${kind}/${name} does not round-trip through its own parser`);
+      assert.ok(!text.includes('{{'), `${kind}/${name}: no placeholder survives rendering`);
+      assert.ok(text.endsWith('\n'), `${kind}/${name} ends with a newline`);
+      for (const [other, otherSpec] of Object.entries(KINDS)) {
+        if (other === kind) continue;
+        assert.equal(otherSpec.parse(text), null, `${other}'s parser claims a ${kind} file`);
+      }
+    }
+  }
+});
+
+// ─── the /omelette-test skill ────────────────────────────────────────────────
+
+test('the skill template ships, renders its marker on line 2, and round-trips through parseSkillMarker', () => {
+  assert.deepEqual(SKILL_FILES, ['omelette-test/SKILL.md']);
+  const template = join(SKILL_TEMPLATE_DIR, 'omelette-test', 'SKILL.md');
+  assert.ok(existsSync(template));
+  // The template does not retype the marker: it asks for it by placeholder.
+  assert.match(readFileSync(template, 'utf8'), /\{\{marker\}\}/);
+  const text = renderSkillFile('omelette-test/SKILL.md', '1.2.3');
+  const lines = text.split('\n');
+  assert.equal(lines[0], '---');
+  assert.equal(lines[1], SKILL_MARKER('1.2.3'));
+  assert.equal(SKILL_MARKER('1.2.3'), '# omelette-fleet skill v1.2.3 · managed by `omelette-fleet rules --agents` · edits are overwritten on refresh');
+  assert.equal(parseSkillMarker(text), '1.2.3');
+  assert.ok(!text.includes('{{'), 'no placeholder survives rendering');
+});
+
+test('the skill hands the forked tester the spec and a diff taken from git AT INVOCATION', () => {
+  const text = renderSkillFile('omelette-test/SKILL.md', '1.2.3');
+  assert.match(text, /^name: omelette-test$/m);
+  assert.match(text, /^context: fork$/m);
+  assert.match(text, /^agent: omelette-tester$/m);
+  assert.match(text, /^disable-model-invocation: true$/m);
+  assert.match(text, /^argument-hint: \[spec path\]$/m);
+  // QUOTED: the description ends in "Usage: /omelette-test <spec path>", and an
+  // unquoted `: ` inside a plain scalar ends the value — a YAML parser rejects
+  // the file, and Claude Code would never load the skill at all.
+  assert.match(text, /^description: "Clean-context tester handoff — .*Usage: \/omelette-test <spec path>"$/m);
+  // The whole point of the skill: the `!`…`` lines run at render time, before
+  // the fork, so the tester gets the diff instead of the coder's summary. They
+  // are content, not placeholders — nothing may rewrite or escape them.
+  const lines = text.split('\n');
+  assert.ok(lines.includes('!`git diff HEAD`'), 'the diff injection line must survive rendering verbatim');
+  assert.ok(lines.includes('!`git ls-files --others --exclude-standard`'), 'the untracked-files line must survive rendering verbatim');
+  assert.ok(text.includes('read `$ARGUMENTS` first'), '$ARGUMENTS reaches the skill body untouched');
+  assert.ok(text.indexOf('\n---\n', 4) > 0, 'frontmatter is closed');
+  // Every line of it is a plain `key: value` a YAML parser reads, marker aside.
+  for (const line of frontmatter(text, 'skills/omelette-test/SKILL.md')) {
+    if (line.startsWith('#')) continue;
+    assert.match(line, /^[a-z-]+: \S/, `not a "key: value" line: ${line}`);
+  }
+});
+
+test('parseSkillMarker demands the EXACT generated marker line on line 2, not a prefix of it', () => {
+  assert.equal(parseSkillMarker(''), null);
+  assert.equal(parseSkillMarker('---\nname: mine\n---\n'), null);
+  assert.equal(parseSkillMarker(SKILL_MARKER('1.0.0') + '\n'), null, 'line 1 must be the frontmatter opener');
+  assert.equal(parseSkillMarker('---\n# omelette-fleet skill v1.0.0\nname: mine\n'), null, 'prefix + version alone is not the marker');
+  assert.equal(parseSkillMarker('---\n# omelette-fleet skill v1.0.0 · managed by\nname: mine\n'), null, 'truncated after "managed by"');
+  assert.equal(parseSkillMarker('---\n# omelette-fleet skill v1.0.0 · managed by someone else\nname: mine\n'), null);
+  assert.equal(parseSkillMarker('---\n' + SKILL_MARKER('1.0.0') + ' plus a tail\nname: mine\n'), null, 'trailing garbage after the marker');
+  assert.equal(parseSkillMarker('---\n' + AGENT_MARKER('1.0.0') + '\nname: mine\n'), null, 'an AGENT marker does not own a skill file');
+  assert.equal(parseSkillMarker('---\n' + SKILL_MARKER('1.0.0') + '\nname: mine\n'), '1.0.0');
+});
+
+test('skillsTarget mirrors agentsTarget', () => {
+  assert.deepEqual(skillsTarget({ cwd: '/w/p', env: {} }), { dir: '/w/p/.claude/skills', scope: 'project' });
+  assert.deepEqual(skillsTarget({ global: true, env: {} }), { dir: join(homedir(), '.claude', 'skills'), scope: 'global' });
+  assert.equal(skillsTarget({ global: true, env: { CLAUDE_CONFIG_DIR: '/cfg' } }).dir, '/cfg/skills');
+  assert.equal(skillsTarget({ global: true, env: { CLAUDE_CONFIG_DIR: '  ' } }).dir, join(homedir(), '.claude', 'skills'));
+});
+
+// ─── the guard hook ──────────────────────────────────────────────────────────
+
+test('the guard template ships, renders its marker on line 1, and round-trips through parseHookMarker', () => {
+  assert.deepEqual(HOOK_FILES, ['omelette-guard.mjs']);
+  const template = join(HOOK_TEMPLATE_DIR, 'omelette-guard.mjs');
+  assert.ok(existsSync(template));
+  // The template does not retype the marker: it asks for it by placeholder.
+  assert.match(readFileSync(template, 'utf8'), /^\{\{marker\}\}$/m);
+  const text = renderHookFile('omelette-guard.mjs', '1.2.3');
+  assert.equal(text.split('\n')[0], HOOK_MARKER('1.2.3'));
+  assert.equal(HOOK_MARKER('1.2.3'), '// omelette-fleet hook v1.2.3 · managed by `omelette-fleet rules --hooks` · edits are overwritten on refresh');
+  assert.equal(parseHookMarker(text), '1.2.3');
+  assert.ok(!text.includes('{{'), 'no placeholder survives rendering');
+});
+
+test('parseHookMarker demands the EXACT generated marker line on line 1, not a prefix of it', () => {
+  assert.equal(parseHookMarker(''), null);
+  assert.equal(parseHookMarker('#!/usr/bin/env node\n'), null);
+  assert.equal(parseHookMarker('\n' + HOOK_MARKER('1.0.0') + '\n'), null, 'the marker must be the FIRST line');
+  assert.equal(parseHookMarker('// omelette-fleet hook v1.0.0\n'), null, 'prefix + version alone is not the marker');
+  assert.equal(parseHookMarker('// omelette-fleet hook v1.0.0 · managed by\n'), null, 'truncated after "managed by"');
+  assert.equal(parseHookMarker(HOOK_MARKER('1.0.0') + ' plus a tail\n'), null, 'trailing garbage after the marker');
+  assert.equal(parseHookMarker(HOOK_MARKER('1.0.0') + '\nbody\n'), '1.0.0');
+});
+
+test('hooksTarget mirrors agentsTarget, and settingsTarget names the file doctor only ever READS', () => {
+  assert.deepEqual(hooksTarget({ cwd: '/w/p', env: {} }), { dir: '/w/p/.claude/hooks', scope: 'project' });
+  assert.deepEqual(hooksTarget({ global: true, env: {} }), { dir: join(homedir(), '.claude', 'hooks'), scope: 'global' });
+  assert.equal(hooksTarget({ global: true, env: { CLAUDE_CONFIG_DIR: '/cfg' } }).dir, '/cfg/hooks');
+  assert.deepEqual(settingsTarget({ cwd: '/w/p', env: {} }), { path: '/w/p/.claude/settings.json', scope: 'project' });
+  assert.deepEqual(settingsTarget({ global: true, env: {} }), { path: join(homedir(), '.claude', 'settings.json'), scope: 'global' });
+  assert.equal(settingsTarget({ global: true, env: { CLAUDE_CONFIG_DIR: '/cfg' } }).path, '/cfg/settings.json');
+});
+
+// ─── frontmatter that a YAML parser will actually accept ─────────────────────
+
+/**
+ * A minimal frontmatter scan. This package ships no YAML parser and node has
+ * none, so the check is the shape a parser cares about, not a parse: `key:
+ * value` per line, and — the one that bit us — a value containing `: ` must be
+ * QUOTED, or the parser reads a nested mapping and rejects the document.
+ */
+function frontmatter(text, label) {
+  const lines = text.split('\n');
+  assert.equal(lines[0], '---', `${label}: line 1 opens the frontmatter`);
+  const close = lines.indexOf('---', 1);
+  assert.ok(close > 1, `${label}: frontmatter is closed`);
+  return lines.slice(1, close);
+}
+
+test('every rendered frontmatter file is YAML a parser will accept: key: value lines, and no unquoted ": " in a value', () => {
+  for (const kind of ['agents', 'skills']) {
+    for (const name of KINDS[kind].files) {
+      const label = `${kind}/${name}`;
+      for (const line of frontmatter(KINDS[kind].render(name, '1.2.3'), label)) {
+        if (line.startsWith('#')) continue; // the marker, a YAML comment
+        assert.match(line, /^[A-Za-z][A-Za-z0-9-]*: \S/, `${label}: not a "key: value" line: ${line}`);
+        const value = line.slice(line.indexOf(': ') + 2);
+        if (value.includes(': ')) {
+          assert.ok(
+            value.startsWith('"') && value.endsWith('"'),
+            `${label}: an unquoted ": " ends the value early — quote it: ${line}`,
+          );
+        }
+      }
+    }
+  }
+});
+
+test('settingsTargets names BOTH files Claude Code reads at a scope, in that order — and this package writes neither', () => {
+  assert.deepEqual(settingsTargets({ cwd: '/w/p', env: {} }).map((t) => t.path), [
+    '/w/p/.claude/settings.json',
+    '/w/p/.claude/settings.local.json',
+  ]);
+  assert.deepEqual(settingsTargets({ cwd: '/w/p', env: {} }).map((t) => t.name), SETTINGS_FILES);
+  assert.deepEqual(settingsTargets({ global: true, env: { CLAUDE_CONFIG_DIR: '/cfg' } }).map((t) => t.path), [
+    '/cfg/settings.json',
+    '/cfg/settings.local.json',
+  ]);
+  assert.equal(settingsTargets({ global: true, env: {} })[0].path, join(homedir(), '.claude', 'settings.json'));
+  // The primary one is what `rules --hooks` names in its "paste into …" line.
+  assert.equal(settingsTarget({ cwd: '/w/p', env: {} }).path, settingsTargets({ cwd: '/w/p', env: {} })[0].path);
 });

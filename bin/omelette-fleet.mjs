@@ -28,11 +28,14 @@
  * deliberately never wired up is not a fault.
  *
  * READ-ONLY ABOUT THE MACHINE: Claude Code's config — $CLAUDE_CONFIG_DIR/
- * .claude.json if that is set, else ~/.claude.json — is parsed, never written.
- * The only writer of it is `claude` itself. The files this CLI writes are
- * <home>/fleet.config.json, <home>/update-check.json and, on request,
- * .claude/rules/omelette-fleet.md (and .claude/agents/omelette-*.md with
- * `rules --agents`) — each of those only when it carries our marker.
+ * .claude.json if that is set, else ~/.claude.json — is parsed, never written,
+ * and so is its settings.json, which doctor reads to say whether the guard hook
+ * is wired and `rules --hooks` only ever prints a snippet for. The only writer
+ * of those is `claude` and the operator. The files this CLI writes are
+ * <home>/fleet.config.json, <home>/update-check.json and, on request, the
+ * managed files of core/rules.mjs's KINDS — the rules file, the agent
+ * definitions and the skill (`rules --agents`), the guard script
+ * (`rules --hooks`) — each of those only when it carries our marker.
  *
  * TEST HOOK — OMELETTE_PKG_ROOT: `update` (and the install-kind detection it
  * uses) treats that directory as the package root instead of this checkout, so
@@ -48,10 +51,7 @@ import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, KEY_SCHEMA, coerce, configPath, fleetHome, unitConfig, writeFleetConfig } from '../core/config.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import {
-  AGENT_FILES, RULES_FILE_NAME, agentSettings, agentsTarget, parseAgentMarker, parseRulesMarker,
-  renderAgentFile, renderRulesFile, rulesTarget,
-} from '../core/rules.mjs';
+import { HOOK_EVENTS, HOOK_FILES, KINDS, agentSettings, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
 import { resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -124,7 +124,7 @@ const COMMANDS = {
     ],
   },
   rules: {
-    args: '[--global] [--agents] [--print] [--remove] [--force] [--dry-run]',
+    args: '[--global] [--agents] [--hooks] [--print] [--remove] [--force] [--dry-run]',
     body: [
       'Write the fleet\'s operating rules (units propose, this session applies;',
       'tester flow; routing table) to <cwd>/.claude/rules/omelette-fleet.md,',
@@ -135,7 +135,10 @@ const COMMANDS = {
       'the text to stdout; --remove deletes only a file with the marker.',
       '--agents also writes two sub-agent definitions (omelette-coder:',
       'Opus xhigh; omelette-tester: Sonnet xhigh, both disallowedTools:',
-      'Agent) into .claude/agents, where their effort is set.',
+      'Agent) into .claude/agents, where their effort is set, and the',
+      '/omelette-test skill into .claude/skills. --hooks writes the',
+      'guard script into .claude/hooks and prints the settings.json',
+      'snippet that calls it — that file is yours to edit, never ours.',
     ],
   },
   doctor: {
@@ -705,17 +708,19 @@ async function cmdUpdate(argv) {
       const key = realOrSelf(r.path);
       if (r.state !== 'ours' || !r.behind || seen.has(key)) continue;
       seen.add(key);
-      out(`rules file ${r.path} is v${r.version} (this install is v${version}) — refresh: omelette-fleet rules${r.scope === 'global' ? ' --global' : ''}`);
+      out(`rules file ${r.path} is v${r.version} (this install is v${version}) — refresh: ${refreshCommand('rules', r.scope)}`);
     }
-    // One line per SCOPE, not per file: the two definitions are refreshed
-    // together — and only when the whole scope is ours. A scope holding a file
-    // that is not ours would refuse that refresh, so pointing at it is worse
-    // than saying nothing.
-    for (const r of agentsReport(version)) {
-      const key = realOrSelf(r.dir);
-      if (r.state !== 'ours' || !r.behind || seen.has(key)) continue;
-      seen.add(key);
-      out(`agent files under ${r.dir} are v${r.version} (this install is v${version}) — refresh: omelette-fleet rules --agents${r.scope === 'global' ? ' --global' : ''}`);
+    // One line per SCOPE and kind, not per file: the files of a kind are
+    // refreshed together — and only when the whole scope is ours. A scope
+    // holding a file that is not ours would refuse that refresh, so pointing at
+    // it is worse than saying nothing.
+    for (const kind of DIR_KINDS) {
+      for (const r of dirReport(kind, version)) {
+        const key = realOrSelf(r.dir);
+        if (r.state !== 'ours' || !r.behind || seen.has(key)) continue;
+        seen.add(key);
+        out(`${KINDS[kind].noun} files under ${r.dir} are v${r.version} (this install is v${version}) — refresh: ${refreshCommand(kind, r.scope)}`);
+      }
     }
   };
   if (checkOnly) rulesHints(current);
@@ -807,17 +812,26 @@ async function cmdUpdate(argv) {
 
 /**
  * Every path component this command touches has to be the real thing it looks
- * like. `<base>/.claude`, `<base>/.claude/{rules,agents}` and the target file
- * are lstat'ed — never followed — so a link planted anywhere along the way
- * cannot redirect a write, or a `--remove`, at a file the operator never named.
- * A missing component is fine: mkdirSync creates it, as before.
+ * like. The target file and EVERY directory from it up to `top` — the scope's
+ * own `.claude` (or $CLAUDE_CONFIG_DIR) — are lstat'ed, never followed, so a
+ * link planted anywhere along the way cannot redirect a write, or a `--remove`,
+ * at a file the operator never named. A missing component is fine: mkdirSync
+ * creates it, as before. Outermost first, so the refusal names the outermost
+ * link rather than something below it.
+ *
+ * The default `top` is the grandparent, which is what a flat kind
+ * (`.claude/rules/<file>`) needs; a nested one (`.claude/skills/<skill>/SKILL.md`)
+ * passes its own, so the deeper directory is covered too.
  *
  * @returns {string|null} the refusal's reason, or null when the path is clean.
  */
-function unsafeManagedPath(path) {
-  const fileDir = dirname(path); //        .claude/rules | .claude/agents
-  const claudeDir = dirname(fileDir); //   .claude
-  for (const p of [claudeDir, fileDir, path]) {
+function unsafeManagedPath(path, top = dirname(dirname(path))) {
+  const dirs = [];
+  for (let d = dirname(path); ; d = dirname(d)) {
+    dirs.push(d);
+    if (d === top || d === dirname(d)) break; // …or the filesystem root, whichever comes first
+  }
+  for (const p of [...dirs.reverse(), path]) {
     let st;
     try { st = lstatSync(p); } catch { continue; } // absent — nothing to redirect through
     if (st.isSymbolicLink()) return `${p} is a symlink`;
@@ -843,14 +857,14 @@ function unsafeManagedPath(path) {
  * would happily load on the next session start.
  *
  * @param {{path:string, next:string, parse:(t:string)=>string|null, marker:string,
- *          version:string, force?:boolean, dryRun?:boolean, remove?:boolean}} o
+ *          version:string, top?:string, force?:boolean, dryRun?:boolean, remove?:boolean}} o
  * @returns {{code:number, line:string|null, error:string|null}} `line` → stdout, `error` → stderr.
  */
-function syncManagedFile({ path, next, parse, marker, version, force = false, dryRun = false, remove = false }) {
+function syncManagedFile({ path, next, parse, marker, version, top, force = false, dryRun = false, remove = false }) {
   // FIRST, before the file is even read — a symlink must not be read through,
   // and a FIFO at the target would block readFileSync forever. Also ahead of
   // the --force decision: --force replaces a foreign FILE, never a link.
-  const unsafe = unsafeManagedPath(path);
+  const unsafe = unsafeManagedPath(path, top);
   if (unsafe) return { code: 1, line: null, error: `omelette-fleet rules: refusing ${path}: ${unsafe}` };
 
   let text = null;
@@ -908,38 +922,63 @@ function syncManagedFile({ path, next, parse, marker, version, force = false, dr
 
 /**
  * Every file this command manages, in the order it handles them: the rules file
- * first, then — with --agents — one entry per shipped sub-agent definition.
- * The whole command is this list plus syncManagedFile.
+ * first, then whatever the flags asked for — the registry (core/rules.mjs KINDS)
+ * says which flag writes a kind, where its files live and how they render. The
+ * whole command is this list plus syncManagedFile.
  */
-function managedFiles({ global = false, agents = false, version, settings } = {}) {
-  const files = [{
-    name: RULES_FILE_NAME,
-    path: rulesTarget({ global }).path,
-    next: renderRulesFile(version),
-    parse: parseRulesMarker,
-    marker: 'no marker on line 1',
-  }];
-  if (agents) {
-    const { dir } = agentsTarget({ global });
-    // Always an explicit settings object: `renderAgentFile`'s own default would
-    // read the config a second time, and a caller that forgot the argument
-    // would render defaults with nothing to show for it.
-    const resolved = settings || agentSettings();
-    for (const name of AGENT_FILES) {
+function managedFiles({ global = false, agents = false, hooks = false, version, settings } = {}) {
+  const asked = { agents: !!agents, hooks: !!hooks };
+  // Always an explicit settings object: `renderAgentFile`'s own default would
+  // read the config a second time, and a caller that forgot the argument would
+  // render defaults with nothing to show for it. Only when it is needed, so a
+  // run that writes no agent definition never reads the fleet config.
+  const resolved = agents ? (settings || agentSettings()) : undefined;
+  const files = [];
+  for (const [kind, spec] of Object.entries(KINDS)) {
+    if (spec.flag !== null && !asked[spec.flag]) continue;
+    const { dir } = spec.dir({ global });
+    for (const name of spec.files) {
       files.push({
+        kind,
         name,
-        path: join(dir, name),
-        next: renderAgentFile(name, version, resolved),
-        parse: parseAgentMarker,
-        marker: 'no marker on line 2',
+        // A kind's file name may be a nested path (a skill is a directory with a
+        // SKILL.md in it), so the whole tree under `dir` is checked before a write.
+        path: join(dir, ...name.split('/')),
+        top: dirname(dir),
+        next: spec.render(name, version, resolved),
+        parse: spec.parse,
+        marker: spec.hint,
       });
     }
   }
   return files;
 }
 
+/**
+ * What to paste into settings.json to make the guard actually run. Printed,
+ * never applied: Claude Code's config is read by this package and written by
+ * `claude` and the operator alone (see readClaudeConfig).
+ *
+ * The path is RESOLVED — a relative CLAUDE_CONFIG_DIR must still produce an
+ * absolute hook command, because a hook runs from wherever the session happens
+ * to be — and SHELL-QUOTED, because that value is a command line and not an
+ * argv: an operator whose checkout lives under "~/My Projects" would otherwise
+ * paste a hook that runs `node /Users/x/My` and fails at every single tool call.
+ * An embedded `'` is escaped the POSIX way; JSON.stringify then escapes for JSON.
+ */
+const shellQuote = (s) => `'${String(s).replaceAll("'", "'\\''")}'`;
+
+function hookSettingsSnippet(scriptPath) {
+  const command = JSON.stringify(`node ${shellQuote(resolvePath(scriptPath))}`);
+  return [
+    '{ "hooks": {',
+    `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
+    `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
+  ];
+}
+
 async function cmdRules(argv) {
-  const { flags, positional, errors } = parseArgv(argv, { booleans: ['global', 'agents', 'print', 'remove', 'force', 'dry-run'] });
+  const { flags, positional, errors } = parseArgv(argv, { booleans: ['global', 'agents', 'hooks', 'print', 'remove', 'force', 'dry-run'] });
   if (positional.length) errors.push(`unexpected argument: ${positional[0]}`);
   if (flags.print && flags.remove) errors.push('--print and --remove ask for opposite things — pick one');
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet rules: ${e}`)); return 1; }
@@ -951,7 +990,7 @@ async function cmdRules(argv) {
   // as their own value.
   const settings = flags.agents ? agentSettings() : undefined;
   if (settings && !flags.remove) settings.warnings.forEach((w) => err(`omelette-fleet rules: ${w}`));
-  const files = managedFiles({ global: !!flags.global, agents: !!flags.agents, version: PKG.version, settings });
+  const files = managedFiles({ global: !!flags.global, agents: !!flags.agents, hooks: !!flags.hooks, version: PKG.version, settings });
 
   // --print touches nothing at all. Each rendered file already ends in a
   // newline, so out() must not add a second one.
@@ -965,9 +1004,10 @@ async function cmdRules(argv) {
 
   let code = 0;
   let wrote = false;
+  const toWire = []; // the guard scripts that are in place (or would be)
   for (const f of files) {
     const r = syncManagedFile({
-      path: f.path, next: f.next, parse: f.parse, marker: f.marker, version: PKG.version,
+      path: f.path, next: f.next, parse: f.parse, marker: f.marker, top: f.top, version: PKG.version,
       force: !!flags.force, dryRun: !!flags.dryRun, remove: !!flags.remove,
     });
     if (r.line) out(r.line);
@@ -975,8 +1015,21 @@ async function cmdRules(argv) {
     // One refused file is enough to exit 1 — and never a reason to skip the rest.
     if (r.code) code = 1;
     if (r.line && r.line.startsWith('written ')) wrote = true;
+    if (!r.code && f.kind === 'hooks' && !flags.remove) toWire.push(f.path);
   }
   if (wrote) out('Rules load on the next session start; agent definitions are picked up within seconds (restart if .claude/agents did not exist before).');
+  // A script on disk is not a hook: settings.json is what calls it, and this CLI
+  // never writes that file. So the snippet is printed on EVERY --hooks run, not
+  // only the one that created the script — doctor sends the operator here for it.
+  // Under --dry-run it is ANNOUNCED and not printed: a snippet naming a script
+  // that was never written is a snippet somebody pastes.
+  for (const path of toWire) {
+    if (flags.dryRun) { out('would print the settings snippet after writing'); continue; }
+    out();
+    out(`The script only runs once ${settingsTarget({ global: !!flags.global }).path} calls it — omelette-fleet never writes that file. Paste:`);
+    out();
+    for (const line of hookSettingsSnippet(path)) out(line);
+  }
   return code;
 }
 
@@ -1010,26 +1063,27 @@ function rulesReport(current) {
 }
 
 /**
- * The agent definitions at one scope, as one verdict: ours only when EVERY file
- * is there and marked, `partial` when some are missing, and `foreign` as soon as
- * one of them is not ours — the version shown is the OLDEST marker, because that
- * is the one a refresh would move.
+ * One directory-shaped kind at one scope, as one verdict: ours only when EVERY
+ * file is there and marked, `partial` when some are missing, and `foreign` as
+ * soon as one of them is not ours — the version shown is the OLDEST marker,
+ * because that is the one a refresh would move.
  */
-function agentsState({ current, global = false, cwd = process.cwd(), env = process.env } = {}) {
-  const { dir } = agentsTarget({ global, cwd, env });
-  const found = AGENT_FILES.map((name) => {
+function dirState({ kind, current, global = false, cwd = process.cwd(), env = process.env } = {}) {
+  const spec = KINDS[kind];
+  const { dir } = spec.dir({ global, cwd, env });
+  const found = spec.files.map((name) => {
     let text;
-    try { text = readFileSync(join(dir, name), 'utf8'); } catch { return { name, state: 'absent', version: null }; }
-    const version = parseAgentMarker(text);
+    try { text = readFileSync(join(dir, ...name.split('/')), 'utf8'); } catch { return { name, state: 'absent', version: null }; }
+    const version = spec.parse(text);
     return version ? { name, state: 'ours', version } : { name, state: 'foreign', version: null };
   });
   const ours = found.filter((f) => f.state === 'ours');
   const oldest = ours.reduce((a, f) => (a === null || compareSemver(f.version, a) < 0 ? f.version : a), null);
   const state = found.some((f) => f.state === 'foreign') ? 'foreign'
     : !ours.length ? 'absent'
-      : ours.length < AGENT_FILES.length ? 'partial' : 'ours';
+      : ours.length < spec.files.length ? 'partial' : 'ours';
   return {
-    dir, state, version: oldest, present: ours.length, total: AGENT_FILES.length,
+    kind, dir, state, version: oldest, present: ours.length, total: spec.files.length,
     // Any marked file that is not this install's own version is a scope worth
     // refreshing — string inequality, not compareSemver, so a prerelease marker
     // beside the matching release is reported rather than read as current.
@@ -1041,21 +1095,80 @@ function agentsState({ current, global = false, cwd = process.cwd(), env = proce
 const rulesLabel = (r) => (
   r.state === 'absent' ? 'absent'
     : r.state === 'foreign' ? 'foreign (no marker)'
-      : `v${r.version}${r.behind ? ` [run: omelette-fleet rules${r.scope === 'global' ? ' --global' : ''}]` : ''}`);
+      : `v${r.version}${r.behind ? ` [run: ${refreshCommand('rules', r.scope)}]` : ''}`);
 
-/** One scope's agent definitions in the same line: how many are ours, at which version. */
-const agentsLabel = (r) => (
+/** `omelette-fleet rules …` — the command that refreshes one kind at one scope. */
+const refreshCommand = (kind, scope) => [
+  'omelette-fleet rules', KINDS[kind].refresh, scope === 'global' ? '--global' : '',
+].filter(Boolean).join(' ');
+
+/** One scope's files of one kind in the same line: how many are ours, at which version. */
+const dirLabel = (r) => (
   r.state === 'absent' ? 'absent'
     : r.state === 'foreign' ? 'foreign (no marker)'
-      : `${r.state === 'partial' ? `partial (${r.present}/${r.total})` : `v${r.version} (${r.present})`}${r.behind ? ` [run: omelette-fleet rules --agents${r.scope === 'global' ? ' --global' : ''}]` : ''}`);
+      : `${r.state === 'partial' ? `partial (${r.present}/${r.total})` : `v${r.version} (${r.present})`}${r.behind ? ` [run: ${refreshCommand(r.kind, r.scope)}]` : ''}`);
 
-/** Both scopes of agent definitions, for doctor's one-line summary and update's hint. */
-function agentsReport(current) {
+/** Both scopes of one kind, for doctor's one-line summary and update's hint. */
+function dirReport(kind, current) {
   return [
-    { scope: 'project', ...agentsState({ current }) },
-    { scope: 'global', ...agentsState({ current, global: true }) },
+    { scope: 'project', ...dirState({ kind, current }) },
+    { scope: 'global', ...dirState({ kind, current, global: true }) },
   ];
 }
+
+/** Every kind that lives in a directory of its own — the rules file is the one that does not. */
+const DIR_KINDS = Object.keys(KINDS).filter((k) => k !== 'rules');
+
+/**
+ * Which of the guard's events one settings file calls it from. The test is the
+ * script's NAME inside the command string, not an exact path: an operator may
+ * quote it (the printed snippet does), wrap it, point at their own node or keep
+ * the script somewhere else — all of which still run our guard, and none of
+ * which we would recognise by comparing paths.
+ */
+function hookWiring(config) {
+  const hooks = isObj(config) && isObj(config.hooks) ? config.hooks : {};
+  const calls = (h) => isObj(h) && HOOK_FILES.some((f) => String(h.command || '').includes(f));
+  return HOOK_EVENTS.filter((event) => (Array.isArray(hooks[event]) ? hooks[event] : [])
+    .some((group) => isObj(group) && Array.isArray(group.hooks) && group.hooks.some(calls)));
+}
+
+/**
+ * Both of a scope's settings files — PARSED, NEVER WRITTEN, exactly like
+ * .claude.json above: `rules --hooks` prints a snippet and the operator pastes
+ * it wherever they keep their settings. A file is `wired` when ONE of them wires
+ * BOTH events; an absent file is normal, and one we cannot read is named rather
+ * than counted, because "not wired" about a file nobody could parse would send
+ * an operator to re-paste something that is already there.
+ */
+function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env } = {}) {
+  const unreadable = [];
+  let wired = [];
+  for (const { name, path } of settingsTargets({ global, cwd, env })) {
+    let raw;
+    try { raw = readFileSync(path, 'utf8'); } catch { continue; } // absent is the normal case
+    let config = null;
+    try { config = JSON.parse(raw); } catch { config = null; }
+    if (!isObj(config)) { unreadable.push(name); continue; }
+    const here = hookWiring(config);
+    if (here.length > wired.length) wired = here;
+  }
+  return { wired, unreadable };
+}
+
+/**
+ * One scope's guard script: ours or not, at which version — and whether anything
+ * ever calls it. A script nobody calls is the failure mode worth a line of its
+ * own, because everything about it looks installed.
+ */
+const hooksLabel = (r, { wired, unreadable }) => {
+  if (r.state === 'absent') return 'absent';
+  if (r.state === 'foreign') return 'foreign (no marker)';
+  const stale = r.behind ? ` [run: ${refreshCommand('hooks', r.scope)}]` : '';
+  if (wired.length === HOOK_EVENTS.length) return `v${r.version} (wired: ${wired.join(', ')})${stale}`;
+  const why = unreadable.length ? ` (${unreadable.join(' and ')} unreadable)` : '';
+  return `v${r.version} (NOT wired${why} — paste the snippet from rules --hooks)${stale}`;
+};
 
 // ─── doctor ──────────────────────────────────────────────────────────────────
 
@@ -1127,7 +1240,11 @@ async function cmdDoctor(argv) {
   // The managed files, both scopes, read-only and never a fault: a project
   // without them is a perfectly healthy project.
   out(`rules         ${rulesReport(PKG.version).map((r) => `${r.scope}: ${rulesLabel(r)}`).join(' · ')}`);
-  out(`agents        ${agentsReport(PKG.version).map((r) => `${r.scope}: ${agentsLabel(r)}`).join(' · ')}`);
+  out(`agents        ${dirReport('agents', PKG.version).map((r) => `${r.scope}: ${dirLabel(r)}`).join(' · ')}`);
+  out(`skills        ${dirReport('skills', PKG.version).map((r) => `${r.scope}: ${dirLabel(r)}`).join(' · ')}`);
+  // The one managed kind that is inert until something else names it: the wiring
+  // lives in settings.json, which doctor reads and nothing here ever writes.
+  out(`hooks         ${dirReport('hooks', PKG.version).map((r) => `${r.scope}: ${hooksLabel(r, hookWiringAt({ global: r.scope === 'global' }))}`).join(' · ')}`);
   out();
 
   let faults = 0;
