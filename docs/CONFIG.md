@@ -52,14 +52,15 @@ The `agents` block is the other top-level one, and it configures something diffe
 | `agents.coder.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line — the only place a sub-agent's effort can be set |
 | `agents.tester.model` | one printable line | `"sonnet"` | The `model:` line of `omelette-tester.md` |
 | `agents.tester.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line |
-| `agents.tester.maxTurns` | positive int | `80` | Its `maxTurns:` line — how many turns the tester gets before the harness stops it |
+| `agents.tester.maxTurns` | positive int | `80` | Its `maxTurns:` line — how many turns the tester gets before the harness stops it. It is honoured: the agent stops at the limit and the orchestrator is told it can continue it (measured 2026-09-06) |
 
 The templates carry `{{model}}`, `{{effort}}` and `{{maxTurns}}` where those values go, and **`rules --agents` renders from the config as it is at that moment**. So a change here does not reach a session until you re-render:
 
 ```bash
 omelette-fleet show agents                        # values and where each came from
 omelette-fleet set agents.tester.maxTurns=120
-omelette-fleet rules --agents                     # re-render; the session picks it up in seconds
+omelette-fleet rules --agents                     # re-render; Claude Code's watcher picks it up —
+                                                  # usually within seconds, sometimes minutes
 ```
 
 The definition is refreshed at the same package version — the marker is the proof of ownership, and a changed value simply makes the content differ, so the run reports `written … (v0.3.1, was 0.3.1)` rather than pretending nothing happened. `set` prints the same reminder:
@@ -83,17 +84,18 @@ Every unit understands these. Adapters may add their own (below).
 | `effort` | string | `""` (vendor default) | Default reasoning effort. Only meaningful for units whose catalog declares effort levels |
 | `timeoutS` | positive int | `300` | Wall-clock bound for one vendor run. See the per-unit note below |
 | `maxTurns` | positive int | `30` | Tool-loop cap. Consumed by Grok only |
+| `outputCap` | positive int | `400000` | Characters of a run's stdout kept. The **last** ones — see the note below |
 | `webSearch` | boolean | `true` | Whether the unit's web tools are available |
 | `status` | boolean | `true` | Write the status feed for this unit |
 
-Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/no`, so the same values work from a file or an environment variable. `timeoutS`/`maxTurns` accept numeric strings and are floored; zero and negatives are rejected.
+Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/no`, so the same values work from a file or an environment variable. `timeoutS`/`maxTurns`/`outputCap` accept numeric strings and are floored; zero and negatives are rejected.
 
 ### Unit-specific extras and built-in overrides
 
 | Unit | Extra key | Built-in defaults |
 |---|---|---|
 | gemini | — | `timeoutS: 300` |
-| grok | `imageMaxTurns` (positive int, default `8`) — turn cap for image runs only | `timeoutS: 300`, `maxTurns: 30` |
+| grok | `imageMaxTurns` (positive int, default `8`) — turn cap for image runs only | `timeoutS: 300`, `maxTurns: 30`, `outputCap: 2000000` |
 | codex | — | `timeoutS: 600`, `effort: "high"`, `webSearch: true` |
 
 ### Which unit actually uses which key
@@ -105,6 +107,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 | `effort` | **ignored** — the catalog bakes effort into the model id and declares no effort levels | `--reasoning-effort` (`low`/`medium`/`high`/`xhigh`) | `model_reasoning_effort` (`none`/`low`/`medium`/`high`/`xhigh`/`max`) |
 | `timeoutS` | yes (see below) | yes | yes |
 | `maxTurns` | — | `--max-turns` | — |
+| `outputCap` | bounds stdout | bounds stdout (built-in `2000000`), and a capped run is marked partial or refused — see below | bounds stdout |
 | `webSearch` | — | drops `web_search`/`web_fetch` from the toolset | `-c tools.web_search=<bool>` |
 | `imageMaxTurns` | — | image runs only | — |
 
@@ -252,3 +255,14 @@ To remove the tools from the client entirely, use `omelette-fleet uninstall` (or
 | **codex** | Same — hard kill only, at `timeoutS`. Default 600 s, because `codex_code_review` over a directory is a long call |
 
 A hard kill is always reported as an error naming the unit and the limit, e.g. `codex hard-killed after 600s (raise codex.timeoutS in the fleet config)`. `gemini_deep_research` runs several stages (decompose, parallel gathers, synthesis) and each stage is bounded by `timeoutS` separately — the whole pipeline commonly takes 3–10 minutes.
+
+## What `outputCap` does
+
+Each run's stdout is held in memory, so it is bounded: the fleet keeps the **last** `outputCap` characters and drops what came before, which is what stops a runaway model from exhausting the server. The default of 400 000 characters is far above any answer a unit gives; the cap exists for the pathological run.
+
+Keeping the *tail* is the right half for every unit here: a finished run's answer is the last thing it prints (Grok's `result` line, agy's envelope, Codex's final item), so a cap that bites takes the narration ahead of the answer rather than the answer. What it does mean is that a capped run's output starts mid-stream — and if the answer alone is bigger than the cap, it is cut open too. Grok says which of the two happened rather than passing either off as a whole answer:
+
+- **grok** raises the built-in to **2 000 000** characters, because its streaming NDJSON carries thinking deltas, tool calls and one JSON envelope per text delta alongside the answer — the stream is many times the size of what you read. A capped run whose remaining lines still parse comes back with `[grok: output capped at <N> chars — the beginning of the stream was dropped; treat the answer as partial]` appended and `partial: true` in the status feed. If the answer itself was longer than the cap, not one line of the stream parses, and the call fails loudly with `grok output exceeded the <N> char cap and the final result line was lost — raise grok.outputCap or narrow the task` instead of handing back the JSON fragment that survived. That last case is for the streaming research and review runs only: an image run's plain stdout has no lines to parse, so a capped one comes back marked like any other capped answer. A run that was hard-killed as well is answered as a hard kill first — the salvaged text, both markers — and only a killed run with nothing captured surfaces the cap in its error.
+- **gemini** and **codex** keep the 400 000 default.
+
+Raise it per unit (`omelette-fleet set grok.outputCap=4000000`) when a legitimately huge review is being truncated; narrowing the task is usually the better answer.

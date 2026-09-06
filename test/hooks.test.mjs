@@ -181,6 +181,62 @@ test('PreToolUse: everything else runs — other git commands, other tools, othe
   }
 });
 
+test('PreToolUse: `git tag` reads and `git rebase --abort` pass; the tag writes and the rebase continuations still block', () => {
+  const g = guard();
+  // `git tag` with nothing after it LISTS tags, and so do -l / --list / -n
+  // (with or without a count) — a coder finding out where it is.
+  for (const command of [
+    'git tag',
+    'git tag -l',
+    'git tag --list',
+    'git tag -n',
+    'git tag -n5',
+    'git tag -l "v1.*"',
+    "git tag --list 'v*'",
+    'git tag --sort=-v:refname',
+    'git tag --contains HEAD',
+    // …and the one rebase that UNDOES rather than writes: the recovery an agent
+    // needs after a rebase it should never have started.
+    'git rebase --abort',
+    'git -C /x rebase --abort',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+  for (const command of [
+    // Naming a tag creates one, and so does every flag that writes or deletes one.
+    'git tag v1.0.0',
+    'git tag -a v1.0.0 -m "release"',
+    'git tag --annotate v1.0.0',
+    'git tag -m "release" v1.0.0',
+    'git tag -s v1.0.0',
+    'git tag -f v1.0.0 HEAD',
+    'git tag --force v1.0.0',
+    'git tag -d v1.0.0',
+    'git tag --delete v1.0.0',
+    // -F/--file take the message from a file and --cleanup grooms one: each of
+    // them implies -a, so each creates an annotated tag exactly as -m does.
+    'git tag -F msg v1',
+    'git tag --file=m v1',
+    'git tag --file m v1',
+    'git tag --cleanup=verbatim v1',
+    'git -C /x tag v1.0.0',
+    // `--continue` and `--skip` each create a commit; a bare `git rebase` rebases.
+    'git rebase --continue',
+    'git rebase --skip',
+    'git rebase',
+    'git rebase main',
+    'git rebase -i main',
+    'git rebase --onto main x y',
+    'git -C /x rebase --continue',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL);
+  }
+});
+
 test('PreCompact: every ledger gets the re-read marker and the handoff line goes to stdout', () => {
   const g = guard();
   const proj = join(g.dir, 'proj');

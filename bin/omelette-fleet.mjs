@@ -43,7 +43,7 @@
  * honoured NOWHERE else: server paths, the shipped example config and doctor
  * all still come from the real ROOT below.
  */
-import { accessSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,7 +51,7 @@ import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, KEY_SCHEMA, coerce, configPath, fleetHome, unitConfig, writeFleetConfig } from '../core/config.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import { HOOK_EVENTS, HOOK_FILES, KINDS, agentSettings, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
+import { HOOK_EVENTS, HOOK_FILES, KINDS, agentSettings, hookSettingsSnippet, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
 import { resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -93,12 +93,15 @@ const cfgFor = (name, env = process.env) => {
  */
 const COMMANDS = {
   install: {
-    args: '[--prefix <name>] [--units <a,b,c>] [--dry-run] [--force]',
+    args: '[--prefix <name>] [--units <a,b,c>] [--rules] [--dry-run] [--force]',
     body: [
       'Register one MCP server per unit with `claude mcp add -s user`',
       'as <prefix>-<unit>, and create <home>/fleet.config.json from the',
       'shipped example if it does not exist yet (never overwritten).',
       'A unit whose vendor CLI is not in PATH is skipped unless --force.',
+      '--rules then does `rules --agents --hooks` in the current directory:',
+      'the operating rules, both sub-agent definitions, the /omelette-test',
+      'skill and the guard script, followed by the settings.json snippet.',
       '--dry-run prints every command and every write, and runs nothing.',
     ],
   },
@@ -508,13 +511,27 @@ function writeConfigFromExample(plan) {
 }
 
 async function cmdInstall(argv) {
-  const { flags, positional, errors } = parseArgv(argv, { booleans: ['dry-run', 'force'], options: ['prefix', 'units'] });
+  const { flags, positional, errors } = parseArgv(argv, { booleans: ['rules', 'dry-run', 'force'], options: ['prefix', 'units'] });
   if (positional.length) errors.push(`unexpected argument: ${positional[0]}`);
   const prefix = selectPrefix(flags.prefix, errors);
   const names = selectUnits(flags.units, errors);
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet install: ${e}`)); return 1; }
 
   const dry = !!flags.dryRun;
+  /**
+   * The SECOND half of `install --rules`: the same `rules --agents --hooks` an
+   * operator would run next, in this directory, printing the same lines — one
+   * command instead of two, and the snippet ends up where the eye already is.
+   * It runs on EVERY exit path, `claude` missing included: the project files
+   * have nothing to do with the registrations, and --dry-run covers both halves.
+   */
+  const andRules = async (code) => {
+    if (!flags.rules) return code;
+    out();
+    out(`── project files in ${process.cwd()} (rules --agents --hooks) ${'─'.repeat(8)}`);
+    const rulesCode = await cmdRules([...(dry ? ['--dry-run'] : []), '--agents', '--hooks']);
+    return code || rulesCode;
+  };
   const claudePath = whichBin('claude');
   const cfgPlan = planConfig();
   const plans = names.map((name) => {
@@ -548,7 +565,7 @@ async function cmdInstall(argv) {
     else { writeConfigFromExample(cfgPlan); out(`config  wrote ${cfgPlan.target} (0600, from ${cfgPlan.source})`); }
     out();
     out('Restart Claude Code to load the new servers.');
-    return 0;
+    return andRules(0);
   }
 
   const registered = [];
@@ -591,7 +608,7 @@ async function cmdInstall(argv) {
   if (skipped.length) out(`Skipped (vendor CLI missing): ${skipped.join(', ')}.`);
   if (failed.length) out(`Failed: ${failed.join(', ')}.`);
   out('Restart Claude Code to load the new servers.');
-  return failed.length ? 1 : 0;
+  return andRules(failed.length ? 1 : 0);
 }
 
 async function cmdUninstall(argv) {
@@ -921,6 +938,30 @@ function syncManagedFile({ path, next, parse, marker, version, top, force = fals
 }
 
 /**
+ * THE ONE DIRECTORY `--remove` TAKES WITH IT. syncManagedFile removes files and
+ * never directories, deliberately — but a skill IS a directory
+ * (`.claude/skills/omelette-test/SKILL.md`), and the empty one left behind
+ * still reads as an installed skill to anyone listing that folder.
+ *
+ * So the skills kind gets this one post-remove step, and it is timid on
+ * purpose: never through a symlink, never a directory that still holds
+ * anything — a file somebody else put in there is theirs and the directory is
+ * then theirs too — and a failure says nothing, because a leftover directory
+ * is not worth a refusal on top of the removal that already worked.
+ *
+ * @returns {string|null} the directory that was removed, or null for every other case.
+ */
+function pruneEmptySkillDir(path) {
+  const dir = dirname(path);
+  try {
+    if (lstatSync(dir).isSymbolicLink()) return null;
+    if (readdirSync(dir).length) return null;
+    rmdirSync(dir);
+    return dir;
+  } catch { return null; }
+}
+
+/**
  * Every file this command manages, in the order it handles them: the rules file
  * first, then whatever the flags asked for — the registry (core/rules.mjs KINDS)
  * says which flag writes a kind, where its files live and how they render. The
@@ -954,31 +995,8 @@ function managedFiles({ global = false, agents = false, hooks = false, version, 
   return files;
 }
 
-/**
- * What to paste into settings.json to make the guard actually run. Printed,
- * never applied: Claude Code's config is read by this package and written by
- * `claude` and the operator alone (see readClaudeConfig).
- *
- * The path is RESOLVED — a relative CLAUDE_CONFIG_DIR must still produce an
- * absolute hook command, because a hook runs from wherever the session happens
- * to be — and SHELL-QUOTED, because that value is a command line and not an
- * argv: an operator whose checkout lives under "~/My Projects" would otherwise
- * paste a hook that runs `node /Users/x/My` and fails at every single tool call.
- * An embedded `'` is escaped the POSIX way; JSON.stringify then escapes for JSON.
- */
-const shellQuote = (s) => `'${String(s).replaceAll("'", "'\\''")}'`;
-
 /** The kinds a running session ever picks up on its own — the post-write line is about these and no other. */
 const LOADED_BY_A_SESSION = new Set(['rules', 'agents', 'skills']);
-
-function hookSettingsSnippet(scriptPath) {
-  const command = JSON.stringify(`node ${shellQuote(resolvePath(scriptPath))}`);
-  return [
-    '{ "hooks": {',
-    `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
-    `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
-  ];
-}
 
 async function cmdRules(argv) {
   const { flags, positional, errors } = parseArgv(argv, { booleans: ['global', 'agents', 'hooks', 'print', 'remove', 'force', 'dry-run'] });
@@ -1019,11 +1037,18 @@ async function cmdRules(argv) {
     if (r.code) code = 1;
     if (r.line && r.line.startsWith('written ') && LOADED_BY_A_SESSION.has(f.kind)) wrote = true;
     if (!r.code && f.kind === 'hooks' && !flags.remove) toWire.push(f.path);
+    // The skill's own directory, once its SKILL.md is gone — and only after a
+    // removal that really happened: `--dry-run` changes nothing at all, and a
+    // "nothing to remove" run never owned anything in that directory.
+    if (r.line && r.line.startsWith('removed ') && f.kind === 'skills' && f.name.includes('/')) {
+      const pruned = pruneEmptySkillDir(f.path);
+      if (pruned) out(`removed ${pruned} (empty skill directory)`);
+    }
   }
   // Only about the kinds a SESSION picks up. A hook script is called by
   // settings.json the moment it is on disk — nothing about it waits for a
   // session start or a directory watch, and the snippet below says what it does need.
-  if (wrote) out('Rules load on the next session start; agent definitions and skills are picked up within seconds (restart if .claude/agents or .claude/skills did not exist before).');
+  if (wrote) out("Rules load on the next session start; agent definitions and skills are picked up by Claude Code's watcher — usually within seconds, sometimes minutes (restart if .claude/agents or .claude/skills did not exist before).");
   // A script on disk is not a hook: settings.json is what calls it, and this CLI
   // never writes that file. So the snippet is printed on EVERY --hooks run, not
   // only the one that created the script — doctor sends the operator here for it.
@@ -1129,35 +1154,59 @@ function dirReport(kind, current) {
 const DIR_KINDS = Object.keys(KINDS).filter((k) => k !== 'rules');
 
 /**
+ * Whether one PreToolUse matcher lets the guard see a `Bash` call — and, when it
+ * does not, WHY, because the two ways of getting it wrong are fixed differently.
+ *
+ * A matcher is a REGEX, not a tool name — Claude Code's hooks docs spell
+ * `"Edit|Write"` and `"mcp__.*"` — so a guard wired under `"Bash|Edit"` fires on
+ * every Bash call, and comparing the string literally reported it as NOT wired.
+ * Absent / `""` / `"*"` are the documented "everything" forms; any other pattern
+ * is anchored and asked whether it matches `Bash`. One that does not COMPILE
+ * covers nothing either, but that is a typo in the settings file rather than a
+ * guard aimed at another tool — and an operator told "matcher is not Bash"
+ * about `(` would go looking for the wrong thing.
+ *
+ * @returns {string|null} null when it covers Bash, else the reason it does not.
+ */
+const bashMatcherProblem = (m) => {
+  if (m === undefined || m === null || m === '' || m === '*') return null;
+  let re;
+  try { re = new RegExp(`^(?:${m})$`); }
+  catch { return `PreToolUse matcher ${JSON.stringify(String(m))} is not a valid regex`; }
+  return re.test('Bash') ? null : 'PreToolUse matcher is not Bash';
+};
+
+/**
  * Which of the guard's events one settings file calls it from. The test is the
  * script's NAME inside the command string, not an exact path: an operator may
  * quote it (the printed snippet does), wrap it, point at their own node or keep
  * the script somewhere else — all of which still run our guard, and none of
  * which we would recognise by comparing paths.
- */
-const coversBash = (m) => m === undefined || m === null || m === '' || m === '*' || m === 'Bash';
-
-/**
- * @returns {{wired:string[], matcherMismatch:boolean}} the events wired, plus
- *   whether a PreToolUse entry calls the guard from a matcher that will never
- *   fire on a Bash call — which looks installed from every angle and guards
- *   nothing, so it is reported instead of being counted either way.
+ *
+ * @returns {{wired:string[], matcherProblem:string|null}} the events wired, plus
+ *   why a PreToolUse entry that calls the guard will never fire on a Bash call —
+ *   which looks installed from every angle and guards nothing, so it is reported
+ *   instead of being counted either way.
  */
 function hookWiring(config) {
   const hooks = isObj(config) && isObj(config.hooks) ? config.hooks : {};
   const calls = (h) => isObj(h) && HOOK_FILES.some((f) => String(h.command || '').includes(f));
   const wired = [];
-  let matcherMismatch = false;
+  let matcherProblem = null;
   for (const event of HOOK_EVENTS) {
     const calling = (Array.isArray(hooks[event]) ? hooks[event] : [])
       .filter((group) => isObj(group) && Array.isArray(group.hooks) && group.hooks.some(calls));
     if (!calling.length) continue;
     // Only PreToolUse is matched against a tool name at all, and the guard has
-    // exactly one tool to guard.
-    if (event === 'PreToolUse' && !calling.some((group) => coversBash(group.matcher))) { matcherMismatch = true; continue; }
+    // exactly one tool to guard. ONE entry covering Bash is enough; when none
+    // does, the first entry's reason is the one worth printing.
+    if (event === 'PreToolUse') {
+      const problems = calling.map((group) => bashMatcherProblem(group.matcher));
+      if (problems.every(Boolean)) { matcherProblem = matcherProblem || problems[0]; continue; }
+    }
     wired.push(event);
   }
-  return { wired, matcherMismatch };
+  return { wired, matcherProblem };
 }
 
 /**
@@ -1171,7 +1220,7 @@ function hookWiring(config) {
 function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env } = {}) {
   const unreadable = [];
   let wired = [];
-  let matcherMismatch = false;
+  let matcherProblem = null;
   for (const { name, path } of settingsTargets({ global, cwd, env })) {
     let raw;
     try { raw = readFileSync(path, 'utf8'); } catch { continue; } // absent is the normal case
@@ -1179,10 +1228,10 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
     try { config = JSON.parse(raw); } catch { config = null; }
     if (!isObj(config)) { unreadable.push(name); continue; }
     const here = hookWiring(config);
-    if (here.matcherMismatch) matcherMismatch = true;
+    matcherProblem = matcherProblem || here.matcherProblem;
     if (here.wired.length > wired.length) wired = here.wired;
   }
-  return { wired, unreadable, matcherMismatch };
+  return { wired, unreadable, matcherProblem };
 }
 
 /**
@@ -1190,17 +1239,49 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
  * ever calls it. A script nobody calls is the failure mode worth a line of its
  * own, because everything about it looks installed.
  */
-const hooksLabel = (r, { wired, unreadable, matcherMismatch }) => {
+const hooksLabel = (r, { wired, unreadable, matcherProblem }) => {
   if (r.state === 'absent') return 'absent';
   if (r.state === 'foreign') return 'foreign (no marker)';
   const stale = r.behind ? ` [run: ${refreshCommand('hooks', r.scope)}]` : '';
   if (wired.length === HOOK_EVENTS.length) return `v${r.version} (wired: ${wired.join(', ')})${stale}`;
   const reasons = [];
   if (unreadable.length) reasons.push(`${unreadable.join(' and ')} unreadable`);
-  if (matcherMismatch) reasons.push('PreToolUse matcher is not Bash');
+  if (matcherProblem) reasons.push(matcherProblem);
   const why = reasons.length ? ` (${reasons.join('; ')})` : '';
   return `v${r.version} (NOT wired${why} — paste the snippet from rules --hooks)${stale}`;
 };
+
+/**
+ * The ONE thing to do next, or null when nothing is missing — the first-run
+ * path in the order it has to happen: register the servers, write the project
+ * files, wire the guard up. It is INFORMATIONAL and never a fault: a machine
+ * halfway through being set up is not a broken machine, and doctor's exit code
+ * stays the answer to "is a unit that is enabled AND registered broken".
+ *
+ * The scope is the project, because that is what the commands it suggests
+ * write; an operator who installed globally chose that and knows it.
+ */
+function nextStep(prefix, claude) {
+  // OURS, not merely present: a name registered against another clone runs that
+  // clone's servers, and `install` here is exactly what repoints it.
+  const registeredHere = UNIT_ORDER.some((n) => {
+    const reg = findRegistration(claude.config, `${prefix}-${n}`, serverPathFor(n));
+    return !!reg && reg.ours;
+  });
+  if (!registeredHere) return 'omelette-fleet install';
+  // All four kinds, because one command writes all four: a project holding the
+  // rules file and no guard script has not finished this step either.
+  const incomplete = rulesState({}).state !== 'ours'
+    || DIR_KINDS.some((kind) => dirState({ kind, current: PKG.version }).state !== 'ours');
+  if (incomplete) return 'omelette-fleet rules --agents --hooks';
+  // Past here the guard script IS ours, so the only thing that can still be
+  // missing is the file that calls it — a script nobody calls is the failure
+  // mode where everything looks installed, and one command prints the fix.
+  if (hookWiringAt({}).wired.length < HOOK_EVENTS.length) {
+    return 'merge the hooks snippet into .claude/settings.json (rules --hooks prints it)';
+  }
+  return null;
+}
 
 // ─── doctor ──────────────────────────────────────────────────────────────────
 
@@ -1277,6 +1358,9 @@ async function cmdDoctor(argv) {
   // The one managed kind that is inert until something else names it: the wiring
   // lives in settings.json, which doctor reads and nothing here ever writes.
   out(`hooks         ${dirReport('hooks', PKG.version).map((r) => `${r.scope}: ${hooksLabel(r, hookWiringAt({ global: r.scope === 'global' }))}`).join(' · ')}`);
+  // ONE line, and only while something is missing — see nextStep. Never a fault.
+  const next = nextStep(prefix, claude);
+  if (next) out(`next          ${next}`);
   out();
 
   let faults = 0;

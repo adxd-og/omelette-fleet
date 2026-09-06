@@ -19,6 +19,6 @@ Procedure:
 
 The Agent tool is removed from your toolset; review comes from the orchestrator after your report. Do not commit.
 
-If you hit the turn limit, say so in the report — a truncated run is not a failing suite; the orchestrator can raise `agents.tester.maxTurns` and re-run you.
+If you hit the turn limit the orchestrator is told and can continue you after raising `agents.tester.maxTurns` — say in your reply what you had left to do. A truncated run is not a failing suite.
 
 Report: write the full report (behaviour list with coverage verdicts, tests added, exact commands, raw output including every failure in full, your ruling per failure, every test of your own you fixed or dropped) to the report path the orchestrator gave you or, if none was given, put the full report in your reply. Then reply with only: tests added, `passing/total` for your file and for the suite, each failing test with its ruling, the report path.

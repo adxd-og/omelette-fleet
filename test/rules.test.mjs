@@ -5,10 +5,10 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  AGENT_FILES, AGENT_MARKER, AGENT_ROLES, FLEET_CONTRACT, HOOK_FILES, HOOK_MARKER, HOOK_TEMPLATE_DIR, KINDS,
+  AGENT_FILES, AGENT_MARKER, AGENT_ROLES, FLEET_CONTRACT, HOOK_EVENTS, HOOK_FILES, HOOK_MARKER, HOOK_TEMPLATE_DIR, KINDS,
   RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH, SETTINGS_FILES, SKILL_FILES, SKILL_MARKER,
   SKILL_TEMPLATE_DIR,
-  agentSettings, agentsTarget, hooksTarget, parseAgentMarker, parseHookMarker, parseRulesMarker, parseSkillMarker,
+  agentSettings, agentsTarget, hookSettingsSnippet, hooksTarget, parseAgentMarker, parseHookMarker, parseRulesMarker, parseSkillMarker,
   renderAgentFile, renderHookFile, renderRulesFile, renderSkillFile, rulesTarget, settingsTarget, settingsTargets,
   skillsTarget, unitInstructions,
 } from '../core/rules.mjs';
@@ -294,18 +294,22 @@ test('the skill hands the forked tester the spec and a diff taken from git AT IN
   assert.match(text, /^agent: omelette-tester$/m);
   // The orchestrator (the session model) invokes this skill via the Skill tool, so it must stay model-invocable.
   assert.ok(!/^disable-model-invocation:/m.test(text), 'the skill must not disable model invocation — the orchestrator calls it');
-  assert.match(text, /^argument-hint: \[spec path\]$/m);
-  // QUOTED: the description ends in "Usage: /omelette-test <spec path>", and an
-  // unquoted `: ` inside a plain scalar ends the value — a YAML parser rejects
-  // the file, and Claude Code would never load the skill at all.
-  assert.match(text, /^description: "Clean-context tester handoff — .*Usage: \/omelette-test <spec path>"$/m);
+  assert.match(text, /^argument-hint: \[spec path\] \[repo path\]$/m);
+  // QUOTED: the description ends in "Usage: /omelette-test <spec path> [repo
+  // path]", and an unquoted `: ` inside a plain scalar ends the value — a YAML
+  // parser rejects the file, and Claude Code would never load the skill at all.
+  assert.match(text, /^description: "Clean-context tester handoff — .*Usage: \/omelette-test <spec path> \[repo path\]"$/m);
   // The whole point of the skill: the `!`…`` lines run at render time, before
   // the fork, so the tester gets the diff instead of the coder's summary. They
-  // are content, not placeholders — nothing may rewrite or escape them.
+  // are content, not placeholders — nothing may rewrite or escape them. The
+  // repo path rides `$1`, which the shell expands to "" when it was not given —
+  // and `git -C ""` is a no-op, so the diff is then the current directory's.
   const lines = text.split('\n');
-  assert.ok(lines.includes('!`git diff HEAD`'), 'the diff injection line must survive rendering verbatim');
-  assert.ok(lines.includes('!`git ls-files --others --exclude-standard`'), 'the untracked-files line must survive rendering verbatim');
-  assert.ok(text.includes('read `$ARGUMENTS` first'), '$ARGUMENTS reaches the skill body untouched');
+  assert.ok(lines.includes('!`git -C "$1" diff HEAD`'), 'the diff injection line must survive rendering verbatim');
+  assert.ok(lines.includes('!`git -C "$1" ls-files --others --exclude-standard`'), 'the untracked-files line must survive rendering verbatim');
+  // $0 is the first argument the skill was invoked with, $1 the second.
+  assert.ok(text.includes('read `$0` first'), '$0 reaches the skill body untouched');
+  assert.match(text, /^Repository under test: `\$1` — when empty, the current directory\.$/m);
   assert.ok(text.indexOf('\n---\n', 4) > 0, 'frontmatter is closed');
   // Every line of it is a plain `key: value` a YAML parser reads, marker aside.
   for (const line of frontmatter(text, 'skills/omelette-test/SKILL.md')) {
@@ -400,6 +404,40 @@ test('every rendered frontmatter file is YAML a parser will accept: key: value l
       }
     }
   }
+});
+
+// ─── the settings snippet the CLI prints (and never writes) ──────────────────
+
+test('hookSettingsSnippet quotes the script for the platform it is told about: POSIX single quotes, Windows double quotes', () => {
+  const spaced = '/Users/me/My Projects/app/.claude/hooks/omelette-guard.mjs';
+  const posix = hookSettingsSnippet(spaced, 'darwin');
+  // A hook `command` is a command LINE: an unquoted path with a space in it
+  // runs `node /Users/me/My` at every single tool call.
+  assert.ok(posix[1].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
+  assert.ok(posix[2].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
+  assert.equal(hookSettingsSnippet(spaced, 'linux').join('\n'), posix.join('\n'));
+
+  // cmd.exe knows nothing about POSIX single quotes, and the JSON layer is what
+  // doubles the backslashes of a Windows path.
+  const win = hookSettingsSnippet('/C\\Users\\me\\.claude\\hooks\\omelette-guard.mjs', 'win32');
+  assert.ok(win[1].includes('"command": "node \\"/C\\\\Users\\\\me\\\\.claude\\\\hooks\\\\omelette-guard.mjs\\""'), win.join('\n'));
+
+  // Whatever the platform, what it prints is a pasteable `hooks` object naming
+  // both events, and the script is still recognisable by name.
+  for (const platform of ['darwin', 'win32']) {
+    const parsed = JSON.parse(hookSettingsSnippet(spaced, platform).join('\n'));
+    assert.deepEqual(Object.keys(parsed.hooks), HOOK_EVENTS);
+    assert.equal(parsed.hooks.PreToolUse[0].matcher, 'Bash');
+    for (const event of HOOK_EVENTS) assert.ok(parsed.hooks[event][0].hooks[0].command.includes(HOOK_FILES[0]));
+  }
+
+  // The default is this machine's own platform — the CLI passes no argument.
+  assert.deepEqual(hookSettingsSnippet(spaced), hookSettingsSnippet(spaced, process.platform));
+});
+
+test('hookSettingsSnippet resolves a relative path: a hook runs from wherever the session is, not from where the CLI ran', () => {
+  const [, preToolUse] = hookSettingsSnippet('cfgrel/hooks/omelette-guard.mjs', 'darwin');
+  assert.ok(preToolUse.includes(`node '${join(process.cwd(), 'cfgrel', 'hooks', 'omelette-guard.mjs')}'`), preToolUse);
 });
 
 test('settingsTargets names BOTH files Claude Code reads at a scope, in that order — and this package writes neither', () => {

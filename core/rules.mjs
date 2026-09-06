@@ -51,7 +51,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENT_SETTINGS_SCHEMA, coerce, loadFleetConfig } from './config.mjs';
 
@@ -331,6 +331,43 @@ export const hooksTarget = scopeDir('hooks');
 
 /** The two events the guard serves, in the order doctor reports them wired. */
 export const HOOK_EVENTS = ['PreToolUse', 'PreCompact'];
+
+/**
+ * QUOTING THE SCRIPT PATH FOR A SHELL, per platform. A hook `command` is a
+ * command LINE and not an argv, so an operator whose checkout lives under
+ * "~/My Projects" would otherwise paste a hook that runs `node /Users/x/My` and
+ * fails at every single tool call. POSIX takes single quotes with an embedded
+ * `'` escaped the POSIX way; cmd.exe knows nothing about single quotes and
+ * takes double ones (a Windows path cannot contain a `"`, so there is nothing
+ * to escape inside them). JSON.stringify then escapes the whole thing for JSON,
+ * which is what doubles the backslashes of a Windows path.
+ */
+const shellQuote = (s, platform) => (platform === 'win32'
+  ? `"${s}"`
+  : `'${String(s).replaceAll("'", "'\\''")}'`);
+
+/**
+ * What to paste into settings.json to make the guard actually run. PRINTED by
+ * `omelette-fleet rules --hooks`, never applied: Claude Code's settings files
+ * are read by this package and written by the operator alone.
+ *
+ * The path is RESOLVED — a relative CLAUDE_CONFIG_DIR must still produce an
+ * absolute hook command, because a hook runs from wherever the session happens
+ * to be. `platform` decides the QUOTING only (it defaults to this machine's,
+ * and is a parameter so both forms are testable from either kind of box); the
+ * resolution is always the host's, which is the only path shape that can exist
+ * on it.
+ *
+ * @returns {string[]} the snippet's lines, together a parseable JSON object.
+ */
+export function hookSettingsSnippet(scriptPath, platform = process.platform) {
+  const command = JSON.stringify(`node ${shellQuote(resolve(scriptPath), platform)}`);
+  return [
+    '{ "hooks": {',
+    `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
+    `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
+  ];
+}
 
 /**
  * EVERY KIND OF MANAGED FILE, in one registry. A kind is its marker builder (the

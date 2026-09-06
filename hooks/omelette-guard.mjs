@@ -64,11 +64,19 @@ const OPTION_RUN = '(?:'
   + '|\\s+--'
   + ')*';
 
-/** Subcommands that create a commit, or move a stash / worktree / tag — nothing after them makes them read-only. */
-const WRITES_HISTORY = 'commit|merge|rebase|cherry-pick|revert|am|pull|push|stash|tag|worktree';
+/** Subcommands that create a commit, or move a stash / worktree — nothing after them makes them read-only. */
+const WRITES_HISTORY = 'commit|merge|cherry-pick|revert|am|pull|push|stash|worktree';
 
 /** `git branch` flags that MOVE a ref: rename (`-m`/`-M`), copy (`-c`/`-C`), force-reset (`-f`), upstream (`-u`). */
 const BRANCH_WRITES = '-[mMcCfu]|--force|--set-upstream';
+
+/**
+ * `git tag` flags that WRITE a tag: annotate (`-a`), sign (`-s`, `-u <key>`),
+ * force (`-f`), delete (`-d`), and the three that supply or groom a message and
+ * so imply `-a` — `-m`, `-F`/`--file` and `--cleanup`. Its listing flags —
+ * `-l`, `--list`, `-n`, `--contains`, `--sort` — are reads and are not here.
+ */
+const TAG_WRITES = '-[adFfmsu]|--annotate|--cleanup|--delete|--file|--force|--message|--sign|--local-user';
 
 /**
  * What the coder is never allowed to run, whatever it was asked to do — matched
@@ -78,6 +86,11 @@ const BRANCH_WRITES = '-[mMcCfu]|--force|--set-upstream';
  *     only computes — hence `(?![\w-])` on the bare subcommands;
  *   - `git branch` READS (listing, `-d`, `-a`, `-r`, `-v`) until it is handed a
  *     name to create or a flag that moves a ref (BRANCH_WRITES);
+ *   - `git tag` is the same shape: listing tags is how an agent finds the last
+ *     release, so it reads until it is handed a name or a TAG_WRITES flag;
+ *   - `git rebase` writes in every form but ONE: `--abort` undoes a rebase and
+ *     is the recovery an agent stuck mid-rebase needs (`--continue` and
+ *     `--skip` create commits, and a bare `git rebase` starts one);
  *   - and the branch-creating flags of `checkout`/`switch` may come after other
  *     flags and arguments (`checkout -q -b feat`) or with the name attached to
  *     them (`checkout -bfeat`, and `-B`/`-C` force it), so the scan runs to the
@@ -90,8 +103,11 @@ const BRANCH_WRITES = '-[mMcCfu]|--force|--set-upstream';
  */
 const FORBIDDEN = new RegExp(
   `\\bgit${OPTION_RUN}\\s+(?:(?:${WRITES_HISTORY})(?![\\w-])`
+  + '|rebase(?![\\w-])(?!\\s+--abort(?![\\w-]))'
   + '|branch(?![\\w-])\\s+(?!-)\\S'
   + `|branch(?![\\w-])(?:\\s+[^\\s;&|]+)*?\\s+(?:${BRANCH_WRITES})`
+  + '|tag(?![\\w-])\\s+(?!-)\\S'
+  + `|tag(?![\\w-])(?:\\s+[^\\s;&|]+)*?\\s+(?:${TAG_WRITES})`
   + '|checkout(?:\\s+[^\\s;&|]+)*?\\s+(?:-[bB]|--orphan|--track)'
   + '|switch(?:\\s+[^\\s;&|]+)*?\\s+(?:-[cC]|--create|--force-create)'
   + ')',
