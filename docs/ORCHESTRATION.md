@@ -12,7 +12,7 @@ Use whatever subset you have installed. The routing below degrades gracefully: w
 
 ## How the rules reach a session
 
-None of the above helps if the session never reads it. Two layers deliver it, and they are independent.
+None of the above helps if the session never reads it. Three layers deliver it, and they are independent.
 
 **Layer 1 — the contract, automatic.** Every unit server returns a short contract from the MCP `initialize` handshake (`InitializeResult.instructions`), and Claude Code puts it in the session's context as "MCP Server Instructions". Install a unit and it is there, with no user action: the units propose and the session applies, absolute paths and one job per call, no unit is a source of record and Grok least of all, plus one line saying what that particular unit is for. It is under ten lines on purpose. Like every other server change, it takes effect on the next Claude Code restart.
 
@@ -21,16 +21,44 @@ None of the above helps if the session never reads it. Two layers deliver it, an
 ```bash
 omelette-fleet rules            # <project>/.claude/rules/omelette-fleet.md
 omelette-fleet rules --global   # $CLAUDE_CONFIG_DIR or ~/.claude instead
-omelette-fleet rules --agents   # also the two sub-agent definitions below
+omelette-fleet rules --agents   # also the sub-agent definitions and the /omelette-test skill
+omelette-fleet rules --hooks    # the guard script, plus the settings snippet to paste
 ```
 
-Claude Code loads `.claude/rules/*.md` and `~/.claude/rules/*.md` the way it loads CLAUDE.md, at session start (verified on Claude Code 2.1.261). Agent definitions are different: Claude Code watches `.claude/agents/` and `~/.claude/agents/` and picks a new or edited definition up within seconds. So: **rules load on the next session start; agent definitions are picked up within seconds (restart if `.claude/agents` did not exist before)** — the directory has to have existed when the session started for the watch to be on it. That is the sentence the CLI prints after a write. Claude Code's own documentation (code.claude.com/docs/en/claude-directory) describes a `paths:` frontmatter key that scopes a rules file to matching files; a rules file without it loads at session start. The shipped file declares no `paths:`, so it is always on.
+Claude Code loads `.claude/rules/*.md` and `~/.claude/rules/*.md` the way it loads CLAUDE.md, at session start (verified on Claude Code 2.1.261). Agent definitions are different: Claude Code watches `.claude/agents/` and `~/.claude/agents/` and picks a new or edited definition up within seconds. So: **rules load on the next session start; agent definitions are picked up within seconds (restart if `.claude/agents` did not exist before)** — the directory has to have existed when the session started for the watch to be on it. That is the sentence the CLI prints after a write. Skills behave like agent definitions: `.claude/skills/` is watched too, and the same "it has to have existed at session start" caveat applies to a skills directory created afterwards. Claude Code's own documentation (code.claude.com/docs/en/claude-directory) describes a `paths:` frontmatter key that scopes a rules file to matching files; a rules file without it loads at session start. The shipped file declares no `paths:`, so it is always on.
 
-The file's first line is a version marker, and that marker is the only proof of ownership. Re-running refreshes a marked file and prints which version it moved from; a file sitting at that path *without* the marker is left alone unless you pass `--force`. `--remove` deletes only a marked file, `--print` writes nothing at all, `--dry-run` prints every path and action. `doctor` reports both scopes on one informational line (`rules  project: v0.3.0 · global: absent`, plus the same for `agents`) and never counts a missing file as a fault. `update` prints the exact refresh command when a marked file is behind the installed package — it never rewrites the file for you.
+The file's first line is a version marker, and that marker is the only proof of ownership. Re-running refreshes a marked file and prints which version it moved from; a file sitting at that path *without* the marker is left alone unless you pass `--force`. `--remove` deletes only a marked file, `--print` writes nothing at all, `--dry-run` prints every path and action (and, for `--hooks`, announces the settings snippet instead of printing it — a snippet naming a script that was never written is a snippet somebody pastes). All four managed kinds — the rules file, the agent definitions, the skill, the hook script — work exactly this way; only the comment syntax of the marker differs. One thing `--remove` does not do is remove directories: `--remove --agents` takes `SKILL.md` away and leaves an empty `.claude/skills/omelette-test/` behind, which is yours to delete. `doctor` reports each kind on one informational line, both scopes, and never counts a missing file as a fault:
 
-The overlap is deliberate: layer 1 is the part you cannot afford to have missing, layer 2 is the part worth a command.
+```
+rules         project: v0.3.1 · global: absent
+agents        project: v0.3.1 (2) · global: absent
+skills        project: v0.3.1 (1) · global: absent
+hooks         project: v0.3.1 (wired: PreToolUse, PreCompact) · global: absent
+```
+
+`update` prints the exact refresh command when a marked file is behind the installed package — it never rewrites the file for you.
+
+**Layer 3 — the guard, one script the operator wires up.** `omelette-fleet rules --hooks` writes `.claude/hooks/omelette-guard.mjs` and serves two events from it. On `PreToolUse` (matcher `Bash`) it reads the event's `agent_type`: when the caller is `omelette-coder` and the command is a `git` invocation of `commit`, `push`, `stash`, `worktree`, `checkout -b` or `switch -c` — with any leading `-C <dir>`, `-c key=value` or `--flag` options in between — it exits 2 and the call never runs. "Coder sub-agents never commit" stops being a request. What it deliberately lets through is everything the coder legitimately needs: `git log`, `git diff`, `git status`, and `git commit-tree`, which writes an object and commits nothing. On `PreCompact` it appends a re-read line to every `.omelette/ledger-*.md` in the project. It never throws: malformed input, an unknown event or a ledger it may not write all exit 0, because a hook that crashes is a session that stops working.
+
+A hook script is not a hook until something calls it, and **the caller lives in your settings, which this package reads and never writes**. So `rules --hooks` prints the snippet on every run and you paste it in yourself — into `.claude/settings.json` or `.claude/settings.local.json`, whichever you keep this kind of setting in:
+
+```json
+{ "hooks": {
+  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node '/abs/path/.claude/hooks/omelette-guard.mjs'" } ] } ],
+  "PreCompact": [ { "hooks": [ { "type": "command", "command": "node '/abs/path/.claude/hooks/omelette-guard.mjs'" } ] } ] } }
+```
+
+The printed path is absolute and shell-quoted: a hook `command` is a command line rather than an argv, so a checkout under `~/My Projects` would otherwise paste a hook that runs `node /Users/you/My` and fails on every tool call.
+
+`doctor` reads **both** files of a scope — `settings.json` and `settings.local.json`, and the global pair under `$CLAUDE_CONFIG_DIR` or `~/.claude` — and says which events actually call the script: `wired: PreToolUse, PreCompact` when one of them wires both, or `NOT wired — paste the snippet from rules --hooks`. Reading only the first would report a guard wired in `settings.local.json`, the file a project usually gitignores, as inert. A settings file that exists but cannot be parsed is named rather than counted (`NOT wired (settings.local.json unreadable) — …`), because sending an operator to re-paste something that is already there is the wrong advice. That line exists at all because a script nobody calls is the failure mode where everything looks installed.
+
+The guard is a *settings-level* hook on purpose: a `hooks:` block in an agent definition's own frontmatter did **not** fire on Claude Code 2.1.261 — no log line, `git commit` went straight through — while the same hook in the project's settings did fire for the same sub-agent, blocked it with exit 2, and its stdin JSON carried `agent_type: <the sub-agent>` (and no `agent_type` at all for the main thread). Measured 2026-09-06; that measurement is why the guard is keyed on `agent_type` rather than declared in the definition.
+
+The overlap is deliberate: layer 1 is the part you cannot afford to have missing, layer 2 is the part worth a command, layer 3 is the part worth enforcing rather than asking for.
 
 If the project already keeps an `AGENTS.md` for other agents, Claude Code does not read it on its own; a one-line `@AGENTS.md` import in `CLAUDE.md` makes both read the same text (code.claude.com/docs/en/memory, "AGENTS.md"), and `.claude/rules/omelette-fleet.md` loads independently of either.
+
+**In a monorepo, placement decides reach.** `omelette-fleet rules` writes into the `.claude` of the directory you run it in, and a session picks up the rules of the tree it starts in. Put the file at the level whose sessions should see it: the repository root when the whole monorepo works this way, a package directory when only that package does. Descendant directories are loaded lazily rather than all at once, so a root-level file is the one reliably in context for every session — and `--global` puts it in front of every project on the machine, which is the right call for a personal setup and the wrong one for a shared checkout.
 
 ## Inside Claude Code
 
@@ -44,15 +72,43 @@ The same split applies one level down, and it is the operating model this packag
 
 Two practical rules that follow: give each delegate one job and the context to do it (they start fresh and see none of your session), and do not delegate the decision about whether the work is correct — that is the part you kept the expensive session for.
 
+## Ledger and handoff
+
+A long plan outlives the context it was made in. Compaction is the obvious way that happens, but it is not the only one: an interrupted evening, a session that had to be restarted, a hand-off to a colleague. Everything the orchestrator knows and never wrote down is lost at that moment — and what is lost first is exactly what is most expensive to recover, the *reasons*. The code is still in git. Why option B was rejected is not.
+
+So: **keep a ledger file for every plan, from the first step.**
+
+- One line per event, appended as it happens — not reconstructed afterwards from memory that has already been compacted.
+- **Every decision as `Ruling: <what> — <why> — <cost if wrong>`.** The third field is the one that pays for itself: it is what tells a later reader whether to revisit the call or leave it alone.
+- Tasks marked complete **with their commits**, so the ledger and the branch name the same checkpoints.
+- Before a compaction — announced or merely suspected — and at every natural pause, append a **handoff block**: where the work stands, open findings, agents in flight, next action. Write it as if the reader has none of your context, because they do not.
+- After a compaction, **re-read the ledger before doing anything else.** Acting first and reading second is how a plan silently forks.
+
+Location: `<project>/.omelette/ledger-<plan>.md`, with `.omelette/` in `.gitignore` — or wherever the project's own convention puts it. The rule is the file, not the path.
+
+`omelette-fleet rules --hooks` mechanises the fragile step. Its `PreCompact` handler appends `## Compaction <ISO timestamp> (trigger: …) — re-read this ledger before continuing` to every `.omelette/ledger-*.md` in the project, so the marker lands even when the compaction was not announced. It fires on a manual `/compact` as well, including one that reports "not enough messages to compact" (verified on Claude Code 2.1.261, 2026-09-06). The hook is a backstop, not the discipline: it stamps a reminder, it cannot write the handoff block you did not write.
+
 ## Tester sub-agent and arbitration
 
 A coder sub-agent reporting "done" is a claim, not evidence. What turns it into evidence is a second sub-agent that did not write the code.
 
+**The clean context is the whole mechanism, and it is cheaper than it looks.** The second agent is not smarter than the first; it is *uncorrelated with it*. An implementer's context contains every assumption that produced the bug, so the blind spot travels with it — re-reading your own diff harder buys very little, while a fresh reader with the same spec and none of the history catches a different class of mistake. That is the reasoning behind Boris Cherny's advice to spend test-time compute on a second, clean-context pass rather than on one longer one ([claude-code-best-practice, tips/claude-boris-2-tips-10-mar-26.md](https://github.com/shanraisshan/claude-code-best-practice/blob/main/tips/claude-boris-2-tips-10-mar-26.md)). The corollary is the rule below: anything that carries the coder's framing into the tester's context — a summary, a "here's what I changed", a list of what to look at — spends the second pass re-running the first one.
+
 **The orchestrator spawns the tester, never the coder.** A coder that picks its own tester grades its own homework: it chooses what gets checked, and it briefs the tester out of the same understanding that produced the bug. A sub-agent on Claude Code *can* spawn a sub-agent, so this is a rule of the operating model rather than a limit of the tool.
 
-**The tester's input is the approved spec plus the diff, taken from git** (`git diff`, or the changed files by absolute path) — never the coder's summary. A summary says what the implementer believed they built; the diff says what they actually did, and the spec says what was asked. Anything that reaches the tester only through a summary is untested by construction.
+**The tester's input is the approved spec plus the diff, taken from git** — never the coder's summary. A summary says what the implementer believed they built; the diff says what they actually did, and the spec says what was asked. Anything that reaches the tester only through a summary is untested by construction.
+
+`omelette-fleet rules --agents` ships that handoff as a mechanism rather than a habit:
+
+```
+/omelette-test docs/specs/my-feature.md
+```
+
+The skill (`.claude/skills/omelette-test/SKILL.md`) declares `context: fork` and `agent: omelette-tester`, and its body carries `` !`git diff HEAD` `` and `` !`git ls-files --others --exclude-standard` ``. Those commands run **at invocation, before the fork**, so the forked tester opens with the working tree's real diff and the list of untracked files already in front of it — there is no step at which a summary could be substituted. `$ARGUMENTS` is the spec path. `disable-model-invocation: true` keeps it a thing you invoke, not a thing a model reaches for on its own. Where skills are unavailable, dispatch `subagent_type: omelette-tester` by hand with the spec and the diff; the rule is the same, only the plumbing is manual.
 
 **The tests run through the real runner.** The tester writes its tests in a new file, never editing the implementation, and runs them with `npm test`, `pytest` or whatever the project actually uses. The raw runner output is the evidence, quoted. "I verified it" from a model is not a test result, and neither is a test that was written and reasoned about but never executed.
+
+**Narrow the run when the full suite is Docker-bound or minutes long** — the affected suite, the changed package, the one target that exercises the diff. The orchestrator decides the scope, and the report says which scope ran; an unqualified "tests pass" over a subset is the kind of evidence that is worse than none.
 
 **Arbitration belongs to the orchestrator, and it happens before anyone edits.** A failing test is not automatically a bug in the code; it is just as often a bug in the test. The rule: the test encodes an assumption the spec never made → fix the test; the spec is explicit and the code disagrees with it → fix the code. That ruling binds the coder: what must never happen is a coder changing code until a test goes green without the call being made — that is how a spec quietly becomes whatever the tester happened to assume.
 
@@ -78,15 +134,26 @@ The frontmatter keys that matter:
 | `effort` | `low` / `medium` / `high` / `xhigh` / `max` — where a sub-agent's effort is set, short of the environment variable above |
 | `tools` | Comma-separated allowlist; omit it to give the agent the default tool set |
 | `disallowedTools` | Comma-separated denylist, applied **before** `tools` resolves — the harness enforces it, so it is the only way to make "does not spawn sub-agents" true rather than requested |
+| `maxTurns` | How many turns the sub-agent may take before the harness stops it |
 
 `omelette-fleet rules --agents` writes two of these next to the rules file:
 
 - **`omelette-coder`** — `model: opus`, `effort: xhigh`, `disallowedTools: Agent`, otherwise the default tools. Implements one task from the brief the orchestrator gives it (a file path or the text itself), follows the brief's test cycle, does not commit unless told to, and cannot spawn anything.
-- **`omelette-tester`** — `model: sonnet`, `effort: xhigh`, `disallowedTools: Agent`, tools `Read, Glob, Grep, Bash, Write, Edit`. The flow above: spec plus diff in, new test file, real runner, a test-vs-spec ruling on every failure.
+- **`omelette-tester`** — `model: sonnet`, `effort: xhigh`, `maxTurns: 80`, `disallowedTools: Agent`, tools `Read, Glob, Grep, Bash, Write, Edit`. The flow above: spec plus diff in, new test file, real runner, a test-vs-spec ruling on every failure.
 
 Select them with `subagent_type: omelette-coder` / `omelette-tester`. Both are refreshed by re-running the command and are yours to replace — drop the marker comment and the fleet stops touching the file.
 
-Nesting is allowed three levels deep by default (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`), which is exactly why the tester rule has to be enforced rather than stated: the coder *could* spawn its own reviewer. `disallowedTools: Agent` in both shipped definitions takes the possibility away. Verified on Claude Code 2.1.261, 2026-09-05.
+**Those values are configuration, not code.** They live in the fleet config's `agents` block and the templates carry `{{model}}`, `{{effort}}` and `{{maxTurns}}` where they go, so a role is retuned with `set` and a re-render:
+
+```bash
+omelette-fleet show agents                                          # what the definitions will say
+omelette-fleet set agents.tester.maxTurns=120                       # change it
+omelette-fleet rules --agents                                       # re-render the definitions
+```
+
+The most common case is the tester running out of turns on a big diff. **A turn-limit truncation is not a failing suite** — the shipped tester is told to say so in its report — and the fix is the two commands above followed by a re-dispatch; the session picks the new definition up within seconds. The orchestrator may do this on its own mid-plan: it is a config change, not a code change. Details of the block, its defaults and the dotted `set` form: [CONFIG.md](CONFIG.md#agent-settings).
+
+Nesting is allowed three levels deep by default (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`), which is exactly why the tester rule has to be enforced rather than stated: the coder *could* spawn its own reviewer. `disallowedTools: Agent` in both shipped definitions takes the possibility away. Verified on Claude Code 2.1.261, 2026-09-05. The coder's "never commits" is enforced one layer out, by the `PreToolUse` guard of `rules --hooks` — a denylist can remove the `Agent` tool, but `git commit` is just a `Bash` call, and only a hook can tell it apart from the `git diff` the coder legitimately runs.
 
 ## Routing by task
 
@@ -146,9 +213,11 @@ Delegated calls are slow and silent — a deep-research run can take ten minutes
 tail -f ~/.omelette/fleet-log.ndjson | jq -r '"\(.ts) \(.unit) \(.event) \(.tool) \(.status // "")"'
 ```
 
-What to watch for: an `active` entry whose `startedAt` is older than that unit's `timeoutS` (something is stuck and will be hard-killed); a run of `end` events with `status: "error"` (usually auth, quota, or a CLI that auto-updated under you); and `usage` on Codex and Gemini events, which is where the fleet reports what a call actually cost (Grok reports none).
+What to watch for: an `active` entry whose `startedAt` is older than that unit's `timeoutS` (something is stuck and will be hard-killed); a run of `end` events with `status: "error"` (usually auth, quota, or a CLI that auto-updated under you); and `usage`, which is where the fleet reports what a call actually cost. All three units report it now (Grok's image runs still report none) — Codex the fullest (`input, cachedInput, output, reasoning`), Gemini and Grok `{input, output}`.
 
 In the answers themselves, watch for a trailing `[… treat the answer as partial]` or `[… run ended early …]` marker. The unit kept the text because the call was paid for, but it did not finish — re-run it or narrow the question rather than acting on it. One of those markers names its own fix: `[<unit>: hard-killed after <N>s — treat the answer as partial; raise <unit>.timeoutS in the fleet config]` is a run that outlived `timeoutS` and was SIGKILLed with an answer already on stdout. The text is what it had produced by then; the `end` event carries `partial: true` next to `status: "ok"`. Full schema in [STATUS-FEED.md](STATUS-FEED.md).
+
+**A hard-killed Grok run now actually salvages something.** `grok_research` and `grok_code_review` ask the CLI for `--output-format streaming-messages-json --include-partial-messages` rather than `json`, because the `json` format writes *nothing* to stdout until the run ends: on a 2026-09-06 probe it had produced 0 bytes at 20 s while the same question in plain mode had text by 16 s. A salvage path reading that stream had nothing to salvage on exactly the runs it exists for. The streaming format emits one JSON object per line as the answer is produced — 441 text deltas, 1513 characters, still there when a 30 s kill landed. Grok is also the slowest unit to give up (`timeoutS` 1800 s in the shipped config, after observed 15-minute reviews), so this is the unit where the difference shows.
 
 The vendor CLIs update themselves; this package deliberately does not — a fleet that rewrote its own code under a running session would be one more thing to distrust when something breaks. `doctor` shows both sides of that: each unit's `version` line is whatever the vendor CLI has become, and the header's `version … · latest …` is where the fleet itself stands. Bringing it forward is your call: `omelette-fleet update`, then restart Claude Code.
 

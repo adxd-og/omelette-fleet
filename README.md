@@ -19,14 +19,16 @@ Three peers inside Claude Code, each on a subscription you already pay for, none
 
 ```console
 $ omelette-fleet doctor      # example output — all three units; config tables trimmed
-FLEET DOCTOR · omelette-fleet 0.3.0 · node v20.19.5 · darwin
-version       0.3.0 · latest 0.3.0
+FLEET DOCTOR · omelette-fleet 0.3.1 · node v20.19.5 · darwin
+version       0.3.1 · latest 0.3.1
 fleet home    ~/.omelette
 fleet config  ~/.omelette/fleet.config.json
 claude CLI    ~/.local/bin/claude
 claude config ~/.claude.json
-rules         project: v0.3.0 · global: absent
-agents        project: v0.3.0 (2) · global: absent
+rules         project: v0.3.1 · global: absent
+agents        project: v0.3.1 (2) · global: absent
+skills        project: v0.3.1 (1) · global: absent
+hooks         project: v0.3.1 (wired: PreToolUse, PreCompact) · global: absent
 
 ── gemini (Gemini) ────────────────────────────────────────────
   bin         agy → ~/.local/bin/agy   [AGY_BIN=(unset)]
@@ -117,10 +119,18 @@ Then put the operating rules into your project (optional, recommended):
 ```bash
 ./bin/omelette-fleet.mjs rules          # <project>/.claude/rules/omelette-fleet.md
 ./bin/omelette-fleet.mjs rules --global # ~/.claude/rules instead
-./bin/omelette-fleet.mjs rules --agents # + the coder / tester sub-agent definitions
+./bin/omelette-fleet.mjs rules --agents # + the coder / tester sub-agent definitions and the /omelette-test skill
 ```
 
 Rules load on the next session start; agent definitions are picked up within seconds (restart if `.claude/agents` did not exist before).
+
+Optionally, install the guard hook — the coder's "never commits" rule, enforced rather than requested, plus a ledger marker on every compaction:
+
+```bash
+./bin/omelette-fleet.mjs rules --hooks  # writes .claude/hooks/omelette-guard.mjs
+```
+
+It prints a settings snippet and you paste it in yourself, into `.claude/settings.json` or `.claude/settings.local.json`: a hook script does nothing until your settings call it, and omelette-fleet reads those files but never writes them. `doctor` reads both and reports `hooks         project: v0.3.1 (wired: PreToolUse, PreCompact)` — or `NOT wired`, which is the failure mode where everything looks installed.
 
 Then check the install:
 
@@ -134,6 +144,24 @@ It exits 1 only for a unit that is **enabled and registered** *and* broken: the 
 
 Once published, the same commands work as `npx omelette-fleet …`.
 
+### Fewer permission prompts
+
+Every unit tool is read-only by design — it spawns a vendor CLI that cannot write your repository — so approving each call one at a time buys you nothing. Allowlist them once in `.claude/settings.json` (project) or `~/.claude/settings.json` (global):
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__omelette-gemini__*",
+      "mcp__omelette-grok__*",
+      "mcp__omelette-codex__*"
+    ]
+  }
+}
+```
+
+Use your own `--prefix` if you installed with one. If you register the servers per project through a checked-in `.mcp.json` instead of `claude mcp add -s user`, `"enableAllProjectMcpServers": true` in `.claude/settings.json` approves the servers themselves; the `permissions.allow` entries above still decide the per-tool prompting. As everywhere else here, this is a file you edit — `omelette-fleet` never writes `settings.json` or `settings.local.json`.
+
 ### CLI
 
 | Command | What it does |
@@ -141,14 +169,14 @@ Once published, the same commands work as `npx omelette-fleet …`.
 | `install [--prefix <name>] [--units <a,b,c>] [--dry-run] [--force]` | Registers one MCP server per unit as `<prefix>-<unit>` with `claude mcp add -s user`, and creates `<home>/fleet.config.json` from the shipped example if it does not exist yet (an existing file is never overwritten). A unit whose vendor CLI is not in `PATH` is skipped unless `--force`. `--dry-run` prints every command and every write and runs nothing. Exits 1 if a `claude mcp add` fails |
 | `uninstall [--prefix <name>] [--units <a,b,c>] [--dry-run]` | `claude mcp remove -s user` for those servers. Removing one that was never registered is a no-op; a removal that **fails for one that is registered** prints "Still registered" and exits 1. The fleet config and the status files are never touched |
 | `update [--check]` | Reports the latest released version, then brings **this** install up to date. A git checkout is fast-forwarded (`git pull --ff-only`); a dirty tree or a diverged branch is refused, never overwritten. An npm install is left alone and the exact `npm i -g` line is printed. MCP registrations are never rewritten — they hold absolute paths a pull does not move. `--check` fetches but pulls nothing and exits 3 when an update is available, 0 when there is none |
-| `rules [--global] [--agents] [--print] [--remove] [--force] [--dry-run]` | Writes the fleet's operating rules — units propose and this session applies, the tester flow, the routing table — to `<cwd>/.claude/rules/omelette-fleet.md`, which Claude Code loads like CLAUDE.md. `--global` writes it under `$CLAUDE_CONFIG_DIR` or `~/.claude` instead. The file carries a version marker on line 1: re-running refreshes a file with the marker, and a file **without** it is never touched (`--force` replaces it). `--print` sends the text to stdout; `--remove` deletes only a file with the marker; `--dry-run` prints every path and action and writes nothing. `--agents` also writes two sub-agent definitions (`omelette-coder`: Opus xhigh; `omelette-tester`: Sonnet xhigh, both `disallowedTools: Agent`) into `.claude/agents` — a definition is where a sub-agent's effort is set |
+| `rules [--global] [--agents] [--hooks] [--print] [--remove] [--force] [--dry-run]` | Writes the fleet's operating rules — units propose and this session applies, the ledger and handoff rule, the tester flow, the routing table — to `<cwd>/.claude/rules/omelette-fleet.md`, which Claude Code loads like CLAUDE.md. `--global` writes it under `$CLAUDE_CONFIG_DIR` or `~/.claude` instead. The file carries a version marker on line 1: re-running refreshes a file with the marker, and a file **without** it is never touched (`--force` replaces it). `--print` sends the text to stdout; `--remove` deletes only a file with the marker; `--dry-run` prints every path and action and writes nothing. `--agents` also writes two sub-agent definitions (`omelette-coder`: Opus xhigh; `omelette-tester`: Sonnet xhigh, both `disallowedTools: Agent`) into `.claude/agents` — a definition is where a sub-agent's effort is set — and the `/omelette-test` skill into `.claude/skills`. `--hooks` writes the guard script into `.claude/hooks` and prints the settings snippet that calls it; `settings.json` and `settings.local.json` are yours to edit, never ours. Every flag obeys the same marker rules, and `--remove` never removes a directory — it takes the skill's `SKILL.md` and leaves the empty folder |
 | `doctor [--prefix <name>] [--probe-models]` | Per unit: binary, `--version`, login state, resolved config with sources, ceiling, MCP registration, status-feed writability. A registration counts as yours only if its command is node and its path is *this* clone's `servers/<unit>.mjs` — otherwise it is reported as "registered elsewhere". `--probe-models` spends real Codex calls to test every catalog id |
-| `show [<unit>]` | Every config key for one unit or all of them: value, where it came from, and the ceiling |
-| `set <unit>.<key>=<value> [...]` | Changes keys in the config file. Unknown units, unknown keys and invalid values are refused; the rest of the file is kept |
+| `show [<unit> \| agents]` | Every config key for one unit or all of them: value, where it came from, and the ceiling. `show agents` prints the `agents` block that `rules --agents` renders the sub-agent definitions from |
+| `set <unit>.<key>=<value> \| agents.<agent>.<key>=<value> [...]` | Changes keys in the config file. Unknown units, unknown agents, unknown keys and invalid values are refused; the rest of the file is kept. An agent setting reaches a session on the next `omelette-fleet rules --agents`, which re-renders the definitions |
 | `call <unit> <tool> [json-args] [--timeout <seconds>]` | Drives a unit's server over real stdio (initialize → tools/list → tools/call). `json-args` must be a JSON **object**. Exit 0 = ok, 2 = the tool answered with an error, 1 = usage error or the call never completed. Default timeout 900 s, clamped to 1–86400 |
 | `--help`, `--version` | Every subcommand answers `--help` / `-h` too, and so does `help <command>` |
 
-If `claude` is not in `PATH`, `install` still writes the fleet config and prints the exact `claude mcp add` commands to run later; `uninstall` prints its commands and changes nothing. Neither the CLI nor the servers ever shell out — every child is `spawn(bin, [args])`, so a path or a value containing a space is data, not shell syntax. The only files the CLI writes are `<home>/fleet.config.json`, `<home>/update-check.json` and — only when you run `rules` — the marked files it manages under `.claude/rules/` and `.claude/agents/`, never one that lacks its marker unless you pass `--force`. Claude Code's own config is parsed, never written.
+If `claude` is not in `PATH`, `install` still writes the fleet config and prints the exact `claude mcp add` commands to run later; `uninstall` prints its commands and changes nothing. Neither the CLI nor the servers ever shell out — every child is `spawn(bin, [args])`, so a path or a value containing a space is data, not shell syntax. The only files the CLI writes are `<home>/fleet.config.json`, `<home>/update-check.json` and — only when you run `rules` — the marked files it manages under `.claude/rules/`, `.claude/agents/`, `.claude/skills/` and `.claude/hooks/`, never one that lacks its marker unless you pass `--force`. Claude Code's own config is parsed, never written: that goes for `.claude.json` and for `settings.json` / `settings.local.json`, which `doctor` reads to say whether the guard hook is wired and `rules --hooks` only ever prints a snippet for.
 
 `call` is the way to test a unit without a client: `./bin/omelette-fleet.mjs call codex codex_models '{}'`. It distinguishes the two failures that matter — a tool that answered with an error (exit 2, the unit talking) from a server that errored at the protocol level or died mid-call (exit 1, the pipe breaking), rather than reporting either as an empty success.
 
@@ -170,7 +198,7 @@ The vendor CLIs update *themselves*; this package deliberately does not. `doctor
 | Unit | CLI | Log in with | Tools | Good for | Do not trust it with |
 |---|---|---|---|---|---|
 | **gemini** | `agy` (Antigravity) | agy has no `login` subcommand — sign in through the OAuth flow on your first interactive `agy` run; credentials land under `~/.gemini/` | `gemini_research`, `gemini_deep_research`, `gemini_image`, `gemini_models` | Grounded web research and fact synthesis; multi-source deep research; reading local files **including images and PDFs** (give an absolute path); inputs past 1M tokens and formal/scientific reasoning via `Gemini 3.1 Pro (High)`; a non-Google second opinion via `GPT-OSS 120B (Medium)`; image generation | Writing anything. agy has no kernel sandbox — read-only here rests on your own agy `settings.json` permission policy plus a prompt preamble, the weakest posture in the fleet. Deep-research sources are **asserted by the model**; verify them. Anything it read off the web is untrusted input |
-| **grok** | `grok` (Grok Build) | `grok login`, or `grok login --device-code` | `grok_research`, `grok_code_review`, `grok_image`, `grok_image_edit`, `grok_models` | A cheap, fast second opinion; mechanical code analysis; math/STEM checks (AIME 93–100%, GPQA Diamond 84.6–88%); high-volume research sweeps; image generation **and image-to-image editing** — the only unit in the fleet that edits images | Fact-critical claims. AA-Omniscience measures Grok 4.6 at **48.2% accuracy / 34.3% hallucination** (read 2026-09-05; 4.5 was ~54% hallucination) — better, and still roughly one factual answer in three wrong — and it is overconfident. Never the sole source of a fact. Also: architecture calls, long-horizon engineering (DeepSWE 1.1 65.9), UI/front-end taste. Prompt-injection susceptible; `workspace-write` is **declared unsupported** and refused even with the ceiling open |
+| **grok** | `grok` (Grok Build) | `grok login`, or `grok login --device-code` | `grok_research`, `grok_code_review`, `grok_image`, `grok_image_edit`, `grok_models` | A cheap, fast second opinion; mechanical code analysis; math/STEM checks (AIME 93–100%, GPQA Diamond 84.6–88%); high-volume research sweeps; image generation **and image-to-image editing** — the only unit in the fleet that edits images. Research and review runs stream their output, so a hard-killed run comes back with the text it had produced, and token usage now reaches the status feed | Fact-critical claims. AA-Omniscience measures Grok 4.6 at **48.2% accuracy / 34.3% hallucination** (read 2026-09-05; 4.5 was ~54% hallucination) — better, and still roughly one factual answer in three wrong — and it is overconfident. Never the sole source of a fact. Also: architecture calls, long-horizon engineering (DeepSWE 1.1 65.9), UI/front-end taste. Prompt-injection susceptible; `workspace-write` is **declared unsupported** and refused even with the ceiling open |
 | **codex** | `codex` (Codex CLI) | `codex login` (ChatGPT account) | `codex_research`, `codex_code_review`, `codex_image`, `codex_models` | The strongest code review in the fleet and agentic terminal analysis, on `gpt-6-astra` (high) by default — AA Intelligence Index 55 against sol's 51 and terra's 47, and accepted on a ChatGPT Plus plan; directory-scoped review with an explicit `cwd`; grounded research with web search; image generation via the CLI's built-in **gpt-image-2** tool, saved to a temp directory outside every project; reports the fullest token usage in the fleet (input, cached, output, reasoning) | Being a source of record — verify factual claims. `gpt-5.6-luna` on anything multi-file or past ~200K tokens. `gpt-5.6-sol` unless your plan is ChatGPT Pro/Enterprise (Plus/Team gets an explicit rejection). `effort: xhigh` or `max` on routine work |
 
 Model ids, benchmark numbers and routing advice live in `units/<unit>/models.js` and are served by each unit's `<unit>_models` tool — call it when you are unsure which model a task belongs on.
@@ -184,6 +212,17 @@ One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.
   "version": 1,
   "defaults": {
     "status": true
+  },
+  "agents": {
+    "coder": {
+      "model": "opus",
+      "effort": "xhigh"
+    },
+    "tester": {
+      "model": "sonnet",
+      "effort": "xhigh",
+      "maxTurns": 80
+    }
   },
   "units": {
     "gemini": {
@@ -232,7 +271,7 @@ Every unit writes what it is doing to `$OMELETTE_HOME` (default `~/.omelette`): 
 
 How to actually run a session with a fleet — who decides, who proposes, which unit gets which task, and when to escalate a model or effort level: **[docs/ORCHESTRATION.md](docs/ORCHESTRATION.md)**. The adapter contract and internals: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**. Adding a fourth unit: **[docs/ADAPTERS.md](docs/ADAPTERS.md)**.
 
-**Rules in your session.** Two layers put that operating model in front of Claude Code. Every unit server hands the short version — units propose, the session applies, absolute paths, verify Grok — to the client from the MCP `initialize` handshake, so it is in context as "MCP Server Instructions" after a restart, with nothing to run. The long version is one command: `omelette-fleet rules` writes `<project>/.claude/rules/omelette-fleet.md` (or `--global` for `~/.claude/rules`), which Claude Code loads like CLAUDE.md, and `--agents` adds the coder and tester sub-agent definitions — where their effort is set and where the harness is told they may not spawn sub-agents of their own. Details, including how the version marker decides which files the fleet may overwrite: **[docs/ORCHESTRATION.md](docs/ORCHESTRATION.md#how-the-rules-reach-a-session)**.
+**Rules in your session.** Three layers put that operating model in front of Claude Code. Every unit server hands the short version — units propose, the session applies, absolute paths, verify Grok — to the client from the MCP `initialize` handshake, so it is in context as "MCP Server Instructions" after a restart, with nothing to run. The long version is one command: `omelette-fleet rules` writes `<project>/.claude/rules/omelette-fleet.md` (or `--global` for `~/.claude/rules`), which Claude Code loads like CLAUDE.md, and `--agents` adds the coder and tester sub-agent definitions — where their effort and the tester's turn limit are set, and where the harness is told they may not spawn sub-agents of their own — plus the `/omelette-test` skill, which forks the tester with the diff taken from git at invocation so it can never be handed the coder's summary. The third layer is `--hooks`: one guard script that blocks the coder's `git commit` at `PreToolUse` and stamps a re-read marker into your plan ledger at `PreCompact`, wired up by a snippet you paste into your own settings file. Details, including how the version marker decides which files the fleet may overwrite: **[docs/ORCHESTRATION.md](docs/ORCHESTRATION.md#how-the-rules-reach-a-session)**.
 
 ## FAQ
 

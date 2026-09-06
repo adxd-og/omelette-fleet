@@ -18,6 +18,10 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
   "version": 1,
   "updateCheck": true,
   "defaults": { "status": true },
+  "agents": {
+    "coder":  { "model": "opus", "effort": "xhigh" },
+    "tester": { "model": "sonnet", "effort": "xhigh", "maxTurns": 80 }
+  },
   "units": {
     "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
     "grok":   { "enabled": true, "mode": "read-only", "timeoutS": 1800, "maxTurns": 30 },
@@ -26,7 +30,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 }
 ```
 
-`defaults` applies to every unit; `units.<unit>` overrides it for one unit. Both accept the same keys. A `version` higher than 1 is accepted with a warning — known keys still apply, unknown ones are ignored.
+`defaults` applies to every unit; `units.<unit>` overrides it for one unit. Both accept the same keys. `agents` is a separate top-level block that has nothing to do with the units — it configures the Claude Code sub-agent definitions this package ships, and is described [below](#agent-settings). A `version` higher than 1 is accepted with a warning — known keys still apply, unknown ones are ignored.
 
 ### Top-level settings
 
@@ -37,6 +41,35 @@ Some keys describe the fleet rather than any one unit, so they sit at the top le
 | `updateCheck` | boolean | `true` | Whether a unit server may check for a newer release at startup, and whether `doctor` / `update` report the latest version. See [Update check](#update-check) |
 
 An invalid value is a warning and the built-in default stays in force, exactly as for a unit's keys.
+
+### Agent settings
+
+The `agents` block is the other top-level one, and it configures something different from everything else in this file: the two Claude Code sub-agent definitions `omelette-fleet rules --agents` writes into `.claude/agents/`. No unit reads it, and no vendor CLI ever sees it.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `agents.coder.model` | one printable line | `"opus"` | The `model:` line of `omelette-coder.md` |
+| `agents.coder.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line — the only place a sub-agent's effort can be set |
+| `agents.tester.model` | one printable line | `"sonnet"` | The `model:` line of `omelette-tester.md` |
+| `agents.tester.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line |
+| `agents.tester.maxTurns` | positive int | `80` | Its `maxTurns:` line — how many turns the tester gets before the harness stops it |
+
+The templates carry `{{model}}`, `{{effort}}` and `{{maxTurns}}` where those values go, and **`rules --agents` renders from the config as it is at that moment**. So a change here does not reach a session until you re-render:
+
+```bash
+omelette-fleet show agents                        # values and where each came from
+omelette-fleet set agents.tester.maxTurns=120
+omelette-fleet rules --agents                     # re-render; the session picks it up in seconds
+```
+
+The definition is refreshed at the same package version — the marker is the proof of ownership, and a changed value simply makes the content differ, so the run reports `written … (v0.3.1, was 0.3.1)` rather than pretending nothing happened. `set` prints the same reminder:
+
+```
+agents.tester.maxTurns  80 [default] → 120 [file]
+  note: `omelette-fleet rules --agents` re-renders the definitions with the new value.
+```
+
+Validation is deliberately forgiving in one direction: an unknown agent, an unknown key or an invalid value in the file is a **warning**, and the built-in default is used — because the alternative is `rules --agents` refusing to write a definition the session needs. Through `set` the same mistakes are refused outright and nothing is written. There are no environment overrides for this block.
 
 ## Keys
 
@@ -126,7 +159,7 @@ An invalid value does not poison the key — it warns and falls through to the n
 
 ### Editing with `set`
 
-`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` (or the `units.<unit>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
+`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command, and `agents` is the only word accepted in the first position that is not a unit name. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
 
 ```
 codex.timeoutS  600 [default] → 900 [file]
@@ -197,6 +230,8 @@ With the check off, `doctor` prints `latest check disabled` and `omelette-fleet 
 The file is `stat`ed on **every** resolution and re-parsed only when its mtime changes. A toggle therefore takes effect on the next tool call — no server restart, no session restart.
 
 A malformed file is a **warning, never an exception**: the last good parse of that same file stays in force, and if there never was one, the built-in defaults do. The config layer cannot throw into a tool call. Warnings are logged once per process (stderr, prefixed with the unit name) rather than repeated on every call.
+
+The `agents` block is the exception, and for a plain reason: nothing reads it at call time. It is rendered into files on disk by `rules --agents`, and until you run that, the config and the definitions a session is reading disagree.
 
 ## `enabled: false`
 

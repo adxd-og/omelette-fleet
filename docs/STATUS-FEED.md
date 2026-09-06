@@ -50,7 +50,7 @@ One file per unit, rewritten on every event.
 | `lastEvent.endedAt` | ISO-8601 UTC |
 | `lastEvent.durationMs` | Wall-clock milliseconds |
 | `lastEvent.error` | Error text, truncated to **500** characters, or `null` |
-| `lastEvent.usage` | Present only when the unit reports token usage — Codex: `{input, cachedInput, output, reasoning}`; Gemini: `{input, output}`; Grok: absent |
+| `lastEvent.usage` | Present only when the unit reports token usage — Codex: `{input, cachedInput, output, reasoning}`; Gemini and Grok: `{input, output}`. Grok reported none before 0.3.1; its research and review runs now read the counts off the streaming output, merging the lines that carry them, so a run whose last message reported only output tokens does not erase the input count. Image runs still report none |
 | `lastEvent.partial` | `true` only when the answer is incomplete — today: the run outlived `timeoutS`, was SIGKILLed, and the text it had already produced was kept. `status` stays `"ok"` (there IS an answer) and the text carries a matching `[<unit>: hard-killed after <N>s …]` marker. Absent on a normal call — never `false` |
 | `updatedAt` | When this snapshot was written |
 

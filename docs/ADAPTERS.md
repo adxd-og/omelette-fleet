@@ -128,6 +128,20 @@ export default defineUnit({
 
 Export `buildArgs` and the result interpreter. Everything worth testing about an adapter lives in those two pure functions.
 
+### Prefer a streaming output format
+
+The example above asks for `--output-format json` because it is the shortest thing to write. **If the CLI offers a streaming format, take it instead**, and pick it for the same reason the Grok unit did in 0.3.1.
+
+A hard kill only salvages what the CLI has already written to stdout. A whole-document JSON format has written nothing at that point: it buffers the run and prints one object at the end. Measured on the Grok CLI, 2026-09-06 — `--output-format json` had produced **0 bytes at 20 s** on a question that had visible text in plain mode by 16 s. The salvage path was correct, tested, and had nothing to work with on precisely the runs it exists for. Switching to `--output-format streaming-messages-json --include-partial-messages` — NDJSON, one object per line, written as the answer is produced — left 441 text deltas and 1513 characters recoverable from a 30 s kill.
+
+What that costs you is a line parser instead of one `JSON.parse`, and it comes with three rules worth stating:
+
+- **Still one parser for both paths.** Assemble the answer from the incremental events; when the run finished and the stream carries a final whole message, that message's text wins — it is authoritative, and it is what a complete run should return. A killed run simply never reaches that line and keeps the assembled deltas. Two parsers, one for "finished" and one for "killed", is how the two answers drift apart.
+- **Skip the deltas that are not the answer.** Reasoning/thinking deltas and tool-argument fragments arrive on the same stream and must never end up in the text.
+- **Tolerate a truncated last line.** A SIGKILL lands mid-write, so the final line is routinely half a JSON object. Skip unparseable lines rather than failing the salvage.
+
+Take usage counts off the stream while you are there, merging across the lines that carry them: a final event reporting only output tokens must not erase the input count an earlier one gave. That is how Grok started reporting `usage` at all.
+
 ## 3. `servers/<unit>.mjs`
 
 ```js
@@ -191,6 +205,7 @@ Also worth a test each: an unknown model is rejected before any spawn, a disable
 - [ ] **`supportedModes` honesty** — declare `workspace-write: null` unless the unit actually implements a mode you would defend in [SECURITY.md](SECURITY.md). A unit that declares it and then relies on a prompt to stay read-only is worse than one that refuses. If you do implement it, say precisely what scopes the write, and prefer granting it to one tool with an explicit `cwd`.
 - [ ] **Retry only when re-issuing is safe.** `ctx.retry` re-runs on empty output. That is fine for a read-only one-shot; it is not fine for anything that spends metered quota per call (image generation), anything that may already have written, or a deterministic failure. Pass `skipIf` for auth, quota, hard-kill, missing-binary and CLI-error cases.
 - [ ] **Fail loudly, never blankly.** An empty answer with a talkative stderr is a bug report, not a shrug — surface the stderr. A run that produced text but exited non-zero, stopped early, or was hard-killed keeps the text and appends a marker (`[<unit>: CLI exited N — treat the answer as partial]`, `[<unit>: hard-killed after <N>s — … raise <unit>.timeoutS …]`); only a text-less failure throws. A salvaged kill also returns `partial: true`, which the runtime puts in the status feed's `end` event while the status stays `"ok"`. Extract that text with the SAME parsing the success path uses — a second parser for the failure path is how the two drift. Refusals you handle yourself return `isError: true`.
+- [ ] **Choose a streaming output format over a whole-document one** where the CLI has both. A format that writes nothing until the run ends leaves the hard-kill salvage above with nothing to salvage — measured, not assumed. See [Prefer a streaming output format](#prefer-a-streaming-output-format).
 - [ ] **stdout is JSON-RPC only.** Log through `ctx.log`.
 - [ ] **`mutateGate`** on prompt-driven research tools; leave it off where git-reading is a legitimate ask, and off for image prompts.
 - [ ] **Add the unit to the CLI's install list** and to `doctor`, so a missing CLI is skipped rather than registered broken.
