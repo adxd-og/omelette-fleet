@@ -1,4 +1,4 @@
-<!-- omelette-fleet rules v0.3.1 · managed by `omelette-fleet rules` · edits are overwritten on refresh -->
+<!-- omelette-fleet rules v0.3.2 · managed by `omelette-fleet rules` · edits are overwritten on refresh -->
 # Working with the omelette fleet
 
 Gemini, Grok and Codex are wired into this session as **read-only units**. They research, review and propose; **this session applies**. Nothing a unit returns reaches the code, a document or a decision until the session has checked it against the code and the plan.
@@ -17,13 +17,14 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 
 - **Keep a ledger from the first step of a plan**, one line per event: `<project>/.omelette/ledger-<plan>.md` (add `.omelette/` to `.gitignore`), or wherever this project already keeps one — the rule is the file, not the path.
 - Write every decision as `Ruling: <what> — <why> — <cost if wrong>`, and mark each task complete with its commit.
+- **Tag what a line is, and never edit a wrong one.** A claim by a unit, a coder or a tester is `candidate` until the orchestrator verified it; then `verified` or `rejected`. A ruling that turned out wrong stays in place and gets a `Superseded by:` line — the reader after a compaction sees what was decided, why it changed, and what it cost.
 - **Before a compaction** — announced or suspected — **and at every natural pause, append a handoff block**: where the work stands, open findings, agents in flight, next action.
 - **After a compaction, re-read the ledger before doing anything else.** `omelette-fleet rules --hooks` installs a `PreCompact` hook that stamps the re-read line into every ledger for you; the discipline is the file, not the hook.
 
 ## Tester flow
 
 1. When a coder sub-agent reports done, the **orchestrator, never the coder,** spawns a **tester sub-agent with a clean context** (Sonnet-class, xhigh — the shipped `omelette-tester`).
-2. **Invoke `/omelette-test <spec path>`**: the skill forks `omelette-tester` and injects `git diff HEAD` at invocation, so the tester is handed the real diff and can never be handed the coder's summary — that would test what the coder believed, not what was asked. Where the skill is not installed, dispatch `subagent_type: omelette-tester` by hand with the approved spec plus the diff taken from git (`git diff`, or the changed files by absolute path).
+2. **Invoke `/omelette-test <spec path> [repo path]`**: the skill forks `omelette-tester` and injects the working tree's diff at invocation, so the tester is handed the real diff and can never be handed the coder's summary — that would test what the coder believed, not what was asked. The repo path is optional and is for an orchestrator whose session sits in another repository; leave it off and the diff is the current directory's. It is substituted into a shell command at invocation, so pass a plain absolute path — nothing the shell would interpret (`$`, quotes, `$(`). Where the skill is not installed, dispatch `subagent_type: omelette-tester` by hand with the approved spec plus the diff taken from git (`git diff`, or the changed files by absolute path).
 3. The tester writes tests and **runs them through the real runner** (`npm test`, `pytest`, …). The raw runner output is the evidence. A model's "I verified it" is not.
 4. **Arbitration comes first, and it belongs to the orchestrator.** A failing test is not automatically a bug in the code: the orchestrator decides *test vs spec* before any code is edited, and the coder never "fixes the code to make the test pass" without that decision. The one thing the tester may change on its own is **its own test** — when the spec never made the assumption that test encodes, the tester fixes or drops it and **reports every such change** so the ruling stays visible.
 5. The ruling, with the findings, goes back to the coder (continue the same sub-agent where the harness supports resuming one, so its context is kept), **at most 2–3 rounds**, then escalate to the operator.
@@ -35,7 +36,7 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 - Definitions live in `.claude/agents/<name>.md` in the project or `~/.claude/agents/<name>.md` for the user, project winning a name clash. Effort values: `low`, `medium`, `high`, `xhigh`, `max`.
 - `omelette-fleet rules --agents` installs two definitions — **`omelette-coder`** (Opus, `effort: xhigh`) and **`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config)) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-tester`.
 - Sub-agents may nest up to three levels deep, but both shipped definitions carry `disallowedTools: Agent`: they cannot spawn anything, so the **orchestrator** spawns the tester, never the coder.
-- **The tester's turn limit is config, not code.** If the tester reports a turn-limit truncation, raise it and re-run: `omelette-fleet set agents.tester.maxTurns=<n> && omelette-fleet rules --agents` — the session picks the new definition up within seconds; then re-dispatch the tester. Do it yourself: it is a config change, not a code change.
+- **The tester's turn limit is config, not code.** `maxTurns` in the definition is honoured: the tester stops at it and the harness tells you so. Raise it and continue: `omelette-fleet set agents.tester.maxTurns=<n> && omelette-fleet rules --agents` — the new definition is picked up by Claude Code's watcher, usually within seconds, sometimes minutes — then **continue the same tester** rather than re-dispatching, so its context is kept (in Claude Code, `SendMessage` to the tester's agent id). Do it yourself: it is a config change, not a code change.
 
 ## Routing
 
