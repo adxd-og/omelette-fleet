@@ -142,6 +142,21 @@
  *
  * TIMEOUT: unlike agy there is NO CLI-side print-timeout flag to hand down,
  * so the process-group SIGKILL is the only wall-clock bound (config timeoutS).
+ *
+ * OUTPUT CAP: core/spawn.mjs keeps only the LAST `outputCap` characters of
+ * stdout, and this unit's built-in raises it to 2 000 000 (config `outputCap`,
+ * fleet default 400 000) because the whole stream — thinking deltas, tool
+ * arguments, one JSON envelope per text delta — rides where the answer does.
+ * A cap that bites drops the FRONT of the stream, and the run's authoritative
+ * `result` line is the last one printed, so the two cases differ: whole lines
+ * still parse (the answer is real, its beginning is gone → the capped marker,
+ * partial: true) or the answer rode one line longer than the cap and nothing
+ * parses (grokAnswer would fail open with a JSON fragment as the "answer", so
+ * interpretGrok throws instead and names `grok.outputCap`). The throw is for
+ * STREAMING runs only — plain-mode image runs have no lines to parse, so their
+ * front-truncated text comes back marked like any other capped answer. A hard
+ * kill is answered first either way: 0.3.1's salvage keeps its promise, and the
+ * cap error surfaces only when the killed run had nothing to salvage.
  */
 import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
@@ -157,6 +172,17 @@ export const catalog = makeCatalog({
   title: 'GROK MODEL CATALOG',
   vendorDefaultNote: 'omit `model` for the fleet default, else grok\'s own default',
 });
+
+/**
+ * Grok's built-in `outputCap` — five times the fleet default (400 000). The
+ * streaming NDJSON carries the answer, every thinking delta, every tool call
+ * and their arguments, and each text delta is wrapped in its own JSON envelope:
+ * the stream is far larger than the answer, and the run's authoritative
+ * `result` line comes LAST. A tail cap that bites therefore takes the front of
+ * the stream, and a cap small enough to cut into the final line loses the
+ * answer outright — see interpretGrok.
+ */
+export const GROK_OUTPUT_CAP = 2000000;
 
 const BILLING_RISK_ENV = ['XAI_API_KEY'];
 const AUTH_RE = /not signed in|not authenticated/i;
@@ -384,25 +410,45 @@ const answer = (text, usage, extra) =>
 /**
  * Interpret one finished grok run → the answer text, `{ text, usage? }` once
  * the run reported tokens, `{ text, usage?, partial: true }` for a salvaged
- * hard kill, or throw. Exported for tests.
+ * hard kill or a front-truncated stream, or throw. Exported for tests.
  * `jsonMode` selects the structured output format (since 0.3.1: the streaming
  * NDJSON of research/review runs); false is the plain stdout of image runs.
+ * `outputCap` is the tail cap the run was spawned under — `res.capped` says it
+ * was reached, and the messages below quote it because raising it is the fix.
  */
-export function interpretGrok(res, { jsonMode, timeoutS }) {
-  const { stdout: out, stderr: errBuf, code, killed } = res;
+export function interpretGrok(res, { jsonMode, timeoutS, outputCap = GROK_OUTPUT_CAP }) {
+  const { stdout: out, stderr: errBuf, code, killed, capped } = res;
   const a = grokAnswer(out, jsonMode);
+  // THE TAIL CAP DROPS THE BEGINNING of the stream, so a capped run is never a
+  // whole answer: every path out of here marks it and flags it partial.
+  const capMark = (text) => (capped && text
+    ? `${text}\n\n[grok: output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial]`
+    : text);
+  const capExtra = capped ? { partial: true } : undefined;
   // A hard kill at timeoutS used to discard everything the CLI had printed —
   // on a long review that is a paid-for hour thrown away. Keep what was
   // captured, marked; only a kill with nothing to show is still an error.
+  // The kill is answered FIRST, cap or no cap: salvage is the older promise, and
+  // a killed run that has text has an answer to read whatever else went wrong.
   if (killed) {
     if (a.text) {
       return answer(
-        `${a.text}\n\n[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`,
+        capMark(`${a.text}\n\n[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`),
         a.usage,
         { partial: true },
       );
     }
-    throw new Error(`grok hard-killed after ${timeoutS}s (raise grok.timeoutS in the fleet config)`);
+    throw new Error(capped
+      ? `grok hard-killed after ${timeoutS}s and output exceeded the ${outputCap} char cap — raise grok.timeoutS or grok.outputCap in the fleet config`
+      : `grok hard-killed after ${timeoutS}s (raise grok.timeoutS in the fleet config)`);
+  }
+  // A capped STREAM that parsed nothing is the one case with no answer at all:
+  // the whole reply rode one huge `result` line, the tail kept a fragment of it,
+  // and grokAnswer's fail-open would hand that JSON fragment back as the answer.
+  // Plain mode never parses by design, so its capped runs are not this case —
+  // their text is text, front-truncated, and it goes back marked (below).
+  if (capped && jsonMode && !a.parsed) {
+    throw new Error(`grok output exceeded the ${outputCap} char cap and the final result line was lost — raise grok.outputCap or narrow the task`);
   }
   if (code !== 0 && !out.trim()) throw new Error(`grok exited ${code}: ${errBuf.trim().slice(-500) || '(no stderr)'}`);
   // A non-zero exit that still produced text: keep the text — the run is paid
@@ -410,10 +456,12 @@ export function interpretGrok(res, { jsonMode, timeoutS }) {
   // can never be read as a completed answer.
   const partial = (text) => (code !== 0 && text ? `${text}\n\n[grok: CLI exited ${code} — treat the answer as partial]` : text);
   if (a.error) throw new Error(`grok CLI error: ${a.error}`);
-  if (!a.parsed) return partial(a.text);
+  // Plain mode, or a stream in a format we do not recognize: fail open with the
+  // text, marked when the cap took its beginning.
+  if (!a.parsed) return answer(capMark(partial(a.text)), a.usage, capExtra);
   const stopNorm = a.stop.toLowerCase().replace(/[_\s]/g, '');
-  if (a.text && (!a.stop || stopNorm === 'endturn')) return answer(partial(a.text), a.usage);
-  if (a.text) return answer(partial(`${a.text}\n\n[grok: run ended early — stopReason=${a.stop}]`), a.usage);
+  if (a.text && (!a.stop || stopNorm === 'endturn')) return answer(capMark(partial(a.text)), a.usage, capExtra);
+  if (a.text) return answer(capMark(partial(`${a.text}\n\n[grok: run ended early — stopReason=${a.stop}]`)), a.usage, capExtra);
   throw new Error(
     `grok run ended with no answer (stopReason=${a.stop || 'unknown'})` +
     (stopNorm === 'cancelled' ? ' — a tool call needed interactive approval and the headless run was cancelled' : ''),
@@ -425,7 +473,7 @@ async function runGrok(ctx, { prompt, cwd, tools, maxTurns }) {
   const args = buildArgs({ prompt, model: ctx.model, effort: ctx.effort, cwd, tools, maxTurns });
   ctx.log(`grok spawn · tools=${tools} · model=${ctx.model || '(grok default)'} · effort=${ctx.effort || '(default)'} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd: cwd || undefined, extraEnv: { GROK_WEB_FETCH: '1' } });
-  const out = interpretGrok(res, { jsonMode, timeoutS: ctx.cfg.timeoutS });
+  const out = interpretGrok(res, { jsonMode, timeoutS: ctx.cfg.timeoutS, outputCap: ctx.cfg.outputCap });
   if (out && out.usage) {
     const n = (v) => (v === null || v === undefined ? '?' : v); // a count the run never reported
     ctx.log(`grok done · tokens in=${n(out.usage.input)} out=${n(out.usage.output)}`);
@@ -436,7 +484,9 @@ async function runGrok(ctx, { prompt, cwd, tools, maxTurns }) {
 /** The text of a run, whether it came back plain or as a salvaged-kill result. */
 const runText = (r) => (typeof r === 'string' ? r : (r && r.text) || '');
 
-const isDeterministic = (e) => /not authenticated|hard-killed|CLI error|not found in PATH/i.test((e && e.message) || '');
+// `output exceeded`: an answer that outgrew the cap once will outgrow it again,
+// so the retry is a second full paid run that cannot end differently.
+const isDeterministic = (e) => /not authenticated|hard-killed|CLI error|not found in PATH|output exceeded/i.test((e && e.message) || '');
 const researchTools = (ctx) => (ctx.cfg.webSearch ? READONLY_TOOLS : READONLY_TOOLS_NOWEB);
 
 function checkCwd(raw) {
@@ -474,7 +524,7 @@ export default defineUnit({
   // after this and removes XAI_API_KEY, which would flip billing to metered.
   envPassthrough: ['GROK_*', 'XAI_*'],
   envMap: { model: 'GROK_DEFAULT_MODEL', timeoutS: 'GROK_TIMEOUT_S', maxTurns: 'GROK_MAX_TURNS', imageMaxTurns: 'GROK_IMAGE_MAX_TURNS' },
-  builtin: { timeoutS: 300, maxTurns: 30 },
+  builtin: { timeoutS: 300, maxTurns: 30, outputCap: GROK_OUTPUT_CAP },
   extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },
   supportedModes: { 'read-only': true, 'workspace-write': null },
   auth: { detect: (stderr) => AUTH_RE.test(stderr), help: AUTH_HELP },

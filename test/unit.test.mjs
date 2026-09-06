@@ -46,6 +46,18 @@ function fakeUnit(overrides = {}) {
         async run(_a, ctx) { const r = await ctx.spawn({ args: ['-e', 'setTimeout(()=>{}, 20000)'] }); return r.killed ? 'killed' : 'finished'; },
       },
       {
+        // A CLI that prints more than the cap allows: what the runtime hands
+        // back is the TAIL, flagged, so the adapter can say the beginning is gone.
+        name: 'fake_flood', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+        async run(args, ctx) {
+          const r = await ctx.spawn({
+            args: ['-e', 'process.stdout.write("x".repeat(5000) + "END")'],
+            ...(args.outputCap !== undefined ? { outputCap: args.outputCap } : {}),
+          });
+          return `len=${r.stdout.length};capped=${r.capped}`;
+        },
+      },
+      {
         // An adapter that refuses the call itself (bad args), the way the real ones do.
         name: 'fake_refuse', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
         async run() { return { text: 'Error: "prompt" is required.', isError: true }; },
@@ -156,6 +168,21 @@ test('timeout from config hard-kills the child', async () => {
   const rt = createUnitRuntime(fakeUnit(), env({ units: { fake: { timeoutS: 1 } } }));
   const r = await rt.callTool('fake_slow', {});
   assert.equal(r.text, 'killed');
+});
+
+test('outputCap comes from the config, and a call may override it', async () => {
+  const wide = createUnitRuntime(fakeUnit(), env(null));
+  assert.equal((await wide.callTool('fake_flood', {})).text, 'len=5003;capped=false', 'the 400 000 default is nowhere near');
+  const narrow = createUnitRuntime(fakeUnit(), env({ units: { fake: { outputCap: 100 } } }));
+  assert.equal((await narrow.callTool('fake_flood', {})).text, 'len=100;capped=true');
+  // A call that knows better than the config (a pipeline stage, say) wins over it.
+  assert.equal((await narrow.callTool('fake_flood', { outputCap: 50 })).text, 'len=50;capped=true');
+  // …but it cannot switch the cap OFF: `slice(-0)` keeps the whole string, so a
+  // 0 from an adapter would silently uncap stdout. Clamped to one character.
+  assert.equal((await narrow.callTool('fake_flood', { outputCap: 0 })).text, 'len=1;capped=true');
+  assert.equal((await narrow.callTool('fake_flood', { outputCap: -5 })).text, 'len=1;capped=true');
+  // A value that is not a number at all falls back to the unit's config.
+  assert.equal((await narrow.callTool('fake_flood', { outputCap: 'lots' })).text, 'len=100;capped=true');
 });
 
 test('unknown tool and missing binary are clean errors', async () => {

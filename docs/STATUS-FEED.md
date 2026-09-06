@@ -51,12 +51,12 @@ One file per unit, rewritten on every event.
 | `lastEvent.durationMs` | Wall-clock milliseconds |
 | `lastEvent.error` | Error text, truncated to **500** characters, or `null` |
 | `lastEvent.usage` | Present only when the unit reports token usage — Codex: `{input, cachedInput, output, reasoning}`; Gemini and Grok: `{input, output}`. Grok reported none before 0.3.1; its research and review runs now read the counts off the streaming output, merging the lines that carry them, so a run whose last message reported only output tokens does not erase the input count. Image runs still report none |
-| `lastEvent.partial` | `true` only when the answer is incomplete — today: the run outlived `timeoutS`, was SIGKILLed, and the text it had already produced was kept. `status` stays `"ok"` (there IS an answer) and the text carries a matching `[<unit>: hard-killed after <N>s …]` marker. Absent on a normal call — never `false` |
+| `lastEvent.partial` | `true` only when the answer is incomplete, for one of two reasons: the run outlived `timeoutS` and was SIGKILLed with text already produced, or its stdout hit `outputCap` and the beginning of the output was dropped. `status` stays `"ok"` (there IS an answer) and the text carries the matching marker — `[<unit>: hard-killed after <N>s …]` or `[grok: output capped at <N> chars …]`, both of them on a run that managed both. Absent on a normal call — never `false` |
 | `updatedAt` | When this snapshot was written |
 
 Only tools that **spawn a CLI** are tracked. `<unit>_models` and any other local catalog read never appear.
 
-A hard-killed run that had already produced text is **not** an error: it ends `"ok"` with `partial: true`, because there is an answer to read — just not a finished one. A hard kill with nothing captured is an error like any other failed run.
+A hard-killed run that had already produced text is **not** an error: it ends `"ok"` with `partial: true`, because there is an answer to read — just not a finished one. A hard kill with nothing captured is an error like any other failed run. An output-capped run reads the same way, with one exception: when the cap cut into Grok's final `result` line nothing parses at all, and that call is an error rather than an answer with a marker — there is no answer left to read, only a JSON fragment.
 
 `status: "error"` covers everything that did not return a clean answer: a failed run, a rejected model or effort, a prompt the mutate gate refused, and a refusal the adapter made itself (a missing `prompt`, a `cwd` that is not an absolute existing directory). A call rejected after the config check — an unknown model, a gated prompt — still produces a matching `start`/`end` pair even though nothing spawned. A disabled unit and an unknown tool name are refused earlier and never reach the feed.
 

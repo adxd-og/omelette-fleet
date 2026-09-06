@@ -9,7 +9,7 @@ import unit, {
 } from '../units/grok/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
-const ok = (over = {}) => ({ stdout: '', stderr: '', code: 0, killed: false, ...over });
+const ok = (over = {}) => ({ stdout: '', stderr: '', code: 0, killed: false, capped: false, ...over });
 
 /**
  * NDJSON fixture builders, shaped on a live probe (grok 1.0.13, 2026-09-06):
@@ -253,12 +253,95 @@ test('interpretGrok: a non-zero exit WITH text keeps the text under a partial ma
   assert.match(interpretGrok(ok({ stdout: '{not json', code: 1 }), { jsonMode: true, timeoutS: 300 }), /CLI exited 1/);
 });
 
+test('interpretGrok: a front-truncated stream is a marked partial answer, or a loud error — never a fragment', () => {
+  const opts = { jsonMode: true, timeoutS: 300, outputCap: 2000 };
+  const MARKER = /\[grok: output capped at 2000 chars — the beginning of the stream was dropped; treat the answer as partial\]/;
+  // Whole lines survived in the tail: the answer is there, its beginning is not.
+  const marked = interpretGrok(ok({
+    stdout: stream(textDelta('the tail of the answer'), resultLine({ result: 'the tail of the answer', stop_reason: 'end_turn', usage: USAGE })),
+    capped: true,
+  }), opts);
+  assert.match(marked.text, /^the tail of the answer/);
+  assert.match(marked.text, MARKER);
+  assert.equal(marked.partial, true);
+  assert.deepEqual(marked.usage, { input: 10867, output: 524 });
+  // The whole answer rode ONE huge `result` line and the cap cut it open: not a
+  // single line parses, and the JSON fragment that survived must never be
+  // handed back as the answer the way an unrecognized format legitimately is.
+  assert.throws(
+    () => interpretGrok(ok({ stdout: '_reason":"end_turn","usage":{"input_tokens":10}}\n', capped: true }), opts),
+    /^Error: grok output exceeded the 2000 char cap and the final result line was lost — raise grok\.outputCap or narrow the task$/,
+  );
+  // Plain mode has no lines to parse and never claims to: its text is text,
+  // front-truncated, so it comes back marked rather than thrown away. An image
+  // run's path is the LAST token of the output, which the cap keeps.
+  const plain = interpretGrok(ok({ stdout: '/tmp/img.jpg', capped: true }), { jsonMode: false, timeoutS: 300, outputCap: 2000 });
+  assert.match(plain.text, /^\/tmp\/img\.jpg/);
+  assert.match(plain.text, MARKER);
+  assert.equal(plain.partial, true);
+  // A run that was killed AND capped says both things, once each: the salvage is
+  // answered first, and the cap note rides along with it.
+  const both = interpretGrok(ok({ stdout: stream(sys(), textDelta('what it got to')), capped: true, code: null, killed: true }), opts);
+  assert.match(both.text, /hard-killed after 300s/);
+  assert.match(both.text, MARKER);
+  assert.equal(both.partial, true);
+  // Killed, capped, and nothing captured at all: no answer to salvage, and the
+  // error names both bounds rather than sending the operator at one of them.
+  assert.throws(
+    () => interpretGrok(ok({ stdout: '', capped: true, code: null, killed: true }), opts),
+    /^Error: grok hard-killed after 300s and output exceeded the 2000 char cap — raise grok\.timeoutS or grok\.outputCap in the fleet config$/,
+  );
+  // …and an uncapped kill with nothing captured keeps naming only timeoutS.
+  assert.throws(
+    () => interpretGrok(ok({ stdout: '', code: null, killed: true }), opts),
+    /^Error: grok hard-killed after 300s \(raise grok\.timeoutS in the fleet config\)$/,
+  );
+  // So does an early stop.
+  const early = interpretGrok(ok({ stdout: stream(sys(), textDelta('some'), resultLine({ result: 'some', stop_reason: 'max_tokens' })), capped: true }), opts);
+  assert.match(early.text, /run ended early — stopReason=max_tokens/);
+  assert.match(early.text, MARKER);
+  assert.equal(early.partial, true);
+  // Nothing dropped: no marker, no flag, and the bare-string shape is kept.
+  assert.equal(
+    interpretGrok(ok({ stdout: stream(sys(), textDelta('all of it'), resultLine({ result: 'all of it', stop_reason: 'end_turn' })) }), opts),
+    'all of it',
+  );
+});
+
+test('runtime with a fake grok: `outputCap` bounds the real spawn, and a capped-out run is not retried', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-cap-'));
+  const runs = join(dir, 'runs');
+  const fake = join(dir, 'fake-grok.mjs');
+  // One `result` line far longer than the cap: the tail keeps a fragment of it
+  // and nothing parses — the shape a real answer past the cap arrives in.
+  writeFileSync(fake, [
+    'import { appendFileSync } from "node:fs";',
+    `appendFileSync(${JSON.stringify(runs)}, "x");`,
+    'process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "a".repeat(400) }) + "\\n");',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { grok: { outputCap: 100 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, GROK_BIN: process.execPath };
+  const rt = createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+    { env },
+  );
+  const r = await rt.callTool('grok_research', { prompt: 'q' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /exceeded the 100 char cap and the final result line was lost/);
+  // The bounded retry exists for an empty run; a second full run here would be
+  // paid for and would hit the same cap.
+  assert.equal(readFileSync(runs, 'utf8').length, 1, 'the run was not retried');
+});
+
 test('unit contract: five tools, efforts from the catalog, workspace-write declared unsupported', () => {
   assert.deepEqual(unit.tools.map((t) => t.name), ['grok_research', 'grok_code_review', 'grok_image', 'grok_image_edit', 'grok_models']);
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': null });
   assert.ok(catalog.effortEnum().includes('high'));
   assert.deepEqual(unit.billingRiskEnv, ['XAI_API_KEY']);
   assert.equal(unit.extraSchema.imageMaxTurns.default, 8);
+  // Thinking deltas ride the same stream as the answer, so Grok's tail cap is
+  // five times the fleet default — a long review must not lose its result line.
+  assert.equal(unit.builtin.outputCap, 2000000);
 });
 
 test('runtime with a fake grok: the streamed answer is assembled, usage reaches the status feed, image edit validates its source', async () => {

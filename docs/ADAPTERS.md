@@ -124,7 +124,13 @@ export default defineUnit({
 });
 ```
 
-`ctx` gives you `{ cfg, mode, model, effort, spawn, retry, log, catalog, home }`. `spawn(o)` accepts `{ args, cwd, stdinText, extraEnv, hardKillMs, outputCap }` and resolves `{ stdout, stderr, code, signal, killed }` — it does **not** reject on a non-zero exit, because only you know what an exit code means for this CLI. A refusal you make yourself returns `{ text, isError: true }`; returning an `Error: …` string without the flag reports a failure to MCP as a success. `{ text, partial: true }` is the third shape: an answer the run did not finish (today, a hard kill whose captured text was kept) — a success, with the flag carried into the status feed.
+`ctx` gives you `{ cfg, mode, model, effort, spawn, retry, log, catalog, home }`. `spawn(o)` accepts `{ args, cwd, stdinText, extraEnv, hardKillMs, outputCap }` and resolves `{ stdout, stderr, code, signal, killed, capped }` — it does **not** reject on a non-zero exit, because only you know what an exit code means for this CLI. Both bounds default to the unit's config (`timeoutS`, `outputCap`) and a call may override either. A refusal you make yourself returns `{ text, isError: true }`; returning an `Error: …` string without the flag reports a failure to MCP as a success. `{ text, partial: true }` is the third shape: an answer the run did not finish — a success, with the flag carried into the status feed. There are two reasons to set it: a hard kill whose captured text you kept, and output that hit `outputCap`.
+
+### Handle `capped`
+
+`capped: true` means the tail cap dropped characters, and what it drops is the **beginning** of stdout: your parser is reading a fragment. Say so rather than returning it as a whole answer — append a marker to the text and return `partial: true`. Then decide what the truncation cost you. If your CLI's answer arrives as one final object and the cap cut into that object, there is no answer left to hand back — throw an error naming the config key instead of failing open with a fragment (the Grok unit's `[grok: output capped at <N> chars …]` marker and its `raise grok.outputCap or narrow the task` error are the worked example, in `units/grok/adapter.mjs`). If your run was hard-killed as well, answer the kill first: salvaged text is still an answer, and the cap note rides along with it.
+
+Gemini and Codex do **not** read `capped` today — their answers arrive whole rather than as a stream, and the 400 000-character default is far above what they print. It is a gap, not a decision: tracked, and worth closing when either unit grows a streaming path.
 
 Export `buildArgs` and the result interpreter. Everything worth testing about an adapter lives in those two pure functions.
 

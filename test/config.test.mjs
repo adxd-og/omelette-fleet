@@ -107,6 +107,28 @@ test('invalid values warn and fall through to the next-lower layer; unknown keys
   assert.ok(c.warnings.some((w) => /GROK_MAX_TURNS = "lots" is invalid/.test(w)));
 });
 
+test('outputCap: a schema key like any other — 400 000 by default, raised by a unit builtin, tunable per unit', () => {
+  const plain = unitConfig({ unit: 'gemini', supportedModes: MODES_CODEX, env: { OMELETTE_HOME: home() } });
+  assert.equal(plain.values.outputCap, 400000);
+  assert.equal(plain.sources.outputCap, 'default');
+  // Grok's thinking deltas ride the same stream, so its adapter raises the built-in.
+  const grok = unitConfig({ unit: 'grok', builtin: { outputCap: 2000000 }, supportedModes: MODES_GROK, env: { OMELETTE_HOME: home() } });
+  assert.equal(grok.values.outputCap, 2000000);
+  assert.equal(grok.sources.outputCap, 'default');
+  // The operator narrows or widens it per unit or fleet-wide; a bad value warns
+  // and falls through to the layer below, like every other key.
+  const env = { OMELETTE_HOME: home({ defaults: { outputCap: 50000 }, units: { grok: { outputCap: 8000000 }, codex: { outputCap: 'lots' } } }) };
+  const raised = unitConfig({ unit: 'grok', builtin: { outputCap: 2000000 }, supportedModes: MODES_GROK, env });
+  assert.equal(raised.values.outputCap, 8000000);
+  assert.equal(raised.sources.outputCap, 'file');
+  const fleetWide = unitConfig({ unit: 'gemini', supportedModes: MODES_CODEX, env });
+  assert.equal(fleetWide.values.outputCap, 50000);
+  assert.equal(fleetWide.sources.outputCap, 'file:defaults');
+  const bad = unitConfig({ unit: 'codex', builtin: { outputCap: 2000000 }, supportedModes: MODES_CODEX, env });
+  assert.equal(bad.values.outputCap, 50000, 'the invalid unit value falls through to `defaults`');
+  assert.ok(bad.warnings.some((w) => /codex\.outputCap = "lots" is invalid/.test(w)));
+});
+
 test('an unknown key in `defaults` warns too — a fleet-wide typo is the quietest one', () => {
   const env = { OMELETTE_HOME: home({ defaults: { webSerch: false, timeoutS: 42 } }) };
   const c = unitConfig({ unit: 'grok', supportedModes: MODES_GROK, env });

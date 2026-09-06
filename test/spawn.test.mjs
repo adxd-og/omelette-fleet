@@ -87,10 +87,32 @@ test('inheritEnv hands the parent env over untouched — operator tools only (`c
   assert.equal(r.stdout, '/home/x/.claude-alt');
 });
 
-test('keeps only the tail of runaway output', async () => {
+test('keeps only the tail of runaway output, and says so with `capped`', async () => {
   const r = await runProcess({ bin: node, args: ['-e', 'process.stdout.write("a".repeat(5000) + "END")'], outputCap: 100 });
   assert.equal(r.stdout.length, 100);
   assert.ok(r.stdout.endsWith('END'));
+  // The BEGINNING is what a tail cap drops, so a parser reading a stream from
+  // the top has to be told it is looking at a fragment.
+  assert.equal(r.capped, true);
+});
+
+test('`capped` is false when nothing was sliced — under the cap and exactly at it', async () => {
+  const under = await runProcess({ bin: node, args: ['-e', 'process.stdout.write("short")'], outputCap: 100 });
+  assert.equal(under.stdout, 'short');
+  assert.equal(under.capped, false);
+  // Exactly at the cap: every character is still there, so nothing was dropped.
+  const exact = await runProcess({ bin: node, args: ['-e', 'process.stdout.write("a".repeat(100))'], outputCap: 100 });
+  assert.equal(exact.stdout.length, 100);
+  assert.equal(exact.capped, false);
+  // Arriving in several chunks changes nothing: `capped` is about characters
+  // dropped, not about how many writes it took to reach the cap.
+  const chunked = await runProcess({
+    bin: node,
+    args: ['-e', 'process.stdout.write("a".repeat(50)); process.stdout.write("b".repeat(50))'],
+    outputCap: 100,
+  });
+  assert.equal(chunked.stdout.length, 100);
+  assert.equal(chunked.capped, false);
 });
 
 test('feeds stdinText and closes stdin', async () => {

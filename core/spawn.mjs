@@ -3,7 +3,10 @@
  * One headless vendor-CLI run, bounded in every direction:
  *   - own process group (`detached`) so a wall-clock timeout can SIGKILL the
  *     whole tree, not just the top process;
- *   - stdout kept to a tail cap (a runaway model cannot exhaust memory);
+ *   - stdout kept to a tail cap (a runaway model cannot exhaust memory), the
+ *     result carrying `capped: true` when the cap actually dropped characters —
+ *     a TAIL cap drops the BEGINNING, so a parser reading a stream from the top
+ *     is looking at a fragment and has to be told rather than left to guess;
  *   - stderr kept to a short tail for error messages;
  *   - the child env built from an ALLOWLIST, not inherited (see below);
  *   - billing-risk env vars deleted from the child env (see units/*: an API
@@ -93,7 +96,10 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
  *          outputCap?:number, stdinText?:string, notFoundHelp?:string, log?:(m:string)=>void}} o
  *   env is the PARENT environment to select from — never the child env itself.
  *   inheritEnv: hand the parent env over untouched (operator tools only, see header).
- * @returns {Promise<{stdout:string, stderr:string, code:number|null, signal:string|null, killed:boolean}>}
+ *   outputCap: tail-keeping cap on stdout — the unit's `outputCap` config value.
+ * @returns {Promise<{stdout:string, stderr:string, code:number|null, signal:string|null,
+ *                    killed:boolean, capped:boolean}>}
+ *   capped: the cap dropped characters, so `stdout` starts mid-stream.
  */
 export function runProcess({
   bin, args, cwd, env = process.env, envPassthrough = [], extraEnv, scrubEnv = [], inheritEnv = false,
@@ -119,8 +125,15 @@ export function runProcess({
 
     let out = '';
     let errBuf = '';
+    let capped = false;
     child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (c) => { out = (out + c).slice(-outputCap); });
+    // `capped` counts characters DROPPED, not slices attempted: output that
+    // lands exactly on the cap keeps every character and is not capped.
+    child.stdout.on('data', (c) => {
+      const next = out + c;
+      if (next.length > outputCap) capped = true;
+      out = next.slice(-outputCap);
+    });
     child.stdout.on('error', () => {});
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (c) => { errBuf = (errBuf + c).slice(-STDERR_CAP); });
@@ -154,8 +167,8 @@ export function runProcess({
       if (timer) clearTimeout(timer);
       if (settled) return;
       settled = true;
-      log(`exit ${bin} · code=${code} · signal=${signal || '-'}${killed ? ' · HARD-KILLED' : ''}`);
-      resolve({ stdout: out, stderr: errBuf, code, signal, killed });
+      log(`exit ${bin} · code=${code} · signal=${signal || '-'}${killed ? ' · HARD-KILLED' : ''}${capped ? ` · OUTPUT-CAPPED at ${outputCap}` : ''}`);
+      resolve({ stdout: out, stderr: errBuf, code, signal, killed, capped });
     });
   });
 }

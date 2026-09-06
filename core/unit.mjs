@@ -34,6 +34,12 @@
  * never spawn and are answered by the runtime. Every other kind gets
  * `run(args, ctx)` with ctx = { cfg, mode, model, effort, spawn, retry, log,
  * catalog, home } and returns a string or { text, usage?, isError?, partial? }.
+ * `ctx.spawn({ args, cwd?, stdinText?, extraEnv?, hardKillMs?, outputCap? })`
+ * resolves to core/spawn.mjs's result — `{ stdout, stderr, code, signal,
+ * killed, capped }`. Both bounds come from the unit's config (`timeoutS`,
+ * `outputCap`) unless the call passes its own. `capped: true` means the tail
+ * cap dropped the BEGINNING of stdout: the adapter's parser is reading a
+ * fragment and must say so rather than pass it off as a whole answer.
  * `partial: true` marks an answer whose run did not finish (a hard kill whose
  * captured text was kept): still a success, still `isError: false`, and the
  * flag travels to the status feed's `end()` extra next to `usage`.
@@ -128,13 +134,18 @@ export function createUnitRuntime(unit, { env = process.env } = {}) {
   function spawnFor(cfg, { args, cwd, stdinText, extraEnv, hardKillMs, outputCap }) {
     const bin = resolveBin(unit, env);
     const timeoutMs = hardKillMs ?? cfg.values.timeoutS * 1000;
-    log(`spawn · bin=${bin} · argc=${args.length} · cwd=${cwd || '(process cwd)'} · hard-kill=${Math.round(timeoutMs / 1000)}s`);
+    // Both bounds come from the unit's config unless this call knows better.
+    // The config value is a validated posint; a call's is not, and `slice(-0)`
+    // keeps the WHOLE string — an adapter passing 0 would silently UNCAP stdout.
+    const asked = Number(outputCap ?? cfg.values.outputCap);
+    const cap = Number.isFinite(asked) ? Math.max(1, Math.floor(asked)) : cfg.values.outputCap;
+    log(`spawn · bin=${bin} · argc=${args.length} · cwd=${cwd || '(process cwd)'} · hard-kill=${Math.round(timeoutMs / 1000)}s · output-cap=${cap}`);
     return runProcess({
       // env is the PARENT env to select from: core/spawn.mjs builds the child
       // from the allowlist + this unit's passthrough, never by inheritance.
       bin, args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
       scrubEnv: unit.billingRiskEnv,
-      hardKillMs: timeoutMs, stdinText, outputCap, log,
+      hardKillMs: timeoutMs, stdinText, outputCap: cap, log,
       notFoundHelp: `${bin} not found in PATH — install the ${unit.label} CLI${unit.bin.env ? ` or point ${unit.bin.env} at it` : ''}`,
     }).then((res) => {
       // Auth check ONLY on empty-stdout runs: a real answer that merely mentions
