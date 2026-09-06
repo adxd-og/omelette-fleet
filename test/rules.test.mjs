@@ -292,7 +292,8 @@ test('the skill hands the forked tester the spec and a diff taken from git AT IN
   assert.match(text, /^name: omelette-test$/m);
   assert.match(text, /^context: fork$/m);
   assert.match(text, /^agent: omelette-tester$/m);
-  assert.match(text, /^disable-model-invocation: true$/m);
+  // The orchestrator (the session model) invokes this skill via the Skill tool, so it must stay model-invocable.
+  assert.ok(!/^disable-model-invocation:/m.test(text), 'the skill must not disable model invocation — the orchestrator calls it');
   assert.match(text, /^argument-hint: \[spec path\]$/m);
   // QUOTED: the description ends in "Usage: /omelette-test <spec path>", and an
   // unquoted `: ` inside a plain scalar ends the value — a YAML parser rejects

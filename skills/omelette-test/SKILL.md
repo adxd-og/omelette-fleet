@@ -4,7 +4,6 @@ name: omelette-test
 description: "Clean-context tester handoff — forks omelette-tester with the approved spec and the diff taken from git at invocation, so the tester never receives the coder's summary. Usage: /omelette-test <spec path>"
 context: fork
 agent: omelette-tester
-disable-model-invocation: true
 argument-hint: [spec path]
 ---
 Spec to test against: read `$ARGUMENTS` first; it is the authority.
