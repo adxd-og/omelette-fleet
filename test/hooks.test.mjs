@@ -11,13 +11,13 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HOOK_FILES, HOOK_MARKER, parseHookMarker, renderHookFile } from '../core/rules.mjs';
 
-const REFUSAL = 'omelette-coder never commits, pushes, stashes, branches or opens worktrees; report instead';
+const REFUSAL = 'omelette-coder never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead';
 
 /** The guard exactly as `rules --hooks` writes it, in a throwaway directory. */
 function guard() {
@@ -35,6 +35,28 @@ function fire(path, input, cwd) {
   });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+/**
+ * The same invocation with the STDIN PIPE under the test's control: spawnSync
+ * always closes stdin for you, and the two things worth proving here are what
+ * the guard does when the pipe carries too much (`write` and never read past
+ * the cap — the write may EPIPE, which is the point) and when it never closes
+ * at all (`end: false`). Resolves with how long the run took.
+ */
+function fireOpenStdin(path, { write = '', end = true } = {}) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(process.execPath, [path], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.stdin.on('error', () => { /* the guard stopping short of the write is the behaviour under test */ });
+    child.on('close', (code, signal) => resolve({ code, signal, out, err, ms: Date.now() - started }));
+    child.stdin.write(write, () => { if (end) child.stdin.end(); });
+    if (!write && end) child.stdin.end();
+  });
 }
 
 const preToolUse = (over = {}) => ({
@@ -68,6 +90,46 @@ test('PreToolUse: the coder is blocked with exit 2 and the refusal on stderr', (
     'git switch -cfeat',
     'git checkout -Bfeat',
     'git switch -Cfeat',
+    // An option value is quoted the moment it contains a space, and a long
+    // option takes its value with a space as readily as with an `=`.
+    'git -C "/My Dir" commit',
+    "git -C '/My Dir' commit",
+    'git -c user.name="A B" commit',
+    "git -c user.name='A B' commit",
+    'git --work-tree /tmp/x commit',
+    'git --git-dir /x/.git commit',
+    // Value-less short flags and the bare `--` separator are options too.
+    'git -p commit',
+    'git -P commit',
+    'git -C a -p commit',
+    'git -- commit',
+    // Creating a branch is creating a branch however it is spelled…
+    'git branch feat',
+    // …and moving one that already exists is the same write: rename, copy,
+    // force-reset to another ref, or repoint its upstream.
+    'git branch -m old new',
+    'git branch -M old new',
+    'git branch -c a b',
+    'git branch -C a b',
+    'git branch -f feat main',
+    'git branch --force feat main',
+    'git branch -u origin/x',
+    'git branch --set-upstream-to=origin/x',
+    'git branch -fm old new',
+    'git checkout -q -b feat',
+    'git checkout -q -B feat',
+    'git checkout --orphan x',
+    'git checkout --track origin/feat',
+    'git switch --create feat',
+    'git switch --force-create feat',
+    // Everything else that writes history or a ref.
+    'git merge main',
+    'git rebase -i main',
+    'git cherry-pick abc123',
+    'git revert abc123',
+    'git am /tmp/p.patch',
+    'git pull',
+    'git tag v1.0.0',
   ]) {
     const r = fire(g.path, preToolUse({ tool_input: { command } }));
     assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
@@ -87,6 +149,22 @@ test('PreToolUse: everything else runs — other git commands, other tools, othe
     // writes an object and commits nothing, and checkout without -b/-c moves.
     preToolUse({ tool_input: { command: 'git commit-tree $t -m x' } }),
     preToolUse({ tool_input: { command: 'git checkout main' } }),
+    preToolUse({ tool_input: { command: 'git switch main' } }),
+    preToolUse({ tool_input: { command: 'git checkout -- file.txt' } }),
+    preToolUse({ tool_input: { command: 'git merge-base main HEAD' } }),
+    // `git branch` READS until it is given a name or a flag that moves a ref:
+    // listing, deleting and the remote/all/verbose views are how a coder finds
+    // out where it is.
+    preToolUse({ tool_input: { command: 'git branch' } }),
+    preToolUse({ tool_input: { command: 'git branch --list' } }),
+    preToolUse({ tool_input: { command: 'git branch -l' } }),
+    preToolUse({ tool_input: { command: 'git branch -a' } }),
+    preToolUse({ tool_input: { command: 'git branch -r' } }),
+    preToolUse({ tool_input: { command: 'git branch -v' } }),
+    preToolUse({ tool_input: { command: 'git branch -av' } }),
+    preToolUse({ tool_input: { command: 'git branch -d x' } }),
+    preToolUse({ tool_input: { command: 'git branch -D x' } }),
+    preToolUse({ tool_input: { command: 'git branch --list feature-c' } }),
     // the same command from anything that is not the coder
     preToolUse({ agent_type: 'omelette-tester' }),
     preToolUse({ agent_type: undefined }), //         the main thread carries no agent_type
@@ -138,6 +216,27 @@ test('PreCompact: no .omelette directory at all is still a clean exit with the h
   assert.deepEqual(readdirSync(proj), [], 'a missing ledger is not a reason to create one');
 });
 
+test('PreCompact: a ledger that is not a regular file is skipped — a symlink is never followed, a FIFO never blocks', { skip: process.platform === 'win32' && 'POSIX symlinks and FIFOs' }, () => {
+  const g = guard();
+  const proj = join(g.dir, 'special');
+  mkdirSync(join(proj, '.omelette'), { recursive: true });
+  writeFileSync(join(proj, '.omelette', 'ledger-real.md'), '# real\n');
+  // A symlink out of .omelette is how an append becomes a write to somewhere
+  // else entirely; a FIFO is how it becomes a hang that never ends.
+  const outside = join(g.dir, 'outside.md');
+  writeFileSync(outside, 'untouched\n');
+  symlinkSync(outside, join(proj, '.omelette', 'ledger-link.md'));
+  const fifo = join(proj, '.omelette', 'ledger-fifo.md');
+  const madeFifo = spawnSync('mkfifo', [fifo], { encoding: 'utf8' }).status === 0;
+
+  const r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'auto', cwd: proj });
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /^HANDOFF: /);
+  assert.match(readFileSync(join(proj, '.omelette', 'ledger-real.md'), 'utf8'), /\n## Compaction .* \(trigger: auto\) —/);
+  assert.equal(readFileSync(outside, 'utf8'), 'untouched\n', 'a symlinked ledger is skipped, not followed');
+  if (madeFifo) assert.ok(statSync(fifo).isFIFO(), 'the FIFO is still a FIFO and the run did not hang on it');
+});
+
 test('PreCompact falls back to the process cwd when the event carries none', () => {
   const g = guard();
   const proj = join(g.dir, 'nocwd');
@@ -165,5 +264,45 @@ test('the guard never throws: malformed, empty, hostile and unknown input all ex
     const r = fire(g.path, input, g.dir);
     assert.equal(r.code, 0, `${input} should exit 0: ${r.out}${r.err}`);
     assert.equal(r.err, '', `${input} printed to stderr: ${r.err}`);
+  }
+});
+
+test('stdin over the 1 MiB cap is treated as malformed: the guard stops reading and exits 0', async () => {
+  const g = guard();
+  // The event WOULD block if it were read: the forbidden command is the first
+  // thing in it, and the 2 MiB of padding comes after. Exit 0 is the cap.
+  const oversized = JSON.stringify(preToolUse({
+    tool_input: { command: 'git push origin main' }, padding: 'x'.repeat(2 * 1024 * 1024),
+  }));
+  const r = await fireOpenStdin(g.path, { write: oversized });
+  assert.equal(r.code, 0, `${r.out}${r.err}`);
+  assert.equal(r.signal, null);
+  assert.equal(r.err, '', 'a capped read is silent, not a refusal');
+  assert.ok(r.ms < 15000, `the guard should give up at once, took ${r.ms}ms`);
+});
+
+test('stdin that never closes: the guard gives up at its deadline and exits 0 rather than holding the session', async () => {
+  const g = guard();
+  const r = await fireOpenStdin(g.path, { write: '{"hook_event_name":"PreToolUse"', end: false });
+  assert.equal(r.code, 0, `${r.out}${r.err}`);
+  assert.equal(r.signal, null);
+  assert.equal(r.err, '');
+  assert.ok(r.ms >= 4000 && r.ms < 15000, `expected the ~5 s stdin deadline, exited after ${r.ms}ms`);
+});
+
+test('PreToolUse: a command of nothing but option-shaped tokens is answered at once, not tiled', () => {
+  // Overlapping alternatives in the option run give a NON-matching command
+  // exponentially many tilings — ` -c` readable as its own flag or as the
+  // previous option's value. Measured on the earlier form: 5 ms at 20 tokens,
+  // 94 ms at 30, 11.4 s at 40. On the guard's hot path that is every Bash call
+  // in the session, so the run is deliberately unambiguous instead.
+  const g = guard();
+  for (const command of [`git${' -c'.repeat(60)} zzz`, `git${' --foo'.repeat(60)}`]) {
+    const started = Date.now();
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    const ms = Date.now() - started;
+    assert.equal(r.code, 0, `${command.slice(0, 40)}… should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+    assert.ok(ms < 2000, `the option run tiled instead of scanning: ${ms}ms for ${command.length} characters`);
   }
 });

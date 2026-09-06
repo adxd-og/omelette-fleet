@@ -122,7 +122,7 @@ Then put the operating rules into your project (optional, recommended):
 ./bin/omelette-fleet.mjs rules --agents # + the coder / tester sub-agent definitions and the /omelette-test skill
 ```
 
-Rules load on the next session start; agent definitions are picked up within seconds (restart if `.claude/agents` did not exist before).
+Rules load on the next session start; agent definitions and skills are picked up within seconds (restart if `.claude/agents` or `.claude/skills` did not exist before).
 
 Optionally, install the guard hook — the coder's "never commits" rule, enforced rather than requested, plus a ledger marker on every compaction:
 
@@ -130,7 +130,7 @@ Optionally, install the guard hook — the coder's "never commits" rule, enforce
 ./bin/omelette-fleet.mjs rules --hooks  # writes .claude/hooks/omelette-guard.mjs
 ```
 
-It prints a settings snippet and you paste it in yourself, into `.claude/settings.json` or `.claude/settings.local.json`: a hook script does nothing until your settings call it, and omelette-fleet reads those files but never writes them. `doctor` reads both and reports `hooks         project: v0.3.1 (wired: PreToolUse, PreCompact)` — or `NOT wired`, which is the failure mode where everything looks installed.
+It prints a settings snippet and you merge it in yourself, into `.claude/settings.json` or `.claude/settings.local.json`: a hook script does nothing until your settings call it, and omelette-fleet reads those files but never writes them. The snippet is a whole `hooks` object, so — as the printed line says — *"Merge this into your settings file (it is a whole `hooks` object — add the two events to an existing `hooks` block rather than replacing the file)"*. The script path in it is shell-quoted with POSIX single quotes; on Windows, quote it for your own shell by hand. `doctor` reads both files and reports `hooks         project: v0.3.1 (wired: PreToolUse, PreCompact)` — or `NOT wired`, which is the failure mode where everything looks installed; a `PreToolUse` entry whose matcher is not `Bash` is reported as `NOT wired (PreToolUse matcher is not Bash)`, since it will never see the call it exists to guard.
 
 Then check the install:
 

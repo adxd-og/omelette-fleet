@@ -243,9 +243,9 @@ test('update --check hints a stale skill with the --agents refresh command, and 
 // ─── the coder guard's actual security promise vs the given regex ──────────
 //
 // The rule text (§4, and the guard's own header comment) is unconditional:
-// "omelette-coder never commits, pushes, stashes, branches or opens
-// worktrees … whatever it was asked to do". The task-4 brief then FIXES the
-// exact regex: `\bgit\s+(commit|push|stash|checkout\s+-b|switch\s+-c|worktree)\b`.
+// "omelette-coder never commits, merges, rebases, pushes, stashes, tags,
+// branches or opens worktrees … whatever it was asked to do". The task-4
+// brief then FIXES the exact regex: `\bgit\s+(commit|push|stash|checkout\s+-b|switch\s+-c|worktree)\b`.
 // Real git accepts branch names attached to `-b`/`-c` with no space, and a
 // global flag (`-C <dir>`) ahead of the subcommand — both create a branch and
 // both are real, everyday git syntax. Verified against the real git binary

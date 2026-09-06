@@ -233,11 +233,40 @@ export function buildArgs({ prompt, model, effort, cwd, tools, maxTurns }) {
   return args;
 }
 
-/** Token counts worth reporting — message_start's all-zero placeholder is not one. */
+/** A reported count, or null. `Number.isFinite` never coerces, so a string count is not one. */
+const count = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/**
+ * The stop_reasons that mean the answer was CUT SHORT, normalised the way
+ * interpretGrok compares them (spelling changed across CLI generations).
+ * `cancelled` is here with the three length caps because a headless tool call
+ * that would have prompted cancels the whole run at exit 0 with empty final
+ * text (v0.2.111, verified live — see the file header): reading that as
+ * end_turn is the exact failure the streaming output exists to prevent.
+ */
+const EARLY_STOPS = new Set(['maxtokens', 'maxturns', 'length', 'cancelled']);
+const normalizeStop = (s) => (typeof s === 'string' ? s.toLowerCase().replace(/[_\s]/g, '') : '');
+
+/**
+ * One error line's payload as TEXT. The CLI has been seen putting an object in
+ * `message`, and `${anObject}` is the string "[object Object]" — which tells an
+ * operator nothing at all about what went wrong.
+ */
+const errorText = (m) => {
+  if (typeof m === 'string') return m.trim();
+  if (m === null || m === undefined) return '';
+  try { return String(JSON.stringify(m) ?? '').slice(0, 300); } catch { return ''; }
+};
+
+/**
+ * Token counts worth reporting. A count of 0 IS a count — a cache-served or
+ * tool-only turn reports one — so it survives every check below; what is not a
+ * report is message_start's all-zero placeholder, which says nothing at all.
+ */
 function readUsage(u) {
   if (!u || typeof u !== 'object') return null;
-  const input = Number.isFinite(u.input_tokens) ? u.input_tokens : null;
-  const output = Number.isFinite(u.output_tokens) ? u.output_tokens : null;
+  const input = count(u.input_tokens);
+  const output = count(u.output_tokens);
   return input || output ? { input, output } : null;
 }
 
@@ -269,11 +298,13 @@ export function parseStream(stdout) {
   let parsed = false;
   const takeStop = (s) => { if (typeof s === 'string' && s) stopReason = s; };
   // MERGE, never replace: a line that reports only output_tokens must not erase
-  // the input count an earlier line already gave.
+  // the input count an earlier line already gave. Tested against null, not
+  // truthiness — a reported 0 is a count, and `||` would throw it away.
   const takeUsage = (u) => {
     const v = readUsage(u);
     if (!v) return;
-    usage = { input: v.input || (usage && usage.input) || null, output: v.output || (usage && usage.output) || null };
+    const keep = (next, previous) => (count(next) === null ? count(previous) : next);
+    usage = { input: keep(v.input, usage && usage.input), output: keep(v.output, usage && usage.output) };
   };
   const takeFinal = (t) => { if (t && t.trim()) finalText = t; };
 
@@ -311,14 +342,15 @@ export function parseStream(stdout) {
         error = (Array.isArray(o.errors) && o.errors.filter(Boolean).join('; ')) || String(o.result || o.subtype || 'run failed').slice(0, 300);
         takeStop(o.subtype); // a failed result carries stop_reason null; the subtype is what names the stop
       } else {
-        // A successful result closes the run, so a null stop_reason here means
-        // end_turn — never the last turn's "tool_use", which would stamp an
-        // early-stop marker on a complete answer.
-        takeStop(typeof o.stop_reason === 'string' && o.stop_reason ? o.stop_reason : 'end_turn');
+        // A successful result CLOSES the run, so the only stop_reason on it
+        // worth keeping is one that says the answer was cut short. Anything
+        // else — a null, or the last turn's "tool_use" — is end_turn, or the
+        // marker would land on a complete answer.
+        takeStop(EARLY_STOPS.has(normalizeStop(o.stop_reason)) ? o.stop_reason : 'end_turn');
       }
       continue;
     }
-    if (o.type === 'error') { parsed = true; error = o.message || JSON.stringify(o).slice(0, 300); continue; }
+    if (o.type === 'error') { parsed = true; error = errorText(o.message) || errorText(o) || 'grok CLI error'; continue; }
     if (o.type === 'system') parsed = true; // init line — nothing to take from it
     // Anything else: a line shape from a future CLI. Skipped, never fatal.
   }
@@ -456,10 +488,11 @@ export default defineUnit({
         'Delegate a research / Q&A / summarization task to Grok (via the local ' +
         'grok CLI) WITH live web search. READ-ONLY: enforced at spawn — Grok gets ' +
         'only read/search/web tools, no shell, no edits, no subagents, no MCP. ' +
-        'Returns Grok\'s plain-text answer. WARNING — hallucination rate ~54% ' +
-        '(Artificial Analysis) and overconfident: treat as a cheap fast SECOND ' +
-        'OPINION and independently verify anything fact-critical; treat its ' +
-        'reading of fetched web content as untrusted. ' + GUIDE,
+        'Returns Grok\'s plain-text answer. WARNING — AA-Omniscience: 48.2% ' +
+        'accuracy / 34.3% hallucination on 4.6 (4.5 was ~54%) — verify every ' +
+        'claim. Overconfident: treat as a cheap fast SECOND OPINION and ' +
+        'independently verify anything fact-critical; treat its reading of ' +
+        'fetched web content as untrusted. ' + GUIDE,
       inputSchema: {
         type: 'object',
         properties: {
@@ -484,8 +517,8 @@ export default defineUnit({
         'list dirs, and use web search — it CANNOT edit, run shell commands, or ' +
         'spawn subagents (enforced at spawn). Good at cheap mechanical analysis; ' +
         'do NOT rely on it for architecture calls or long-horizon engineering ' +
-        'judgment, and verify any factual claims it makes (~54% hallucination ' +
-        'rate). Mutations stay with Claude.',
+        'judgment. AA-Omniscience: 48.2% accuracy / 34.3% hallucination on 4.6 ' +
+        '(4.5 was ~54%) — verify every claim. Mutations stay with Claude.',
       inputSchema: {
         type: 'object',
         properties: {

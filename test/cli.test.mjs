@@ -19,7 +19,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -776,7 +776,7 @@ test('rules: writes the managed file into <cwd>/.claude/rules, is idempotent, re
   assert.match(r1.stdout, /^written .*omelette-fleet\.md \(v\d+\.\d+\.\d+, was absent\)/m);
   // True for --global and for --agents too: it never names one location, and it
   // says how each kind of file actually reaches a session.
-  assert.match(r1.stdout, /^Rules load on the next session start; agent definitions are picked up within seconds \(restart if \.claude\/agents did not exist before\)\.$/m);
+  assert.match(r1.stdout, /^Rules load on the next session start; agent definitions and skills are picked up within seconds \(restart if \.claude\/agents or \.claude\/skills did not exist before\)\.$/m);
   const text = readFileSync(target, 'utf8');
   assert.ok(text.startsWith('<!-- omelette-fleet rules v'));
   assert.match(text, /Tester flow/);
@@ -1127,6 +1127,10 @@ test('rules --hooks writes the guard, prints the settings snippet, is idempotent
   const wired = join(realpathSync(proj), '.claude', 'hooks', 'omelette-guard.mjs');
   assert.ok(r1.stdout.includes(SNIPPET(wired)), `no snippet for ${wired} in:\n${r1.stdout}`);
   assert.doesNotMatch(r1.stdout, /written .*omelette-coder\.md/, '--hooks does not drag the agent definitions in');
+  // The snippet is a WHOLE `hooks` object, and an operator who already keeps
+  // hooks in that file has to merge rather than paste over it — so the
+  // paragraph above it says so instead of saying "Paste:".
+  assert.match(r1.stdout, /never writes that file\. Merge this into your settings file \(it is a whole hooks object — add the two events to an existing hooks block rather than replacing the file\):$/m, r1.stdout);
 
   // Running it again still prints the snippet: doctor's "paste the snippet from
   // rules --hooks" has to lead somewhere even when the file is already current.
@@ -1134,6 +1138,16 @@ test('rules --hooks writes the guard, prints the settings snippet, is idempotent
   assert.equal(r2.status, 0, r2.stderr);
   assert.match(r2.stdout, /^up to date .*omelette-guard\.mjs/m);
   assert.ok(r2.stdout.includes(SNIPPET(wired)));
+
+  // A run whose only write is the guard says nothing about session starts and
+  // directory watches: a hook script is called by settings.json the moment it
+  // is on disk, and the post-write line is about the kinds that are not.
+  rmSync(guard);
+  const r2b = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(r2b.status, 0, r2b.stderr);
+  assert.match(r2b.stdout, /^written .*omelette-guard\.mjs/m);
+  assert.match(r2b.stdout, /^up to date .*omelette-fleet\.md/m);
+  assert.doesNotMatch(r2b.stdout, /Rules load on the next session start/, r2b.stdout);
 
   writeFileSync(guard, '// my own hook\n');
   const r3 = rulesIn(proj, dir, ['--hooks']);
@@ -1257,6 +1271,22 @@ test('doctor reports the guard hook and whether settings.json wires it — readi
   assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired — paste the snippet from rules --hooks\)/m);
   writeFileSync(settings, JSON.stringify({ hooks: { ...snippet.hooks, PreCompact: [{ hooks: [{ type: 'command', command: 'node /elsewhere/other-hook.mjs' }] }] } }, null, 2));
   assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired — paste the snippet from rules --hooks\)/m);
+
+  // A PreToolUse entry that calls the guard from a matcher other than Bash
+  // never sees a Bash call at all: the script is there, the event is listed,
+  // and the guard is off. That is worth naming rather than counting as wired.
+  const withMatcher = (matcher) => JSON.stringify({
+    hooks: { ...snippet.hooks, PreToolUse: [{ ...snippet.hooks.PreToolUse[0], matcher }] },
+  }, null, 2);
+  writeFileSync(settings, withMatcher('Read'));
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(PreToolUse matcher is not Bash\) — paste the snippet from rules --hooks\)/m, doctor());
+  // `*` and an absent matcher cover Bash as surely as "Bash" does.
+  writeFileSync(settings, withMatcher('*'));
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact\)/m);
+  writeFileSync(settings, JSON.stringify({
+    hooks: { ...snippet.hooks, PreToolUse: [{ hooks: snippet.hooks.PreToolUse[0].hooks }] },
+  }, null, 2));
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact\)/m);
 
   const pasted = JSON.stringify(snippet, null, 2);
   writeFileSync(settings, pasted);

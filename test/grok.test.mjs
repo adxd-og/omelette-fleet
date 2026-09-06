@@ -313,3 +313,72 @@ test('runtime with a fake grok: the streamed answer is assembled, usage reaches 
   const noPrompt = await rt.callTool('grok_research', { prompt: '' });
   assert.equal(noPrompt.isError, true);
 });
+
+/** interpretGrok returns a bare string when nothing travels with the text, and `{ text, … }` when something does. */
+const answerText = (res, opts = { jsonMode: true, timeoutS: 300 }) => {
+  const a = interpretGrok(res, opts);
+  return typeof a === 'string' ? a : a.text;
+};
+
+test('parseStream: a token count of 0 is a count — the merge keeps it instead of reading it as "absent"', () => {
+  // A cache-served or tool-only turn really does report output_tokens 0, and
+  // `a || b` turns that number into "no count reported" (a `?` in the log line).
+  const zeroOut = parseStream(stream(sys(), textDelta('x'), resultLine({ result: 'x', stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 0 } })));
+  assert.deepEqual(zeroOut.usage, { input: 10, output: 0 });
+  const zeroIn = parseStream(stream(sys(), textDelta('x'), resultLine({ result: 'x', stop_reason: 'end_turn', usage: { input_tokens: 0, output_tokens: 7 } })));
+  assert.deepEqual(zeroIn.usage, { input: 0, output: 7 });
+  // …and a later 0 does not hand an earlier line's count back in its place.
+  const merged = parseStream(stream(
+    sys(),
+    ev({ type: 'message_start', message: { usage: { input_tokens: 512, output_tokens: 0 } } }),
+    textDelta('x'),
+    messageDelta('end_turn', { output_tokens: 0 }),
+  ));
+  assert.deepEqual(merged.usage, { input: 512, output: 0 });
+  // The MERGE itself is unchanged: a line that reports only one side keeps the other.
+  const kept = parseStream(stream(
+    sys(),
+    ev({ type: 'message_start', message: { usage: { input_tokens: 512, output_tokens: 0 } } }),
+    messageDelta('end_turn', { output_tokens: 40 }),
+  ));
+  assert.deepEqual(kept.usage, { input: 512, output: 40 });
+  // message_start's all-zero placeholder is still not a report of anything.
+  const placeholder = parseStream(stream(sys(), ev({ type: 'message_start', message: { usage: { input_tokens: 0, output_tokens: 0 } } }), textDelta('x')));
+  assert.equal(placeholder.usage, null);
+});
+
+test('parseStream: a SUCCESSFUL result line that stops on "tool_use" is a finished answer, not an early stop', () => {
+  // The last turn of a completed run can carry the tool call's own stop_reason.
+  // Stamping "ended early" on that turns every clean answer into a suspect one.
+  const s = parseStream(stream(sys(), textDelta('done'), resultLine({ result: 'done', stop_reason: 'tool_use', usage: USAGE })));
+  assert.equal(s.stopReason, 'end_turn');
+  assert.equal(answerText(ok({ stdout: stream(sys(), textDelta('done'), resultLine({ result: 'done', stop_reason: 'tool_use' })) })), 'done');
+  // The stop_reasons that DO mean "cut short" still say so, in their own
+  // spelling — `cancelled` among them: a headless run that reached a tool call
+  // needing approval ends at exit 0 with empty final text, and reading that as
+  // a clean end_turn is the very thing the streaming output exists to prevent.
+  for (const stop of ['max_tokens', 'max_turns', 'length', 'cancelled']) {
+    const early = parseStream(stream(sys(), textDelta('half'), resultLine({ result: 'half', stop_reason: stop })));
+    assert.equal(early.stopReason, stop, stop);
+    const marked = answerText(ok({ stdout: stream(sys(), textDelta('half'), resultLine({ result: 'half', stop_reason: stop })) }));
+    assert.match(marked, new RegExp(`\\[grok: run ended early — stopReason=${stop}\\]`));
+  }
+});
+
+test('parseStream: an error line whose `message` is not a string still yields TEXT, never "[object Object]"', () => {
+  const obj = parseStream(stream(sys(), JSON.stringify({ type: 'error', message: { code: 'rate_limit', detail: 'slow down' } })));
+  assert.equal(typeof obj.error, 'string');
+  assert.doesNotMatch(obj.error, /\[object Object\]/);
+  assert.match(obj.error, /rate_limit/);
+  assert.throws(
+    () => interpretGrok(ok({ stdout: stream(sys(), JSON.stringify({ type: 'error', message: { code: 'rate_limit' } })) }), { jsonMode: true, timeoutS: 300 }),
+    /grok CLI error: .*rate_limit/,
+  );
+  // A string message is passed through, and one that is neither still says something.
+  assert.equal(parseStream(stream(sys(), JSON.stringify({ type: 'error', message: 'plain words' }))).error, 'plain words');
+  for (const message of [null, 42, ['a', 'b']]) {
+    const e = parseStream(stream(sys(), JSON.stringify({ type: 'error', message }))).error;
+    assert.equal(typeof e, 'string', JSON.stringify(message));
+    assert.ok(e.length > 0 && !e.includes('[object Object]'), e);
+  }
+});

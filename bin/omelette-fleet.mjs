@@ -968,6 +968,9 @@ function managedFiles({ global = false, agents = false, hooks = false, version, 
  */
 const shellQuote = (s) => `'${String(s).replaceAll("'", "'\\''")}'`;
 
+/** The kinds a running session ever picks up on its own — the post-write line is about these and no other. */
+const LOADED_BY_A_SESSION = new Set(['rules', 'agents', 'skills']);
+
 function hookSettingsSnippet(scriptPath) {
   const command = JSON.stringify(`node ${shellQuote(resolvePath(scriptPath))}`);
   return [
@@ -1014,10 +1017,13 @@ async function cmdRules(argv) {
     if (r.error) err(r.error);
     // One refused file is enough to exit 1 — and never a reason to skip the rest.
     if (r.code) code = 1;
-    if (r.line && r.line.startsWith('written ')) wrote = true;
+    if (r.line && r.line.startsWith('written ') && LOADED_BY_A_SESSION.has(f.kind)) wrote = true;
     if (!r.code && f.kind === 'hooks' && !flags.remove) toWire.push(f.path);
   }
-  if (wrote) out('Rules load on the next session start; agent definitions are picked up within seconds (restart if .claude/agents did not exist before).');
+  // Only about the kinds a SESSION picks up. A hook script is called by
+  // settings.json the moment it is on disk — nothing about it waits for a
+  // session start or a directory watch, and the snippet below says what it does need.
+  if (wrote) out('Rules load on the next session start; agent definitions and skills are picked up within seconds (restart if .claude/agents or .claude/skills did not exist before).');
   // A script on disk is not a hook: settings.json is what calls it, and this CLI
   // never writes that file. So the snippet is printed on EVERY --hooks run, not
   // only the one that created the script — doctor sends the operator here for it.
@@ -1026,7 +1032,10 @@ async function cmdRules(argv) {
   for (const path of toWire) {
     if (flags.dryRun) { out('would print the settings snippet after writing'); continue; }
     out();
-    out(`The script only runs once ${settingsTarget({ global: !!flags.global }).path} calls it — omelette-fleet never writes that file. Paste:`);
+    // "Paste" was an instruction an operator could follow literally and lose
+    // the hooks they already had: what follows is a whole `hooks` object, not a
+    // whole settings file.
+    out(`The script only runs once ${settingsTarget({ global: !!flags.global }).path} calls it — omelette-fleet never writes that file. Merge this into your settings file (it is a whole hooks object — add the two events to an existing hooks block rather than replacing the file):`);
     out();
     for (const line of hookSettingsSnippet(path)) out(line);
   }
@@ -1126,11 +1135,29 @@ const DIR_KINDS = Object.keys(KINDS).filter((k) => k !== 'rules');
  * the script somewhere else — all of which still run our guard, and none of
  * which we would recognise by comparing paths.
  */
+const coversBash = (m) => m === undefined || m === null || m === '' || m === '*' || m === 'Bash';
+
+/**
+ * @returns {{wired:string[], matcherMismatch:boolean}} the events wired, plus
+ *   whether a PreToolUse entry calls the guard from a matcher that will never
+ *   fire on a Bash call — which looks installed from every angle and guards
+ *   nothing, so it is reported instead of being counted either way.
+ */
 function hookWiring(config) {
   const hooks = isObj(config) && isObj(config.hooks) ? config.hooks : {};
   const calls = (h) => isObj(h) && HOOK_FILES.some((f) => String(h.command || '').includes(f));
-  return HOOK_EVENTS.filter((event) => (Array.isArray(hooks[event]) ? hooks[event] : [])
-    .some((group) => isObj(group) && Array.isArray(group.hooks) && group.hooks.some(calls)));
+  const wired = [];
+  let matcherMismatch = false;
+  for (const event of HOOK_EVENTS) {
+    const calling = (Array.isArray(hooks[event]) ? hooks[event] : [])
+      .filter((group) => isObj(group) && Array.isArray(group.hooks) && group.hooks.some(calls));
+    if (!calling.length) continue;
+    // Only PreToolUse is matched against a tool name at all, and the guard has
+    // exactly one tool to guard.
+    if (event === 'PreToolUse' && !calling.some((group) => coversBash(group.matcher))) { matcherMismatch = true; continue; }
+    wired.push(event);
+  }
+  return { wired, matcherMismatch };
 }
 
 /**
@@ -1144,6 +1171,7 @@ function hookWiring(config) {
 function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env } = {}) {
   const unreadable = [];
   let wired = [];
+  let matcherMismatch = false;
   for (const { name, path } of settingsTargets({ global, cwd, env })) {
     let raw;
     try { raw = readFileSync(path, 'utf8'); } catch { continue; } // absent is the normal case
@@ -1151,9 +1179,10 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
     try { config = JSON.parse(raw); } catch { config = null; }
     if (!isObj(config)) { unreadable.push(name); continue; }
     const here = hookWiring(config);
-    if (here.length > wired.length) wired = here;
+    if (here.matcherMismatch) matcherMismatch = true;
+    if (here.wired.length > wired.length) wired = here.wired;
   }
-  return { wired, unreadable };
+  return { wired, unreadable, matcherMismatch };
 }
 
 /**
@@ -1161,12 +1190,15 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
  * ever calls it. A script nobody calls is the failure mode worth a line of its
  * own, because everything about it looks installed.
  */
-const hooksLabel = (r, { wired, unreadable }) => {
+const hooksLabel = (r, { wired, unreadable, matcherMismatch }) => {
   if (r.state === 'absent') return 'absent';
   if (r.state === 'foreign') return 'foreign (no marker)';
   const stale = r.behind ? ` [run: ${refreshCommand('hooks', r.scope)}]` : '';
   if (wired.length === HOOK_EVENTS.length) return `v${r.version} (wired: ${wired.join(', ')})${stale}`;
-  const why = unreadable.length ? ` (${unreadable.join(' and ')} unreadable)` : '';
+  const reasons = [];
+  if (unreadable.length) reasons.push(`${unreadable.join(' and ')} unreadable`);
+  if (matcherMismatch) reasons.push('PreToolUse matcher is not Bash');
+  const why = reasons.length ? ` (${reasons.join('; ')})` : '';
   return `v${r.version} (NOT wired${why} — paste the snippet from rules --hooks)${stale}`;
 };
 

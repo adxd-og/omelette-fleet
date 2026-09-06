@@ -210,8 +210,8 @@ The answer is cached in `<home>/update-check.json`, written atomically with mode
 ```json
 {
   "checkedAt": 1756900000000,
-  "latest": "0.3.0",
-  "url": "https://github.com/adxd-og/omelette-fleet/releases/tag/v0.3.0"
+  "latest": "0.3.1",
+  "url": "https://github.com/adxd-og/omelette-fleet/releases/tag/v0.3.1"
 }
 ```
 

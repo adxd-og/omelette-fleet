@@ -40,6 +40,13 @@ test('coerce: a `line` spec is one printable line — no blank, no control chara
   for (const bad of ['opus\n---\ninjected: 1', 'opus\r\nx', 'opus\tx', 'opus\u000bx', 'opus\fx', 'opus\u0000x', 'opus\u001b[0m']) {
     assert.deepEqual(coerce({ type: 'line' }, bad), { ok: false }, JSON.stringify(bad));
   }
+  // The Unicode line breaks a YAML reader ends a line on as readily as on \n:
+  // NEL, LINE SEPARATOR, PARAGRAPH SEPARATOR. Built from a char code so this
+  // source file never carries one — what a config file may contain is the point.
+  for (const code of [0x0085, 0x2028, 0x2029]) {
+    const bad = `opus${String.fromCharCode(code)}disallowedTools: `;
+    assert.deepEqual(coerce({ type: 'line' }, bad), { ok: false }, `U+${code.toString(16).toUpperCase().padStart(4, '0')}`);
+  }
   // the unit keys are unaffected: '' is how a plain string key says "unset"
   assert.deepEqual(coerce({ type: 'string' }, ''), { ok: true, value: '' });
 });

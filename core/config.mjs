@@ -87,10 +87,13 @@ export function coerce(spec, raw) {
     // `disallowedTools: Agent` included — into the body, where the harness
     // enforces nothing, in a file whose marker still says it is ours. Blank is
     // out for the same reason: it would ship a `model:` with no value.
+    // U+0085, U+2028 and U+2029 join the C0 controls in the class: a YAML
+    // reader ends a line on each of them exactly as it does on a newline, and
+    // not one of them is a control character, so nothing else here catches them.
     case 'line': {
       if (typeof raw !== 'string') return { ok: false };
       const value = raw.trim();
-      return value && !/[\u0000-\u001f\u007f]/.test(value) ? { ok: true, value } : { ok: false };
+      return value && !/[\u0000-\u001f\u007f\u0085\u2028\u2029]/.test(value) ? { ok: true, value } : { ok: false };
     }
     default:
       return { ok: false };
