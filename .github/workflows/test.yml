@@ -1,8 +1,8 @@
 # omelette-fleet CI — the whole promise of this package is "zero runtime
 # dependencies, no build step", so the job is literally checkout + node + test:
 # no `npm install` (there is nothing to install), no cache, no secrets. The
-# matrix is the support floor (Node 20) and the current line (Node 22) on both
-# platforms the vendor CLIs run on. Every test must pass without any vendor CLI
+# matrix is the support floor (Node 20) and the current line (Node 22) on the
+# platforms the vendor CLIs run on, plus windows-latest as a signal (0.3.2 spike). Every test must pass without any vendor CLI
 # and without `claude` — the suite fakes those.
 name: test
 
@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: [20, 22]
     name: node ${{ matrix.node }} · ${{ matrix.os }}
     steps:
