@@ -88,7 +88,7 @@ Every unit understands these. Adapters may add their own (below).
 | `webSearch` | boolean | `true` | Whether the unit's web tools are available |
 | `status` | boolean | `true` | Write the status feed for this unit |
 
-Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/no`, so the same values work from a file or an environment variable. `timeoutS`/`maxTurns`/`outputCap` accept numeric strings and are floored; zero and negatives are rejected.
+Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/no`, so the same values work from a file or an environment variable. Every **positive int** key — `timeoutS`, `maxTurns`, `outputCap`, `imageMaxTurns`, `agents.tester.maxTurns` — is a WHOLE number above zero, given as a number or a numeric string. A fraction is refused rather than rounded (`0.5` used to floor to the very `0` these keys forbid, and `1.9` to a `1` nobody wrote), and so are zero, negatives and anything that is not a number.
 
 ### Unit-specific extras and built-in overrides
 

@@ -135,7 +135,9 @@ const COMMANDS = {
       '$CLAUDE_CONFIG_DIR or ~/.claude instead. The file carries a version',
       'marker on line 1: re-running refreshes a file with the marker, and a',
       'file WITHOUT it is never touched (--force replaces it). --print sends',
-      'the text to stdout; --remove deletes only a file with the marker.',
+      'the text to stdout; --remove deletes only a file with the marker, plus',
+      "the skill's own directory once its SKILL.md is gone and it is empty —",
+      'a skill IS a directory, and an empty one still reads as installed.',
       '--agents also writes two sub-agent definitions (omelette-coder:',
       'Opus xhigh; omelette-tester: Sonnet xhigh, both disallowedTools:',
       'Agent) into .claude/agents, where their effort is set, and the',
@@ -147,7 +149,13 @@ const COMMANDS = {
   doctor: {
     args: '[--prefix <name>] [--probe-models]',
     body: [
-      'Per unit: the vendor binary, its --version, the login state, the',
+      'First the machine: the fleet home and config, the claude CLI and the',
+      'file its registrations live in, then one line per managed kind —',
+      'rules, agents, skills, hooks — for both scopes, saying whose each',
+      'file is and, for hooks, which events actually call the guard. While',
+      'something is missing it adds ONE `next` line naming the command that',
+      'fixes it; none of that ever changes the exit code.',
+      'Then per unit: the vendor binary, its --version, the login state, the',
       'resolved fleet config with sources, the MCP registration and',
       'whether the status feed is writable. Exits 1 when a unit that is',
       'enabled AND registered has a missing binary, is signed out, or is',
@@ -510,6 +518,27 @@ function writeConfigFromExample(plan) {
   writeFileSync(plan.target, readFileSync(plan.source, 'utf8'), { mode: 0o600 });
 }
 
+/**
+ * The config half of `install`, as a LINE and an exit contribution rather than
+ * an exception. A fleet home the CLI may not write is a real failure and the
+ * exit code says so — but it has nothing to do with the project files, and
+ * throwing here took the whole `--rules` phase down with it, leaving an
+ * operator who asked for both halves with neither.
+ *
+ * @returns {number} 0, or 1 when the file was meant to be created and was not.
+ */
+function createConfig(plan) {
+  if (plan.exists) { out(`config  ${plan.target} already exists — left alone`); return 0; }
+  try { writeConfigFromExample(plan); }
+  catch (e) {
+    out(`config  FAILED to write ${plan.target}: ${(e && e.message) || e}`);
+    out('        the fleet falls back to its built-in defaults until that file exists.');
+    return 1;
+  }
+  out(`config  wrote ${plan.target} (0600, from ${plan.source})`);
+  return 0;
+}
+
 async function cmdInstall(argv) {
   const { flags, positional, errors } = parseArgv(argv, { booleans: ['rules', 'dry-run', 'force'], options: ['prefix', 'units'] });
   if (positional.length) errors.push(`unexpected argument: ${positional[0]}`);
@@ -561,11 +590,10 @@ async function cmdInstall(argv) {
       out(`  ${p.add.join(' ')}`);
     }
     out();
-    if (cfgPlan.exists) out(`config  ${cfgPlan.target} already exists — left alone`);
-    else { writeConfigFromExample(cfgPlan); out(`config  wrote ${cfgPlan.target} (0600, from ${cfgPlan.source})`); }
+    const cfgFailed = createConfig(cfgPlan);
     out();
     out('Restart Claude Code to load the new servers.');
-    return andRules(0);
+    return andRules(cfgFailed);
   }
 
   const registered = [];
@@ -593,9 +621,9 @@ async function cmdInstall(argv) {
   }
 
   out();
-  if (cfgPlan.exists) out(`config  ${cfgPlan.target} already exists — left alone`);
-  else if (dry) out(`config  would write ${cfgPlan.target} (0600, copied from ${cfgPlan.source})`);
-  else { writeConfigFromExample(cfgPlan); out(`config  wrote ${cfgPlan.target} (0600, from ${cfgPlan.source})`); }
+  let cfgFailed = 0;
+  if (dry && !cfgPlan.exists) out(`config  would write ${cfgPlan.target} (0600, copied from ${cfgPlan.source})`);
+  else cfgFailed = createConfig(cfgPlan);
 
   out();
   const list = registered.map((n) => `${prefix}-${n}`).join(', ') || '(none)';
@@ -608,7 +636,7 @@ async function cmdInstall(argv) {
   if (skipped.length) out(`Skipped (vendor CLI missing): ${skipped.join(', ')}.`);
   if (failed.length) out(`Failed: ${failed.join(', ')}.`);
   out('Restart Claude Code to load the new servers.');
-  return andRules(failed.length ? 1 : 0);
+  return andRules(failed.length || cfgFailed ? 1 : 0);
 }
 
 async function cmdUninstall(argv) {
@@ -1154,25 +1182,61 @@ function dirReport(kind, current) {
 const DIR_KINDS = Object.keys(KINDS).filter((k) => k !== 'rules');
 
 /**
+ * Every managed path in the PROJECT that `rules` would refuse to touch, in the
+ * command's own words — the same lstat walk syncManagedFile runs before it reads
+ * anything, so what doctor reports and what a write would do cannot disagree.
+ * Reading only: a link is named, never followed and never removed.
+ */
+function unsafeManagedPaths({ cwd = process.cwd(), env = process.env } = {}) {
+  const reasons = [];
+  for (const spec of Object.values(KINDS)) {
+    const { dir } = spec.dir({ cwd, env });
+    for (const name of spec.files) {
+      const reason = unsafeManagedPath(join(dir, ...name.split('/')), dirname(dir));
+      if (reason) reasons.push(reason);
+    }
+  }
+  return reasons;
+}
+
+/**
+ * A matcher made of nothing but tool names, their separators and spaces —
+ * `"Bash"`, `"Bash|Edit"`, `"Bash, Write"`. Claude Code reads one of these as
+ * an exact LIST rather than as a pattern, which is why `"Bashful"` and `"ash"`
+ * cover no tool at all while the regex forms below would match `Bash` in both.
+ */
+const EXACT_LIST = /^[A-Za-z0-9_ ,|-]+$/;
+
+/**
  * Whether one PreToolUse matcher lets the guard see a `Bash` call — and, when it
- * does not, WHY, because the two ways of getting it wrong are fixed differently.
+ * does not, WHY, because the ways of getting it wrong are fixed differently.
  *
- * A matcher is a REGEX, not a tool name — Claude Code's hooks docs spell
- * `"Edit|Write"` and `"mcp__.*"` — so a guard wired under `"Bash|Edit"` fires on
- * every Bash call, and comparing the string literally reported it as NOT wired.
- * Absent / `""` / `"*"` are the documented "everything" forms; any other pattern
- * is anchored and asked whether it matches `Bash`. One that does not COMPILE
- * covers nothing either, but that is a typo in the settings file rather than a
- * guard aimed at another tool — and an operator told "matcher is not Bash"
- * about `(` would go looking for the wrong thing.
+ * Claude Code's own matcher rules, in the order it applies them (hooks docs):
+ * absent / `""` / `"*"` are the documented "everything" forms; a plain list of
+ * names matches a tool name EXACTLY, item by item; anything else is a regex,
+ * and it is tested UNANCHORED — `"mcp__.*"` is theirs, and `"ash$"` matches a
+ * `Bash` call whether or not anybody meant it to. So `"Bash|Edit"` fires on
+ * every Bash call and comparing the string literally reported it as NOT wired.
+ * A pattern that does not COMPILE covers nothing either, but that is a typo in
+ * the settings file rather than a guard aimed at another tool — and an operator
+ * told "matcher is not Bash" about `(` would go looking for the wrong thing.
+ * A matcher that is not a string at all is a third mistake, easy to write in
+ * JSON and worth its own words.
  *
  * @returns {string|null} null when it covers Bash, else the reason it does not.
  */
 const bashMatcherProblem = (m) => {
-  if (m === undefined || m === null || m === '' || m === '*') return null;
+  // An ABSENT key is the documented "every tool" form; a key that is there
+  // holding `null` is not — it is a value that is not a pattern, and it is
+  // reported as one.
+  if (m === undefined || m === '' || m === '*') return null;
+  if (typeof m !== 'string') return 'PreToolUse matcher is not a string';
+  if (EXACT_LIST.test(m)) {
+    return m.split(/[|,]/).some((name) => name.trim() === 'Bash') ? null : 'PreToolUse matcher is not Bash';
+  }
   let re;
-  try { re = new RegExp(`^(?:${m})$`); }
-  catch { return `PreToolUse matcher ${JSON.stringify(String(m))} is not a valid regex`; }
+  try { re = new RegExp(m); }
+  catch { return `PreToolUse matcher ${JSON.stringify(m)} is not a valid regex`; }
   return re.test('Bash') ? null : 'PreToolUse matcher is not Bash';
 };
 
@@ -1268,12 +1332,29 @@ function nextStep(prefix, claude) {
     const reg = findRegistration(claude.config, `${prefix}-${n}`, serverPathFor(n));
     return !!reg && reg.ours;
   });
-  if (!registeredHere) return 'omelette-fleet install';
+  // The prefix doctor was ASKED about is the one the suggested command has to
+  // register: plain `install` would create `omelette-*` and leave the names
+  // this run went looking for exactly as missing as it found them.
+  if (!registeredHere) return `omelette-fleet install${prefix === DEFAULT_PREFIX ? '' : ` --prefix ${prefix}`}`;
+  // A path `rules` would REFUSE outright is not a step that command can take:
+  // it lstats the target and every directory down to the scope's `.claude`
+  // before it reads anything, and `--force` refuses a link too. So this is the
+  // one next step that is not a command to run — the link comes off first.
+  const unsafe = unsafeManagedPaths()[0];
+  if (unsafe) {
+    const fix = unsafe.endsWith('is a symlink') ? 'remove the link' : 'remove it';
+    return `${unsafe} — omelette-fleet refuses to manage it; ${fix}, then rules --agents --hooks`;
+  }
   // All four kinds, because one command writes all four: a project holding the
   // rules file and no guard script has not finished this step either.
-  const incomplete = rulesState({}).state !== 'ours'
-    || DIR_KINDS.some((kind) => dirState({ kind, current: PKG.version }).state !== 'ours');
-  if (incomplete) return 'omelette-fleet rules --agents --hooks';
+  const states = [rulesState({}).state, ...DIR_KINDS.map((kind) => dirState({ kind, current: PKG.version }).state)];
+  // A file at one of those paths without our marker is not ours to replace, and
+  // `rules --agents --hooks` would refuse it — sending the operator into a
+  // refusal is not a next step. Say what is in the way, and which flag ends it.
+  if (states.includes('foreign')) {
+    return 'a managed file has no omelette-fleet marker (see the rules/agents/skills/hooks lines) — inspect it, then `omelette-fleet rules --agents --hooks --force` replaces it';
+  }
+  if (states.some((state) => state !== 'ours')) return 'omelette-fleet rules --agents --hooks';
   // Past here the guard script IS ours, so the only thing that can still be
   // missing is the file that calls it — a script nobody calls is the failure
   // mode where everything looks installed, and one command prints the fix.
@@ -1460,7 +1541,7 @@ const SET_SHAPE = '<unit>.<key>=<value> or agents.<agent>.<key>=<value>';
 
 const describeSpec = (spec) => (
   spec.type === 'enum' ? spec.values.join(' | ')
-    : spec.type === 'posint' ? 'a positive integer'
+    : spec.type === 'posint' ? 'a positive integer (a whole number — 0.5 and 1.9 are refused, not rounded)'
       : spec.type === 'boolean' ? 'true | false'
         : spec.type === 'line' ? 'a single printable line (no newline, tab or other control character)'
           : 'a string');

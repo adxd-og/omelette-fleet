@@ -291,10 +291,46 @@ test('interpretGrok: a front-truncated stream is a marked partial answer, or a l
     () => interpretGrok(ok({ stdout: '', capped: true, code: null, killed: true }), opts),
     /^Error: grok hard-killed after 300s and output exceeded the 2000 char cap — raise grok\.timeoutS or grok\.outputCap in the fleet config$/,
   );
+  // Killed and capped with a JSON FRAGMENT in the tail: the salvage is answered
+  // first everywhere else, but here there is nothing to salvage — not one line
+  // parsed, so the "text" is the middle of a `result` line, and handing that
+  // back under the partial marker would dress a fragment up as an answer.
+  assert.throws(
+    () => interpretGrok(ok({ stdout: '_reason":"end_turn","usage":{"input_tokens":10}}\n', capped: true, code: null, killed: true }), opts),
+    /^Error: grok hard-killed after 300s and output exceeded the 2000 char cap — raise grok\.timeoutS or grok\.outputCap in the fleet config$/,
+  );
+  // Plain mode parses nothing BY DESIGN, so its capped kill is not that case:
+  // the text is text, front-truncated, and it is still salvaged and marked.
+  const plainKill = interpretGrok(ok({ stdout: '/tmp/img.jpg', capped: true, code: null, killed: true }), { jsonMode: false, timeoutS: 300, outputCap: 2000 });
+  assert.match(plainKill.text, /^\/tmp\/img\.jpg/);
+  assert.match(plainKill.text, /hard-killed after 300s/);
+  assert.equal(plainKill.partial, true);
   // …and an uncapped kill with nothing captured keeps naming only timeoutS.
   assert.throws(
     () => interpretGrok(ok({ stdout: '', code: null, killed: true }), opts),
     /^Error: grok hard-killed after 300s \(raise grok\.timeoutS in the fleet config\)$/,
+  );
+  // A kill on a run the CLI had already reported an error for: the error is
+  // WHY there is no answer, and dropping it left the operator with a bare
+  // timeout to chase — an expired login reads nothing like a slow review.
+  assert.throws(
+    () => interpretGrok(ok({
+      stdout: stream(sys(), JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['auth expired'] })),
+      code: null,
+      killed: true,
+    }), opts),
+    /^Error: grok hard-killed after 300s; the CLI had reported: auth expired$/,
+  );
+  // …and the same run capped as well says all three things: both bounds, and
+  // the reason the CLI itself gave, which neither bound explains.
+  assert.throws(
+    () => interpretGrok(ok({
+      stdout: stream(sys(), JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['auth expired'] })),
+      capped: true,
+      code: null,
+      killed: true,
+    }), opts),
+    /^Error: grok hard-killed after 300s and output exceeded the 2000 char cap; the CLI had reported: auth expired — raise grok\.timeoutS or grok\.outputCap in the fleet config$/,
   );
   // So does an early stop.
   const early = interpretGrok(ok({ stdout: stream(sys(), textDelta('some'), resultLine({ result: 'some', stop_reason: 'max_tokens' })), capped: true }), opts);

@@ -19,16 +19,16 @@ Three peers inside Claude Code, each on a subscription you already pay for, none
 
 ```console
 $ omelette-fleet doctor      # example output — all three units; config tables trimmed
-FLEET DOCTOR · omelette-fleet 0.3.1 · node v20.19.5 · darwin
-version       0.3.1 · latest 0.3.1
+FLEET DOCTOR · omelette-fleet 0.3.2 · node v20.19.5 · darwin
+version       0.3.2 · latest 0.3.2
 fleet home    ~/.omelette
 fleet config  ~/.omelette/fleet.config.json
 claude CLI    ~/.local/bin/claude
 claude config ~/.claude.json
-rules         project: v0.3.1 · global: absent
-agents        project: v0.3.1 (2) · global: absent
-skills        project: v0.3.1 (1) · global: absent
-hooks         project: v0.3.1 (wired: PreToolUse, PreCompact) · global: absent
+rules         project: v0.3.2 · global: absent
+agents        project: v0.3.2 (2) · global: absent
+skills        project: v0.3.2 (1) · global: absent
+hooks         project: v0.3.2 (wired: PreToolUse, PreCompact) · global: absent
 
 ── gemini (Gemini) ────────────────────────────────────────────
   bin         agy → ~/.local/bin/agy   [AGY_BIN=(unset)]
@@ -105,13 +105,24 @@ A partial fleet is normal and expected. `install` skips units whose CLI is not o
 
 ## Quickstart
 
+Install the units once, from the clone:
+
 ```bash
 git clone https://github.com/adxd-og/omelette-fleet.git
 cd omelette-fleet
-./bin/omelette-fleet.mjs install --rules   # in the project you want the rules in
+./bin/omelette-fleet.mjs install
 ```
 
-Then: **restart Claude Code**, **merge the printed snippet** into that project's `.claude/settings.json`, and run **`omelette-fleet doctor`** — it names the one thing still missing, if there is one.
+Then give one project the operating rules — **from inside that project**, because every file this writes lands in the current directory:
+
+```bash
+cd /path/to/your/project
+/path/to/omelette-fleet/bin/omelette-fleet.mjs rules --agents --hooks
+```
+
+(`install --rules` does both halves in one run, and its second half targets the current directory too — so run *that* from the project, not from the clone.)
+
+Then: **restart Claude Code**, **merge the printed snippet** into that same project's `.claude/settings.json`, and run **`omelette-fleet doctor`** there — it names the one thing still missing, if there is one.
 
 `install` registers one MCP server per available unit with `claude mcp add -s user`, named `<prefix>-<unit>` (default prefix `omelette`, so `omelette-gemini`, `omelette-grok`, `omelette-codex`), and creates `~/.omelette/fleet.config.json` from `examples/fleet.config.json` if you don't have one. The tools appear after the restart as `mcp__<prefix>-<unit>__<tool>` — for example `mcp__omelette-codex__codex_code_review`.
 
@@ -131,7 +142,7 @@ Optionally, install the guard hook — the coder's "never commits" rule, enforce
 ./bin/omelette-fleet.mjs rules --hooks  # writes .claude/hooks/omelette-guard.mjs
 ```
 
-It prints a settings snippet and you merge it in yourself, into `.claude/settings.json` or `.claude/settings.local.json`: a hook script does nothing until your settings call it, and omelette-fleet reads those files but never writes them. The snippet is a whole `hooks` object, so — as the printed line says — *"Merge this into your settings file (it is a whole `hooks` object — add the two events to an existing `hooks` block rather than replacing the file)"*. The script path in it is quoted for the platform the CLI runs on: POSIX single quotes on macOS and Linux, double quotes on Windows, where the JSON layer then doubles the backslashes of the path (`"node \"C:\\Users\\me\\.claude\\hooks\\omelette-guard.mjs\""`). `doctor` reads both files and reports `hooks         project: v0.3.2 (wired: PreToolUse, PreCompact)` — or `NOT wired`, which is the failure mode where everything looks installed; a `PreToolUse` entry whose matcher cannot see a `Bash` call is reported as `NOT wired (PreToolUse matcher is not Bash)`, since it will never see the call it exists to guard. A matcher is a **regex**, so `Bash|Edit`, `.*` and an absent matcher all count as wired; one that does not compile counts as nothing and is named as what it is — `NOT wired (PreToolUse matcher "(" is not a valid regex)` — because that is a typo to fix, not a guard aimed at the wrong tool.
+It prints a settings snippet and you merge it in yourself, into `.claude/settings.json` or `.claude/settings.local.json`: a hook script does nothing until your settings call it, and omelette-fleet reads those files but never writes them. The snippet is a whole `hooks` object, so — as the printed line says — *"Merge this into your settings file (it is a whole `hooks` object — add the two events to an existing `hooks` block rather than replacing the file)"*. The script path in it is quoted for the platform the CLI runs on: POSIX single quotes on macOS and Linux, double quotes on Windows, where the JSON layer then doubles the backslashes of the path (`"node \"C:\\Users\\me\\.claude\\hooks\\omelette-guard.mjs\""`). Double quotes are a shell quoting, not an argv: under PowerShell or Git Bash a `$` in that path would expand, so a path holding one wants editing by hand — one more reason native Windows is not supported yet. `doctor` reads both files and reports `hooks         project: v0.3.2 (wired: PreToolUse, PreCompact)` — or `NOT wired`, which is the failure mode where everything looks installed; a `PreToolUse` entry whose matcher cannot see a `Bash` call is reported as `NOT wired (PreToolUse matcher is not Bash)`, since it will never see the call it exists to guard. A matcher is read the way Claude Code reads it: an **exact list or an unanchored regex**. A string of nothing but tool names, `|`, `,` and spaces is a list — `Bash|Edit` and `Bash, Write` are wired, `Bashful` and `ash` are not — and anything else is a regex tested against `Bash` unanchored, so `.*`, `Ba.` and `ash$` are wired too; an absent matcher, `""` and `"*"` mean every tool. One that does not compile counts as nothing and is named as what it is — `NOT wired (PreToolUse matcher "(" is not a valid regex)` — because that is a typo to fix, not a guard aimed at the wrong tool, and a matcher that is not a string at all is reported as `NOT wired (PreToolUse matcher is not a string)`.
 
 Then check the install:
 
@@ -144,12 +155,14 @@ Then check the install:
 While something is missing it also prints ONE `next` line, in the order a first run needs them:
 
 ```
-next          omelette-fleet install                     # nothing registered yet
-next          omelette-fleet rules --agents --hooks       # registered, but this project has no rules file
+next          omelette-fleet install                     # nothing registered yet (--prefix <p> when you use one)
+next          omelette-fleet rules --agents --hooks       # registered, but one of the four managed kinds is missing
+next          a managed file has no omelette-fleet marker (see the rules/agents/skills/hooks lines) — inspect it, then `omelette-fleet rules --agents --hooks --force` replaces it
+next          <path> is a symlink — omelette-fleet refuses to manage it; remove the link, then rules --agents --hooks
 next          merge the hooks snippet into .claude/settings.json (rules --hooks prints it)
 ```
 
-and nothing at all once the three are done. It is a hint, never a fault: it does not change the exit code. It looks at the **project** scope only — the scope the commands it suggests write — so a guard installed and wired globally still gets the merge hint here.
+and nothing at all once they are done. The last two lines are the exceptions to "run this command": a file at one of those paths that is not ours would be refused by the plain command, and a symlink is refused by `--force` as well — `rules` never writes through one — so `doctor` names the situation instead of sending you into a refusal. It is a hint, never a fault: it does not change the exit code. It looks at the **project** scope only — the scope the commands it suggests write — so a guard installed and wired globally still gets the merge hint here.
 
 It exits 1 only for a unit that is **enabled and registered** *and* broken: the vendor binary is missing, the CLI says it is signed out, or the registration points at a server file that no longer exists. A unit you deliberately never wired up is not a fault — and neither is a login state of `unknown`. A probe `doctor` cannot interpret (a non-zero `--version`, a `login status` with no explicit signal) is reported as `unknown (exit N)` with the tail of its output, never as a version and never as "signed out".
 

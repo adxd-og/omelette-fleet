@@ -78,9 +78,12 @@ export function coerce(spec, raw) {
       }
       return { ok: false };
     }
+    // A WHOLE number above zero, and a fraction is REFUSED rather than floored:
+    // flooring made `0.5` mean the 0 every posint key exists to forbid, and
+    // `1.9` mean a 1 the operator never wrote. Both are typos.
     case 'posint': {
       const n = Number(raw);
-      return Number.isFinite(n) && n > 0 ? { ok: true, value: Math.floor(n) } : { ok: false };
+      return Number.isInteger(n) && n > 0 ? { ok: true, value: n } : { ok: false };
     }
     case 'enum':
       return typeof raw === 'string' && spec.values.includes(raw) ? { ok: true, value: raw } : { ok: false };

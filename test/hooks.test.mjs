@@ -195,10 +195,43 @@ test('PreToolUse: `git tag` reads and `git rebase --abort` pass; the tag writes 
     "git tag --list 'v*'",
     'git tag --sort=-v:refname',
     'git tag --contains HEAD',
-    // …and the one rebase that UNDOES rather than writes: the recovery an agent
-    // needs after a rebase it should never have started.
+    // A listing MODE is a listing however the pattern is spelled and wherever
+    // the flag sits: the mode flag is what git dispatches on, not the position.
+    'git tag v1 --list',
+    'git tag --list v1*',
+    'git tag --contains abc',
+    'git tag --no-contains abc',
+    'git tag --points-at HEAD',
+    'git tag --merged main',
+    'git tag --no-merged main',
+    // --with/--without are the listing aliases of --contains/--no-contains.
+    'git tag --with HEAD',
+    'git tag --without HEAD',
+    // A quoted span is ONE opaque value: the flags inside it are text, and the
+    // whitespace inside it does not end the token.
+    "git tag -l --format='%(refname) -a %(objectname)'",
+    "git tag -l --format='%(refname)'",
+    // An option's VALUE is a value, not a tag name — `--sort refname` sorts a
+    // listing and creates nothing, whether the value arrives attached or as
+    // the next word.
+    'git tag --sort refname',
+    'git tag --format "%(refname)"',
+    'git tag --column always',
+    // A shell comment is not part of the command — and a `git tag` inside one
+    // is not a command at all.
+    'echo hi # git tag v1',
+    // -v/--verify VERIFIES a signature: it reads a tag that already exists.
+    'git tag -v v1',
+    'git tag --verify v1',
+    // …and the rebases that UNDO or explain rather than write: the recovery an
+    // agent needs after a rebase it should never have started, wherever the
+    // flag sits among the arguments.
     'git rebase --abort',
     'git -C /x rebase --abort',
+    'git rebase -q --abort',
+    'git rebase --quit',
+    'git rebase --help',
+    'git rebase -h',
   ]) {
     const r = fire(g.path, preToolUse({ tool_input: { command } }));
     assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
@@ -222,6 +255,36 @@ test('PreToolUse: `git tag` reads and `git rebase --abort` pass; the tag writes 
     'git tag --file m v1',
     'git tag --cleanup=verbatim v1',
     'git -C /x tag v1.0.0',
+    // A NAME is a name whatever stands in front of it: an option separator, an
+    // option that takes no value, or a negation that is not a listing mode.
+    'git tag -- v1',
+    'git tag --create-reflog v1',
+    'git tag --end-of-options v1',
+    'git tag --no-sign v1',
+    'git tag --no-annotate v1',
+    'git tag -a v1',
+    'git tag -d v1',
+    // --format and --sort DECORATE a listing, they do not select one: with a
+    // name and no listing flag beside it, git creates the tag and ignores them.
+    'git tag v1 --format=x',
+    'git tag v1 --sort=refname',
+    // A comment does not turn a command into a listing — the tag is created
+    // before the `#` is ever read.
+    'git tag v1 # --list',
+    // …and a comment ends where its LINE ends: what follows on the next line is
+    // a command of its own, whatever the line above it said.
+    'echo hi # a note\ngit tag v1',
+    'echo hi # a note\r\ngit tag v1',
+    // A separator INSIDE quotes separates nothing: the value carries the `;`
+    // and the tag name after it is still the name of a tag being created.
+    'git tag --format="x; y" v1',
+    "git tag --format='x && y' v1",
+    // A name is a name after an option that took its own value, too.
+    'git tag --sort refname v1',
+    'git tag -m msg v1',
+    // …and a flag quoted inside a value is text, not a flag: `--exec` runs its
+    // argument once per commit, which is a rebase in every sense.
+    "git rebase --exec 'echo --abort now' HEAD~1",
     // `--continue` and `--skip` each create a commit; a bare `git rebase` rebases.
     'git rebase --continue',
     'git rebase --skip',
@@ -353,7 +416,17 @@ test('PreToolUse: a command of nothing but option-shaped tokens is answered at o
   // 94 ms at 30, 11.4 s at 40. On the guard's hot path that is every Bash call
   // in the session, so the run is deliberately unambiguous instead.
   const g = guard();
-  for (const command of [`git${' -c'.repeat(60)} zzz`, `git${' --foo'.repeat(60)}`]) {
+  for (const command of [
+    `git${' -c'.repeat(60)} zzz`,
+    `git${' --foo'.repeat(60)}`,
+    // A tag listing narrowed 60 times over: the subcommand's own arguments are
+    // classified by scanning them once, so they cannot be tiled either.
+    `git tag${' --contains x'.repeat(60)}`,
+    // …and the same shape at 10 KB, because the comment scan, the tokenizer and
+    // the classifier each walk the command once and none of them re-reads it.
+    `git tag${' --contains x'.repeat(800)}`,
+    `echo ${'x'.repeat(5000)} # ${'a comment '.repeat(500)}`,
+  ]) {
     const started = Date.now();
     const r = fire(g.path, preToolUse({ tool_input: { command } }));
     const ms = Date.now() - started;

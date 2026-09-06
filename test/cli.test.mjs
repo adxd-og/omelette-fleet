@@ -338,6 +338,32 @@ test('install --rules writes the project rules, agents, skill and guard, then pr
   assert.match(cli(['install', '--help'], { dir }).out, /--rules/);
 });
 
+test(
+  'install --rules: a config file it cannot create is a reported failure, never a lost rules phase',
+  { skip: process.platform === 'win32' ? 'POSIX directory modes' : (process.getuid && process.getuid() === 0 && 'root writes into any directory') },
+  () => {
+    const dir = home();
+    const proj = join(dir, 'proj'); mkdirSync(proj);
+    const fake = fakeBin(dir);
+    // The fleet home is read-only, so `fleet.config.json` cannot be created —
+    // and the project, which is a directory of its own, still can be written.
+    chmodSync(dir, 0o500);
+    try {
+      const r = cliIn(proj, dir, ['install', '--rules', '--units', 'codex'], { PATH: join(dir, 'empty'), CODEX_BIN: fake });
+      // The failure is real and it is what the exit code says…
+      assert.equal(r.code, 1, `a config that could not be written must exit 1:\n${r.out}${r.err}`);
+      assert.match(r.out, /^config {2}FAILED to write .*fleet\.config\.json/m, r.out);
+      assert.equal(existsSync(join(dir, 'fleet.config.json')), false);
+      // …and the half it has nothing to do with ran anyway: the project files
+      // are the reason the operator typed --rules.
+      for (const f of MANAGED) assert.ok(existsSync(join(proj, '.claude', ...f.split('/'))), `${f} was not written:\n${r.out}${r.err}`);
+      assert.ok(r.out.includes(SNIPPET(join(realpathSync(proj), '.claude', 'hooks', 'omelette-guard.mjs'))), r.out);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  },
+);
+
 test('uninstall --dry-run prints one remove per unit and promises to keep the config', () => {
   const dir = home();
   const r = cli(['uninstall', '--dry-run', '--prefix', 'test'], { dir });
@@ -634,6 +660,16 @@ test('set refuses an unknown agent, an unknown agent key and an out-of-range val
   const zero = cli(['set', 'agents.tester.maxTurns=0'], { dir });
   assert.equal(zero.code, 1);
   assert.match(zero.err, /invalid value for agents\.tester\.maxTurns: "0" — expected a positive integer/);
+  // A posint is a WHOLE number: `0.5` used to floor to the 0 the key forbids,
+  // and `1.9` to a 1 nobody wrote. Both are refused outright now.
+  for (const value of ['0.5', '1.9']) {
+    const fraction = cli(['set', `agents.tester.maxTurns=${value}`], { dir });
+    assert.equal(fraction.code, 1, value);
+    assert.match(fraction.err, new RegExp(`invalid value for agents\\.tester\\.maxTurns: "${value}" — expected a positive integer`));
+  }
+  const unitFraction = cli(['set', 'grok.outputCap=0.5'], { dir });
+  assert.equal(unitFraction.code, 1);
+  assert.match(unitFraction.err, /invalid value for grok\.outputCap: "0\.5" — expected a positive integer/);
   const effort = cli(['set', 'agents.coder.effort=turbo'], { dir });
   assert.equal(effort.code, 1);
   assert.match(effort.err, /invalid value for agents\.coder\.effort: "turbo" — expected low \| medium \| high \| xhigh \| max/);
@@ -1433,11 +1469,16 @@ test('doctor: a PreToolUse matcher is a REGEX — "Bash|Edit" and ".*" wire the 
 
   // Claude Code's hooks docs spell a matcher as a regex — "Edit|Write", "mcp__.*"
   // — so a guard wired under "Bash|Edit" DOES fire on every Bash call.
-  for (const matcher of ['Bash|Edit', 'Edit|Bash', '.*', 'Bash.*', '(Bash|Task)', 'Ba(sh)']) {
+  // A matcher of nothing but names, separators and spaces is an exact LIST, as
+  // Claude Code reads it; anything else is a regex, tested UNANCHORED — which
+  // is what makes "Ba.", "^Ba" and "ash$" cover a Bash call.
+  for (const matcher of ['Bash|Edit', 'Edit|Bash', 'Bash, Write', '.*', 'Bash.*', '(Bash|Task)', 'Ba(sh)', 'Ba.', '^Ba', 'ash$']) {
     writeFileSync(settings, withMatcher(matcher));
     assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact\)/m, `matcher ${matcher} covers Bash`);
   }
-  // …and one that cannot match "Bash" is still named rather than counted.
+  // …and one that cannot match "Bash" is still named rather than counted. In an
+  // exact list a name is a whole name: "Bas" and "ash" are items of their own,
+  // not fragments of "Bash" the way an unanchored regex would read them.
   for (const matcher of ['Edit', 'Edit|Write', 'Bas', 'Bashful', 'ash']) {
     writeFileSync(settings, withMatcher(matcher));
     assert.match(
@@ -1450,11 +1491,23 @@ test('doctor: a PreToolUse matcher is a REGEX — "Bash|Edit" and ".*" wire the 
   // different mistake from pointing the guard at another tool and gets its own
   // line: an operator reading "matcher is not Bash" about `(` would go looking
   // for the wrong thing entirely.
-  for (const matcher of ['(', 'Bash[', '*Bash']) {
+  for (const matcher of ['(', 'Bash[', '*Bash', ')|(']) {
     writeFileSync(settings, withMatcher(matcher));
     assert.ok(
       doctor().includes(`(NOT wired (PreToolUse matcher ${JSON.stringify(matcher)} is not a valid regex) — paste the snippet from rules --hooks)`),
       `matcher ${matcher} does not compile:\n${doctor()}`,
+    );
+  }
+  // A matcher that is not a string at all is neither of those mistakes: there
+  // is nothing to compile and nothing to compare, and JSON makes it easy to
+  // write one by accident. An explicit `null` is one of them — the key IS there
+  // and holds something that is not a pattern, which is a different state from
+  // leaving the key out, the documented "every tool" form.
+  for (const matcher of [42, true, null, ['Bash'], { name: 'Bash' }]) {
+    writeFileSync(settings, withMatcher(matcher));
+    assert.ok(
+      doctor().includes('(NOT wired (PreToolUse matcher is not a string) — paste the snippet from rules --hooks)'),
+      `matcher ${JSON.stringify(matcher)} is not a string:\n${doctor()}`,
     );
   }
 });
@@ -1544,6 +1597,53 @@ test('doctor prints ONE next step — install, then the project files, then the 
   for (const r of [fresh, unruled, unwired, done]) {
     assert.doesNotMatch(r.out, /FAULT/, 'a missing next step is never a fault');
     assert.match(r.out, /No faults in units that are both enabled and registered\./);
+  }
+});
+
+test('doctor: the next step carries the prefix it was asked about, and a FOREIGN managed file gets a step of its own', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const gone = join(dir, 'no-such-cli');
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } },
+  }));
+  const doctor = (args = []) => cliIn(proj, dir, ['doctor', ...args], { AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone });
+  const nextLines = (out) => out.split('\n').filter((l) => l.startsWith('next'));
+
+  // A non-default prefix is what doctor LOOKED for, so it has to be what the
+  // install line it prints would register — `omelette-fleet install` alone
+  // would register `omelette-*` and leave `review-*` exactly as missing.
+  assert.deepEqual(nextLines(doctor(['--prefix', 'review']).out), ['next          omelette-fleet install --prefix review']);
+  assert.deepEqual(nextLines(doctor().out), ['next          omelette-fleet install'], 'the default prefix is not spelled out');
+
+  // Registered here, and a rules file at that path that is NOT ours: `rules
+  // --agents --hooks` would refuse it, so suggesting it sends the operator into
+  // a refusal. Name the situation and the flag that resolves it instead.
+  writeFileSync(join(dir, '.claude.json'), JSON.stringify({
+    mcpServers: { 'omelette-codex': { command: 'node', args: [join(ROOT, 'servers', 'codex.mjs')] } },
+  }));
+  mkdirSync(join(proj, '.claude', 'rules'), { recursive: true });
+  writeFileSync(join(proj, '.claude', 'rules', 'omelette-fleet.md'), '# somebody else wrote this\n');
+  const foreign = doctor();
+  assert.equal(foreign.code, 0, foreign.out);
+  assert.match(foreign.out, /^rules {9}project: foreign \(no marker\)/m, 'sanity: the file really reads as foreign');
+  assert.deepEqual(nextLines(foreign.out), [
+    'next          a managed file has no omelette-fleet marker (see the rules/agents/skills/hooks lines) — inspect it, then `omelette-fleet rules --agents --hooks --force` replaces it',
+  ]);
+
+  // A SYMLINK at a managed path is a third state again: `rules` refuses to
+  // write through one at all — before the marker is even read, and `--force`
+  // refuses it too — so the step is to remove the link, not to force past it.
+  if (symlinksWork) {
+    const rules = join(proj, '.claude', 'rules', 'omelette-fleet.md');
+    rmSync(rules);
+    symlinkSync(join(dir, 'elsewhere.md'), rules);
+    writeFileSync(join(dir, 'elsewhere.md'), '# somewhere else entirely\n');
+    const linked = doctor();
+    assert.equal(linked.code, 0, linked.out);
+    assert.deepEqual(nextLines(linked.out), [
+      `next          ${realpathSync(proj)}/.claude/rules/omelette-fleet.md is a symlink — omelette-fleet refuses to manage it; remove the link, then rules --agents --hooks`,
+    ]);
   }
 });
 

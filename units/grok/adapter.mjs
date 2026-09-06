@@ -425,29 +425,35 @@ export function interpretGrok(res, { jsonMode, timeoutS, outputCap = GROK_OUTPUT
     ? `${text}\n\n[grok: output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial]`
     : text);
   const capExtra = capped ? { partial: true } : undefined;
+  // A capped STREAM that parsed nothing is the one case with NO ANSWER AT ALL:
+  // the whole reply rode one huge `result` line, the tail kept a fragment of it,
+  // and grokAnswer's fail-open would hand that JSON fragment back as the answer.
+  // Plain mode never parses by design, so its capped runs are not this case —
+  // their text is text, front-truncated, and it goes back marked.
+  const fragmentOnly = capped && jsonMode && !a.parsed;
   // A hard kill at timeoutS used to discard everything the CLI had printed —
   // on a long review that is a paid-for hour thrown away. Keep what was
   // captured, marked; only a kill with nothing to show is still an error.
   // The kill is answered FIRST, cap or no cap: salvage is the older promise, and
   // a killed run that has text has an answer to read whatever else went wrong.
+  // A fragment is not that text, so it is the one thing never salvaged here.
   if (killed) {
-    if (a.text) {
+    if (a.text && !fragmentOnly) {
       return answer(
         capMark(`${a.text}\n\n[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`),
         a.usage,
         { partial: true },
       );
     }
-    throw new Error(capped
-      ? `grok hard-killed after ${timeoutS}s and output exceeded the ${outputCap} char cap — raise grok.timeoutS or grok.outputCap in the fleet config`
-      : `grok hard-killed after ${timeoutS}s (raise grok.timeoutS in the fleet config)`);
+    // The CLI said WHY before the kill landed: an expired login reads nothing
+    // like a slow review, and neither bound explains one, so the reported error
+    // travels with the cap message as readily as on its own.
+    const reported = a.error ? `; the CLI had reported: ${a.error}` : '';
+    if (capped) throw new Error(`grok hard-killed after ${timeoutS}s and output exceeded the ${outputCap} char cap${reported} — raise grok.timeoutS or grok.outputCap in the fleet config`);
+    if (reported) throw new Error(`grok hard-killed after ${timeoutS}s${reported}`);
+    throw new Error(`grok hard-killed after ${timeoutS}s (raise grok.timeoutS in the fleet config)`);
   }
-  // A capped STREAM that parsed nothing is the one case with no answer at all:
-  // the whole reply rode one huge `result` line, the tail kept a fragment of it,
-  // and grokAnswer's fail-open would hand that JSON fragment back as the answer.
-  // Plain mode never parses by design, so its capped runs are not this case —
-  // their text is text, front-truncated, and it goes back marked (below).
-  if (capped && jsonMode && !a.parsed) {
+  if (fragmentOnly) {
     throw new Error(`grok output exceeded the ${outputCap} char cap and the final result line was lost — raise grok.outputCap or narrow the task`);
   }
   if (code !== 0 && !out.trim()) throw new Error(`grok exited ${code}: ${errBuf.trim().slice(-500) || '(no stderr)'}`);

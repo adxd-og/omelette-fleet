@@ -294,7 +294,10 @@ test('the skill hands the forked tester the spec and a diff taken from git AT IN
   assert.match(text, /^agent: omelette-tester$/m);
   // The orchestrator (the session model) invokes this skill via the Skill tool, so it must stay model-invocable.
   assert.ok(!/^disable-model-invocation:/m.test(text), 'the skill must not disable model invocation — the orchestrator calls it');
-  assert.match(text, /^argument-hint: \[spec path\] \[repo path\]$/m);
+  // QUOTED, like the description below: `[spec path] [repo path]` opens a YAML
+  // FLOW SEQUENCE and then puts a second one after it, which is a parse error —
+  // the whole file, skill and all, is what a YAML reader would then reject.
+  assert.match(text, /^argument-hint: "\[spec path\] \[repo path\]"$/m);
   // QUOTED: the description ends in "Usage: /omelette-test <spec path> [repo
   // path]", and an unquoted `: ` inside a plain scalar ends the value — a YAML
   // parser rejects the file, and Claude Code would never load the skill at all.
@@ -395,11 +398,15 @@ test('every rendered frontmatter file is YAML a parser will accept: key: value l
         if (line.startsWith('#')) continue; // the marker, a YAML comment
         assert.match(line, /^[A-Za-z][A-Za-z0-9-]*: \S/, `${label}: not a "key: value" line: ${line}`);
         const value = line.slice(line.indexOf(': ') + 2);
+        const quoted = value.startsWith('"') && value.endsWith('"') && value.length > 1;
         if (value.includes(': ')) {
-          assert.ok(
-            value.startsWith('"') && value.endsWith('"'),
-            `${label}: an unquoted ": " ends the value early — quote it: ${line}`,
-          );
+          assert.ok(quoted, `${label}: an unquoted ": " ends the value early — quote it: ${line}`);
+        }
+        // A value that OPENS a flow collection is parsed as one: `[spec path]
+        // [repo path]` is a sequence with a second sequence stapled to it,
+        // which is a parse error rather than the hint it looks like.
+        if (/^[[{]/.test(value)) {
+          assert.ok(quoted, `${label}: an unquoted "${value[0]}" starts a YAML flow collection — quote it: ${line}`);
         }
       }
     }

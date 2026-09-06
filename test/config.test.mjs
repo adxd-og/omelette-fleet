@@ -29,6 +29,20 @@ test('coerce accepts env-style strings for booleans and ints', () => {
   assert.deepEqual(coerce({ type: 'enum', values: ['a'] }, 'b'), { ok: false });
 });
 
+test('coerce: a posint is a WHOLE number — a fraction is refused, never floored', () => {
+  // Flooring made `0.5` mean `0`, which every posint key exists to forbid, and
+  // `1.9` mean `1`, a value the operator never wrote. Both are typos: refuse.
+  for (const raw of [0.5, '0.5', 1.9, '1.9', '1e-3', 0.999]) {
+    assert.deepEqual(coerce({ type: 'posint' }, raw), { ok: false }, JSON.stringify(raw));
+  }
+  assert.deepEqual(coerce({ type: 'posint' }, 1), { ok: true, value: 1 });
+  assert.deepEqual(coerce({ type: 'posint' }, '1'), { ok: true, value: 1 });
+  assert.deepEqual(coerce({ type: 'posint' }, ' 900 '), { ok: true, value: 900 });
+  assert.deepEqual(coerce({ type: 'posint' }, 0), { ok: false });
+  assert.deepEqual(coerce({ type: 'posint' }, Infinity), { ok: false });
+  assert.deepEqual(coerce({ type: 'posint' }, 'abc'), { ok: false });
+});
+
 test('coerce: a `line` spec is one printable line — no blank, no control character, no smuggled newline', () => {
   // The type exists for values that get RENDERED into a managed file: a newline
   // would close a definition's frontmatter early and push the rest of it,
