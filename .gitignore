@@ -4,3 +4,7 @@ fleet.config.json
 !examples/fleet.config.json
 *.tmp
 .DS_Store
+
+# Claude Code / agent system files: rendered per install by `omelette-fleet rules --agents --hooks`, never committed
+.claude/
+CLAUDE.md
