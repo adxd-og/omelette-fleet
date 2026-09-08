@@ -863,6 +863,83 @@ test('PreToolUse: a QUOTED rebase option still takes its value, and an abbreviat
   }
 });
 
+test('PreToolUse: quoting that STARTS INSIDE a token is quoting too — the shell joins it and git sees one option', () => {
+  const g = guard();
+  for (const command of [
+    // `--ex"ec"` reaches git as `--exec`, whose value is the next word: the
+    // `--abort` behind it is that value and the rebase runs, exactly as the
+    // bare and the fully quoted forms do. Reading the token as an unknown
+    // option (it matches nothing with the quotes still in it) is what let the
+    // `--abort` behind it read as the recovery flag until 0.3.4.
+    'git rebase --ex"ec" --abort main',
+    "git rebase --'exec' --abort main",
+    'git rebase --exec"" --abort main',
+    'git rebase --on"to" --abort main',
+    // The same for a short option: `-"x"` is `-x`, which takes the next word.
+    'git rebase -"x" --abort main',
+    // …and for an abbreviation spelled with quoting in the middle of it.
+    "git rebase --ex'e' --abort main",
+    // An ACTION word that arrived with ANY quoting in it is text, wherever the
+    // quoting starts: `--abort` is recovery only when it is typed as itself.
+    // Over-blocking a `--ab"ort"` costs a recovery command spelled the hard way
+    // — reading one as recovery would cost a rebase that ran.
+    'git rebase "--abort"',
+    'git rebase --ab"ort"',
+    "git rebase --qu'it'",
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+
+  for (const command of [
+    // The plainly spelled recovery forms are untouched by any of it.
+    'git rebase --abort',
+    'git rebase -q --abort',
+    // …and a quoted VALUE still hides the action word inside it: the quoted
+    // token is the exec command and the bare `--abort` behind it is the action,
+    // which git answers with `usage: git rebase …` rather than a rebase.
+    "git rebase --exec 'echo --abort' --abort",
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+});
+
+test('PreToolUse: `-S` takes its key-id ATTACHED, so the rest of the cluster is that key and never a value skip', () => {
+  const g = guard();
+  for (const command of [
+    // git's parse-options gives an optional attached argument the WHOLE rest of
+    // the token, so `-SABC` is `--gpg-sign=ABC` and the `C` inside `ABC` is a
+    // letter of the key, not the `-C` that takes a value. `-h` behind it is the
+    // action: git prints usage and writes nothing.
+    'git rebase -SABC -h',
+    'git rebase -SABC --abort',
+    // …and a value-taking letter BEHIND the `S` is part of the key too.
+    'git rebase -Sx --abort',
+    // `-qS` ends at the `S` the same way; git answers the pair with `usage: git
+    // rebase …` and exit 129 — an action option must be the whole argument
+    // list — so nothing is written either way.
+    'git rebase -qS --abort',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+
+  for (const command of [
+    // A cluster that reaches a real value-taking letter still swallows the word
+    // behind it: `-C` wants a numerical value and reads `--abort` as one.
+    'git rebase -C --abort main',
+    'git rebase -qC --abort main',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+});
+
 const gitAvailable = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
 
 /** A throwaway repository where `feature` and `main` have each moved on by one commit. */

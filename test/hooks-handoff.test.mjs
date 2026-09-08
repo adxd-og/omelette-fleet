@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
@@ -372,6 +372,60 @@ test('PostToolUse: a state file that is not ours to write is silence, and the li
     writeFileSync(broken.statePath, '{ not json');
     assert.equal(nudged(fire(g, post(broken))), NUDGE(91, 200000, 'default'));
     assert.equal(broken.state()['s-1'].nudged, true);
+  });
+
+/**
+ * THE STATE FILE LANDS WHOLE OR NOT AT ALL. A partial write that was renamed
+ * into place would leave JSON that no longer parses, and readState answers a
+ * file it cannot parse by rewriting it from an empty map — so every crossing
+ * recorded in it would be gone and every session would be nudged again. The
+ * write itself is not reachable from out here (the guard is a script, not a
+ * module, and nothing in it can be monkeypatched), so what is pinned is the
+ * observable contract: what is on disk is exactly what was serialised.
+ */
+test('PostToolUse: the state file lands WHOLE — a big map is on disk byte for byte, and nothing is left over', () => {
+  const g = guard();
+  const p = project(g, 'state-whole');
+  // 63 fillers plus the crossing = the 64 the file is capped at, each padded so
+  // the write is ~130 KB rather than a couple of hundred bytes: a map that has
+  // to survive to its last byte, not one that fits in any single write.
+  const seeded = {};
+  const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+  for (let i = 0; i < 63; i++) {
+    seeded[`filler-${i}`] = { crossedAt: iso(i * 60000), ledgers: {}, nudged: true, blocked: false, note: 'x'.repeat(2000) };
+  }
+  writeFileSync(p.statePath, JSON.stringify(seeded));
+
+  assert.equal(nudged(fire(g, post(p))), NUDGE(91, 200000, 'default'));
+
+  const text = readFileSync(p.statePath, 'utf8');
+  assert.equal(Buffer.byteLength(text), statSync(p.statePath).size, 'the file is read whole');
+  const parsed = JSON.parse(text); // truncated JSON never parses
+  assert.equal(JSON.stringify(parsed), text, 'on disk byte for byte, with nothing lost off either end');
+  assert.deepEqual(JSON.parse(readFileSync(p.statePath, 'utf8')), parsed, 'and it reads back the same every time');
+  assert.equal(Object.keys(parsed).length, 64);
+  assert.equal(parsed['s-1'].nudged, true, 'the crossing that was just written');
+  assert.equal(parsed['filler-62'].note.length, 2000, 'and the far end of the map survived with it');
+
+  // The rename took the temporary file's name with it: a `.tmp` left behind is
+  // a write that half happened.
+  assert.deepEqual(readdirSync(join(p.dir, '.omelette')).sort(), ['handoff-state.json', 'ledger-0.3.4.md']);
+});
+
+test('PostToolUse: a state directory that may not be written is silence — no note, no half-written temporary file',
+  { skip: (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) && 'the mode has to bite' }, () => {
+    const g = guard();
+    const p = project(g, 'state-readonly');
+    const omelette = join(p.dir, '.omelette');
+    // Readable and traversable, so the ledger and the measurement are still
+    // there; not writable, so the temporary file cannot even be created.
+    chmodSync(omelette, 0o500);
+    try {
+      silent(fire(g, post(p)), 'a state directory that may not be written');
+      assert.deepEqual(readdirSync(omelette).sort(), ['ledger-0.3.4.md'], 'nothing was created, not even a tmp');
+    } finally {
+      chmodSync(omelette, 0o700); // …or the throwaway tree cannot be cleaned up
+    }
   });
 
 test('PostToolUse: the state is pruned at 7 days and capped at 64 entries, and the live session survives both', () => {

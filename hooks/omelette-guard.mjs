@@ -358,6 +358,16 @@ const REBASE_VALUE_SHORT = new Set([...'xsXC']);
 const REBASE_VALUE_LONG = new Set(['--empty', '--exec', '--onto', '--strategy', '--strategy-option', '--whitespace']);
 
 /**
+ * …and the short options whose value is OPTIONAL and only ever ATTACHED: git's
+ * parse-options hands one the whole rest of the token and never the next word,
+ * so `-SABC` is `--gpg-sign=ABC`. Such a letter ENDS the cluster scan without
+ * taking a value — the letters behind it are the key, not more flags: `-SABC`
+ * read on past the `S` cost the coder `git rebase -SABC -h`, where the `C` of
+ * the key was taken for `-C` and the `-h` behind it for its numeric value.
+ */
+const REBASE_ATTACHED_SHORT = new Set([...'S']);
+
+/**
  * The value-taking options an ABBREVIATION spells. git accepts any unambiguous
  * prefix of a long option, and the prefix takes the same value the full name
  * does: `git rebase --ex --abort main` is `--exec --abort main`. Two letters and
@@ -369,28 +379,51 @@ const REBASE_VALUE_LONG = new Set(['--empty', '--exec', '--onto', '--strategy', 
 const rebaseTakesValue = (name) => REBASE_VALUE_LONG.has(name)
   || (name.length >= 4 && [...REBASE_VALUE_LONG].some((full) => full.startsWith(name)));
 
-/** A token's text with its quoting removed — what the shell hands git. */
-const unquote = (text) => text.replaceAll('"', '').replaceAll("'", '');
+/**
+ * A token's text with its QUOTING removed — what the shell hands git.
+ *
+ * QUOTING STARTS WHEREVER IT STARTS. `"--exec"`, `--'exec'` and `--ex"ec"` are
+ * the same one word by the time git sees it, and only the first of them opens
+ * with a quote: reading the other two as unknown options is what let `git
+ * rebase --ex"ec" --abort main` — a rebase whose exec command is `--abort` —
+ * pass until 0.3.4. A quote character INSIDE a span opened by the other one is
+ * a literal character (`"it's"` is `it's`), exactly as tokenize reads them.
+ */
+function unquote(text) {
+  let out = '';
+  let quote = '';
+  for (const c of text) {
+    if (quote) { if (c === quote) quote = ''; else out += c; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    out += c;
+  }
+  return out;
+}
 
 /**
  * Does this `git rebase` write? Only an undo or an explain flag standing on its
  * OWN account says no: one that arrived inside quotes is text, one sitting in an
  * option's value position is that value, and one behind a `--` is a positional.
  *
- * QUOTING HIDES AN ACTION WORD AND NOTHING ELSE. The shell strips the quotes
- * before git sees them, so `"--exec"` is `--exec` and takes the next word
- * exactly as the bare form does; it is only the ACTION words — `--abort` and
- * the rest of REBASE_READS — that a quoted token cannot be, because quoting is
- * how `--exec 'echo --abort now'` says the word is data.
+ * QUOTING HIDES AN ACTION WORD AND NOTHING ELSE. The quotes come off every
+ * token before it is classified, wherever in it they sit, so `"--exec"`,
+ * `--'exec'` and `--ex"ec"` all take the next word exactly as the bare form
+ * does; it is only the ACTION words — `--abort` and the rest of REBASE_READS —
+ * that a token carrying any quoting at all cannot be, because quoting is how
+ * `--exec 'echo --abort now'` says the word is data. A recovery flag spelled
+ * with quotes in it is refused rather than guessed at: that costs a command an
+ * agent can retype, where the other reading costs a rebase that ran.
  */
 function rebaseWrites(args) {
   let afterSeparator = false;
   let takesValue = false;
-  for (const { text, quoted } of args) {
+  for (const { text } of args) {
     if (afterSeparator) continue; //                    a positional, however it is spelled
     if (takesValue) { takesValue = false; continue; } // the previous option's value
-    if (!quoted && REBASE_READS.has(text)) return false;
-    const token = quoted ? unquote(text) : text;
+    const token = unquote(text);
+    // `token === text` is exactly "this token carried no quote character",
+    // which is what an action word has to be; everything else is data.
+    if (token === text && REBASE_READS.has(token)) return false;
     if (token === '--') { afterSeparator = true; continue; }
     if (token === '-' || !token.startsWith('-')) continue;
     if (token.startsWith('--')) {
@@ -400,7 +433,9 @@ function rebaseWrites(args) {
       continue;
     }
     for (let k = 1; k < token.length; k++) {
-      if (REBASE_VALUE_SHORT.has(token[k])) { takesValue = k === token.length - 1; break; }
+      const ch = token[k];
+      if (REBASE_ATTACHED_SHORT.has(ch)) break; //     the rest of the token is its key, and the next word is not
+      if (REBASE_VALUE_SHORT.has(ch)) { takesValue = k === token.length - 1; break; }
     }
   }
   return true;
@@ -996,7 +1031,19 @@ function writeState(dir, change) {
   try {
     fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
     created = true;
-    writeSync(fd, json);
+    // WRITTEN TO THE LAST BYTE BEFORE THE RENAME. writeSync reports how much it
+    // actually took, and a short write is only a failure if the rest is never
+    // sent: half a map renamed into place is JSON that no longer parses, which
+    // readState answers by rewriting the file from empty — every crossing this
+    // project recorded gone, and every session nudged again. A write that takes
+    // nothing at all is a write that is not progressing, and the finally below
+    // closes the descriptor and takes the temporary file with it.
+    const buf = Buffer.from(json);
+    for (let off = 0; off < buf.length;) {
+      const written = writeSync(fd, buf, off, buf.length - off);
+      if (written <= 0) return false;
+      off += written;
+    }
     closeSync(fd);
     fd = null;
     renameSync(tmp, path);
