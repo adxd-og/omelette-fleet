@@ -14,6 +14,8 @@ A unit is one vendor CLI exposed as one MCP server. Adding one is three files an
 | The auth check on empty-stdout runs | The `auth.detect` regex and the `help` text |
 | JSON-RPC, `tools/list`, stderr logging | Nothing — never touch stdin/stdout |
 | One bounded retry, when the adapter asks for it | Deciding whether re-issuing this call is safe |
+| Progress notifications while a run is in flight, and the request's cancellation policy | Checking `ctx.signal` between stages of a pipeline |
+| Answering `local` tools in-process, without a spawn or a feed entry | Declaring a tool `local` when it reads something the runtime already has |
 
 ## 1. `units/<unit>/models.js`
 
@@ -124,7 +126,7 @@ export default defineUnit({
 });
 ```
 
-`ctx` gives you `{ cfg, mode, model, effort, spawn, retry, log, catalog, home }`. `spawn(o)` accepts `{ args, cwd, stdinText, extraEnv, hardKillMs, outputCap }` and resolves `{ stdout, stderr, code, signal, killed, capped }` — it does **not** reject on a non-zero exit, because only you know what an exit code means for this CLI. Both bounds default to the unit's config (`timeoutS`, `outputCap`) and a call may override either. A refusal you make yourself returns `{ text, isError: true }`; returning an `Error: …` string without the flag reports a failure to MCP as a success. `{ text, partial: true }` is the third shape: an answer the run did not finish — a success, with the flag carried into the status feed. There are two reasons to set it: a hard kill whose captured text you kept, and output that hit `outputCap`.
+`ctx` gives you `{ cfg, mode, model, effort, spawn, retry, log, catalog, home, signal }`. `spawn(o)` accepts `{ args, cwd, stdinText, extraEnv, hardKillMs, outputCap }` and resolves `{ stdout, stderr, code, signal, killed, capped }` — it does **not** reject on a non-zero exit, because only you know what an exit code means for this CLI. Both bounds default to the unit's config (`timeoutS`, `outputCap`) and a call may override either. A refusal you make yourself returns `{ text, isError: true }`; returning an `Error: …` string without the flag reports a failure to MCP as a success. `{ text, partial: true }` is the third shape: an answer the run did not finish — a success, with the flag carried into the status feed. There are two reasons to set it: a hard kill whose captured text you kept, and output that hit `outputCap`.
 
 ### Handle `capped`
 
@@ -133,6 +135,47 @@ export default defineUnit({
 Gemini and Codex do **not** read `capped` today — their answers arrive whole rather than as a stream, and the 400 000-character default is far above what they print. It is a gap, not a decision: tracked, and worth closing when either unit grows a streaming path.
 
 Export `buildArgs` and the result interpreter. Everything worth testing about an adapter lives in those two pure functions.
+
+### The `local` kind
+
+A tool whose answer needs no vendor CLI is `kind: 'local'`. It still gets
+`run(args, ctx)`, but with a reduced context — `{ cfg, mode, log, catalog, home }`,
+no `spawn`, no `retry` — because a local tool that spawns is not local. The
+runtime answers it directly: it is never tracked by the status feed, never
+spooled, and (like a `catalog` read) it still answers while the unit is
+`enabled: false`, since what it serves was produced before someone switched the
+unit off. Use it for reading back something the fleet already has; use a normal
+kind for anything that talks to the vendor.
+
+### Progress and cancellation
+
+Both are the runtime's job, and an adapter only has to stay out of the way.
+
+**Progress.** While a call runs, the runtime sends
+`notifications/progress` every 30 seconds to a client that supplied a
+`progressToken`, carrying elapsed seconds and one short line. Nothing is sent
+without a token and nothing after the response. This is not decoration: a stdio
+tool call that sends neither a response nor a progress notification for 30
+minutes is aborted for idleness by the client, whatever its wall-clock timeout
+says.
+
+**Cancellation.** When the client withdraws a request, the unit's `cancel`
+config decides what happens (see [CONFIG.md](CONFIG.md#cancellation)). Under
+`kill` the runtime passes an `AbortSignal` down: `ctx.spawn` SIGKILLs the
+process group the moment it fires, `ctx.retry` abandons a pending delay, and the
+run's result carries `cancelled: true` next to `killed: true`. Under `finish`
+nothing is passed down at all and the run ends normally.
+
+What an adapter owns is the space *between* spawns. A pipeline that runs several
+stages should check `ctx.signal` before starting the next one:
+
+```js
+if (ctx.signal && ctx.signal.aborted) return partialReport;   // undefined under `cancel: finish`
+```
+
+Always guard the property access: `ctx.signal` is `undefined` unless the unit is
+in `kill` mode. A single-spawn tool needs no check — the spawn itself is already
+bound to the signal.
 
 ### Prefer a streaming output format
 
@@ -158,7 +201,7 @@ import unit from '../units/acme/adapter.mjs';
 startUnit(unit);
 ```
 
-Register it with `claude mcp add -s user <prefix>-acme -- node /abs/path/servers/acme.mjs`, or add the unit to the CLI's install list. Drive it by hand with `node scripts/mcp-call.mjs servers/acme.mjs acme_models '{}'` — the low-level entry point, which takes a server path rather than a unit name and therefore works before the unit is wired into the CLI. Once it is, `omelette-fleet call acme acme_models '{}'` does the same through `core/client.mjs`. Both keep stdin open until the call answers, which a naive `printf | node server` does not (a server exits on stdin EOF by design).
+Register it with `claude mcp add -s user <prefix>-acme -- node /abs/path/servers/acme.mjs`, or add the unit to the CLI's install list. Drive it by hand with `node scripts/mcp-call.mjs servers/acme.mjs acme_models '{}'` — the low-level entry point, which takes a server path rather than a unit name and therefore works before the unit is wired into the CLI. Once it is, `omelette-fleet call acme acme_models '{}'` does the same through `core/client.mjs`. Both keep stdin open until the call answers, and that is on the client's side of the bargain: on stdin EOF a server stops reading, lets the calls already in flight finish (each bounded by that unit's `timeoutS`), flushes stdout and exits. The answer is written, but a `printf | node server` pipeline has usually gone away by then — the response has to be read before the client closes.
 
 ## 4. `test/<unit>.test.mjs` — the fake-binary pattern
 

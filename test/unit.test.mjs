@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defineUnit, createUnitRuntime, boundedRetry, MUTATE_RE } from '../core/unit.mjs';
+import { defineUnit, createUnitRuntime, boundedRetry, makeResultId, MUTATE_RE, PROGRESS_EVERY_MS, TOOL_KINDS } from '../core/unit.mjs';
 import { makeCatalog } from '../core/catalog.mjs';
 
 const node = process.execPath;
@@ -67,6 +67,28 @@ function fakeUnit(overrides = {}) {
         // flagged, the way all three real adapters report a salvaged kill.
         name: 'fake_partial', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
         async run() { return { text: 'half an answer\n\n[fake: hard-killed]', usage: { out: 2 }, partial: true }; },
+      },
+      {
+        // A `local` tool: answered in-process, never spawned, never tracked.
+        name: 'fake_result', kind: 'local', description: 'd', inputSchema: { type: 'object', properties: {} },
+        async run(_a, ctx) { return `local:${ctx.cfg.timeoutS}:${ctx.spawn === undefined ? 'no-spawn' : 'HAS-SPAWN'}`; },
+      },
+      {
+        // An in-process wait: a call long enough to tick, with no child noise.
+        name: 'fake_wait', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+        async run(args) { await new Promise((r) => setTimeout(r, Number(args.ms) || 50)); return 'waited'; },
+      },
+      {
+        // A real child that outlives a cancel unless the signal reaches it.
+        name: 'fake_cancel', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+        async run(_a, ctx) {
+          const r = await ctx.spawn({ args: ['-e', 'setTimeout(() => process.stdout.write("done"), 800)'] });
+          return `killed=${r.killed};cancelled=${r.cancelled}`;
+        },
+      },
+      {
+        name: 'fake_signal', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+        async run(_a, ctx) { return `signal=${ctx.signal ? 'yes' : 'no'}`; },
       },
       { name: 'fake_models', kind: 'catalog', description: 'd', inputSchema: { type: 'object', properties: {} } },
     ],
@@ -236,4 +258,217 @@ test('a partial result is a successful answer that says so: status ok, isError f
 test('defineUnit keeps an `instructions` line and defaults it to empty', () => {
   assert.equal(fakeUnit().instructions, '');
   assert.equal(fakeUnit({ instructions: 'This unit: Fake.' }).instructions, 'This unit: Fake.');
+});
+
+// --- the `local` kind and the result id -------------------------------------
+
+test('defineUnit knows the `local` kind and still demands a run() for it', () => {
+  assert.ok(TOOL_KINDS.has('local'));
+  assert.throws(
+    () => defineUnit({ name: 'x', bin: 'x', catalog, tools: [{ name: 't', description: 'd', inputSchema: {}, kind: 'local' }] }),
+    /needs run/,
+  );
+  const u = defineUnit({ name: 'x', bin: 'x', catalog, tools: [{ name: 't', description: 'd', inputSchema: {}, kind: 'local', run: () => 'x' }] });
+  assert.equal(u.tools[0].kind, 'local');
+});
+
+test('a `local` tool is answered in-process: no spawn in its ctx, no feed entry, and it answers while the unit is disabled', async () => {
+  const { dir, env: e } = env({ units: { fake: { enabled: false, timeoutS: 42 } } });
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  const r = await rt.callTool('fake_result', {});
+  assert.equal(r.isError, undefined);
+  assert.equal(r.text, 'local:42:no-spawn');
+  // Never tracked: the feed only ever hears from tools that spawn a CLI.
+  assert.equal(existsSync(join(dir, 'fleet-log.ndjson')), false);
+  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  assert.deepEqual(snap.active, []);
+  assert.equal(snap.lastEvent, null);
+  // …while the spawning tools of the same disabled unit still refuse.
+  assert.match((await rt.callTool('fake_research', { prompt: 'x' })).text, /disabled in the fleet config/);
+});
+
+test('makeResultId: a sortable <stamp>-<pid>-<seq>, and the runtime counts its own', async () => {
+  assert.equal(makeResultId(1, new Date('2026-09-08T14:25:01.123Z')), `20260908T142501Z-${process.pid}-1`);
+  assert.match(makeResultId(7), /^\d{8}T\d{6}Z-\d+-\d+$/); // P2's RESULT_ID_RE
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  await rt.callTool('fake_wait', { ms: 1 });
+  await rt.callTool('fake_wait', { ms: 1 });
+  const lines = readFileSync(join(dir, 'fleet-log.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const ids = lines.filter((l) => l.event === 'start').map((l) => l.resultId);
+  assert.equal(ids.length, 2);
+  assert.match(ids[0], /-1$/);
+  assert.match(ids[1], /-2$/);
+  assert.notEqual(ids[0], ids[1]);
+  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  assert.equal(snap.lastEvent.resultId, ids[1], 'the same id closes the pair');
+});
+
+// --- progress ---------------------------------------------------------------
+
+test('progress: only with a token, every progressEveryMs, elapsed seconds, and nothing after the response', async () => {
+  const notes = [];
+  const rt = createUnitRuntime(fakeUnit(), { ...env(null), progressEveryMs: 20 });
+  const call = {
+    id: 1, progressToken: 'tok-1', signal: new AbortController().signal,
+    notify: (m, p) => notes.push([m, p]),
+  };
+  const r = await rt.callTool('fake_wait', { ms: 130 }, call);
+  assert.equal(r.text, 'waited');
+  assert.ok(notes.length >= 3, `expected several progress notifications, got ${notes.length}`);
+  assert.equal(notes[0][0], 'notifications/progress');
+  assert.equal(notes[0][1].progressToken, 'tok-1');
+  assert.equal(typeof notes[0][1].progress, 'number');
+  assert.equal('total' in notes[0][1], false, 'the end of a vendor run is unknown by construction');
+  assert.match(notes[0][1].message, /^fake fake_wait running · \d+s$/);
+  const seen = notes.length;
+  await new Promise((res) => setTimeout(res, 80));
+  assert.equal(notes.length, seen, 'the ticker is cleared when the call finishes');
+  // No token: nothing is sent at all.
+  const quiet = [];
+  await rt.callTool('fake_wait', { ms: 80 }, { id: 2, progressToken: null, notify: (m, p) => quiet.push([m, p]) });
+  assert.equal(quiet.length, 0);
+  // And a call with no context at all is still a normal call.
+  assert.equal((await rt.callTool('fake_wait', { ms: 1 })).text, 'waited');
+  assert.equal(PROGRESS_EVERY_MS, 30000);
+});
+
+// --- cancellation and the result record -------------------------------------
+
+test('cancel `finish` (the default): the run is left alone, the answer stands, the feed says detached', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  const c = new AbortController();
+  const abort = setTimeout(() => c.abort(), 120);
+  if (abort.unref) abort.unref();
+  const r = await rt.callTool('fake_cancel', {}, { id: 1, signal: c.signal });
+  assert.equal(r.text, 'killed=false;cancelled=false', 'the child ran to the end');
+  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'ok', 'the outcome is what the run produced');
+  assert.equal(snap.lastEvent.detached, true, '…but nobody is listening any more');
+  assert.ok(snap.lastEvent.resultId);
+});
+
+test('cancel `kill`: the signal reaches the spawn, the group is reaped, the feed says cancelled', async () => {
+  const { dir, env: e } = env({ units: { fake: { cancel: 'kill' } } });
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  const c = new AbortController();
+  const abort = setTimeout(() => c.abort(), 120);
+  if (abort.unref) abort.unref();
+  const t0 = Date.now();
+  const r = await rt.callTool('fake_cancel', {}, { id: 1, signal: c.signal });
+  assert.equal(r.text, 'killed=true;cancelled=true');
+  assert.ok(Date.now() - t0 < 700, 'the child died with the cancel instead of running its course');
+  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'cancelled');
+  assert.equal('detached' in snap.lastEvent, false, 'a killed run was not left to finish');
+});
+
+test('the progress ticker stops the moment the request is cancelled, even under `cancel: finish`', async () => {
+  const notes = [];
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e, progressEveryMs: 20 });
+  const c = new AbortController();
+  const abort = setTimeout(() => c.abort(), 60);
+  if (abort.unref) abort.unref();
+  const p = rt.callTool('fake_wait', { ms: 400 }, {
+    id: 1, progressToken: 'tok', signal: c.signal, notify: (m, params) => notes.push([m, params]),
+  });
+  await new Promise((res) => setTimeout(res, 140));
+  const atAbort = notes.length;
+  assert.ok(atAbort >= 1, 'the ticker did run before the cancel');
+  // Under `finish` the run is deliberately left to end — but its client is gone,
+  // so it must stop being told about it.
+  assert.equal((await p).text, 'waited');
+  assert.equal(notes.length, atAbort, 'no progress is sent for a request the client dropped');
+  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'ok');
+  assert.equal(snap.lastEvent.detached, true);
+});
+
+test('ctx.signal reaches an adapter only under `cancel: kill`', async () => {
+  const c = new AbortController();
+  const finishing = createUnitRuntime(fakeUnit(), env(null));
+  assert.equal((await finishing.callTool('fake_signal', {}, { signal: c.signal })).text, 'signal=no');
+  const killing = createUnitRuntime(fakeUnit(), env({ units: { fake: { cancel: 'kill' } } }));
+  assert.equal((await killing.callTool('fake_signal', {}, { signal: c.signal })).text, 'signal=yes');
+  // …and a call with no context at all never sees one either.
+  assert.equal((await killing.callTool('fake_signal', {})).text, 'signal=no');
+});
+
+test('boundedRetry: an abort during the delay ends it and stops the retry instead of paying for a second run', async () => {
+  const c = new AbortController();
+  let n = 0;
+  const abort = setTimeout(() => c.abort(), 30);
+  if (abort.unref) abort.unref();
+  const t0 = Date.now();
+  await assert.rejects(boundedRetry(async () => { n++; return ''; }, { delayMs: 5000, signal: c.signal }), /cancelled/);
+  assert.equal(n, 1, 'the second attempt never ran');
+  assert.ok(Date.now() - t0 < 2000, 'the delay was cut short, not waited out');
+  // An untouched signal changes nothing about the existing behaviour.
+  let m = 0;
+  const r = await boundedRetry(async () => { m++; return m === 1 ? '' : 'second'; }, { delayMs: 1, signal: new AbortController().signal });
+  assert.equal(r, 'second');
+  assert.equal(m, 2);
+});
+
+test('finish hands P2 the whole result record — once per finished spawn call, feed on or off', async () => {
+  const records = [];
+  const { env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e, onResult: (rec) => records.push(rec) });
+  await rt.callTool('fake_research', { prompt: 'what is up', cwd: '/tmp/project' });
+  assert.equal(records.length, 1);
+  const rec = records[0];
+  assert.deepEqual(Object.keys(rec).sort(), [
+    'cwd', 'detached', 'durationMs', 'effort', 'endedAt', 'model', 'partial',
+    'promptPreview', 'resultId', 'startedAt', 'status', 'text', 'tool',
+  ]);
+  assert.equal(rec.tool, 'fake_research');
+  assert.equal(rec.status, 'ok');
+  assert.equal(rec.partial, false);
+  assert.equal(rec.detached, false);
+  assert.equal(rec.cwd, '/tmp/project');
+  assert.equal(rec.promptPreview, 'what is up');
+  assert.match(rec.resultId, /^\d{8}T\d{6}Z-\d+-\d+$/);
+  assert.match(rec.startedAt, /^\d{4}-\d\d-\d\dT/);
+  assert.match(rec.endedAt, /^\d{4}-\d\d-\d\dT/);
+  assert.ok(rec.durationMs >= 0);
+  assert.match(rec.text, /^mode=read-only/);
+  // Local and catalog tools are never spooled.
+  await rt.callTool('fake_result', {});
+  await rt.callTool('fake_models', {});
+  assert.equal(records.length, 1);
+  // A call refused before any spawn is still an answer someone may have lost.
+  await rt.callTool('fake_research', { prompt: 'x', model: 'm-nope' });
+  assert.equal(records.length, 2);
+  assert.equal(records[1].status, 'error');
+  assert.match(records[1].text, /unknown model "m-nope"/);
+  assert.equal(records[1].cwd, '');
+  // A partial answer says so, and the feed being OFF changes nothing here.
+  const off = createUnitRuntime(fakeUnit(), { env: { ...e, OMELETTE_STATUS: '0' }, onResult: (rec2) => records.push(rec2) });
+  await off.callTool('fake_partial', {});
+  assert.equal(records.length, 3);
+  assert.equal(records[2].partial, true);
+  assert.equal(records[2].status, 'ok');
+});
+
+test('the reduced ctx of a `local` tool is exactly cfg, mode, log, catalog, home — no signal, even under `cancel: kill`', async () => {
+  let keys = null;
+  const rt = createUnitRuntime(
+    fakeUnit({
+      tools: [
+        {
+          name: 'fake_keys', kind: 'local', description: 'd', inputSchema: { type: 'object', properties: {} },
+          run: (_a, ctx) => { keys = Object.keys(ctx).sort().join(','); return 'ok'; },
+        },
+        { name: 'fake_models', kind: 'catalog', description: 'd', inputSchema: { type: 'object', properties: {} } },
+      ],
+    }),
+    env({ units: { fake: { cancel: 'kill' } } }),
+  );
+  const c = new AbortController();
+  c.abort();
+  // A tool that never spawns has nothing to cancel, in either cancel mode.
+  assert.equal((await rt.callTool('fake_keys', {}, { id: 1, signal: c.signal })).text, 'ok');
+  assert.equal(keys, 'catalog,cfg,home,log,mode');
 });

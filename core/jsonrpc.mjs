@@ -228,9 +228,15 @@ export function serve({ serverInfo, tools, callTool, instructions, log = () => {
     // process.exit() there would cut the frame off mid-string. The callback of
     // an empty write runs only once every write queued before it has gone out,
     // so this exits on the last byte of the answer, not on the first.
-    handle.drain().then(
-      () => setImmediate(() => process.stdout.write('', () => process.exit(0))),
-      () => setImmediate(() => process.stdout.write('', () => process.exit(0))),
-    );
+    const exitWhenFlushed = () => setImmediate(() => {
+      // …and a client that keeps the pipe open without ever reading it never
+      // lets that callback run: the write stays parked on backpressure and the
+      // server would sit there for good. 10 s is far longer than any real
+      // flush and short enough that a stuck server still goes away by itself.
+      const t = setTimeout(() => process.exit(0), 10000);
+      if (t.unref) t.unref();
+      process.stdout.write('', () => { clearTimeout(t); process.exit(0); });
+    });
+    handle.drain().then(exitWhenFlushed, exitWhenFlushed);
   });
 }

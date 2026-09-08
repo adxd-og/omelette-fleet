@@ -87,6 +87,7 @@ Every unit understands these. Adapters may add their own (below).
 | `outputCap` | positive int | `400000` | Characters of a run's stdout kept. The **last** ones — see the note below |
 | `webSearch` | boolean | `true` | Whether the unit's web tools are available |
 | `status` | boolean | `true` | Write the status feed for this unit |
+| `cancel` | `"finish"` \| `"kill"` | `"finish"` | What a client's cancellation does to a run already in flight — see [Cancellation](#cancellation) |
 
 Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/no`, so the same values work from a file or an environment variable. Every **positive int** key — `timeoutS`, `maxTurns`, `outputCap`, `imageMaxTurns`, `agents.tester.maxTurns` — is a WHOLE number above zero, given as a number or a numeric string. A fraction is refused rather than rounded (`0.5` used to floor to the very `0` these keys forbid, and `1.9` to a `1` nobody wrote), and so are zero, negatives and anything that is not a number.
 
@@ -109,6 +110,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 | `maxTurns` | — | `--max-turns` | — |
 | `outputCap` | bounds stdout | bounds stdout (built-in `2000000`), and a capped run is marked partial or refused — see below | bounds stdout |
 | `webSearch` | — | drops `web_search`/`web_fetch` from the toolset | `-c tools.web_search=<bool>` |
+| `cancel` | yes — the runtime honours it for every unit | yes | yes |
 | `imageMaxTurns` | — | image runs only | — |
 
 Keys that a unit ignores are still valid config — they are simply never read. An unknown key *name* warns and is ignored, in `defaults` as well as in `units.<unit>`. One consequence of `defaults` being checked per unit: a key that is valid for one unit only (`imageMaxTurns`) warns for the units that do not know it, so put unit-specific extras under `units.<unit>`.
@@ -245,6 +247,41 @@ Disabling a unit is a runtime decision, not a registration one:
 - **The tool list does not change for the running session.** `tools/list` is built when the server starts, so the client still shows the tools; they just refuse. Re-enable and the next call works, again with no restart.
 
 To remove the tools from the client entirely, use `omelette-fleet uninstall` (or `claude mcp remove`) and restart Claude Code.
+
+## Cancellation
+
+An MCP client can withdraw a request it is no longer waiting for by sending
+`notifications/cancelled` with the request's id — Claude Code does this when you
+press Esc, and also when its own timeout fires. On the wire the two are
+indistinguishable, so what happens next is the operator's call:
+
+| `cancel` | What happens to the run |
+|---|---|
+| `"finish"` (default) | The vendor CLI is left alone. The run ends normally, the status feed closes the call with its real outcome (`ok` / `error`) plus `detached: true`, and **no response is sent** — the client stopped listening, and the MCP spec says a response to a cancelled request is ignored |
+| `"kill"` | Every process group the request owns is SIGKILLed at once, a pending retry delay is aborted, later pipeline stages never start. The feed closes the call with status `cancelled` |
+
+The default is `finish` on purpose. The units run on subscriptions with the
+billing keys scrubbed out of every child environment, so a run that finishes
+after a cancel costs window quota, not money — and the incident this release
+exists for was a *lost answer*, not a wasted one. An operator who mostly regrets
+the runs they cancel sets `kill`:
+
+```bash
+omelette-fleet set codex.cancel=kill        # one unit
+omelette-fleet set defaults.cancel=kill     # not accepted: `defaults` is edited by hand
+```
+
+`set` takes `<unit>.<key>` only; to change it fleet-wide put `"cancel": "kill"`
+in the file's `defaults` block.
+
+Two related guarantees, neither of them configurable:
+
+- **A cancelled request never gets a response.** The result is recorded, not sent.
+- **Closing the connection is not a cancellation.** When the client closes the
+  server's stdin, the server stops reading, waits for the calls still in flight
+  (each bounded by that unit's `timeoutS`) and only then exits. `finish` therefore
+  survives a client timeout and a client restart — it does not survive a `kill`
+  of the server process itself.
 
 ## How `timeoutS` differs per unit
 

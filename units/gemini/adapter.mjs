@@ -72,6 +72,9 @@
  * Stage models are picked from the catalog by tier/effort so a generation
  * sweep never leaves a stale id behind (the old bridge hard-coded one and
  * silently ran on agy's default after 3.5 Flash was retired).
+ * A cancelled request (cancel: kill) stops the pipeline between stages: the
+ * gathers that have not started are skipped and the synthesis never runs, so
+ * what comes back is the raw findings under a cancellation note.
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -263,9 +266,17 @@ export function stageModels(cat, explicit) {
   return { decompose: medium && medium.id, gather: medium && medium.id, synth: high && high.id };
 }
 
+const CANCELLED_NOTE =
+  '> **Cancelled — the synthesis stage did not run.** What follows is the raw ' +
+  'per-sub-question findings, unsynthesised.\n\n';
+
 async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
   const cap = Math.min(5, Math.max(1, Number(maxSubquestions) || 3));
   const stage = stageModels(ctx.catalog, model);
+  // `ctx.signal` exists only under `cancel: kill` (core/unit.mjs). A cancelled
+  // request buys nothing by starting another stage: the spawn would be
+  // SIGKILLed the moment it started, on quota the operator already spent.
+  const cancelled = () => !!(ctx.signal && ctx.signal.aborted);
 
   const decompose = await runAgyWithRetry(ctx, {
     prompt:
@@ -288,6 +299,7 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
   if (!subs || !subs.length) { subs = [question]; degraded = true; }
 
   const findings = await Promise.all(subs.map(async (sq, i) => {
+    if (cancelled()) return `### Sub-question ${i + 1}: ${sq}\n\n_(cancelled before this sub-question ran)_`;
     try {
       const r = await runAgyWithRetry(ctx, {
         prompt:
@@ -301,6 +313,11 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
       return `### Sub-question ${i + 1}: ${sq}\n\n_(gather failed: ${(e && e.message) || e})_`;
     }
   }));
+
+  if (cancelled()) {
+    ctx.log('deep research · cancelled — the synthesis stage was not started');
+    return CANCELLED_NOTE + findings.join('\n\n---\n\n');
+  }
 
   const report = (await runAgyWithRetry(ctx, {
     prompt:

@@ -30,10 +30,14 @@
  *   tools: [{ name, description, inputSchema, kind, mutateGate?, run(args, ctx) }],
  * })
  *
- * tool.kind: research | review | image | pipeline | catalog. `catalog` tools
- * never spawn and are answered by the runtime. Every other kind gets
- * `run(args, ctx)` with ctx = { cfg, mode, model, effort, spawn, retry, log,
- * catalog, home } and returns a string or { text, usage?, isError?, partial? }.
+ * tool.kind: research | review | image | pipeline | catalog | local. `catalog`
+ * tools never spawn and are answered by the runtime from the unit's catalog;
+ * `local` tools never spawn either but DO get `run(args, ctx)` with a reduced
+ * ctx (`cfg, mode, log, catalog, home` — no `spawn`, no `retry`), and like a
+ * catalog read they are never tracked by the status feed and never spooled.
+ * Every other kind gets `run(args, ctx)` with ctx = { cfg, mode, model, effort,
+ * spawn, retry, log, catalog, home, signal }
+ * and returns a string or { text, usage?, isError?, partial? }.
  * `ctx.spawn({ args, cwd?, stdinText?, extraEnv?, hardKillMs?, outputCap? })`
  * resolves to core/spawn.mjs's result — `{ stdout, stderr, code, signal,
  * killed, capped }`. Both bounds come from the unit's config (`timeoutS`,
@@ -43,6 +47,10 @@
  * `partial: true` marks an answer whose run did not finish (a hard kill whose
  * captured text was kept): still a success, still `isError: false`, and the
  * flag travels to the status feed's `end()` extra next to `usage`.
+ * `ctx.signal` is an AbortSignal when the unit's `cancel` is `kill` and the
+ * request was cancelled-capable, and `undefined` otherwise: a pipeline checks
+ * it between stages so a cancelled request stops spending spawns. Under
+ * `cancel: finish` nothing is passed down and the run ends normally.
  * `isError: true` is how an adapter reports a REFUSAL it handled itself
  * (missing prompt, bad cwd, bad imagePath): the text is the error, MCP is told
  * so, and the status feed records "error" — a run that returns `Error: ...`
@@ -51,12 +59,25 @@
 import { serve } from './jsonrpc.mjs';
 import { unitInstructions } from './rules.mjs';
 import { runProcess } from './spawn.mjs';
-import { createStatus } from './status.mjs';
+import { createStatus, previewText } from './status.mjs';
 import { unitConfig } from './config.mjs';
 import { makeLog, makeOnceLog } from './log.mjs';
 import { VERSION, announceUpdate } from './update.mjs';
 
-export const TOOL_KINDS = new Set(['research', 'review', 'image', 'pipeline', 'catalog']);
+export const TOOL_KINDS = new Set(['research', 'review', 'image', 'pipeline', 'catalog', 'local']);
+
+/** How often a running call reports progress to a client that asked for it. */
+export const PROGRESS_EVERY_MS = 30000;
+
+/**
+ * The id one spawn-tool call is filed under: sortable, unique within a process,
+ * and INDEPENDENT of the status feed (which is off in plenty of installs). It
+ * is what a caller quotes to fetch a result the client dropped.
+ */
+export function makeResultId(seq, now = new Date()) {
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  return `${stamp}-${process.pid}-${seq}`;
+}
 
 /** Git/deploy/publish intent stays with the manager — units are research and review peers. */
 export const MUTATE_RE = /\bgit (push|commit|merge|rebase|reset|tag)\b|\bnpm publish\b|\bdeploy\b/i;
@@ -103,23 +124,43 @@ export function resolveBin(unit, env = process.env) {
 /**
  * One bounded retry on empty output — safe for read-only one-shots. `skipIf(err)`
  * names the deterministic failures a retry cannot fix (auth, quota, permission).
+ * `signal` (passed only under `cancel: kill`) ends the delay and cancels the
+ * second attempt: a request nobody is waiting for buys nothing by trying again.
  */
-export async function boundedRetry(fn, { skipIf = () => false, delayMs = 1500 } = {}) {
+export async function boundedRetry(fn, { skipIf = () => false, delayMs = 1500, signal } = {}) {
   try {
     const r = await fn();
     if (r && (typeof r === 'string' ? r.trim() : r.text)) return r;
   } catch (e) {
     if (skipIf(e)) throw e;
   }
-  await new Promise((r) => setTimeout(r, delayMs));
+  if (signal && signal.aborted) throw new Error('cancelled');
+  await new Promise((resolve) => {
+    function done() {
+      clearTimeout(t);
+      if (signal) signal.removeEventListener('abort', done);
+      resolve();
+    }
+    const t = setTimeout(done, delayMs);
+    if (signal) signal.addEventListener('abort', done, { once: true });
+  });
+  if (signal && signal.aborted) throw new Error('cancelled');
   return fn();
 }
 
-/** Build the runtime (config, status, callTool) for a unit without touching stdin/stdout. */
-export function createUnitRuntime(unit, { env = process.env } = {}) {
+/**
+ * Build the runtime (config, status, callTool) for a unit without touching stdin/stdout.
+ * `progressEveryMs` and `onResult` are seams: the first lets a test drive the
+ * progress ticker on a fast clock, the second is P2's result-spool hook (a
+ * no-op here) and the only way to see the record a finished call produces.
+ */
+export function createUnitRuntime(unit, { env = process.env, progressEveryMs = PROGRESS_EVERY_MS, onResult = () => {} } = {}) {
   const log = makeLog(unit.name);
   const warnOnce = makeOnceLog(log);
-  const spawnTools = new Set(unit.tools.filter((t) => t.kind !== 'catalog').map((t) => t.name));
+  // Neither a catalog read nor a `local` tool spawns anything, so neither is
+  // tracked by the feed — and neither is spooled.
+  const spawnTools = new Set(unit.tools.filter((t) => t.kind !== 'catalog' && t.kind !== 'local').map((t) => t.name));
+  let resultSeq = 0;
   const cfgFor = () => unitConfig({
     unit: unit.name, envMap: unit.envMap, builtin: unit.builtin, extraSchema: unit.extraSchema,
     supportedModes: unit.supportedModes, env,
@@ -131,7 +172,7 @@ export function createUnitRuntime(unit, { env = process.env } = {}) {
   });
   status.boot();
 
-  function spawnFor(cfg, { args, cwd, stdinText, extraEnv, hardKillMs, outputCap }) {
+  function spawnFor(cfg, { args, cwd, stdinText, extraEnv, hardKillMs, outputCap }, signal) {
     const bin = resolveBin(unit, env);
     const timeoutMs = hardKillMs ?? cfg.values.timeoutS * 1000;
     // Both bounds come from the unit's config unless this call knows better.
@@ -145,7 +186,7 @@ export function createUnitRuntime(unit, { env = process.env } = {}) {
       // from the allowlist + this unit's passthrough, never by inheritance.
       bin, args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
       scrubEnv: unit.billingRiskEnv,
-      hardKillMs: timeoutMs, stdinText, outputCap: cap, log,
+      hardKillMs: timeoutMs, signal, stdinText, outputCap: cap, log,
       notFoundHelp: `${bin} not found in PATH — install the ${unit.label} CLI${unit.bin.env ? ` or point ${unit.bin.env} at it` : ''}`,
     }).then((res) => {
       // Auth check ONLY on empty-stdout runs: a real answer that merely mentions
@@ -155,13 +196,37 @@ export function createUnitRuntime(unit, { env = process.env } = {}) {
     });
   }
 
-  async function callTool(name, args = {}) {
+  async function callTool(name, args = {}, call = {}) {
     const tool = unit.tools.find((t) => t.name === name);
     if (!tool) return { text: `Error: unknown tool "${name}".`, isError: true };
     if (tool.kind === 'catalog') return { text: unit.catalog.render() };
 
     const cfg = cfgFor();
     for (const w of cfg.warnings) warnOnce('config: ' + w);
+
+    // A `local` tool is answered right here: no spawn, no status feed entry, no
+    // spool. Like a catalog read it still answers while the unit is disabled —
+    // what it serves was produced before someone switched the unit off.
+    if (tool.kind === 'local') {
+      try {
+        const r = await tool.run(args, {
+          cfg: cfg.values,
+          mode: cfg.values.mode,
+          log,
+          catalog: unit.catalog,
+          home: cfg.home,
+          // No `signal` either: a tool that never spawns has nothing to cancel.
+        });
+        const text = typeof r === 'string' ? r : (r && r.text) || '';
+        const isError = !!(r && typeof r === 'object' && r.isError);
+        return isError
+          ? { text, isError: true }
+          : { text: text || `(empty response from ${unit.label})` };
+      } catch (e) {
+        return { text: `${unit.label} error: ${(e && e.message) || e}`, isError: true };
+      }
+    }
+
     if (!cfg.values.enabled) {
       return { text: `Error: unit "${unit.name}" is disabled in the fleet config (${cfg.configPath}).`, isError: true };
     }
@@ -180,9 +245,82 @@ export function createUnitRuntime(unit, { env = process.env } = {}) {
     }
 
     const promptText = typeof args.prompt === 'string' ? args.prompt : (typeof args.question === 'string' ? args.question : '');
-    const token = status.start(name, promptText, model, effort);
+    const resultId = makeResultId(++resultSeq);
+    const startedAt = new Date().toISOString();
+    const t0 = Date.now();
+    const token = status.start(name, promptText, model, effort, resultId);
+    // Progress exists for one reason: a stdio tool call that sends neither a
+    // response nor a `notifications/progress` for 30 minutes is aborted for
+    // idleness by the client, whatever the wall-clock timeout says. Only for a
+    // client that supplied a token, only while the call runs, cleared in
+    // finish() — nothing is ever sent after the response.
+    let ticker = null;
+    if (call.progressToken != null && typeof call.notify === 'function') {
+      ticker = setInterval(() => {
+        const elapsed = Math.round((Date.now() - t0) / 1000);
+        call.notify('notifications/progress', {
+          progressToken: call.progressToken,
+          progress: elapsed,
+          message: `${unit.name} ${name} running · ${elapsed}s`,
+        });
+      }, progressEveryMs);
+      if (ticker.unref) ticker.unref();
+    }
+    // The ticker also stops on the cancellation, not only on the response:
+    // under `cancel: finish` the run is deliberately left to end, and telling a
+    // client that has gone away how its abandoned run is doing helps nobody.
+    let detachTicker = () => {};
+    const clearProgress = () => {
+      if (ticker) { clearInterval(ticker); ticker = null; }
+      detachTicker();
+      detachTicker = () => {};
+    };
+    if (ticker && call.signal) {
+      try {
+        call.signal.addEventListener('abort', clearProgress, { once: true });
+        detachTicker = () => {
+          try { call.signal.removeEventListener('abort', clearProgress); } catch { /* not a real signal */ }
+        };
+      } catch { /* not a real signal: the ticker still stops in finish() */ }
+    }
+
+    // `cancel` decides what a client's cancellation does to this run:
+    //   finish — the vendor CLI is left to end; the result is recorded and
+    //            marked `detached` (no response is sent: the handler drops it);
+    //   kill   — the signal goes down to every spawn and pending retry delay,
+    //            and the call ends with the outcome `cancelled`.
+    const cancelMode = cfg.values.cancel;
+    const killSignal = cancelMode === 'kill' && call.signal ? call.signal : undefined;
+
     const finish = (text, isError = false, extra) => {
-      status.end(token, isError ? 'error' : 'ok', isError ? text : null, extra);
+      clearProgress();
+      const aborted = !!(call.signal && call.signal.aborted);
+      const cancelled = aborted && cancelMode === 'kill';
+      const detached = aborted && !cancelled;
+      const outcome = cancelled ? 'cancelled' : (isError ? 'error' : 'ok');
+      status.end(token, outcome, isError ? text : null, {
+        ...(extra || {}), resultId, ...(detached ? { detached: true } : {}),
+      });
+      // P2 HOOK POINT — the result spool. A no-op here, but the record is built
+      // on EVERY finished spawn-tool call, feed on or off, because the feed is
+      // not what keeps an answer: it keeps an event.
+      try {
+        onResult({
+          resultId,
+          tool: name,
+          model,
+          effort,
+          startedAt,
+          endedAt: new Date().toISOString(),
+          durationMs: Date.now() - t0,
+          status: outcome,
+          partial: !!(extra && extra.partial),
+          detached,
+          cwd: typeof args.cwd === 'string' ? args.cwd : '',
+          promptPreview: previewText(promptText),
+          text,
+        });
+      } catch (e) { log('result hook: ' + ((e && e.message) || e)); }
       return isError ? { text, isError: true } : { text };
     };
 
@@ -205,8 +343,11 @@ export function createUnitRuntime(unit, { env = process.env } = {}) {
       log,
       catalog: unit.catalog,
       home: cfg.home,
-      spawn: (o) => spawnFor(cfg, o),
-      retry: boundedRetry,
+      spawn: (o) => spawnFor(cfg, o, killSignal),
+      retry: (fn, opts = {}) => boundedRetry(fn, { ...opts, signal: killSignal }),
+      // Present under `cancel: kill` only: under `finish` there is nothing for
+      // an adapter to observe, because the run is deliberately left to end.
+      signal: killSignal,
     };
     try {
       const r = await tool.run(args, ctx);
@@ -259,6 +400,7 @@ export function startUnit(unit, opts = {}) {
     tools: rt.tools,
     callTool: rt.callTool,
     log: rt.log,
+    env: opts.env || process.env,
   });
   return rt;
 }

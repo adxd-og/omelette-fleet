@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit, { interpretAgy, parseSubquestions, stageModels, catalog } from '../units/gemini/adapter.mjs';
@@ -128,4 +128,46 @@ test('runtime with a fake agy: argv per mode — research standard, workspace-wr
 
   const noPrompt = await wrap(base).callTool('gemini_research', { prompt: '  ' });
   assert.equal(noPrompt.isError, true);
+});
+
+test('deep research under `cancel: kill`: a cancel stops the remaining gathers and the synthesis stage', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-cancel-'));
+  const fake = join(dir, 'fake-agy.mjs');
+  // Decompose answers at once with two sub-questions; a gather would take 3 s.
+  writeFileSync(fake, [
+    'const argv = process.argv.slice(2);',
+    'const prompt = argv[argv.indexOf("-p") + 1] || "";',
+    'const say = (r) => process.stdout.write(JSON.stringify({ status: "SUCCESS", response: r }));',
+    'if (/Decompose the following/.test(prompt)) say(JSON.stringify(["q one", "q two"]));',
+    'else setTimeout(() => say("a finding"), 3000);',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { cancel: 'kill', timeoutS: 60 } } }));
+  const base = { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath };
+  const controller = new AbortController();
+  const spawns = [];
+  const rt = createUnitRuntime(
+    {
+      ...unit,
+      tools: unit.tools.map((t) => (t.run ? {
+        ...t,
+        run: (a, ctx) => t.run(a, {
+          ...ctx,
+          spawn: (o) => {
+            spawns.push(o.args.join(' '));
+            // The cancel lands exactly as the FIRST gather is issued: the second
+            // gather and the synthesis must never reach a spawn at all.
+            if (spawns.length === 2) controller.abort();
+            return ctx.spawn({ ...o, args: [fake, ...o.args] });
+          },
+        }),
+      } : t)),
+    },
+    { env: base },
+  );
+  const r = await rt.callTool('gemini_deep_research', { question: 'why' }, { id: 1, signal: controller.signal });
+  assert.equal(spawns.length, 2, `decompose + one gather only, got: ${JSON.stringify(spawns.map((s) => s.slice(0, 40)))}`);
+  assert.match(r.text, /Cancelled — the synthesis stage did not run/);
+  assert.match(r.text, /_\(cancelled before this sub-question ran\)_/);
+  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'cancelled');
 });
