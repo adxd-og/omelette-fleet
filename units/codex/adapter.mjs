@@ -27,6 +27,26 @@
  * visible `[codex: CLI exited N — treat the answer as partial]` marker:
  * dropping it wastes the run, returning it clean would be a lie.
  *
+ * OUTPUT CAP — core/spawn.mjs keeps only the LAST `outputCap` characters of
+ * stdout (config `outputCap`, fleet default 400 000; this unit does not raise
+ * it — its JSONL carries one line per item, not one envelope per text delta).
+ * A cap that bites drops the FRONT of the stream and the answer is the LAST
+ * `agent_message`, so the two cases differ: whole lines still parse and the
+ * answer is real with its narration gone (the capped marker, partial: true), or
+ * the answer itself rode a line longer than the cap and NO agent_message
+ * survived — where parseJsonl silently drops the fragment and this function
+ * used to report "produced no answer", naming a cause that is not the cause.
+ * It throws and names `codex.outputCap` instead, and isDeterministic skips the
+ * retry: the same run would hit the same cap and be paid for twice. A hard kill
+ * is answered FIRST either way — 0.3.1's salvage keeps its promise, both markers
+ * ride on the salvaged answer, and the cap surfaces in the error only when the
+ * killed run had nothing to salvage.
+ *
+ * CANCELLATION — the same SIGKILL answers a cancelled request (`cancel: kill`),
+ * and core/spawn.mjs tells the two apart with `cancelled: true`. The salvage is
+ * identical; only the wording changes, because neither bound was reached and
+ * "raise codex.timeoutS" would send the operator after a limit that held.
+ *
  * WEB SEARCH — `-c tools.web_search=true` (verified live: emits `web_search`
  * items and grounds the answer). Toggle per unit with `webSearch` in the
  * fleet config.
@@ -90,6 +110,7 @@
 import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { OUTPUT_CAP } from '../../core/spawn.mjs';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
 import { extractImagePath } from '../../core/artifact.mjs';
@@ -175,13 +196,15 @@ function errorText(raw) {
 }
 
 /**
- * Turn a finished run into { text, usage } — `partial: true` when the run was
- * hard-killed and the answer is what it had already emitted — or throw a clear
- * error. Exported for tests.
- * @param {{stdout:string, stderr:string, code:number|null, killed:boolean}} res
- * @param {{timeoutS?:number}} o
+ * Turn a finished run into { text, usage, searches } — `partial: true` when the
+ * answer is there but incomplete (a hard kill whose captured text we kept, a run
+ * whose stdout hit the tail cap) — or throw a clear error. Exported for tests.
+ * @param {{stdout:string, stderr:string, code:number|null, killed:boolean, capped?:boolean, cancelled?:boolean}} res
+ * @param {{timeoutS?:number, capped?:boolean, outputCap?:number}} o
+ *   capped defaults to the run's own flag; outputCap is the tail cap the run was
+ *   spawned under and is quoted in the messages, because raising it is the fix.
  */
-export function extractResult(res, { timeoutS } = {}) {
+export function extractResult(res, { timeoutS, capped = res.capped, outputCap = OUTPUT_CAP } = {}) {
   const ev = parseJsonl(res.stdout);
   const messages = ev
     .filter((e) => e.type === 'item.completed' && e.item && e.item.type === 'agent_message' && typeof e.item.text === 'string')
@@ -199,25 +222,48 @@ export function extractResult(res, { timeoutS } = {}) {
     reasoning: u.reasoning_output_tokens ?? null,
   } : null;
 
+  // THE TAIL CAP DROPS THE BEGINNING of the JSONL, so a capped run is never a
+  // whole answer: every path out of here marks it and flags it partial.
+  const capMark = (text) => (capped && text
+    ? `${text}\n\n[codex: output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial]`
+    : text);
+  const capExtra = capped ? { partial: true } : undefined;
+
   // A hard kill at timeoutS used to discard every item the run had already
   // completed. The messages above were parsed from what WAS captured, so if the
   // answer is among them it comes back marked instead of being thrown away.
+  // The kill is answered FIRST, cap or no cap: the salvage is the older promise.
   if (res.killed) {
+    // The same SIGKILL ends a cancelled request; `cancelled` says which it was,
+    // and a client that stopped the run is not a timeoutS to raise.
+    const killMark = res.cancelled
+      ? '[codex: cancelled by the client — treat the answer as partial]'
+      : `[codex: hard-killed after ${timeoutS ?? '?'}s — treat the answer as partial; raise codex.timeoutS in the fleet config]`;
     if (messages.length) {
       return {
-        text: `${messages.at(-1)}\n\n[codex: hard-killed after ${timeoutS ?? '?'}s — treat the answer as partial; raise codex.timeoutS in the fleet config]`,
+        text: capMark(`${messages.at(-1)}\n\n${killMark}`),
         usage,
         searches,
         partial: true,
       };
     }
+    // A cancelled run has no answer because the caller asked for none: neither
+    // bound was reached, so neither is named.
+    if (res.cancelled) throw new Error('codex cancelled by the client');
+    if (capped) throw new Error(`codex hard-killed after ${timeoutS ?? '?'}s and output exceeded the ${outputCap} char cap — raise codex.timeoutS or codex.outputCap in the fleet config`);
     throw new Error(`codex hard-killed after ${timeoutS ?? '?'}s (raise codex.timeoutS in the fleet config)`);
   }
+  // A turn the CLI reported as failed is answered by that failure even when the
+  // run was capped: it survived in the tail, it names the real cause (a rejected
+  // model, an HTTP 400), and raising the cap would not produce an answer.
   if (failed) {
     const msg = errorText(failed.error && (failed.error.message || failed.error)) || errors.at(-1) || 'unknown';
     throw new Error(`codex turn failed: ${msg}`);
   }
   if (!messages.length) {
+    // The cap ate the final message: parseJsonl dropped the fragment it left,
+    // and "produced no answer" would send the operator after the wrong thing.
+    if (capped) throw new Error(`codex output exceeded the ${outputCap} char cap and the final message was lost — raise codex.outputCap or narrow the task`);
     const tail = errors.at(-1) || res.stderr.trim().slice(-500) || '(no stderr)';
     throw new Error(res.code === 0 ? `codex produced no answer: ${tail}` : `codex exited ${res.code}: ${tail}`);
   }
@@ -227,7 +273,7 @@ export function extractResult(res, { timeoutS } = {}) {
   // A non-zero exit WITH an answer: keep the answer (the run is paid for and
   // the text is usually the useful part) but never let it read as a clean one.
   if (res.code !== 0) text += `\n\n[codex: CLI exited ${res.code} — treat the answer as partial]`;
-  return { text, usage, searches };
+  return { text: capMark(text), usage, searches, ...capExtra };
 }
 
 /** Pre-spawn validation of an optional review directory. */
@@ -241,7 +287,10 @@ function checkCwd(raw) {
   return { cwd };
 }
 
-const isDeterministic = (e) => /not authenticated|turn failed|hard-killed|not found in PATH/i.test((e && e.message) || '');
+// `output exceeded`: an answer that outgrew the cap once will outgrow it again,
+// so the retry is a second full paid run that cannot end differently. Same for
+// a run the client cancelled — nobody is waiting for the second one.
+const isDeterministic = (e) => /not authenticated|turn failed|hard-killed|not found in PATH|output exceeded|cancelled by the client/i.test((e && e.message) || '');
 
 /**
  * One `codex exec` run. `webSearch` / `effort` default to the resolved config
@@ -257,7 +306,7 @@ async function runOnce(ctx, { prompt, cwd, mode, webSearch, effort }) {
   const args = buildArgs({ model, effort: eff, cwd, mode, webSearch: web });
   ctx.log(`codex exec · sandbox=${mode} · model=${model}${ctx.model ? '' : ' (catalog default)'} · effort=${eff || '(default)'} · web=${web} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd: cwd || undefined, stdinText: prompt });
-  const out = extractResult(res, { timeoutS: ctx.cfg.timeoutS });
+  const out = extractResult(res, { timeoutS: ctx.cfg.timeoutS, outputCap: ctx.cfg.outputCap });
   if (out.usage) ctx.log(`codex done · tokens in=${out.usage.input} (cached ${out.usage.cachedInput}) out=${out.usage.output} reasoning=${out.usage.reasoning} · web_search=${out.searches}`);
   return out;
 }

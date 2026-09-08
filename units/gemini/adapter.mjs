@@ -15,6 +15,23 @@
  * text under a visible marker (`[gemini: CLI exited N — treat the answer as
  * partial]`); only a text-less failure throws.
  *
+ * OUTPUT CAP — core/spawn.mjs keeps only the LAST `outputCap` characters of
+ * stdout (config `outputCap`, fleet default 400 000). agy prints ONE JSON
+ * envelope, so a cap that bites almost always leaves a front-truncated object
+ * that parseAgyResult rejects — and the raw-stdout fail-open, which exists for a
+ * CLI that printed plain text, would then hand back the middle of an envelope as
+ * the answer. A capped run whose envelope no longer parses therefore THROWS and
+ * names `gemini.outputCap`; isDeterministic skips the retry, because the same
+ * run hits the same cap and is paid for twice. The one capped run that still
+ * parses is the one whose dropped front was a preamble the envelope survived
+ * intact: it comes back with the capped marker and partial: true. A hard kill is
+ * answered first, as everywhere else, with both markers on the salvaged text.
+ *
+ * CANCELLATION — the same SIGKILL answers a cancelled request (`cancel: kill`),
+ * and core/spawn.mjs tells the two apart with `cancelled: true`. The salvage is
+ * identical; only the wording changes, because neither bound was reached and
+ * "raise gemini.timeoutS" would send the operator after a limit that held.
+ *
  * READ-ONLY POSTURE — agy has no kernel sandbox; its `--mode` is a permission
  * policy. Research runs in agy's STANDARD mode: any tool that would prompt is
  * auto-denied headless (and the reason lands on stderr — surfaced here as a
@@ -79,6 +96,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { OUTPUT_CAP } from '../../core/spawn.mjs';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
 import { GEMINI_MODELS, GUIDE } from './models.js';
@@ -132,7 +150,9 @@ const HARD_KILL_GRACE_MS = 60000;
 /**
  * Parse agy's `--output-format json` payload, or null when stdout is not that.
  * The output cap keeps the TAIL, so an over-cap run arrives front-truncated and
- * fails the `{` check — which lands on the intended fail-open path.
+ * fails the `{` check. Null therefore means one of two things, and only the
+ * run's `capped` flag tells them apart: a CLI that printed plain text (fail
+ * open to it) or an envelope the cap cut open (throw — see interpretAgy).
  */
 export function parseAgyResult(out) {
   const s = String(out || '').trim();
@@ -147,9 +167,13 @@ export function parseAgyResult(out) {
 
 /**
  * Interpret one finished agy run. Exported for tests.
+ * @param {{stdout:string, stderr:string, code:number|null, killed:boolean, capped?:boolean, cancelled?:boolean}} res
+ * @param {{timeoutS:number, capped?:boolean, outputCap?:number}} o
+ *   capped defaults to the run's own flag; outputCap is the tail cap the run was
+ *   spawned under and is quoted in the messages, because raising it is the fix.
  * @returns {{text:string, structured:*, usage:*, status:string, partial?:boolean}}
  */
-export function interpretAgy(res, { timeoutS }) {
+export function interpretAgy(res, { timeoutS, capped = res.capped, outputCap = OUTPUT_CAP }) {
   const { stdout: out, stderr: errBuf, code, killed } = res;
   const parsed = parseAgyResult(out);
   // `response` is the answer with agy's own envelope stripped; raw stdout is
@@ -163,26 +187,50 @@ export function interpretAgy(res, { timeoutS }) {
     usage: usage ? { input: usage.input_tokens ?? null, output: usage.output_tokens ?? null } : null,
     status: status || 'SUCCESS',
   };
+  // THE TAIL CAP DROPS THE BEGINNING of stdout, so a capped run is never a whole
+  // answer: every path out of here that returns text marks it and flags it partial.
+  const capMark = (text) => (capped && text
+    ? `${text}\n\n[gemini: output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial]`
+    : text);
+  // agy prints ONE envelope. Capped and it no longer parses means the answer was
+  // cut open and `answer` is the raw fail-open fragment — never an answer.
+  const fragmentOnly = !!capped && !parsed;
   // Success path first: exit 0 + a non-empty answer + not hard-killed + agy
   // itself reporting success — a SUCCESSFUL answer is never scanned for
   // exhaustion (answers ABOUT quotas must not be misread as an empty bucket).
-  if (code === 0 && answer && !killed && (!status || status === 'SUCCESS')) return result;
+  if (code === 0 && answer && !killed && !fragmentOnly && (!status || status === 'SUCCESS')) {
+    return capped ? { ...result, text: capMark(answer), partial: true } : result;
+  }
   // Failed turn — now the exhaustion patterns disambiguate the CAUSE.
   if (EXHAUSTED_PATTERNS.some((re) => re.test(`${errBuf}\n${out}`))) {
     throw new Error('Gemini quota exhausted — the Antigravity bucket is empty; try after the window resets.');
   }
   // A hard kill discards nothing it had already produced: `answer` came out of
   // the same envelope reading the clean path uses, so it is returned marked.
+  // The kill is answered FIRST, cap or no cap — the salvage is the older promise
+  // — and a fragment is the one thing never salvaged here.
   if (killed) {
     const after = timeoutS + HARD_KILL_GRACE_MS / 1000;
-    if (answer) {
+    // The same SIGKILL ends a cancelled request; `cancelled` says which it was,
+    // and a client that stopped the run is not a timeoutS to raise.
+    const killMark = res.cancelled
+      ? '[gemini: cancelled by the client — treat the answer as partial]'
+      : `[gemini: hard-killed after ${after}s — treat the answer as partial; raise gemini.timeoutS in the fleet config]`;
+    if (answer && !fragmentOnly) {
       return {
         ...result,
-        text: `${answer}\n\n[gemini: hard-killed after ${after}s — treat the answer as partial; raise gemini.timeoutS in the fleet config]`,
+        text: capMark(`${answer}\n\n${killMark}`),
         partial: true,
       };
     }
+    // A cancelled run has no answer because the caller asked for none: neither
+    // bound was reached, so neither is named.
+    if (res.cancelled) throw new Error('agy cancelled by the client');
+    if (capped) throw new Error(`agy hard-killed after ${after}s and output exceeded the ${outputCap} char cap — raise gemini.timeoutS or gemini.outputCap in the fleet config`);
     throw new Error(`agy hard-killed after ${after}s (raise gemini.timeoutS in the fleet config)`);
+  }
+  if (fragmentOnly) {
+    throw new Error(`agy output exceeded the ${outputCap} char cap and the answer envelope was lost — raise gemini.outputCap or narrow the task`);
   }
   if (code !== 0 && !answer) throw new Error(`agy exited ${code}: ${errBuf.trim().slice(-500) || '(no stderr)'}`);
   // agy says the run did not finish cleanly. Partial text is often the useful
@@ -195,7 +243,9 @@ export function interpretAgy(res, { timeoutS }) {
   // A non-zero exit with text: same deal — annotated, never thrown away and
   // never passed off as a clean answer.
   if (code !== 0 && answer) notes.push(`[gemini: CLI exited ${code} — treat the answer as partial]`);
-  if (notes.length) return { ...result, text: [answer, ...notes].join('\n\n') };
+  if (notes.length) {
+    return { ...result, text: capMark([answer, ...notes].join('\n\n')), ...(capped ? { partial: true } : {}) };
+  }
   // Exit 0 with NO output but a talkative stderr: agy "succeeded" without
   // producing anything, and the cause (typically a headless permission
   // auto-deny: 'a tool required the "read_url" permission...') is sitting on
@@ -203,12 +253,16 @@ export function interpretAgy(res, { timeoutS }) {
   // debugging session (2026-08-02).
   if (!answer && errBuf.trim()) throw new Error(`agy produced no output: ${errBuf.trim().slice(-500)}`);
   // Pre-existing tolerance kept: non-zero exit with SOME output resolves the
-  // partial answer; exit 0 with silent empty output resolves '' (retry handles it).
+  // partial answer; exit 0 with silent empty output resolves '' (retry handles
+  // it) — there is no text for a marker to attach to on that last path.
   return result;
 }
 
-/** Deterministic failures a retry cannot fix. */
-const isDeterministic = (e) => /quota exhausted|permission|hard-killed|not found in PATH/i.test((e && e.message) || '');
+/**
+ * Deterministic failures a retry cannot fix — including the cap (the same run
+ * hits the same cap) and a run the client cancelled (nobody is waiting for it).
+ */
+const isDeterministic = (e) => /quota exhausted|permission|hard-killed|not found in PATH|output exceeded|cancelled by the client/i.test((e && e.message) || '');
 
 /**
  * One agy one-shot through the runtime.
@@ -228,7 +282,7 @@ async function runAgy(ctx, { prompt, model, acceptEdits = false, schema, cwd }) 
   if (schema) args.push('--json-schema', JSON.stringify(schema));
   ctx.log(`agy spawn · model=${model || '(agy default)'} · acceptEdits=${acceptEdits} · schema=${schema ? 'yes' : 'no'} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd, hardKillMs: timeoutS * 1000 + HARD_KILL_GRACE_MS });
-  const r = interpretAgy(res, { timeoutS });
+  const r = interpretAgy(res, { timeoutS, outputCap: ctx.cfg.outputCap });
   if (r.usage) ctx.log(`agy done · status=${r.status} · tokens in=${r.usage.input ?? '?'} out=${r.usage.output ?? '?'}`);
   return r;
 }
@@ -270,6 +324,23 @@ const CANCELLED_NOTE =
   '> **Cancelled — the synthesis stage did not run.** What follows is the raw ' +
   'per-sub-question findings, unsynthesised.\n\n';
 
+/** Printed verbatim when decomposition failed and the "deep" run is one shallow pass. */
+const DEGRADED_BANNER =
+  '> **Degraded run — decomposition failed.** What follows is a SINGLE-PASS answer to '
+  + 'the original question, not a multi-source deep-research report. Treat its coverage '
+  + 'accordingly.';
+
+/**
+ * DECOMPOSE → parallel GATHER → SYNTHESIZE, each stage one agy one-shot — so
+ * each stage can come back `partial` (a hard kill whose text was salvaged, an
+ * output-capped envelope). A report synthesized out of partial stages is a
+ * partial report: the count is stated under the title and the flag travels out
+ * with it, because a reader who cannot see the stages cannot see the gap.
+ * A gather that THREW is not a partial stage — it produced no text at all, and
+ * its `_(gather failed: …)_` line already stands where the finding would be.
+ * A cancelled run never reaches synthesis, so it is partial by definition.
+ * @returns {Promise<{text:string, partial:boolean}>}
+ */
 async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
   const cap = Math.min(5, Math.max(1, Number(maxSubquestions) || 3));
   const stage = stageModels(ctx.catalog, model);
@@ -299,7 +370,7 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
   if (!subs || !subs.length) { subs = [question]; degraded = true; }
 
   const findings = await Promise.all(subs.map(async (sq, i) => {
-    if (cancelled()) return `### Sub-question ${i + 1}: ${sq}\n\n_(cancelled before this sub-question ran)_`;
+    if (cancelled()) return { text: `### Sub-question ${i + 1}: ${sq}\n\n_(cancelled before this sub-question ran)_`, partial: false };
     try {
       const r = await runAgyWithRetry(ctx, {
         prompt:
@@ -308,32 +379,37 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
           `URLs. Be thorough but concise.\n\nQuestion: ${sq}`,
         model: stage.gather,
       });
-      return `### Sub-question ${i + 1}: ${sq}\n\n${r.text}`;
+      return { text: `### Sub-question ${i + 1}: ${sq}\n\n${r.text}`, partial: !!r.partial };
     } catch (e) {
-      return `### Sub-question ${i + 1}: ${sq}\n\n_(gather failed: ${(e && e.message) || e})_`;
+      return { text: `### Sub-question ${i + 1}: ${sq}\n\n_(gather failed: ${(e && e.message) || e})_`, partial: false };
     }
   }));
 
   if (cancelled()) {
     ctx.log('deep research · cancelled — the synthesis stage was not started');
-    return CANCELLED_NOTE + findings.join('\n\n---\n\n');
+    // A report that never reached synthesis is partial whatever its stages did.
+    return { text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n'), partial: true };
   }
 
-  const report = (await runAgyWithRetry(ctx, {
+  const synth = await runAgyWithRetry(ctx, {
     prompt:
       NO_GIT_PREFIX +
       'Synthesize the research findings below into a markdown report with the ' +
       'sections: Summary, Findings, Sources, Gaps & Confidence. Merge duplicate ' +
       'sources, flag contradictions, and be explicit about uncertainty.\n\n' +
-      `Original question: ${question}\n\n${findings.join('\n\n---\n\n')}`,
+      `Original question: ${question}\n\n${findings.map((f) => f.text).join('\n\n---\n\n')}`,
     model: stage.synth,
-  })).text;
+  });
 
-  return degraded
-    ? '> **Degraded run — decomposition failed.** What follows is a SINGLE-PASS answer to '
-      + 'the original question, not a multi-source deep-research report. Treat its coverage '
-      + 'accordingly.\n\n' + report
-    : report;
+  // The stages that RAN: decompose, one per sub-question, synthesis. A gather
+  // that threw is counted here (it ran, it was paid for) and never in the
+  // partial count above.
+  const stages = [!!decompose.partial, ...findings.map((f) => f.partial), !!synth.partial];
+  const partialCount = stages.filter(Boolean).length;
+  const head = [];
+  if (degraded) head.push(DEGRADED_BANNER);
+  if (partialCount) head.push(`[gemini: ${partialCount} of ${stages.length} stages returned partial answers]`);
+  return { text: [...head, synth.text].join('\n\n'), partial: partialCount > 0 };
 }
 
 // --- tool table ---------------------------------------------------------------
@@ -461,8 +537,10 @@ export default defineUnit({
       async run(args, ctx) {
         const question = String(args.question || '').trim();
         if (!question) return { text: 'Error: "question" is required.', isError: true };
-        const report = await runDeepResearch(ctx, { question, maxSubquestions: args.maxSubquestions, model: ctx.model || undefined });
-        return { text: report || '(empty deep-research report)' };
+        const r = await runDeepResearch(ctx, { question, maxSubquestions: args.maxSubquestions, model: ctx.model || undefined });
+        // A report standing on a partial stage is partial: the flag reaches the
+        // status feed next to the count line the text already carries.
+        return { text: r.text || '(empty deep-research report)', ...(r.partial ? { partial: true } : {}) };
       },
     },
   ],

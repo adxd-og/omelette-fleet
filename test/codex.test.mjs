@@ -86,6 +86,82 @@ test('extractResult: a non-zero exit WITH an answer keeps the answer under a par
   assert.deepEqual(r.usage, { input: 60835, cachedInput: 45312, output: 236, reasoning: 103 });
 });
 
+// --- output cap ---------------------------------------------------------------
+
+/** The exact marker every capped answer carries, for the cap the run was spawned under. */
+const CAP_MARK = (n) => new RegExp(`\\[codex: output capped at ${n} chars — the beginning of the stream was dropped; treat the answer as partial\\]`);
+
+test('extractResult: a front-truncated stream is a marked partial answer, or a loud error — never a silent "no answer"', () => {
+  const opts = { timeoutS: 300, outputCap: 2000 };
+  // Whole lines survived in the tail: the final agent_message IS the answer and
+  // the narration ahead of it is what the cap took.
+  const marked = extractResult({ stdout: OK_RUN, stderr: '', code: 0, killed: false, capped: true }, opts);
+  assert.match(marked.text, /^v26\.8\.1/);
+  assert.match(marked.text, CAP_MARK(2000));
+  assert.equal(marked.partial, true);
+  assert.deepEqual(marked.usage, { input: 60835, cachedInput: 45312, output: 236, reasoning: 103 });
+  // The cap cut into the answer's OWN line: parseJsonl drops the fragment, and
+  // "produced no answer" would name a cause that is not the cause.
+  assert.throws(
+    () => extractResult({ stdout: '_message","text":"the tail of a long answer"}}\n', stderr: '', code: 0, killed: false, capped: true }, opts),
+    /^Error: codex output exceeded the 2000 char cap and the final message was lost — raise codex\.outputCap or narrow the task$/,
+  );
+  // `capped` is read off the run when the option is omitted, and `outputCap`
+  // then falls back to the fleet cap rather than printing "undefined".
+  assert.throws(
+    () => extractResult({ stdout: '', stderr: '', code: 0, killed: false, capped: true }, { timeoutS: 300 }),
+    /^Error: codex output exceeded the 400000 char cap and the final message was lost — raise codex\.outputCap or narrow the task$/,
+  );
+  // An explicit `capped: false` wins over the run's own flag.
+  assert.throws(
+    () => extractResult({ stdout: '', stderr: '', code: 0, killed: false, capped: true }, { timeoutS: 300, capped: false }),
+    /produced no answer/,
+  );
+  // A turn the CLI itself reported as failed is answered by THAT failure: the
+  // cap is not why there is no answer, and raising it would not help.
+  assert.throws(
+    () => extractResult({ stdout: FAILED_RUN, stderr: '', code: 1, killed: false, capped: true }, opts),
+    /codex turn failed: The 'no-such' model is not supported/,
+  );
+});
+
+test('extractResult: a run that was hard-killed AND capped answers the kill first', () => {
+  const opts = { timeoutS: 600, outputCap: 2000 };
+  const both = extractResult({ stdout: OK_RUN, stderr: '', code: null, killed: true, capped: true }, opts);
+  assert.match(both.text, /^v26\.8\.1/);
+  assert.match(both.text, /\[codex: hard-killed after 600s — treat the answer as partial; raise codex\.timeoutS in the fleet config\]/);
+  assert.match(both.text, CAP_MARK(2000));
+  assert.equal(both.partial, true);
+  // Killed, capped, and nothing salvaged: the error names both bounds instead of
+  // sending the operator at one of them.
+  assert.throws(
+    () => extractResult({ stdout: '_message","text":"fragment"}}\n', stderr: '', code: null, killed: true, capped: true }, opts),
+    /^Error: codex hard-killed after 600s and output exceeded the 2000 char cap — raise codex\.timeoutS or codex\.outputCap in the fleet config$/,
+  );
+  // An uncapped kill with nothing captured keeps naming only timeoutS.
+  assert.throws(
+    () => extractResult({ stdout: '', stderr: '', code: null, killed: true }, opts),
+    /^Error: codex hard-killed after 600s \(raise codex\.timeoutS in the fleet config\)$/,
+  );
+});
+
+test('extractResult: a run the CLIENT cancelled says so — neither timeoutS nor outputCap is the fix', () => {
+  const opts = { timeoutS: 600, outputCap: 2000 };
+  // core/spawn.mjs flags the same SIGKILL `cancelled` when it answered an
+  // abort rather than the hard-kill timer: the salvage is unchanged, but
+  // "raise codex.timeoutS" would send the operator after a bound that held.
+  const salvaged = extractResult({ stdout: OK_RUN, stderr: '', code: null, killed: true, cancelled: true }, opts);
+  assert.match(salvaged.text, /^v26\.8\.1/);
+  assert.match(salvaged.text, /\[codex: cancelled by the client — treat the answer as partial\]/);
+  assert.doesNotMatch(salvaged.text, /hard-killed/);
+  assert.equal(salvaged.partial, true);
+  // Nothing salvaged, and the cap does not get the blame either.
+  assert.throws(
+    () => extractResult({ stdout: '', stderr: '', code: null, killed: true, cancelled: true, capped: true }, opts),
+    /^Error: codex cancelled by the client$/,
+  );
+});
+
 test('unit contract: four tools, catalog non-empty, efforts fixed, tools/list is clean', () => {
   assert.equal(unit.name, 'codex');
   assert.deepEqual(unit.tools.map((t) => t.name), ['codex_research', 'codex_code_review', 'codex_image', 'codex_models']);
@@ -269,6 +345,56 @@ test('codex_image: prose with no file on disk is an error, not a success', async
   assert.match(r.text, /unable to generate the image/); // the raw tail is kept
   const noPrompt = await rt.callTool('codex_image', { prompt: '  ' });
   assert.equal(noPrompt.isError, true);
+});
+
+// --- output cap, through the real spawn --------------------------------------
+
+test('runtime with a fake codex: a capped run whose final message survived comes back marked, and the flag reaches the status feed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-cap-'));
+  const fake = join(dir, 'fake-codex-cap.mjs');
+  // 2 000 characters of narration ahead of a short answer: the tail cap keeps
+  // the agent_message and the turn.completed line and drops the front, exactly
+  // as a long real run past the cap arrives.
+  writeFileSync(fake, [
+    'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
+    '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
+    '  line({type:"item.completed",item:{type:"reasoning",text:"n".repeat(2000)}});',
+    '  line({type:"item.completed",item:{type:"agent_message",text:"the tail answer"}});',
+    '  line({type:"turn.completed",usage:{input_tokens:9,output_tokens:2}});',
+    '});',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { outputCap: 300, timeoutS: 30 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath };
+  const r = await wrapCodex(env, fake).callTool('codex_research', { prompt: 'q' });
+  assert.ok(!r.isError, r.text);
+  assert.match(r.text, /^the tail answer/);
+  assert.match(r.text, CAP_MARK(300));   // the configured cap, not the fleet default
+  const snapshot = JSON.parse(readFileSync(join(dir, 'status-codex.json'), 'utf8'));
+  assert.equal(snapshot.lastEvent.status, 'ok');   // there IS an answer
+  assert.equal(snapshot.lastEvent.partial, true);  // …just not a whole one
+});
+
+test('runtime with a fake codex: a run whose final message the cap ate is refused, and never retried', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-cap2-'));
+  const runs = join(dir, 'runs');
+  const fake = join(dir, 'fake-codex-cap2.mjs');
+  // ONE agent_message line far longer than the cap: the tail keeps a fragment of
+  // it and not a single line parses.
+  writeFileSync(fake, [
+    'import { appendFileSync } from "node:fs";',
+    'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
+    `  appendFileSync(${JSON.stringify(runs)}, "x");`,
+    '  process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"z".repeat(400)}})+"\\n");',
+    '});',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { outputCap: 100, timeoutS: 30 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath };
+  const r = await wrapCodex(env, fake).callTool('codex_research', { prompt: 'q' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /exceeded the 100 char cap and the final message was lost/);
+  // The bounded retry exists for an empty run; a second full run here would be
+  // paid for and would hit the same cap.
+  assert.equal(readFileSync(runs, 'utf8').length, 1, 'the run was not retried');
 });
 
 // --- catalog ----------------------------------------------------------------
