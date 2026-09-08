@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHandler, createLineSplitter, DEFAULT_PROTOCOL, MAX_FRAME_BYTES } from '../core/jsonrpc.mjs';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHandler, createLineSplitter, DEBUG_META_VAR, DEFAULT_PROTOCOL, MAX_FRAME_BYTES, serve } from '../core/jsonrpc.mjs';
 
 const tools = [{ name: 'echo', description: 'echo', inputSchema: { type: 'object', properties: {} } }];
 const handler = createHandler({
@@ -85,4 +89,166 @@ test('initialize carries `instructions` when given and omits the key when not', 
   assert.ok(!('instructions' in without.result));
   const empty = createHandler({ serverInfo: { name: 't', version: '0' }, tools, callTool: async () => ({ text: '' }), instructions: '   ' });
   assert.ok(!('instructions' in (await empty({ jsonrpc: '2.0', id: 3, method: 'initialize', params: {} })).result));
+});
+
+test('spike 1a: under OMELETTE_DEBUG_META the handler logs the tools/call _meta, and "null" when there is none', async () => {
+  const lines = [];
+  const h = createHandler({
+    serverInfo: { name: 't', version: '0' },
+    tools,
+    callTool: async () => ({ text: 'ok' }),
+    log: (m) => lines.push(m),
+    env: { [DEBUG_META_VAR]: '1' },
+  });
+  await h({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'echo', _meta: { progressToken: 7 } } });
+  assert.deepEqual(lines, ['tools/call _meta={"progressToken":7}']);
+  // The answer the spike exists for: a client that sends no _meta at all.
+  await h({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'echo' } });
+  assert.equal(lines.at(-1), 'tools/call _meta=null');
+  // …and nothing whatsoever without the flag.
+  const quiet = [];
+  const q = createHandler({
+    serverInfo: { name: 't', version: '0' },
+    tools,
+    callTool: async () => ({ text: 'ok' }),
+    log: (m) => quiet.push(m),
+    env: {},
+  });
+  await q({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'echo', _meta: { progressToken: 7 } } });
+  assert.deepEqual(quiet, []);
+});
+
+// --- the per-request call context, cancellation, drain -----------------------
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+/**
+ * A handler whose callTool records the context it was given and can be held
+ * open: `hold` parks until `release()`, which is how two requests are made to
+ * overlap without a timer.
+ */
+function ctxHandler(over = {}) {
+  const seen = [];
+  const gates = [];
+  const h = createHandler({
+    serverInfo: { name: 't', version: '0' },
+    tools,
+    callTool: async (name, args, call) => {
+      seen.push({ name, args, call });
+      if (name === 'hold') await new Promise((resolve) => gates.push(resolve));
+      return { text: `${name}:ok` };
+    },
+    ...over,
+  });
+  return { h, seen, release: () => gates.splice(0).forEach((r) => r()) };
+}
+
+test('tools/call hands the tool a call context: the id, the progress token and a live signal', async () => {
+  const { h, seen } = ctxHandler();
+  await h({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'echo', arguments: { a: 1 }, _meta: { progressToken: 'p1' } } });
+  assert.equal(seen[0].call.id, 5);
+  assert.equal(seen[0].call.progressToken, 'p1');
+  assert.equal(seen[0].call.signal.aborted, false);
+  assert.deepEqual(seen[0].args, { a: 1 });
+  // No _meta: a null token, never undefined — the runtime tests `!= null`.
+  await h({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'echo' } });
+  assert.equal(seen[1].call.progressToken, null);
+});
+
+test('call.notify emits a valid JSON-RPC notification and goes quiet once the response is out', async () => {
+  const sent = [];
+  let later = null;
+  const h = createHandler({
+    serverInfo: { name: 't', version: '0' },
+    tools,
+    callTool: async (name, args, call) => {
+      call.notify('notifications/progress', { progressToken: call.progressToken, progress: 30 });
+      later = call.notify;
+      return { text: 'ok' };
+    },
+    notify: (m) => sent.push(m),
+  });
+  await h({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'echo', _meta: { progressToken: 3 } } });
+  assert.deepEqual(sent, [{ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: 3, progress: 30 } }]);
+  assert.equal('id' in sent[0], false, 'a notification never carries an id');
+  later('notifications/progress', { progressToken: 3, progress: 60 });
+  assert.equal(sent.length, 1, 'nothing is sent after the response');
+});
+
+test('notifications/cancelled aborts the live request, and the cancelled response is dropped', async () => {
+  const { h, seen, release } = ctxHandler();
+  const p = h({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'hold' } });
+  await tick();
+  assert.equal(h.inflight(), 1);
+  assert.equal(await h({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 9 } }), null);
+  assert.equal(seen[0].call.signal.aborted, true);
+  release();
+  assert.equal(await p, null, 'a cancelled request gets no response at all');
+  assert.equal(h.inflight(), 0);
+});
+
+test('a cancellation for an unknown, finished or absent id is ignored — never an error, never a throw', async () => {
+  const { h } = ctxHandler();
+  assert.equal(await h({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 404 } }), null);
+  const done = await h({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'echo' } });
+  assert.equal(done.result.content[0].text, 'echo:ok');
+  assert.equal(await h({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 4 } }), null);
+  assert.equal(await h({ jsonrpc: '2.0', method: 'notifications/cancelled', params: {} }), null);
+  assert.equal(await h({ jsonrpc: '2.0', method: 'notifications/cancelled' }), null);
+});
+
+test('request ids compare by TYPE and value: cancelling "9" leaves request 9 alone', async () => {
+  const { h, seen, release } = ctxHandler();
+  const num = h({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'hold' } });
+  const str = h({ jsonrpc: '2.0', id: '9', method: 'tools/call', params: { name: 'hold' } });
+  await tick();
+  assert.equal(h.inflight(), 2);
+  await h({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: '9' } });
+  assert.equal(seen[0].call.signal.aborted, false, 'the number-id request is untouched');
+  assert.equal(seen[1].call.signal.aborted, true);
+  release();
+  assert.equal((await num).id, 9, 'the other request is answered normally');
+  assert.equal(await str, null);
+});
+
+test('inflight() counts live tools/call requests; drain() resolves when the last one lands', async () => {
+  const { h, release } = ctxHandler();
+  assert.equal(h.inflight(), 0);
+  await h.drain(); // already at zero: resolves immediately
+  const p = h({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'hold' } });
+  await tick();
+  assert.equal(h.inflight(), 1);
+  let drained = false;
+  const d = h.drain().then(() => { drained = true; });
+  await tick();
+  assert.equal(drained, false);
+  release();
+  await p;
+  await d;
+  assert.equal(drained, true);
+  assert.equal(h.inflight(), 0);
+});
+
+test('serve: stdin end waits for a call in flight, answers it, and only then exits 0', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-serve-'));
+  const script = join(dir, 'slow-server.mjs');
+  writeFileSync(script, [
+    `import { serve } from ${JSON.stringify(new URL('../core/jsonrpc.mjs', import.meta.url).href)};`,
+    'serve({',
+    '  serverInfo: { name: "slow", version: "0" },',
+    '  tools: [{ name: "slow", description: "d", inputSchema: { type: "object", properties: {} } }],',
+    '  callTool: async () => { await new Promise((r) => setTimeout(r, 600)); return { text: "late answer" }; },',
+    '});',
+  ].join('\n'));
+  const child = spawn(process.execPath, [script], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (c) => { out += c; });
+  child.stdin.on('error', () => {});
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'slow' } }) + '\n');
+  await new Promise((r) => setTimeout(r, 100));
+  child.stdin.end(); // the client says goodbye while the call is still running
+  const code = await new Promise((r) => child.on('close', r));
+  assert.equal(code, 0);
+  assert.match(out, /late answer/, 'the answer was written before the exit');
 });
