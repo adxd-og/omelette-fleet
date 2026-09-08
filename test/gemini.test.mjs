@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit, { interpretAgy, parseSubquestions, stageModels, catalog } from '../units/gemini/adapter.mjs';
@@ -293,22 +293,36 @@ test('deep research under `cancel: kill`: a cancel DURING synthesis still return
 test('deep research under `cancel: kill`: a synthesis KILLED MID-SENTENCE keeps the findings and marks its fragment', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-cancel-frag-'));
   const fake = join(dir, 'fake-agy.mjs');
+  const printed = join(dir, 'synthesis-printed');
   // The synthesis prints something and then hangs, so the cancel's SIGKILL
   // finds output to salvage: interpretAgy returns that fragment as a partial
   // answer and never throws, which is the path that used to drop the findings.
+  //
+  // The sentinel is written from the WRITE CALLBACK, which runs only once the
+  // fragment has gone out to the pipe — so its existence is proof there is
+  // something for the kill to salvage. A fixed delay would be a race the child
+  // loses on a loaded machine.
   writeFileSync(fake, [
+    'import { writeFileSync } from "node:fs";',
+    `const PRINTED = ${JSON.stringify(printed)};`,
     'const argv = process.argv.slice(2);',
     'const prompt = argv[argv.indexOf("-p") + 1] || "";',
     'const say = (r) => process.stdout.write(JSON.stringify({ status: "SUCCESS", response: r }));',
     'if (/Decompose the following/.test(prompt)) say(JSON.stringify(["q one", "q two"]));',
     'else if (/Synthesize the research findings/.test(prompt)) {',
-    '  process.stdout.write("half a report, cut off mid-");',
+    '  process.stdout.write("half a report, cut off mid-", () => writeFileSync(PRINTED, "flushed"));',
     '  setTimeout(() => {}, 60000);',
     '} else say("a finding");',
   ].join('\n'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { cancel: 'kill', timeoutS: 60 } } }));
   const base = { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath };
   const controller = new AbortController();
+  /** Abort as soon as the fragment is out — bounded, so a fake that never prints fails an assertion instead of hanging. */
+  const abortOnFragment = async () => {
+    const deadline = Date.now() + 20000;
+    while (!existsSync(printed) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    controller.abort();
+  };
   const rt = createUnitRuntime(
     {
       ...unit,
@@ -318,9 +332,9 @@ test('deep research under `cancel: kill`: a synthesis KILLED MID-SENTENCE keeps 
           ...ctx,
           spawn: (o) => {
             const running = ctx.spawn({ ...o, args: [fake, ...o.args] });
-            // AFTER the spawn, so the fragment is written and captured before
-            // the kill — aborting first would leave nothing to salvage.
-            if (/Synthesize the research findings/.test(o.args.join(' '))) setTimeout(() => controller.abort(), 500);
+            // AFTER the spawn, and only once the child says it has printed:
+            // aborting earlier would leave nothing to salvage.
+            if (/Synthesize the research findings/.test(o.args.join(' '))) abortOnFragment();
             return running;
           },
         }),
@@ -329,7 +343,8 @@ test('deep research under `cancel: kill`: a synthesis KILLED MID-SENTENCE keeps 
     { env: base },
   );
   const r = await rt.callTool('gemini_deep_research', { question: 'why' }, { id: 1, signal: controller.signal });
-  assert.match(r.text, /Cancelled — the synthesis stage did not run/);
+  assert.equal(existsSync(printed), true, 'the fake agy never flushed its fragment — the run below proves nothing');
+  assert.match(r.text, /Cancelled — the synthesis stage was cancelled before it finished/);
   assert.match(r.text, /### Sub-question 1: q one\n\na finding/, `findings dropped:\n${r.text}`);
   assert.match(r.text, /### Sub-question 2: q two\n\na finding/);
   // …and the fragment is kept, under a marker that says what it is.

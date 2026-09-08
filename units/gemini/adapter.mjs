@@ -321,9 +321,19 @@ export function stageModels(cat, explicit) {
   return { decompose: medium && medium.id, gather: medium && medium.id, synth: high && high.id };
 }
 
+/** The synthesis produced NOTHING: it was never started, or killed with an empty hand. */
 const CANCELLED_NOTE =
   '> **Cancelled — the synthesis stage did not run.** What follows is the raw ' +
   'per-sub-question findings, unsynthesised.\n\n';
+
+/**
+ * …and the other one: the synthesis DID run and was cut open mid-report, so
+ * saying it never ran would misdescribe the fragment printed under the findings.
+ */
+const CANCELLED_MID_SYNTH_NOTE =
+  '> **Cancelled — the synthesis stage was cancelled before it finished.** What ' +
+  'follows is the raw per-sub-question findings; the partial synthesis, as far as ' +
+  'it got, is appended after them.\n\n';
 
 /** Printed verbatim when decomposition failed and the "deep" run is one shallow pass. */
 const DEGRADED_BANNER =
@@ -424,9 +434,13 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
   // the fragment kept under a marker saying what it is.
   if (cancelled()) {
     ctx.log('deep research · cancelled mid-synthesis — the findings are returned with the partial synthesis');
+    // The note follows the FRAGMENT, not the path: a salvage that came back
+    // empty-handed is a run whose synthesis produced nothing, and that is what
+    // CANCELLED_NOTE says.
+    const fragment = synth.text ? `\n\n---\n\n[gemini: partial synthesis, cancelled]\n\n${synth.text}` : '';
     return {
-      text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n')
-        + (synth.text ? `\n\n---\n\n[gemini: partial synthesis, cancelled]\n\n${synth.text}` : ''),
+      text: (fragment ? CANCELLED_MID_SYNTH_NOTE : CANCELLED_NOTE)
+        + findings.map((f) => f.text).join('\n\n---\n\n') + fragment,
       partial: true,
     };
   }
