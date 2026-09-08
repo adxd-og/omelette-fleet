@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineUnit, createUnitRuntime, boundedRetry, makeResultId, MUTATE_RE, PROGRESS_EVERY_MS, TOOL_KINDS } from '../core/unit.mjs';
 import { makeCatalog } from '../core/catalog.mjs';
+import { createHandler } from '../core/jsonrpc.mjs';
+import { createResultStore, parseResult } from '../core/results.mjs';
 
 const node = process.execPath;
 const catalog = makeCatalog({
@@ -70,7 +72,9 @@ function fakeUnit(overrides = {}) {
       },
       {
         // A `local` tool: answered in-process, never spawned, never tracked.
-        name: 'fake_result', kind: 'local', description: 'd', inputSchema: { type: 'object', properties: {} },
+        // NOT called `fake_result`: that name belongs to the tool the runtime
+        // appends to every unit, and an adapter declaring it keeps its own.
+        name: 'fake_local', kind: 'local', description: 'd', inputSchema: { type: 'object', properties: {} },
         async run(_a, ctx) { return `local:${ctx.cfg.timeoutS}:${ctx.spawn === undefined ? 'no-spawn' : 'HAS-SPAWN'}`; },
       },
       {
@@ -101,6 +105,10 @@ function env(config, extra = {}) {
   if (config) writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify(config));
   return { dir, env: { ...process.env, OMELETTE_HOME: dir, ...extra } };
 }
+
+const spoolDir = (dir) => join(dir, 'results', 'fake');
+const spooled = (dir) => { try { return readdirSync(spoolDir(dir)).filter((n) => n.endsWith('.md')).sort(); } catch { return []; } };
+const readSpooled = (dir, name) => parseResult(readFileSync(join(spoolDir(dir), name), 'utf8'));
 
 test('defineUnit validates the contract loudly', () => {
   assert.throws(() => defineUnit({ name: 'Bad Name', bin: 'x', tools: [], catalog }), /name must match/);
@@ -275,7 +283,7 @@ test('defineUnit knows the `local` kind and still demands a run() for it', () =>
 test('a `local` tool is answered in-process: no spawn in its ctx, no feed entry, and it answers while the unit is disabled', async () => {
   const { dir, env: e } = env({ units: { fake: { enabled: false, timeoutS: 42 } } });
   const rt = createUnitRuntime(fakeUnit(), { env: e });
-  const r = await rt.callTool('fake_result', {});
+  const r = await rt.callTool('fake_local', {});
   assert.equal(r.isError, undefined);
   assert.equal(r.text, 'local:42:no-spawn');
   // Never tracked: the feed only ever hears from tools that spawn a CLI.
@@ -435,7 +443,7 @@ test('finish hands P2 the whole result record — once per finished spawn call, 
   assert.ok(rec.durationMs >= 0);
   assert.match(rec.text, /^mode=read-only/);
   // Local and catalog tools are never spooled.
-  await rt.callTool('fake_result', {});
+  await rt.callTool('fake_local', {});
   await rt.callTool('fake_models', {});
   assert.equal(records.length, 1);
   // A call refused before any spawn is still an answer someone may have lost.
@@ -471,4 +479,161 @@ test('the reduced ctx of a `local` tool is exactly cfg, mode, log, catalog, home
   // A tool that never spawns has nothing to cancel, in either cancel mode.
   assert.equal((await rt.callTool('fake_keys', {}, { id: 1, signal: c.signal })).text, 'ok');
   assert.equal(keys, 'catalog,cfg,home,log,mode');
+});
+
+// ─── the result spool (P2) ───────────────────────────────────────────────────
+
+test('every spawned answer is spooled BEFORE the response is sent, under the id the feed reports', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  const handle = createHandler({ serverInfo: { name: 'omelette-fake', version: '0' }, tools: rt.tools, callTool: rt.callTool });
+  // `res` is the object serve() is ABOUT to write to stdout: nothing has been
+  // sent yet, and the answer is already on disk.
+  const res = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fake_research', arguments: { prompt: 'what is up' } } });
+  const names = spooled(dir);
+  assert.equal(names.length, 1);
+  const { header, text } = readSpooled(dir, names[0]);
+  assert.equal(header.unit, 'fake');
+  assert.equal(header.tool, 'fake_research');
+  assert.equal(header.status, 'ok');
+  assert.equal(header.partial, false);
+  assert.equal(header.detached, false);
+  assert.equal(header.promptPreview, 'what is up');
+  assert.ok(header.durationMs >= 0);
+  assert.equal(text, res.result.content[0].text, 'the spooled text is the answer the client would have got');
+  assert.equal(`${header.resultId}.md`, names[0]);
+  const end = readFileSync(join(dir, 'fleet-log.ndjson'), 'utf8').split('\n').filter(Boolean).map(JSON.parse).at(-1);
+  assert.equal(end.event, 'end');
+  assert.equal(end.resultId, header.resultId, 'the feed and the spool name the same run');
+});
+
+test('a partial answer is spooled as a partial ok', async () => {
+  const { dir, env: e } = env(null);
+  await createUnitRuntime(fakeUnit(), { env: e }).callTool('fake_partial', {});
+  const h = readSpooled(dir, spooled(dir)[0]).header;
+  assert.equal(h.status, 'ok');
+  assert.equal(h.partial, true);
+});
+
+test('results: false writes nothing; the feed being off does not stop the spool', async () => {
+  const off = env({ units: { fake: { results: false } } });
+  await createUnitRuntime(fakeUnit(), { env: off.env }).callTool('fake_research', { prompt: 'x' });
+  assert.deepEqual(spooled(off.dir), []);
+  assert.equal(existsSync(join(off.dir, 'results')), false, 'not even the directory');
+
+  const feedOff = env({ units: { fake: { status: false } } });
+  await createUnitRuntime(fakeUnit(), { env: feedOff.env }).callTool('fake_research', { prompt: 'x' });
+  assert.equal(spooled(feedOff.dir).length, 1, 'the spool is not the status feed');
+  assert.equal(existsSync(join(feedOff.dir, 'status-fake.json')), false);
+});
+
+test('a refusal before the spawn is an answer too — spooled as an error; a catalog read never is', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  assert.equal((await rt.callTool('fake_research', { prompt: 'x', model: 'm-nope' })).isError, true);
+  assert.equal((await rt.callTool('fake_research', { prompt: 'please git push this' })).isError, true);
+  await rt.callTool('fake_models', {});
+  const names = spooled(dir);
+  assert.equal(names.length, 2, 'two refusals, and not the catalog read');
+  for (const n of names) assert.equal(readSpooled(dir, n).header.status, 'error');
+
+  const disabled = env({ units: { fake: { enabled: false } } });
+  const dis = createUnitRuntime(fakeUnit(), { env: disabled.env });
+  assert.equal((await dis.callTool('fake_research', { prompt: 'x' })).isError, true);
+  const one = spooled(disabled.dir);
+  assert.equal(one.length, 1, 'a disabled unit still owes the caller an answer');
+  assert.match(readSpooled(disabled.dir, one[0]).text, /disabled in the fleet config/);
+  assert.equal(readSpooled(disabled.dir, one[0]).header.status, 'error');
+});
+
+test('a server prunes its spool at boot, so a lowered resultsKeep needs no call to take effect', () => {
+  const { dir, env: e } = env({ units: { fake: { resultsKeep: 1 } } });
+  const s = createResultStore({ home: dir, unit: 'fake' });
+  for (let i = 1; i <= 3; i++) {
+    s.write({ resultId: `20260908T142501Z-1-${i}`, tool: 'fake_research', status: 'ok', partial: false, detached: false,
+      startedAt: '2026-09-08T14:25:01.000Z', endedAt: `2026-09-08T14:4${i}:00.000Z`, durationMs: 1, text: 'x' });
+  }
+  assert.equal(spooled(dir).length, 3);
+  createUnitRuntime(fakeUnit(), { env: e });
+  assert.deepEqual(spooled(dir), ['20260908T142501Z-1-3.md']);
+});
+
+test('every unit gets a <unit>_result tool: local, advertised once, never spooled', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  const names = rt.tools.map((t) => t.name);
+  assert.equal(names.filter((n) => n === 'fake_result').length, 1);
+  const t = rt.tools.find((x) => x.name === 'fake_result');
+  assert.equal(t.kind, undefined, 'tools/list shape: no kind, no run');
+  assert.equal(t.run, undefined);
+  assert.deepEqual(Object.keys(t.inputSchema.properties), ['id']);
+  assert.equal(t.inputSchema.required, undefined, 'id is optional');
+  const empty = await rt.callTool('fake_result', {});
+  assert.equal(empty.isError, true);
+  assert.match(empty.text, /result spool is empty/);
+  assert.deepEqual(spooled(dir), [], 'a local tool is never spooled');
+});
+
+test('<unit>_result: no id gives the newest answer plus the last ten; an id gives that one', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  await rt.callTool('fake_research', { prompt: 'first' });
+  await rt.callTool('fake_research', { prompt: 'second' });
+  const names = spooled(dir);
+  assert.equal(names.length, 2);
+  const newest = readSpooled(dir, names.at(-1)).header;
+  assert.equal(newest.promptPreview, 'second');
+
+  const r = await rt.callTool('fake_result', {});
+  assert.equal(r.isError, undefined);
+  assert.match(r.text, /^---\nunit: fake\n/);
+  assert.ok(r.text.includes(`resultId: ${newest.resultId}`));
+  const [body, listing] = r.text.split('\n\nRecent results:\n');
+  assert.ok(body.endsWith(readSpooled(dir, names.at(-1)).text), 'the whole answer, verbatim');
+  const lines = listing.trim().split('\n');
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], new RegExp(`^${newest.resultId}  fake_research  ok  \\d+ms  20\\d\\d-`));
+
+  const one = await rt.callTool('fake_result', { id: newest.resultId });
+  assert.equal(one.isError, undefined);
+  assert.ok(one.text.includes(`resultId: ${newest.resultId}`));
+  assert.doesNotMatch(one.text, /Recent results:/);
+  // A blank id means "the newest", not "a broken id".
+  assert.equal((await rt.callTool('fake_result', { id: '   ' })).isError, undefined);
+});
+
+test('<unit>_result refuses a bad id before it builds a path, in one line', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  await rt.callTool('fake_research', { prompt: 'x' });
+  for (const id of ['../../../etc/passwd', 'nope', '20260908T142501Z-1', '20260908T142501Z-1-1/../x', 42]) {
+    const r = await rt.callTool('fake_result', { id });
+    assert.equal(r.isError, true, JSON.stringify(id));
+    assert.equal(r.text.split('\n').length, 1, 'one line');
+    assert.match(r.text, /is not a result id/);
+  }
+  const gone = await rt.callTool('fake_result', { id: '20260101T000000Z-1-1' });
+  assert.equal(gone.isError, true);
+  assert.match(gone.text, /no spooled result/);
+  assert.equal(spooled(dir).length, 1, 'and none of that was spooled');
+});
+
+test('the spool is still readable with results: false — the switch stops writing, not fetching', async () => {
+  const { dir, env: e } = env(null);
+  await createUnitRuntime(fakeUnit(), { env: e }).callTool('fake_research', { prompt: 'x' });
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { fake: { results: false } } }));
+  const r = await createUnitRuntime(fakeUnit(), { env: e }).callTool('fake_result', {});
+  assert.equal(r.isError, undefined);
+  assert.match(r.text, /^---\nunit: fake\n/);
+});
+
+test('an adapter that declares its own <unit>_result keeps it', () => {
+  const base = fakeUnit();
+  const own = fakeUnit({
+    tools: [...base.tools, { name: 'fake_result', kind: 'catalog', description: 'mine', inputSchema: { type: 'object', properties: {} } }],
+  });
+  const rt = createUnitRuntime(own, env(null));
+  const found = rt.tools.filter((x) => x.name === 'fake_result');
+  assert.equal(found.length, 1);
+  assert.equal(found[0].description, 'mine');
 });

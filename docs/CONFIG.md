@@ -9,7 +9,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 ~/.omelette/fleet.config.json         # default
 ```
 
-`OMELETTE_HOME` also holds the status feed (`status-<unit>.json`, `fleet-log.ndjson`) and the update-check cache (`update-check.json`). The file is optional: with no file at all, every unit runs on built-in defaults, read-only, with no warnings. `omelette-fleet set` writes it atomically (temp file + rename) with mode `0600` and `"version": 1`.
+`OMELETTE_HOME` also holds the status feed (`status-<unit>.json`, `fleet-log.ndjson`), the result spool (`results/<unit>/<resultId>.md`) and the update-check cache (`update-check.json`). The file is optional: with no file at all, every unit runs on built-in defaults, read-only, with no warnings. `omelette-fleet set` writes it atomically (temp file + rename) with mode `0600` and `"version": 1`.
 
 ## Shape
 
@@ -87,9 +87,12 @@ Every unit understands these. Adapters may add their own (below).
 | `outputCap` | positive int | `400000` | Characters of a run's stdout kept. The **last** ones — see the note below |
 | `webSearch` | boolean | `true` | Whether the unit's web tools are available |
 | `status` | boolean | `true` | Write the status feed for this unit |
+| `results` | boolean | `true` | Spool every answer of this unit to `<home>/results/<unit>/` before the response is sent |
+| `resultsKeep` | positive int | `50` | How many spooled results this unit keeps. The oldest by `endedAt` go first |
+| `resultsMaxBytes` | positive int | `52428800` | Byte budget for this unit's spool (50 MB). The newest result is never dropped for size |
 | `cancel` | `"finish"` \| `"kill"` | `"finish"` | What a client's cancellation does to a run already in flight — see [Cancellation](#cancellation) |
 
-Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/no`, so the same values work from a file or an environment variable. Every **positive int** key — `timeoutS`, `maxTurns`, `outputCap`, `imageMaxTurns`, `agents.tester.maxTurns` — is a WHOLE number above zero, given as a number or a numeric string. A fraction is refused rather than rounded (`0.5` used to floor to the very `0` these keys forbid, and `1.9` to a `1` nobody wrote), and so are zero, negatives and anything that is not a number.
+Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/no`, so the same values work from a file or an environment variable. Every **positive int** key — `timeoutS`, `maxTurns`, `outputCap`, `resultsKeep`, `resultsMaxBytes`, `imageMaxTurns`, `agents.tester.maxTurns` — is a WHOLE number above zero, given as a number or a numeric string. A fraction is refused rather than rounded (`0.5` used to floor to the very `0` these keys forbid, and `1.9` to a `1` nobody wrote), and so are zero, negatives and anything that is not a number.
 
 ### Unit-specific extras and built-in overrides
 
@@ -103,7 +106,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 
 | Key | gemini | grok | codex |
 |---|---|---|---|
-| `enabled`, `status`, `model` | yes | yes | yes |
+| `enabled`, `status`, `model`, `results`, `resultsKeep`, `resultsMaxBytes` | yes | yes | yes |
 | `mode` | `workspace-write` → `--mode accept-edits` | declared unsupported; always read-only | `workspace-write` → OS sandbox, review-with-`cwd` only |
 | `effort` | **ignored** — the catalog bakes effort into the model id and declares no effort levels | `--reasoning-effort` (`low`/`medium`/`high`/`xhigh`) | `model_reasoning_effort` (`none`/`low`/`medium`/`high`/`xhigh`/`max`) |
 | `timeoutS` | yes (see below) | yes | yes |
@@ -326,3 +329,11 @@ Keeping the *tail* is the right half for every unit here: a finished run's answe
 In every unit a hard kill is answered first — the salvaged text under both markers — and only a killed run with nothing to salvage names the cap, in an error naming both bounds. Every one of these cap errors is deterministic: the bounded retry skips it, because a second full run would be paid for and would hit the same cap. And a `gemini_deep_research` report built on any partial stage carries `[gemini: N of M stages returned partial answers]` under its title and `partial: true` with it.
 
 Raise it per unit (`omelette-fleet set grok.outputCap=4000000`) when a legitimately huge review is being truncated; narrowing the task is usually the better answer.
+
+## What the result spool keeps
+
+Every tool call that spawns a vendor CLI has its answer written to `<home>/results/<unit>/<resultId>.md` **before the response is sent** — a fenced header (unit, tool, result id, model, effort, timestamps, duration, status, `partial`, `detached`, cwd, a 200-character prompt preview) and then the answer verbatim. Errors and refusals are spooled too: a call refused before the spawn is still an answer the caller may have lost.
+
+It exists because an answer can outlive the request that asked for it. Claude Code abandons a stdio tool call at `MCP_TOOL_TIMEOUT`, and again after 30 minutes without progress; a cancelled call under `cancel: finish` is left to finish deliberately. In each case the run was paid for and the client is gone. `<unit>_result` (in a session) and `omelette-fleet results` (in a shell) read the file back, and neither starts a run.
+
+Retention is per unit and runs after every write and at server start: `resultsKeep` results (default 50), inside `resultsMaxBytes` (default 50 MB), oldest by `endedAt` removed first, abandoned `*.tmp` files older than an hour swept. A single result larger than the whole budget is kept anyway — it is the answer that was just paid for. `results: false` (per unit or in `defaults`) switches writing off; it does not hide what is already spooled, and `doctor` says so on the unit's `results` line.

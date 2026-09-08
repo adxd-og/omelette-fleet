@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { callUnitServer, MAX_TIMEOUT_S } from '../core/client.mjs';
+import { renderResult } from '../core/results.mjs';
 import { AGENT_MARKER, HOOK_EVENTS, HOOK_MARKER, RULES_MARKER, SKILL_MARKER } from '../core/rules.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -48,6 +49,15 @@ function cli(args, { dir, env = {} } = {}) {
     env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', ...env },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+/** Seed a spool by hand: `results` reads files, so no server and no vendor CLI are needed. */
+function spoolResult(dir, unit, rec) {
+  const d = join(dir, 'results', unit);
+  mkdirSync(d, { recursive: true });
+  const path = join(d, `${rec.resultId}.md`);
+  writeFileSync(path, renderResult({ ...rec, unit }));
+  return path;
 }
 
 const gitAvailable = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
@@ -510,7 +520,7 @@ test('call drives a real server over stdio and maps the answer to an exit code',
   const ok = cli(['call', 'codex', 'codex_models', '{}'], { dir });
   assert.equal(ok.code, 0, ok.err);
   assert.match(ok.out, /initialize → omelette-codex/);
-  assert.match(ok.out, /tools\/list → codex_research, codex_code_review, codex_image, codex_models/);
+  assert.match(ok.out, /tools\/list → codex_research, codex_code_review, codex_image, codex_models, codex_result/);
   assert.match(ok.out, /tools\/call → ok/);
   assert.match(ok.out, /CODEX MODEL CATALOG/);
 
@@ -524,6 +534,17 @@ test('call drives a real server over stdio and maps the answer to an exit code',
   assert.equal(cli(['call', 'nope', 'x', '{}'], { dir }).code, 1);
   assert.equal(cli(['call', 'codex', 'codex_models', '{oops'], { dir }).code, 1);
   assert.match(cli(['call', 'codex', 'codex_models', '{}', '--timeout', '0'], { dir }).err, /--timeout must be a positive number/);
+});
+
+test('every unit advertises <unit>_result, and it answers over real stdio with no vendor CLI', () => {
+  const dir = home();
+  for (const unit of ['gemini', 'grok', 'codex']) {
+    // The client refuses a tool that is not in tools/list, so exit 2 — "the
+    // tool answered with an error" — is proof it is advertised AND local.
+    const r = cli(['call', unit, `${unit}_result`, '{}'], { dir });
+    assert.equal(r.code, 2, r.out + r.err);
+    assert.match(r.out, /result spool is empty/);
+  }
 });
 
 /**
@@ -1850,4 +1871,83 @@ test('the cancel key reaches `set` and `show` with no CLI change — it comes fr
   const bad = cli(['set', 'grok.cancel=maybe'], { dir });
   assert.equal(bad.code, 1);
   assert.match(bad.err, /invalid value for grok\.cancel/);
+});
+
+// ─── results ─────────────────────────────────────────────────────────────────
+
+test('results: the last ten across the fleet, newest first, with the unit named', () => {
+  const dir = home();
+  spoolResult(dir, 'codex', {
+    resultId: '20260908T142501Z-1-1', tool: 'codex_code_review', model: 'gpt-6-astra', effort: 'xhigh',
+    startedAt: '2026-09-08T14:25:01.000Z', endedAt: '2026-09-08T14:43:02.000Z', durationMs: 1081000,
+    status: 'ok', partial: false, detached: false, cwd: '/tmp/p', promptPreview: 'review it', text: 'THE REVIEW',
+  });
+  spoolResult(dir, 'grok', {
+    resultId: '20260908T150000Z-1-1', tool: 'grok_research',
+    startedAt: '2026-09-08T15:00:00.000Z', endedAt: '2026-09-08T15:00:42.000Z', durationMs: 42,
+    status: 'cancelled', partial: true, detached: true, promptPreview: 'x', text: 'HALF AN ANSWER',
+  });
+
+  const r = cli(['results'], { dir });
+  assert.equal(r.code, 0, r.err);
+  const lines = r.out.trim().split('\n');
+  assert.deepEqual(lines, [
+    '20260908T150000Z-1-1  grok  grok_research  cancelled partial detached  42ms  2026-09-08T15:00:00.000Z',
+    '20260908T142501Z-1-1  codex  codex_code_review  ok  1081000ms  2026-09-08T14:25:01.000Z',
+  ]);
+
+  const one = cli(['results', 'codex'], { dir });
+  assert.equal(one.code, 0);
+  assert.equal(one.out.trim().split('\n').length, 1);
+
+  const file = cli(['results', 'codex', '20260908T142501Z-1-1'], { dir });
+  assert.equal(file.code, 0);
+  assert.match(file.out, /^---\nunit: codex\n/);
+  assert.match(file.out, /\nstatus: ok\n/);
+  assert.match(file.out, /\nTHE REVIEW\n$/);
+
+  const p = cli(['results', 'codex', '20260908T142501Z-1-1', '--path'], { dir });
+  assert.equal(p.out.trim(), join(dir, 'results', 'codex', '20260908T142501Z-1-1.md'));
+  assert.equal(cli(['results', '--path'], { dir }).out.trim().split('\n').length, 2);
+});
+
+test('results: an empty spool is not a fault; an unknown unit and a bad id are', () => {
+  const dir = home();
+  const empty = cli(['results'], { dir });
+  assert.equal(empty.code, 0);
+  assert.match(empty.out, /no results spooled yet/);
+
+  const badUnit = cli(['results', 'nope'], { dir });
+  assert.equal(badUnit.code, 1);
+  assert.match(badUnit.err, /unknown unit "nope"/);
+
+  const badId = cli(['results', 'codex', 'not-an-id'], { dir });
+  assert.equal(badId.code, 1);
+  assert.match(badId.err, /is not a result id/);
+
+  const missing = cli(['results', 'codex', '20260908T142501Z-1-9'], { dir });
+  assert.equal(missing.code, 1);
+  assert.match(missing.err, /no spooled result/);
+
+  assert.equal(cli(['results', 'codex', '20260908T142501Z-1-9', 'extra'], { dir }).code, 1);
+  assert.equal(cli(['results', '--nope'], { dir }).code, 1);
+  assert.equal(existsSync(join(dir, 'results')), false, 'reading never creates the spool');
+});
+
+test('results is in the usage and has its own help page; doctor names the spool per unit', () => {
+  const dir = home();
+  assert.match(cli(['--help'], { dir }).out, /omelette-fleet results/);
+  const h = cli(['help', 'results'], { dir });
+  assert.equal(h.code, 0);
+  assert.match(h.out, /omelette-fleet results \[<unit>\] \[<id>\] \[--path\]/);
+
+  const fake = fakeBin(dir);
+  const vendors = { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake };
+  const d = cli(['doctor'], { dir, env: vendors });
+  assert.match(d.out, /^ {2}results {5}.+ · keep 50 · max 50 MB$/m);
+  assert.ok(d.out.includes(join(dir, 'results', 'codex')));
+  assert.match(d.out, /^\s+resultsKeep\s+50\s+default$/m, 'and the key is in the config table like every other');
+
+  assert.equal(cli(['set', 'codex.results=false'], { dir }).code, 0);
+  assert.match(cli(['doctor'], { dir, env: vendors }).out, /^ {2}results {5}\(disabled in config\)/m);
 });

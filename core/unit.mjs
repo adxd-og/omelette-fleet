@@ -34,7 +34,10 @@
  * tools never spawn and are answered by the runtime from the unit's catalog;
  * `local` tools never spawn either but DO get `run(args, ctx)` with a reduced
  * ctx (`cfg, mode, log, catalog, home` — no `spawn`, no `retry`), and like a
- * catalog read they are never tracked by the status feed and never spooled.
+ * catalog read they are answered in-process, never tracked by the status feed
+ * and never written to the result spool. The runtime appends one `local` tool
+ * of its own to every unit — `<unit>_result`, which hands back an answer the
+ * client dropped — unless the adapter already declares that name.
  * Every other kind gets `run(args, ctx)` with ctx = { cfg, mode, model, effort,
  * spawn, retry, log, catalog, home, signal }
  * and returns a string or { text, usage?, isError?, partial? }.
@@ -61,6 +64,7 @@ import { unitInstructions } from './rules.mjs';
 import { runProcess } from './spawn.mjs';
 import { createStatus, previewText } from './status.mjs';
 import { unitConfig } from './config.mjs';
+import { createResultStore, formatEntry, isValidResultId, renderResult } from './results.mjs';
 import { makeLog, makeOnceLog } from './log.mjs';
 import { VERSION, announceUpdate } from './update.mjs';
 
@@ -149,28 +153,98 @@ export async function boundedRetry(fn, { skipIf = () => false, delayMs = 1500, s
 }
 
 /**
+ * The `<unit>_result` answer. With an id: that result's file body. Without
+ * one: the newest in full, then a directory of the last ten — which is what a
+ * caller who lost an answer to a timeout actually needs, since it does not
+ * know the id it never received.
+ */
+function answerResult(store, args, unitName) {
+  const raw = args && args.id;
+  const asked = typeof raw === 'string' ? raw.trim() : (raw === undefined || raw === null ? '' : raw);
+  if (asked !== '') {
+    // Validated BEFORE a path exists: no traversal reaches the filesystem.
+    if (!isValidResultId(asked)) {
+      return {
+        text: `Error: ${JSON.stringify(String(asked).slice(0, 80))} is not a result id — they look like 20260908T142501Z-19312-1. Call ${unitName}_result with no id for the newest.`,
+        isError: true,
+      };
+    }
+    const one = store.read(asked);
+    if (!one) {
+      return { text: `Error: no spooled result "${asked}" for ${unitName} — it may have been pruned. Call ${unitName}_result with no id for the newest.`, isError: true };
+    }
+    return { text: renderResult({ ...one.header, text: one.text }) };
+  }
+  const recent = store.list(10);
+  const newest = recent.length ? store.read(recent[0].resultId) : null;
+  if (!newest) {
+    return { text: `Error: the ${unitName} result spool is empty — nothing has been spooled yet, or ${unitName}.results is false in the fleet config.`, isError: true };
+  }
+  return {
+    text: `${renderResult({ ...newest.header, text: newest.text })}\n\nRecent results:\n${recent.map((e) => formatEntry(e)).join('\n')}`,
+  };
+}
+
+/**
  * Build the runtime (config, status, callTool) for a unit without touching stdin/stdout.
  * `progressEveryMs` and `onResult` are seams: the first lets a test drive the
- * progress ticker on a fast clock, the second is P2's result-spool hook (a
- * no-op here) and the only way to see the record a finished call produces.
+ * progress ticker on a fast clock, the second REPLACES the result spool — the
+ * default hook writes the record to core/results.mjs, and a caller that passes
+ * its own is the only way to see the record a finished call produces.
  */
-export function createUnitRuntime(unit, { env = process.env, progressEveryMs = PROGRESS_EVERY_MS, onResult = () => {} } = {}) {
+export function createUnitRuntime(unit, { env = process.env, progressEveryMs = PROGRESS_EVERY_MS, onResult = null } = {}) {
   const log = makeLog(unit.name);
   const warnOnce = makeOnceLog(log);
-  // Neither a catalog read nor a `local` tool spawns anything, so neither is
-  // tracked by the feed — and neither is spooled.
-  const spawnTools = new Set(unit.tools.filter((t) => t.kind !== 'catalog' && t.kind !== 'local').map((t) => t.name));
   let resultSeq = 0;
   const cfgFor = () => unitConfig({
     unit: unit.name, envMap: unit.envMap, builtin: unit.builtin, extraSchema: unit.extraSchema,
     supportedModes: unit.supportedModes, env,
   });
+  /** One store per resolution: `results*` are ordinary config keys and reload like the rest. */
+  const storeFor = (cfg) => createResultStore({
+    home: cfg.home,
+    unit: unit.name,
+    keep: cfg.values.resultsKeep,
+    maxBytes: cfg.values.resultsMaxBytes,
+    log,
+  });
+  // Every unit answers `<unit>_result`: a spool nobody can read back is a spool
+  // that never repaid the call it saved. Appended here rather than declared per
+  // adapter so no unit can forget it — and an adapter that declares its own
+  // keeps it.
+  const resultToolName = `${unit.name}_result`;
+  const resultTool = {
+    name: resultToolName,
+    kind: 'local',
+    description:
+      `Fetch a spooled ${unit.label} result — the answer a dropped request, a cancellation or a client restart lost. `
+      + 'No id: the newest answer in full, then the last 10, one line each. With an id: that answer. '
+      + 'Reads a file this unit already wrote; spends nothing and starts no run.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'A result id like 20260908T142501Z-19312-1 (from a listing, or the status feed\'s resultId). Omit for the newest.',
+        },
+      },
+    },
+    run: (args) => answerResult(storeFor(cfgFor()), args, unit.name),
+  };
+  const allTools = unit.tools.some((t) => t.name === resultToolName) ? unit.tools : [...unit.tools, resultTool];
+  // Neither a catalog read nor a `local` tool spawns anything, so neither is
+  // tracked by the feed — and neither is spooled.
+  const spawnTools = new Set(allTools.filter((t) => t.kind !== 'catalog' && t.kind !== 'local').map((t) => t.name));
   const status = createStatus({
     unit: unit.name,
     spawnTools,
     resolve: () => { const c = cfgFor(); return { dir: c.home, enabled: c.values.status }; },
   });
   status.boot();
+  // Retention runs at boot as well as after every write: a `resultsKeep`
+  // lowered while this server was down should not wait for the next call.
+  const bootCfg = cfgFor();
+  if (bootCfg.values.results) storeFor(bootCfg).prune();
 
   function spawnFor(cfg, { args, cwd, stdinText, extraEnv, hardKillMs, outputCap }, signal) {
     const bin = resolveBin(unit, env);
@@ -197,7 +271,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
   }
 
   async function callTool(name, args = {}, call = {}) {
-    const tool = unit.tools.find((t) => t.name === name);
+    const tool = allTools.find((t) => t.name === name);
     if (!tool) return { text: `Error: unknown tool "${name}".`, isError: true };
     if (tool.kind === 'catalog') return { text: unit.catalog.render() };
 
@@ -225,10 +299,6 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       } catch (e) {
         return { text: `${unit.label} error: ${(e && e.message) || e}`, isError: true };
       }
-    }
-
-    if (!cfg.values.enabled) {
-      return { text: `Error: unit "${unit.name}" is disabled in the fleet config (${cfg.configPath}).`, isError: true };
     }
 
     // model: an explicit arg is validated hard; a configured default that is
@@ -292,6 +362,15 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
     const cancelMode = cfg.values.cancel;
     const killSignal = cancelMode === 'kill' && call.signal ? call.signal : undefined;
 
+    // The result spool. `finish()` calls this synchronously, before it returns,
+    // so the answer is on disk before serve() can send anything — and before a
+    // client that has already timed out is told anything at all. The store is
+    // built from the config live at THIS call, so `results*` reload like every
+    // other key; an `onResult` handed to createUnitRuntime replaces the spool.
+    const recordResult = onResult || ((record) => {
+      if (cfg.values.results) storeFor(cfg).write(record);
+    });
+
     const finish = (text, isError = false, extra) => {
       clearProgress();
       const aborted = !!(call.signal && call.signal.aborted);
@@ -301,11 +380,10 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       status.end(token, outcome, isError ? text : null, {
         ...(extra || {}), resultId, ...(detached ? { detached: true } : {}),
       });
-      // P2 HOOK POINT — the result spool. A no-op here, but the record is built
-      // on EVERY finished spawn-tool call, feed on or off, because the feed is
-      // not what keeps an answer: it keeps an event.
+      // The record is built on EVERY finished spawn-tool call, feed on or off,
+      // because the feed is not what keeps an answer: it keeps an event.
       try {
-        onResult({
+        recordResult({
           resultId,
           tool: name,
           model,
@@ -323,6 +401,13 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       } catch (e) { log('result hook: ' + ((e && e.message) || e)); }
       return isError ? { text, isError: true } : { text };
     };
+
+    // Below finish() on purpose: a call refused because the unit is switched
+    // off is still an answer the caller may have lost, so it is spooled like
+    // every other refusal — and, like them, it is an `error` in the feed too.
+    if (!cfg.values.enabled) {
+      return finish(`Error: unit "${unit.name}" is disabled in the fleet config (${cfg.configPath}).`, true);
+    }
 
     if (model && !unit.catalog.isAllowedModel(model)) {
       return finish(`Error: unknown model "${model}". Allowed: ${unit.catalog.modelEnum().join(', ')}. Call ${unit.name}_models for guidance.`, true);
@@ -368,7 +453,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
   }
 
   // tools/list must show only the public MCP shape.
-  const tools = unit.tools.map(({ run, kind, mutateGate, ...pub }) => pub);
+  const tools = allTools.map(({ run, kind, mutateGate, ...pub }) => pub);
   return { log, status, callTool, cfgFor, tools };
 }
 

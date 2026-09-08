@@ -50,6 +50,7 @@ import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, KEY_SCHEMA, coerce, configPath, fleetHome, unitConfig, writeFleetConfig } from '../core/config.mjs';
+import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
 import { HOOK_EVENTS, HOOK_FILES, KINDS, agentSettings, hookSettingsSnippet, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
 import { resolveBin } from '../core/unit.mjs';
@@ -186,6 +187,18 @@ const COMMANDS = {
       "Drive a unit's MCP server over real stdio (initialize →",
       'tools/list → tools/call) and print the result. Exit 2 = the tool',
       'answered with an error, 1 = the server never answered.',
+    ],
+  },
+  results: {
+    args: '[<unit>] [<id>] [--path]',
+    body: [
+      'Print what the units spooled. Every tool call writes its answer to',
+      '<home>/results/<unit>/<id>.md before the response is sent, so an',
+      'answer a client dropped — a timeout, a cancellation, a restart — is',
+      'still on disk. No arguments: the last 10 across the fleet, newest',
+      'first. A unit: its last 10. A unit and an id: that result, header',
+      'and text. --path prints the file path instead of the content.',
+      'Reads the files directly: no server, no vendor CLI, nothing spent.',
     ],
   },
 };
@@ -1867,6 +1880,9 @@ async function cmdDoctor(argv) {
     if (reg && !reg.exists) problems.push(`the registered server file is missing (${reg.target || 'no args'})`);
     out(`  mcp         ${mcpLine(name, effective, reg, server)}`);
     out(`  status feed ${cfg.values.status ? '' : '(disabled in config) '}${home.writable ? `${home.dir} is writable` : `${home.dir} is NOT writable — ${home.error}`}`);
+    out(`  results     ${cfg.values.results
+      ? `${join(cfg.home, 'results', name)} · keep ${cfg.values.resultsKeep} · max ${Math.round(cfg.values.resultsMaxBytes / (1024 * 1024))} MB`
+      : '(disabled in config) — answers are not spooled'}`);
     // Enabled AND registered AND broken. A unit you never wired up is not a fault.
     if (cfg.values.enabled && reg && problems.length) {
       faults++;
@@ -2116,6 +2132,45 @@ async function cmdCall(argv) {
   }
 }
 
+// ─── results ─────────────────────────────────────────────────────────────────
+
+/** One unit's spool, resolved through the same config layers the running server sees. */
+const storeFor = (name) => {
+  const cfg = cfgFor(name);
+  return createResultStore({
+    home: cfg.home, unit: name, keep: cfg.values.resultsKeep, maxBytes: cfg.values.resultsMaxBytes,
+  });
+};
+
+function cmdResults(argv) {
+  const { flags, positional, errors } = parseArgv(argv, { booleans: ['path'] });
+  const [name, id] = positional;
+  if (positional.length > 2) errors.push(`unexpected argument: ${positional[2]}`);
+  if (name !== undefined && !UNITS[name]) {
+    errors.push(`unknown unit "${name}" — known units: ${UNIT_ORDER.join(', ')} (usage: omelette-fleet results [<unit>] [<id>] [--path])`);
+  }
+  // The id is validated before any path is built, here as in the tool.
+  if (id !== undefined && !isValidResultId(id)) {
+    errors.push(`"${id}" is not a result id — they look like 20260908T142501Z-19312-1`);
+  }
+  if (errors.length) { errors.forEach((e) => err(`omelette-fleet results: ${e}`)); return 1; }
+
+  if (id !== undefined) {
+    const found = storeFor(name).read(id);
+    if (!found) { err(`omelette-fleet results: no spooled result "${id}" for ${name} in ${join(fleetHome(), 'results', name)}`); return 1; }
+    out(flags.path ? found.path : renderResult({ ...found.header, text: found.text }));
+    return 0;
+  }
+
+  const rows = [];
+  for (const u of name ? [name] : UNIT_ORDER) for (const e of storeFor(u).list(10)) rows.push({ ...e, unit: u });
+  rows.sort((a, b) => (a.endedAt === b.endedAt ? 0 : a.endedAt < b.endedAt ? 1 : -1));
+  const top = rows.slice(0, 10);
+  if (!top.length) { out(`(no results spooled yet — ${join(fleetHome(), 'results')})`); return 0; }
+  for (const e of top) out(flags.path ? e.path : formatEntry(e, { unit: e.unit }));
+  return 0;
+}
+
 // ─── dispatch ────────────────────────────────────────────────────────────────
 
 async function main(argv) {
@@ -2134,9 +2189,10 @@ async function main(argv) {
     case 'show': return cmdShow(rest);
     case 'set': return cmdSet(rest);
     case 'call': return cmdCall(rest);
+    case 'results': return cmdResults(rest);
     default:
       err(`omelette-fleet: unknown command "${cmd}"`);
-      err('commands: install, uninstall, update, rules, doctor, show, set, call — `omelette-fleet --help` for the full usage.');
+      err('commands: install, uninstall, update, rules, doctor, show, set, call, results — `omelette-fleet --help` for the full usage.');
       return 1;
   }
 }

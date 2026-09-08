@@ -1,0 +1,254 @@
+/**
+ * omelette-fleet :: test/results.test.mjs
+ * The result spool: the file format, the atomic write, retention, and the two
+ * refusals that keep a fetch inside the spool — an id that is not one, and a
+ * path that is a symlink. Every test gets its own throwaway fleet home; no
+ * server, no vendor CLI and no clock is needed.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createResultStore, formatEntry, isValidResultId, parseResult, renderResult, RESULT_ID_RE } from '../core/results.mjs';
+
+const posixPerms = !(process.platform === 'win32' || (process.getuid && process.getuid() === 0));
+const symlinksWork = process.platform !== 'win32';
+
+const home = () => mkdtempSync(join(tmpdir(), 'omelette-results-'));
+const spool = (dir) => join(dir, 'results', 'fake');
+const store = (dir, o = {}) => createResultStore({ home: dir, unit: 'fake', ...o });
+const files = (dir) => { try { return readdirSync(spool(dir)).sort(); } catch { return []; } };
+
+const REC = {
+  resultId: '20260908T142501Z-19312-1',
+  tool: 'codex_code_review',
+  model: 'gpt-6-astra',
+  effort: 'xhigh',
+  startedAt: '2026-09-08T14:25:01.000Z',
+  endedAt: '2026-09-08T14:43:02.000Z',
+  durationMs: 1081000,
+  status: 'ok',
+  partial: false,
+  detached: false,
+  cwd: '/tmp/project',
+  promptPreview: 'review the Movie app',
+  // A `---` INSIDE the answer: the parser must split on the first terminator only.
+  text: 'the review\n---\nnot a header\n',
+};
+
+test('renderResult writes the spec header block, and parseResult reads it back', () => {
+  const body = renderResult({ ...REC, unit: 'codex' });
+  assert.equal(body.split('\n').slice(0, 15).join('\n'), [
+    '---',
+    'unit: codex',
+    'tool: codex_code_review',
+    'resultId: 20260908T142501Z-19312-1',
+    'model: gpt-6-astra',
+    'effort: xhigh',
+    'startedAt: 2026-09-08T14:25:01.000Z',
+    'endedAt: 2026-09-08T14:43:02.000Z',
+    'durationMs: 1081000',
+    'status: ok',
+    'partial: false',
+    'detached: false',
+    'cwd: /tmp/project',
+    'promptPreview: "review the Movie app"',
+    '---',
+  ].join('\n'));
+  const back = parseResult(body);
+  assert.equal(back.text, REC.text, 'the text is verbatim, `---` inside it included');
+  assert.equal(back.header.unit, 'codex');
+  assert.equal(back.header.durationMs, 1081000);
+  assert.equal(back.header.partial, false);
+  assert.equal(back.header.detached, false);
+  assert.equal(back.header.promptPreview, 'review the Movie app');
+});
+
+test('a header value can never forge a header: controls collapse, the preview is JSON-quoted and capped at 200', () => {
+  const body = renderResult({ ...REC, unit: 'fake', model: 'm\n---\nstatus: ok', promptPreview: 'a"b\n' + 'x'.repeat(400) });
+  const lines = body.split('\n');
+  assert.equal(lines.filter((l) => l === '---').length, 3, 'two header rules and the one inside the text — no fourth');
+  assert.equal(lines[4], 'model: m --- status: ok');
+  const preview = JSON.parse(lines[13].slice('promptPreview: '.length));
+  assert.equal(preview.length, 200);
+  assert.ok(preview.startsWith('a"b x'));
+  assert.equal(parseResult(body).header.model, 'm --- status: ok');
+});
+
+test('an empty header value renders without a trailing space and round-trips', () => {
+  const body = renderResult({ resultId: REC.resultId, tool: 't', status: 'ok', text: '' });
+  assert.ok(body.includes('\nmodel:\n'), 'no trailing whitespace on an empty value');
+  assert.equal(parseResult(body).header.model, '');
+  assert.equal(parseResult(body).text, '');
+});
+
+test('parseResult answers null for anything that is not one of our files', () => {
+  assert.equal(parseResult('no header at all'), null);
+  assert.equal(parseResult('---\nunit: fake\n'), null, 'never terminated');
+  assert.equal(parseResult(''), null);
+  assert.equal(parseResult(null), null);
+});
+
+test('a result id is exactly <YYYYMMDDTHHMMSSZ>-<pid>-<seq>; anything else is refused before a path is built', () => {
+  assert.ok(isValidResultId('20260908T142501Z-19312-1'));
+  assert.ok(RESULT_ID_RE.test('20260908T142501Z-1-1'));
+  for (const bad of ['', '..', '../../etc/passwd', '20260908T142501Z-19312-1/../x', '20260908T142501Z-19312',
+    '20260908T142501Z-19312-1.md', 'x20260908T142501Z-1-1', ' 20260908T142501Z-1-1', null, undefined, 42,
+    '20260908T142501Z-1-' + '1'.repeat(80)]) {
+    assert.equal(isValidResultId(bad), false, JSON.stringify(bad));
+  }
+});
+
+test('write: a 0700 directory, a 0600 file, an atomic rename and no .tmp left behind', () => {
+  const dir = home();
+  const path = store(dir).write(REC);
+  assert.equal(path, join(spool(dir), '20260908T142501Z-19312-1.md'));
+  assert.deepEqual(files(dir), ['20260908T142501Z-19312-1.md']);
+  const body = readFileSync(path, 'utf8');
+  assert.match(body, /^---\nunit: fake\n/, 'the store names the unit, not the record');
+  assert.equal(parseResult(body).text, REC.text);
+  if (posixPerms) {
+    assert.equal(statSync(spool(dir)).mode & 0o777, 0o700);
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+  }
+});
+
+test('a write that cannot happen is one log line and a null — never a half-written file, never another server\'s tmp', () => {
+  const dir = home();
+  mkdirSync(spool(dir), { recursive: true });
+  const target = join(spool(dir), '20260908T142501Z-19312-1.md');
+  const tmp = `${target}.${process.pid}.tmp`;
+  writeFileSync(target, 'the previous answer');
+  writeFileSync(tmp, 'someone else is mid-write'); // blocks the O_EXCL create
+  const logged = [];
+  assert.equal(createResultStore({ home: dir, unit: 'fake', log: (m) => logged.push(m) }).write(REC), null);
+  assert.equal(readFileSync(target, 'utf8'), 'the previous answer', 'the old file is never partially overwritten');
+  assert.equal(readFileSync(tmp, 'utf8'), 'someone else is mid-write', 'a tmp we did not create is never removed');
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /^results: could not spool 20260908T142501Z-19312-1 —/);
+});
+
+test('a spool directory that cannot be created is one log line, not an exception', () => {
+  const dir = home();
+  writeFileSync(join(dir, 'results'), 'not a directory');
+  const logged = [];
+  assert.equal(createResultStore({ home: dir, unit: 'fake', log: (m) => logged.push(m) }).write(REC), null);
+  assert.equal(logged.length, 1);
+});
+
+test('a store for a name that is not a unit name is inert — no path is ever built from it', () => {
+  const dir = home();
+  const logged = [];
+  const s = createResultStore({ home: dir, unit: '../evil', log: (m) => logged.push(m) });
+  assert.equal(s.write(REC), null);
+  assert.deepEqual(s.list(), []);
+  assert.equal(s.read(REC.resultId), null);
+  assert.doesNotThrow(() => s.prune());
+  assert.equal(existsSync(join(dir, 'results')), false);
+  assert.equal(logged.length, 1);
+});
+
+test('list: newest by endedAt first, the filename breaks a tie, and the limit is honoured', () => {
+  const dir = home();
+  const s = store(dir);
+  s.write({ ...REC, resultId: '20260908T142501Z-1-1', endedAt: '2026-09-08T14:30:00.000Z', tool: 'a' });
+  s.write({ ...REC, resultId: '20260908T142501Z-1-2', endedAt: '2026-09-08T14:40:00.000Z', tool: 'b',
+    status: 'cancelled', partial: true, detached: true, durationMs: 5 });
+  s.write({ ...REC, resultId: '20260908T142501Z-1-3', endedAt: '2026-09-08T14:40:00.000Z', tool: 'c' });
+  const all = s.list();
+  assert.deepEqual(all.map((e) => e.resultId), ['20260908T142501Z-1-3', '20260908T142501Z-1-2', '20260908T142501Z-1-1']);
+  assert.deepEqual(all[1], {
+    resultId: '20260908T142501Z-1-2', tool: 'b', status: 'cancelled', partial: true, detached: true,
+    durationMs: 5, startedAt: REC.startedAt, endedAt: '2026-09-08T14:40:00.000Z',
+    path: join(spool(dir), '20260908T142501Z-1-2.md'),
+  });
+  assert.equal(s.list(1).length, 1);
+  assert.equal(s.list(0).length, 0);
+  assert.equal(
+    formatEntry(all[1], { unit: 'fake' }),
+    '20260908T142501Z-1-2  fake  b  cancelled partial detached  5ms  2026-09-08T14:25:01.000Z',
+  );
+  assert.equal(formatEntry(all[2]), '20260908T142501Z-1-1  a  ok  1081000ms  2026-09-08T14:25:01.000Z');
+});
+
+test('retention by count: resultsKeep survivors, oldest dropped first', () => {
+  const dir = home();
+  const s = createResultStore({ home: dir, unit: 'fake', keep: 2 });
+  for (let i = 1; i <= 5; i++) s.write({ ...REC, resultId: `20260908T142501Z-1-${i}`, endedAt: `2026-09-08T14:4${i}:00.000Z` });
+  assert.deepEqual(files(dir), ['20260908T142501Z-1-4.md', '20260908T142501Z-1-5.md']);
+});
+
+test('retention by bytes: the oldest go until it fits, and the newest survives even alone over the cap', () => {
+  const dir = home();
+  const big = 'x'.repeat(4000); // ~4.3 KB per file with the header
+  const s = createResultStore({ home: dir, unit: 'fake', keep: 50, maxBytes: 9000 });
+  for (let i = 1; i <= 4; i++) s.write({ ...REC, resultId: `20260908T142501Z-1-${i}`, endedAt: `2026-09-08T14:4${i}:00.000Z`, text: big });
+  assert.deepEqual(files(dir), ['20260908T142501Z-1-3.md', '20260908T142501Z-1-4.md']);
+  const tiny = createResultStore({ home: dir, unit: 'fake', maxBytes: 10 });
+  tiny.write({ ...REC, resultId: '20260908T142501Z-1-9', endedAt: '2026-09-08T14:49:00.000Z', text: big });
+  assert.deepEqual(files(dir), ['20260908T142501Z-1-9.md'], 'the answer just paid for is never the one thrown away');
+});
+
+test('prune removes an abandoned .tmp older than an hour and leaves a fresh one alone', () => {
+  const dir = home();
+  const s = store(dir);
+  s.write(REC);
+  const old = join(spool(dir), 'abandoned.md.999.tmp');
+  const fresh = join(spool(dir), 'inflight.md.998.tmp');
+  writeFileSync(old, 'x');
+  writeFileSync(fresh, 'x');
+  const twoHoursAgo = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+  utimesSync(old, twoHoursAgo, twoHoursAgo);
+  s.prune();
+  assert.equal(existsSync(old), false);
+  assert.equal(existsSync(fresh), true, 'another server may be writing it right now');
+});
+
+test('read refuses a symlink, an id that is not one, and an id that is not there', { skip: !symlinksWork && 'POSIX symlinks' }, () => {
+  const dir = home();
+  const s = store(dir);
+  s.write(REC);
+  const secret = join(dir, 'secret.txt');
+  writeFileSync(secret, 'private');
+  symlinkSync(secret, join(spool(dir), '20260908T142501Z-1-7.md'));
+  assert.equal(s.read('20260908T142501Z-1-7'), null, 'a symlink is never followed');
+  assert.equal(s.list().length, 1, 'and never listed');
+  assert.equal(s.read('../../../etc/passwd'), null);
+  assert.equal(s.read('20260908T142501Z-19312-2'), null);
+  const got = s.read(REC.resultId);
+  assert.equal(got.text, REC.text);
+  assert.equal(got.header.tool, 'codex_code_review');
+  assert.equal(got.path, join(spool(dir), `${REC.resultId}.md`));
+});
+
+test('a file with a result-id name and no header of ours is never listed, and retention takes it first', () => {
+  const dir = home();
+  const s = createResultStore({ home: dir, unit: 'fake', keep: 1 });
+  mkdirSync(spool(dir), { recursive: true });
+  writeFileSync(join(spool(dir), '20260908T142501Z-1-1.md'), 'someone else wrote this');
+  writeFileSync(join(spool(dir), 'notes.txt'), 'not ours at all');
+  assert.deepEqual(s.list(), []);
+  s.write({ ...REC, resultId: '20260908T142501Z-1-2' });
+  assert.deepEqual(s.list().map((e) => e.resultId), ['20260908T142501Z-1-2']);
+  assert.equal(existsSync(join(spool(dir), '20260908T142501Z-1-1.md')), false, 'headerless: sorted oldest, dropped first');
+  assert.equal(existsSync(join(spool(dir), 'notes.txt')), true, 'a name that is not a result id is left alone');
+});
+
+test('two servers prune the same directory: they agree, and an unlink that cannot happen is not an exception',
+  { skip: !posixPerms && 'POSIX directory modes' }, () => {
+    const dir = home();
+    const a = createResultStore({ home: dir, unit: 'fake', keep: 2 });
+    const b = createResultStore({ home: dir, unit: 'fake', keep: 2 });
+    for (let i = 1; i <= 4; i++) a.write({ ...REC, resultId: `20260908T142501Z-1-${i}`, endedAt: `2026-09-08T14:4${i}:00.000Z` });
+    assert.doesNotThrow(() => b.prune(), 'everything b would remove is already gone');
+    assert.deepEqual(files(dir), ['20260908T142501Z-1-3.md', '20260908T142501Z-1-4.md']);
+    chmodSync(spool(dir), 0o500); // no unlink can succeed any more
+    try {
+      const c = createResultStore({ home: dir, unit: 'fake', keep: 1 });
+      assert.doesNotThrow(() => c.prune());
+      assert.equal(readdirSync(spool(dir)).length, 2, 'nothing removed, and nothing thrown');
+    } finally {
+      chmodSync(spool(dir), 0o700);
+    }
+  });

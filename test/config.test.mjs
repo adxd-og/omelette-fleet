@@ -257,3 +257,28 @@ test('cancel: an enum key like any other — `finish` by default, per unit or fl
   assert.deepEqual(coerce(KEY_SCHEMA.cancel, 'KILL'), { ok: false });
   assert.deepEqual(KEY_SCHEMA.cancel.values, ['finish', 'kill']);
 });
+
+test('the result spool has three keys, resolved like every other one', () => {
+  const base = { unit: 'codex', supportedModes: MODES_CODEX };
+
+  const d = unitConfig({ ...base, env: { OMELETTE_HOME: home() } });
+  assert.equal(d.values.results, true);
+  assert.equal(d.values.resultsKeep, 50);
+  assert.equal(d.values.resultsMaxBytes, 52428800);
+  assert.equal(d.sources.results, 'default');
+
+  const c = unitConfig({
+    ...base,
+    env: { OMELETTE_HOME: home({ version: 1, defaults: { results: false }, units: { codex: { resultsKeep: 5, resultsMaxBytes: '1048576' } } }) },
+  });
+  assert.equal(c.values.results, false);
+  assert.equal(c.sources.results, 'file:defaults');
+  assert.equal(c.values.resultsKeep, 5);
+  assert.equal(c.values.resultsMaxBytes, 1048576, 'a numeric string is coerced like every other posint');
+
+  // An invalid value is a warning and the built-in default — never a throw.
+  const bad = unitConfig({ ...base, env: { OMELETTE_HOME: home({ units: { codex: { resultsKeep: 0, results: 'maybe' } } }) } });
+  assert.equal(bad.values.resultsKeep, 50);
+  assert.equal(bad.values.results, true);
+  assert.equal(bad.warnings.filter((w) => /results/.test(w)).length, 2);
+});

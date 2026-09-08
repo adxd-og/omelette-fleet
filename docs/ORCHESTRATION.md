@@ -178,6 +178,7 @@ Nesting is allowed three levels deep by default (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN
 | Image-to-image editing | **Grok** → `grok_image_edit` | The only unit in the fleet that edits images |
 | Architecture, planning, UI/front-end taste, long-horizon engineering | **Claude** (your session, or its sub-agents) | Grok is explicitly contraindicated for architecture and UI; Codex is a strong reviewer but not a source of record |
 | Any file edit, git operation, deploy or publish | **Claude**, under your approval | The only mutating path. Units reject git/deploy intent before spawn and mostly cannot act on it anyway |
+| A client timeout, a cancellation or a restart dropped an answer | **The same unit** → `<unit>_result` (no id = the newest, plus the last ten) | The answer was spooled before the response was sent, so it is on disk. Fetching it starts no run and costs nothing; re-asking the question pays for it twice |
 
 Ask a unit's `<unit>_models` tool when you are unsure whether a task belongs on it at all — the catalogs carry "route to / route away" advice, not just ids.
 
@@ -228,6 +229,8 @@ In the answers themselves, watch for a trailing `[… treat the answer as partia
 The vendor CLIs update themselves; this package deliberately does not — a fleet that rewrote its own code under a running session would be one more thing to distrust when something breaks. `doctor` shows both sides of that: each unit's `version` line is whatever the vendor CLI has become, and the header's `version … · latest …` is where the fleet itself stands. Bringing it forward is your call: `omelette-fleet update`, then restart Claude Code.
 
 If a unit regresses for no apparent reason, suspect a vendor CLI auto-update first — these CLIs update themselves, and a flag or output format changing under a working adapter is the most common cause of sudden breakage.
+
+The feed's `end` event and `lastEvent` carry a `resultId`, and that id is exactly the file name under `<home>/results/<unit>/`: a supervisor watching a run end can read the answer straight off disk without asking the model for it again, and `omelette-fleet results` prints the same listing from a shell.
 
 ## Briefing a unit well
 

@@ -52,6 +52,7 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 | Tie-breaker when Grok and Gemini Flash disagree | Gemini `Gemini 3.1 Pro (High)` |
 | Image generation / editing | any `_image` tool / Grok `grok_image_edit` |
 | Architecture, planning, UI taste, any file edit, git, deploy, publish | **this session** |
+| A client timeout dropped an answer | `<unit>_result` on that unit (no id = the newest) — it was spooled before the response was sent; nothing is re-run |
 
 Ask a unit's `<unit>_models` tool when unsure whether a task belongs on it. Omit `model` to keep the fleet default.
 

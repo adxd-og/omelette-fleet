@@ -52,6 +52,13 @@ export const KEY_SCHEMA = {
   outputCap: { type: 'posint', default: 400000 },
   webSearch: { type: 'boolean', default: true },
   status: { type: 'boolean', default: true },
+  // The result spool (core/results.mjs): every spawned answer is written to
+  // <home>/results/<unit>/<resultId>.md before the response is sent, so a
+  // client timeout cannot lose an answer that was already paid for.
+  // `resultsKeep` and `resultsMaxBytes` bound the directory PER UNIT.
+  results: { type: 'boolean', default: true },
+  resultsKeep: { type: 'posint', default: 50 },
+  resultsMaxBytes: { type: 'posint', default: 52428800 }, // 50 MB
   // What a client's `notifications/cancelled` does to the run it names.
   // `finish`: the vendor CLI is left to end and the result is recorded — a
   // cancel is usually a client-side timeout, and the run is already paid for.

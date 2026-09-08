@@ -99,6 +99,17 @@ The first two share a 24-hour cache (`<home>/update-check.json`), so a busy day 
 
 Everything else that reaches the network is the vendor CLI's own traffic, made with its own credentials: this package neither proxies nor inspects it.
 
+## What the fleet writes down locally
+
+Two things under the fleet home (`$OMELETTE_HOME`, default `~/.omelette`), both `0600`, both plain files on your own machine:
+
+- **The status feed** — `status-<unit>.json` and `fleet-log.ndjson`: what each unit is doing, with a 200-character preview of each prompt.
+- **The result spool** — `results/<unit>/<resultId>.md`, in a `0700` directory: the *whole* answer of every spawned call, written before the response is sent.
+
+Be deliberate about the second one. A review answer quotes the source it reviewed, so the spool holds excerpts of whatever you pointed a unit at, for as long as retention keeps them (`resultsKeep`, `resultsMaxBytes`; `results: false` switches writing off entirely). Nothing is uploaded, nothing is shared between machines and no unit can reach another unit's files through the fleet — this is local disk, under the same directory and the same permissions as the config and the feed, and never a path outside the fleet home.
+
+Reading it back is deliberately narrow. A result id must match `^\d{8}T\d{6}Z-\d+-\d+$` before any path is built, so no argument from a model or a shell can traverse out of the directory; the file is `lstat`ed and read only when it is a regular file, so a symlink planted in the spool is refused rather than followed; and writes are `O_EXCL` temp + `rename`, so a planted temp file fails the write instead of being written through. A failure to spool is one line on stderr and the call still answers — the spool is insurance, never a gate.
+
 ## Per-unit enforcement matrix
 
 These are not equivalent mechanisms. Be honest with yourself about which unit you are trusting with what.
