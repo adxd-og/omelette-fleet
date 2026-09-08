@@ -143,6 +143,11 @@
  * TIMEOUT: unlike agy there is NO CLI-side print-timeout flag to hand down,
  * so the process-group SIGKILL is the only wall-clock bound (config timeoutS).
  *
+ * CANCELLATION — the same SIGKILL answers a cancelled request (`cancel: kill`),
+ * and core/spawn.mjs tells the two apart with `cancelled: true`. The salvage is
+ * identical; only the wording changes, because neither bound was reached and
+ * "raise grok.timeoutS" would send the operator after a limit that held.
+ *
  * OUTPUT CAP: core/spawn.mjs keeps only the LAST `outputCap` characters of
  * stdout, and this unit's built-in raises it to 2 000 000 (config `outputCap`,
  * fleet default 400 000) because the whole stream — thinking deltas, tool
@@ -438,13 +443,21 @@ export function interpretGrok(res, { jsonMode, timeoutS, outputCap = GROK_OUTPUT
   // a killed run that has text has an answer to read whatever else went wrong.
   // A fragment is not that text, so it is the one thing never salvaged here.
   if (killed) {
+    // The same SIGKILL ends a cancelled request; `cancelled` says which it was,
+    // and a client that stopped the run is not a timeoutS to raise.
+    const killMark = res.cancelled
+      ? '[grok: cancelled by the client — treat the answer as partial]'
+      : `[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`;
     if (a.text && !fragmentOnly) {
       return answer(
-        capMark(`${a.text}\n\n[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`),
+        capMark(`${a.text}\n\n${killMark}`),
         a.usage,
         { partial: true },
       );
     }
+    // A cancelled run has no answer because the caller asked for none: neither
+    // bound was reached, so neither is named.
+    if (res.cancelled) throw new Error('grok cancelled by the client');
     // The CLI said WHY before the kill landed: an expired login reads nothing
     // like a slow review, and neither bound explains one, so the reported error
     // travels with the cap message as readily as on its own.
@@ -491,8 +504,9 @@ async function runGrok(ctx, { prompt, cwd, tools, maxTurns }) {
 const runText = (r) => (typeof r === 'string' ? r : (r && r.text) || '');
 
 // `output exceeded`: an answer that outgrew the cap once will outgrow it again,
-// so the retry is a second full paid run that cannot end differently.
-const isDeterministic = (e) => /not authenticated|hard-killed|CLI error|not found in PATH|output exceeded/i.test((e && e.message) || '');
+// so the retry is a second full paid run that cannot end differently. Same for
+// a run the client cancelled — nobody is waiting for the second one.
+const isDeterministic = (e) => /not authenticated|hard-killed|CLI error|not found in PATH|output exceeded|cancelled by the client/i.test((e && e.message) || '');
 const researchTools = (ctx) => (ctx.cfg.webSearch ? READONLY_TOOLS : READONLY_TOOLS_NOWEB);
 
 function checkCwd(raw) {

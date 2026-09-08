@@ -144,6 +144,28 @@ test('interpretGrok: a hard kill mid-delta returns the assembled deltas under th
   assert.match(fromPlain.text, /^half an answer/);
 });
 
+test('interpretGrok: a run the CLIENT cancelled says so — neither timeoutS nor outputCap is the fix', () => {
+  const opts = { jsonMode: true, timeoutS: 300, outputCap: 2000 };
+  // core/spawn.mjs flags the same SIGKILL `cancelled` when it answered an
+  // abort rather than the hard-kill timer: the salvage is unchanged, but
+  // "raise grok.timeoutS" would send the operator after a bound that held.
+  const salvaged = interpretGrok(ok({
+    stdout: stream(sys(), textDelta('what it got to')),
+    code: null,
+    killed: true,
+    cancelled: true,
+  }), opts);
+  assert.match(salvaged.text, /^what it got to/);
+  assert.match(salvaged.text, /\[grok: cancelled by the client — treat the answer as partial\]/);
+  assert.doesNotMatch(salvaged.text, /hard-killed/);
+  assert.equal(salvaged.partial, true);
+  // Nothing salvaged, and the cap does not get the blame either.
+  assert.throws(
+    () => interpretGrok(ok({ stdout: '', code: null, killed: true, cancelled: true, capped: true }), opts),
+    /^Error: grok cancelled by the client$/,
+  );
+});
+
 test('interpretGrok: usage is reported, an early stop is annotated, a clean end_turn in any spelling is not', () => {
   const clean = interpretGrok(ok({ stdout: stream(sys(), textDelta('hi'), resultLine({ result: 'hi', stop_reason: 'end_turn', usage: USAGE })) }), { jsonMode: true, timeoutS: 300 });
   assert.equal(clean.text, 'hi');
