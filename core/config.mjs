@@ -75,6 +75,9 @@ export function configPath(env = process.env) {
   return join(fleetHome(env), CONFIG_FILE);
 }
 
+/** A plain object — the shape every nested block of this file has to have. */
+const isObj = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
+
 const TRUE_WORDS = new Set(['1', 'true', 'on', 'yes']);
 const FALSE_WORDS = new Set(['0', 'false', 'off', 'no']);
 
@@ -90,12 +93,26 @@ export function coerce(spec, raw) {
       }
       return { ok: false };
     }
-    // A WHOLE number above zero, and a fraction is REFUSED rather than floored:
-    // flooring made `0.5` mean the 0 every posint key exists to forbid, and
-    // `1.9` mean a 1 the operator never wrote. Both are typos.
-    case 'posint': {
+    // A WHOLE number, and a fraction is REFUSED rather than floored: flooring
+    // made `0.5` mean the 0 every posint key exists to forbid, and `1.9` mean a
+    // 1 the operator never wrote. Both are typos. `posint` starts at 1 and
+    // `nonneg` at 0 — the second exists for a key whose zero MEANS something
+    // (`handoff.contextWindow: 0` = resolve the window at run time), where a
+    // refusal would take the value away instead of validating it. `min`/`max`
+    // on the spec bound either one: a `handoff.threshold` of 100 is a typo, not
+    // a preference, and the schema is where that is said.
+    case 'posint':
+    case 'nonneg': {
+      // `Number('')`, `Number(null)`, `Number(false)` and `Number([])` are all
+      // 0 — which posint rejects for being below 1 and nonneg would otherwise
+      // accept as a value nobody wrote. So the raw has to LOOK like a number
+      // before it is read as one.
+      if (typeof raw !== 'number' && (typeof raw !== 'string' || !raw.trim())) return { ok: false };
       const n = Number(raw);
-      return Number.isInteger(n) && n > 0 ? { ok: true, value: n } : { ok: false };
+      if (!Number.isInteger(n) || n < (spec.type === 'posint' ? 1 : 0)) return { ok: false };
+      if (spec.min !== undefined && n < spec.min) return { ok: false };
+      if (spec.max !== undefined && n > spec.max) return { ok: false };
+      return { ok: true, value: n };
     }
     case 'enum':
       return typeof raw === 'string' && spec.values.includes(raw) ? { ok: true, value: raw } : { ok: false };
@@ -186,6 +203,28 @@ export const AGENT_SETTINGS_SCHEMA = {
 };
 
 /**
+ * THE AUTO-HANDOFF, as config: a third top-level block, beside `agents` and for
+ * the same reason — it configures a managed FILE rather than a unit. Nothing
+ * reads it at call time. `omelette-fleet rules --hooks` renders these three
+ * values into the guard script as a JSON literal (core/rules.mjs,
+ * `renderHookFile`), because that script imports nothing from this package, and
+ * until it is re-rendered the config and the installed hook disagree — which is
+ * why `doctor` reports the value it reads back OUT of the script.
+ *
+ * `threshold` is a percentage of the context window and is bounded 50–99: below
+ * 50 the reminder arrives while there is nothing to hand off, and at 100 it
+ * never arrives at all. `contextWindow` is the window to measure against, where
+ * **0 means "resolve it at run time"** — the environment, then Claude Code's own
+ * `autoCompactWindow`, then its documented 200 000 — so it is `nonneg` rather
+ * than `posint`: the zero is the default and not a refusal.
+ */
+export const HANDOFF_SCHEMA = {
+  enabled: { type: 'boolean', default: true },
+  threshold: { type: 'posint', min: 50, max: 99, default: 90 },
+  contextWindow: { type: 'nonneg', default: 0 },
+};
+
+/**
  * The config file's top-level settings, validated. Never throws: a malformed
  * file or an invalid value is a warning and the built-in default stays in
  * force, exactly as it does for a unit's keys.
@@ -205,6 +244,40 @@ export function fleetSettings(env = process.env) {
     else warnings.push(`fleet config: ${key} = ${JSON.stringify(src[key])} is invalid — ignored`);
   }
   return { ...values, warnings, configPath: path };
+}
+
+/**
+ * The `handoff` block, validated, with where every value came from — the same
+ * contract `agentSettings` has and for the same reason: an invalid value is a
+ * WARNING and the built-in default, never a throw, because the alternative is
+ * `rules --hooks` refusing to write the guard a session needs.
+ *
+ * @returns {{enabled:boolean, threshold:number, contextWindow:number,
+ *            sources:object, warnings:string[], configPath:string}}
+ */
+export function handoffSettings(env = process.env) {
+  const { config, error, path } = loadFleetConfig(env);
+  const warnings = [];
+  if (error) warnings.push(`fleet config: ${error}`);
+
+  const raw = isObj(config) ? config.handoff : undefined;
+  if (raw !== undefined && !isObj(raw)) warnings.push('fleet config: handoff is not an object — ignored');
+  const block = isObj(raw) ? raw : {};
+
+  const values = {};
+  const sources = {};
+  for (const [key, spec] of Object.entries(HANDOFF_SCHEMA)) {
+    values[key] = spec.default;
+    sources[key] = 'default';
+    if (block[key] === undefined) continue;
+    const c = coerce(spec, block[key]);
+    if (c.ok) { values[key] = c.value; sources[key] = 'file'; }
+    else warnings.push(`fleet config: handoff.${key} = ${JSON.stringify(block[key])} is invalid — ignored`);
+  }
+  for (const key of Object.keys(block)) {
+    if (!(key in HANDOFF_SCHEMA)) warnings.push(`fleet config: handoff.${key} is not a known key — ignored`);
+  }
+  return { ...values, sources, warnings, configPath: path };
 }
 
 /** Units the machine environment allows past read-only. */
@@ -253,7 +326,6 @@ export function unitConfig({ unit, envMap = {}, builtin = {}, extraSchema = {}, 
   const { config, error, path } = loadFleetConfig(env);
   if (error) warnings.push(`fleet config: ${error}`);
 
-  const isObj = (o) => o && typeof o === 'object' && !Array.isArray(o);
   const fileDefaults = config && isObj(config.defaults) ? config.defaults : {};
   const fileUnit = config && isObj(config.units) && isObj(config.units[unit]) ? config.units[unit] : {};
 

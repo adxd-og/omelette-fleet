@@ -37,11 +37,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HOOK_MARKER, SKILL_MARKER } from '../core/rules.mjs';
+import { HOOK_FILES, HOOK_MARKER, SKILL_MARKER, renderHookFile } from '../core/rules.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
-const GUARD = join(ROOT, 'hooks', 'omelette-guard.mjs'); // the shipped template, not yet rendered
 
 /** A fresh fleet home per test. */
 function home() {
@@ -193,10 +192,12 @@ test('rules --global --hooks writes under CLAUDE_CONFIG_DIR, prints an absolute 
       PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: `node ${guard}` }] }],
       PreCompact: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
       SessionStart: [{ matcher: 'compact', hooks: [{ type: 'command', command: `node ${guard}` }] }],
+      PostToolUse: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
+      Stop: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
     },
   }, null, 2));
   const after = doctorIn(proj, dir, env);
-  assert.match(after, /^hooks {9}project: absent · global: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)$/m, after);
+  assert.match(after, /^hooks {9}project: absent · global: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)$/m, after);
 });
 
 test('rules --global --agents writes the skill (and both agent definitions) under CLAUDE_CONFIG_DIR, and doctor counts them at global scope', () => {
@@ -256,8 +257,11 @@ test('update --check hints a stale skill with the --agents refresh command, and 
 function guard(version = '1.2.3') {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-guard-kt-'));
   const path = join(dir, 'omelette-guard.mjs');
-  const template = readFileSync(GUARD, 'utf8');
-  writeFileSync(path, template.replace('{{marker}}', HOOK_MARKER(version)));
+  // Through the renderer `rules --hooks` itself uses: the shipped template
+  // carries more than one placeholder — `{{marker}}` and, since 0.3.4, the
+  // `{{handoff}}` JSON literal — and it is not runnable until every one of them
+  // is filled in.
+  writeFileSync(path, renderHookFile(HOOK_FILES[0], version));
   return path;
 }
 

@@ -53,7 +53,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENT_SETTINGS_SCHEMA, coerce, loadFleetConfig } from './config.mjs';
+import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, coerce, handoffSettings, loadFleetConfig } from './config.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -311,12 +311,31 @@ const HOOK_MARKER_RE = markerPattern(HOOK_MARKER);
 export const HOOK_FILES = ['omelette-guard.mjs'];
 export const HOOK_TEMPLATE_DIR = join(ROOT, 'hooks');
 
-/** One hook script's full text for this package version. */
-export function renderHookFile(name, version) {
+/**
+ * One hook script's full text for this package version AND the operator's
+ * handoff settings. The script is self-contained by design — it is copied into
+ * a project and run as one file — so the `handoff` block cannot be imported
+ * into it and is substituted instead, as a JSON literal on a line of its own
+ * (`parseHookHandoff` below is the inverse, and `doctor` uses it to report what
+ * the INSTALLED script will actually do).
+ *
+ * The settings default to the live fleet config, so every caller that just
+ * wants "the guard as it should be right now" gets it; a partial object is
+ * filled in from the schema and an invalid value falls back to its default, so
+ * no rendering can produce a script that will not run.
+ */
+export function renderHookFile(name, version, handoff = handoffSettings()) {
   if (!HOOK_FILES.includes(name)) throw new Error(`unknown hook template: ${name}`);
+  const given = isObj(handoff) ? handoff : {};
+  const values = {};
+  for (const [key, spec] of Object.entries(HANDOFF_SCHEMA)) {
+    const c = coerce(spec, given[key]);
+    values[key] = c.ok ? c.value : spec.default;
+  }
   const body = readFileSync(join(HOOK_TEMPLATE_DIR, ...name.split('/')), 'utf8')
     .replaceAll('{{marker}}', HOOK_MARKER(String(version)))
-    .replaceAll('{{version}}', String(version));
+    .replaceAll('{{version}}', String(version))
+    .replaceAll('{{handoff}}', JSON.stringify(values));
   return body.endsWith('\n') ? body : body + '\n';
 }
 
@@ -326,11 +345,69 @@ export function parseHookMarker(text) {
   return m ? m[1] : null;
 }
 
+/**
+ * The rendered handoff block, read back OUT of an installed guard — the inverse
+ * of the substitution above, and the only honest source for `doctor`'s handoff
+ * line: the version marker cannot tell a stale threshold from a current one,
+ * because a changed value renders at the same version.
+ *
+ * A guard that predates the block (0.3.3 and earlier) and a file that is not a
+ * guard both answer null; a value that is out of range answers with the
+ * schema's default, which is exactly what the script itself would do with it.
+ *
+ * @returns {{enabled:boolean, threshold:number, contextWindow:number}|null}
+ */
+const HANDOFF_LITERAL = /^const HANDOFF_CONFIG = (\{[^\n]*\});$/m;
+
+export function parseHookHandoff(text) {
+  const m = HANDOFF_LITERAL.exec(String(text || ''));
+  if (!m) return null;
+  let parsed = null;
+  try { parsed = JSON.parse(m[1]); } catch { return null; }
+  if (!isObj(parsed)) return null;
+  const values = {};
+  for (const [key, spec] of Object.entries(HANDOFF_SCHEMA)) {
+    const c = coerce(spec, parsed[key]);
+    values[key] = c.ok ? c.value : spec.default;
+  }
+  return values;
+}
+
+/**
+ * The context window Claude Code auto-compacts against, in the forms it
+ * documents: a bare integer, `<n>k` or `<n>m`, case-insensitive and decimal
+ * (`500k` is 500 000, `1m` is 1 000 000). Anything else is not a window and is
+ * refused rather than guessed at — a fraction, a separator, a negative, a blank.
+ *
+ * The guard carries its own copy of this parser (it imports nothing from here);
+ * this one is what `doctor` uses, so the two are tested against the same table.
+ */
+export const CONTEXT_WINDOW_ENV = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
+export const CONTEXT_WINDOW_SETTING = 'autoCompactWindow';
+export const CONTEXT_WINDOW_DEFAULT = 200000;
+
+const WINDOW_FORM = /^(\d+)([km])?$/i;
+
+export function parseContextWindow(raw) {
+  if (typeof raw === 'number') return Number.isSafeInteger(raw) && raw > 0 ? raw : null;
+  if (typeof raw !== 'string') return null;
+  const m = WINDOW_FORM.exec(raw.trim());
+  if (!m) return null;
+  const scale = !m[2] ? 1 : m[2].toLowerCase() === 'k' ? 1000 : 1000000;
+  const n = Number(m[1]) * scale;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
 /** Where `rules --hooks` writes: the project's .claude/hooks, or the global one. */
 export const hooksTarget = scopeDir('hooks');
 
-/** The three events the guard serves, in the order doctor reports them wired. */
-export const HOOK_EVENTS = ['PreToolUse', 'PreCompact', 'SessionStart'];
+/**
+ * The five events the guard serves, in the order doctor reports them wired.
+ * The last two are the auto-handoff: `PostToolUse` is where the reminder can
+ * reach the model's context, and `Stop` is the only place a turn can be held
+ * until the handoff is written.
+ */
+export const HOOK_EVENTS = ['PreToolUse', 'PreCompact', 'SessionStart', 'PostToolUse', 'Stop'];
 
 /**
  * QUOTING THE SCRIPT PATH FOR A SHELL, per platform. A hook `command` is a
@@ -361,8 +438,10 @@ const shellQuote = (s, platform) => (platform === 'win32'
  * THE MATCHERS ARE NOT INTERCHANGEABLE. `PreToolUse` is matched against a TOOL
  * name and `SessionStart` against the session's SOURCE — `startup`, `resume`,
  * `clear`, `compact`, `fork` — and only `compact` is a context somebody just
- * lost, which is the one the guard has anything to print into. `PreCompact` is
- * matched on nothing: every compaction is one.
+ * lost, which is the one the guard has anything to print into. The other three
+ * are matched on nothing: every compaction is one, every Stop is one, and a
+ * `PostToolUse` matcher could only skip tools that grow the context exactly the
+ * way the ones it kept do.
  *
  * @returns {string[]} the snippet's lines, together a parseable JSON object.
  */
@@ -372,7 +451,9 @@ export function hookSettingsSnippet(scriptPath, platform = process.platform) {
     '{ "hooks": {',
     `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
     `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
-    `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
+    `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
+    `  "PostToolUse": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
+    `  "Stop": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
   ];
 }
 
@@ -409,7 +490,7 @@ export const KINDS = {
     hint: 'no marker on line 2',
     dir: agentsTarget,
     files: AGENT_FILES,
-    render: (name, version, settings) => renderAgentFile(name, version, settings),
+    render: (name, version, settings) => renderAgentFile(name, version, settings && settings.agents),
   },
   skills: {
     flag: 'agents',
@@ -431,6 +512,6 @@ export const KINDS = {
     hint: 'no marker on line 1',
     dir: hooksTarget,
     files: HOOK_FILES,
-    render: (name, version) => renderHookFile(name, version),
+    render: (name, version, settings) => renderHookFile(name, version, settings && settings.handoff),
   },
 };

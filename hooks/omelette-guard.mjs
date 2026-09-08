@@ -24,6 +24,17 @@
  * every ledger in the project, bounded, and nothing at all on a startup, a
  * resume, a `/clear` or a fork — none of those lost a context.
  *
+ * PostToolUse + Stop — the auto-handoff. The handoff block is written by the
+ * session, by discipline, and the discipline fails exactly when it matters: a
+ * long turn fills the window and auto-compaction fires before anyone thought of
+ * the ledger. So the guard measures the context out of the session transcript's
+ * tail, and past a threshold it says so — on `PostToolUse`, whose
+ * `additionalContext` reaches the model, and once on `Stop`, which is the only
+ * place a turn can be held until the block exists. It nudges once and gates
+ * once per crossing; a session that stops again stops. It is silent unless the
+ * project keeps a `.omelette/ledger-*.md` — that ledger is the opt-in — and
+ * silent inside a sub-agent, which has no ledger of its own.
+ *
  * IT NEVER THROWS AND IT NEVER BLOCKS ANYTHING ELSE. Malformed stdin, an
  * unknown event, a ledger it may not write, stdin past the cap, stdin that
  * never closes: exit 0. A hook that crashes is a session that stops working,
@@ -31,7 +42,8 @@
  *
  * Zero dependencies, Node >= 20, ESM — it is spawned as `node <this file>`.
  */
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, writeSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 // A write to a pipe the harness has stopped reading fails ASYNCHRONOUSLY: the
@@ -326,6 +338,30 @@ const STDIN_DEADLINE_MS = 5000;
 
 const str = (v, fallback = '') => (typeof v === 'string' && v ? v : fallback);
 
+/** A plain object — what every record this guard reads has to be before it is read. */
+const isObject = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
+
+/**
+ * WHAT `rules --hooks` RENDERED HERE. This script imports nothing from the
+ * package — it is copied into a project as one file — so the operator's
+ * `handoff` block arrives as a JSON literal substituted at render time, exactly
+ * the way `{{marker}}` is. `doctor` reads THIS LINE back out of the installed
+ * script, which is how a threshold changed in the config and never re-rendered
+ * is visible instead of merely wrong.
+ */
+const HANDOFF_CONFIG = {{handoff}};
+
+/**
+ * …the same values, defended against a literal somebody edited by hand: out of
+ * range is the built-in, never a throw and never a percentage that cannot fire.
+ */
+const whole = (v, min, max, fallback) => (Number.isInteger(v) && v >= min && v <= max ? v : fallback);
+const AUTO_HANDOFF = {
+  enabled: !isObject(HANDOFF_CONFIG) || HANDOFF_CONFIG.enabled !== false,
+  threshold: whole(isObject(HANDOFF_CONFIG) ? HANDOFF_CONFIG.threshold : null, 50, 99, 90),
+  contextWindow: whole(isObject(HANDOFF_CONFIG) ? HANDOFF_CONFIG.contextWindow : null, 0, Number.MAX_SAFE_INTEGER, 0),
+};
+
 /** The whole event, or null: stdin that never arrives, never parses, never ends or never stops is not an error here. */
 async function readEvent() {
   let raw = '';
@@ -396,8 +432,7 @@ function preCompact(event) {
   const found = ledgerDir(event);
   if (!found) return; // a `.omelette` that is not ours to write: no marker, and nothing to announce
   const line = `\n## Compaction ${new Date().toISOString()} (trigger: ${str(event.trigger, 'unknown')}) — re-read this ledger before continuing\n`;
-  let ledgers = [];
-  try { ledgers = found.exists ? readdirSync(found.dir).filter((f) => /^ledger-.*\.md$/.test(f)).sort() : []; } catch { ledgers = []; }
+  const ledgers = found.exists ? ledgerNames(found.dir) : [];
   for (const name of ledgers) {
     // A ledger we cannot write is not a reason to fail somebody's compaction —
     // and one that is not a REGULAR file is not a ledger at all: lstat (never
@@ -417,6 +452,11 @@ function preCompact(event) {
       if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
     }
   }
+  // The window this session crossed is about to be replaced. Its crossing
+  // described a context that will not exist in a moment — and the sizes it
+  // recorded describe a ledger this very handler has just stamped — so it goes
+  // with it, and the next window crosses on its own terms.
+  resetHandoff(found, event);
   say(process.stdout, `${HANDOFF}\n`);
 }
 
@@ -519,8 +559,7 @@ function sessionStart(event) {
   if (str(event.source) !== 'compact') return;
   const found = ledgerDir(event);
   if (!found || !found.exists) return;
-  let ledgers = [];
-  try { ledgers = readdirSync(found.dir).filter((f) => /^ledger-.*\.md$/.test(f)).sort(); } catch { return; }
+  const ledgers = ledgerNames(found.dir);
   if (!ledgers.length) return;
 
   const buf = Buffer.alloc(LEDGER_READ_MAX);
@@ -554,6 +593,374 @@ function sessionStart(event) {
   if (parts.length) say(process.stdout, parts.join(''));
 }
 
+// ─── the auto-handoff: measure the context, ask for the block, hold one turn ──
+
+/**
+ * A sub-agent's event carries its identity and the main thread's carries none.
+ * Everything below is about the session's own ledger, and a sub-agent has none:
+ * nudging it would spend a delegate's context on a block it must not write.
+ */
+const present = (v) => v !== undefined && v !== null && v !== '';
+const inSubagent = (event) => present(event.agent_id) || present(event.agent_type);
+
+/** Claude Code's own name for the window it auto-compacts against, and the default it documents. */
+const CEILING_ENV = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
+const CEILING_SETTING = 'autoCompactWindow';
+const CEILING_DEFAULT = 200000;
+/** How much of the transcript is read: the answer is always at its end. */
+const TRANSCRIPT_TAIL_MAX = 256 * 1024;
+/** One integer is taken out of a settings file, and even that read is bounded. */
+const SETTINGS_READ_MAX = 1024 * 1024;
+/** The counters that make up the PROMPT that was just sent. `output_tokens` is the answer, not the prompt. */
+const USAGE_KEYS = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
+
+/**
+ * At most `maxBytes` of a file — from `from`, or with `tail` from its END.
+ * Regular files only: lstat first, so a symlink under the name is SEEN, then
+ * O_NOFOLLOW on the open against the race between the two syscalls, then fstat
+ * on the descriptor actually opened. A FIFO is skipped rather than blocking the
+ * read until somebody opens the other end.
+ *
+ * `follow` is the one exception, and it is only ever used for Claude Code's own
+ * settings files: a dotfile setup legitimately keeps those behind a link, one
+ * integer is read out of them, and nothing is ever written through the read.
+ *
+ * @returns {string|null} the bytes as UTF-8, or null when there is nothing here
+ *   this guard may read.
+ */
+function readBounded(path, maxBytes, { tail = false, from = 0, follow = false } = {}) {
+  let fd = null;
+  try {
+    if (!follow && !lstatSync(path).isFile()) return null;
+    fd = openSync(path, constants.O_RDONLY | (follow ? 0 : NOFOLLOW));
+    const st = fstatSync(fd);
+    if (!st.isFile()) return null;
+    const start = tail ? Math.max(from, st.size - maxBytes) : from;
+    const length = Math.max(0, Math.min(maxBytes, st.size - start));
+    if (!length) return '';
+    const buf = Buffer.alloc(length);
+    return buf.subarray(0, readSync(fd, buf, 0, length, start)).toString('utf8');
+  } catch { return null; } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
+  }
+}
+
+/**
+ * `200000`, `500k`, `1m` — the forms Claude Code documents for that window,
+ * case-insensitive and decimal (`k` is 1000, `m` is 1000000). Anything else is
+ * not a window and is refused rather than guessed at: a fraction, a separator,
+ * a negative, a blank. No measurement beats a wrong one.
+ */
+const WINDOW_FORM = /^(\d+)([km])?$/i;
+function parseWindow(raw) {
+  if (typeof raw === 'number') return Number.isSafeInteger(raw) && raw > 0 ? raw : null;
+  if (typeof raw !== 'string') return null;
+  const m = WINDOW_FORM.exec(raw.trim());
+  if (!m) return null;
+  const scale = !m[2] ? 1 : m[2].toLowerCase() === 'k' ? 1000 : 1000000;
+  const n = Number(m[1]) * scale;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * THE CONTEXT FILL: the tokens the model was handed on the last request, which
+ * is what the next one grows from. Claude Code writes one JSON object per line
+ * and only its assistant records carry `message.usage`; the LAST such record is
+ * the newest, and `input + cache_read + cache_creation` is its prompt.
+ *
+ * Only the last 256 KiB are read — a transcript is megabytes and the newest
+ * record is at its end — so the first line of that read is usually half a
+ * record. It simply fails to parse, like any other line that is not one.
+ *
+ * @returns {number|null} null when there is no measurement to be had.
+ */
+function transcriptFill(path) {
+  const text = readBounded(path, TRANSCRIPT_TAIL_MAX, { tail: true });
+  if (text === null) return null;
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith('{')) continue;
+    let rec = null;
+    try { rec = JSON.parse(line); } catch { continue; }
+    const usage = isObject(rec) && isObject(rec.message) ? rec.message.usage : null;
+    if (!isObject(usage)) continue;
+    let fill = 0;
+    for (const key of USAGE_KEYS) {
+      const n = Number(usage[key]);
+      if (Number.isFinite(n) && n > 0) fill += n;
+    }
+    return fill;
+  }
+  return null;
+}
+
+/**
+ * The window the fill is measured against, and WHERE that number came from —
+ * the nudge says so, because "91% of 200000" is only actionable next to the
+ * reason it is 200000. First source that yields a positive integer wins: the
+ * rendered `handoff.contextWindow`, then the variable Claude Code documents,
+ * then `autoCompactWindow` in the USER's own settings (the local file first, as
+ * the client reads them), then Claude Code's 200 000.
+ */
+function contextCeiling(env) {
+  if (AUTO_HANDOFF.contextWindow > 0) return { window: AUTO_HANDOFF.contextWindow, source: 'handoff.contextWindow' };
+  const fromEnv = parseWindow(env[CEILING_ENV]);
+  if (fromEnv) return { window: fromEnv, source: CEILING_ENV };
+  const dir = String(env.CLAUDE_CONFIG_DIR || '').trim() || join(homedir(), '.claude');
+  for (const name of ['settings.local.json', 'settings.json']) {
+    const text = readBounded(join(dir, name), SETTINGS_READ_MAX, { follow: true });
+    if (text === null) continue;
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { continue; }
+    const value = isObject(parsed) ? parseWindow(parsed[CEILING_SETTING]) : null;
+    if (value) return { window: value, source: CEILING_SETTING };
+  }
+  return { window: CEILING_DEFAULT, source: 'default' };
+}
+
+/**
+ * How full the context is, as a whole percent, FLOORED — 89.9 % is 89, and the
+ * threshold is crossed when it is really crossed.
+ *
+ * @returns {object|null} `percent`, `fill`, `window` and `source` — or null
+ *   whenever anything at all was unreadable: no measurement is the one answer
+ *   that never blocks a turn on a guess. The shape is spelled out rather than
+ *   typed, because a doubled brace in this file is a render-time placeholder.
+ */
+function measure(event, env = process.env) {
+  const path = str(event.transcript_path);
+  if (!path) return null;
+  const fill = transcriptFill(path);
+  if (fill === null) return null;
+  const ceiling = contextCeiling(env);
+  return { percent: Math.floor((fill * 100) / ceiling.window), fill, window: ceiling.window, source: ceiling.source };
+}
+
+/** This project's ledgers, sorted — the same set PreCompact stamps and SessionStart prints. */
+function ledgerNames(dir) {
+  try { return readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).sort(); } catch { return []; }
+}
+
+/** Their sizes at this instant: the offsets a later read measures "appended since" against. */
+function ledgerSizes(dir, names) {
+  const sizes = {};
+  for (const name of names) {
+    try { const st = lstatSync(join(dir, name)); if (st.isFile()) sizes[name] = st.size; } catch { /* gone counts as 0 */ }
+  }
+  return sizes;
+}
+
+const STATE_FILE = 'handoff-state.json';
+const STATE_READ_MAX = 256 * 1024;
+const STATE_MAX_ENTRIES = 64;
+const STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** How far past a ledger's recorded size the freshness scan reads. */
+const APPEND_READ_MAX = 64 * 1024;
+/** The heading that counts as a handoff — the grammar SessionStart already prints on. */
+const FRESH_HANDOFF = /^##\s+handoff\b/im;
+
+/**
+ * THE STATE, or the fact that there is none to be had. One entry per session:
+ * when it crossed, how big every ledger was at that moment, and whether the
+ * reminder and the gate have already fired.
+ *
+ * A symlink, a directory or a FIFO under that name is not ours to read and
+ * never ours to rename over — that is `usable: false`, and the caller says
+ * nothing at all rather than write through it. So is a file past the read cap
+ * and one the open or the read refuses. A regular file of OURS whose JSON no
+ * longer parses is a different case: it is rewritten from an empty map, because
+ * one corrupt byte must not disable the mechanism for a project forever.
+ *
+ * @returns {object} `state` (the map) and `usable` (whether it may be written).
+ */
+function readState(dir) {
+  const path = join(dir, STATE_FILE);
+  let st = null;
+  try { st = lstatSync(path); } catch (e) { return { state: {}, usable: !!e && e.code === 'ENOENT' }; }
+  if (!st.isFile() || st.size > STATE_READ_MAX) return { state: {}, usable: false };
+  const text = readBounded(path, STATE_READ_MAX);
+  if (text === null) return { state: {}, usable: false };
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch { return { state: {}, usable: true }; }
+  return { state: isObject(parsed) ? parsed : {}, usable: true };
+}
+
+/**
+ * The state back to disk: 0600, a temporary file opened with O_EXCL and
+ * O_NOFOLLOW, then a rename — so a reader never sees half a map and a planted
+ * link is never written through. A tmp file that is already there belongs to
+ * somebody else and is left exactly as it is.
+ *
+ * Pruned on every write, because this file is one per project and sessions are
+ * many: entries older than 7 days go, and the newest 64 survive. `keep` is the
+ * session being written and survives both, whatever its age says.
+ *
+ * A write that fails is silent. A hook that cannot record its own note is still
+ * a hook that must not fail somebody's turn.
+ */
+function writeState(dir, state, keep) {
+  const now = Date.now();
+  const age = (entry) => {
+    const t = Date.parse(isObject(entry) ? entry.crossedAt : '');
+    return Number.isFinite(t) ? now - t : Infinity;
+  };
+  const kept = Object.entries(state)
+    .filter(([id, entry]) => isObject(entry) && (id === keep || age(entry) <= STATE_MAX_AGE_MS))
+    .sort((a, b) => (a[0] === keep ? -1 : b[0] === keep ? 1 : age(a[1]) - age(b[1])))
+    .slice(0, STATE_MAX_ENTRIES);
+  const next = {};
+  for (const [id, entry] of kept) next[id] = entry;
+
+  const path = join(dir, STATE_FILE);
+  const tmp = `${path}.${process.pid}.tmp`;
+  let fd = null;
+  let created = false;
+  try {
+    fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
+    created = true;
+    writeSync(fd, JSON.stringify(next));
+    closeSync(fd);
+    fd = null;
+    renameSync(tmp, path);
+    created = false; // the rename took the name with it
+  } catch { /* a note we could not write is not a reason to fail a turn */ } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
+    if (created) { try { unlinkSync(tmp); } catch { /* nothing to clean up */ } }
+  }
+}
+
+/**
+ * Has a handoff been APPENDED since the crossing? Every ledger is read from the
+ * size it had at that moment — at most 64 KiB of it — and a `^## Handoff` line
+ * in those bytes is the block. Nothing else counts: a `Ruling:` line is not a
+ * handoff and neither is the `## Compaction` stamp, and a block written before
+ * the crossing sits behind the offset where it belongs.
+ *
+ * A ledger created after the crossing has no recorded size and counts from its
+ * first byte, which is the whole of it.
+ */
+function freshHandoff(dir, names, entry) {
+  const recorded = isObject(entry) && isObject(entry.ledgers) ? entry.ledgers : {};
+  for (const name of names) {
+    const size = recorded[name];
+    const from = Number.isInteger(size) && size > 0 ? size : 0;
+    const text = readBounded(join(dir, name), APPEND_READ_MAX, { from });
+    if (text && FRESH_HANDOFF.test(text)) return true;
+  }
+  return false;
+}
+
+/** The ledger the messages point at: the one, when there is one — otherwise the directory. */
+const ledgerTarget = (names) => (names.length === 1 ? `.omelette/${names[0]}` : 'one of the ledgers in .omelette/');
+
+const nudgeText = (m, names) => `omelette-fleet: context at ${m.percent}% of ${m.window} tokens (${m.source}). `
+  + `Append a \`## Handoff\` block to ${ledgerTarget(names)} now — where the work stands, open findings, `
+  + 'agents in flight, next action — auto-compaction is close.';
+
+/**
+ * Everything both handlers need, or null when this session is not one the guard
+ * has anything to say about: the block switched off, a sub-agent, an event with
+ * no session id, a `.omelette` that is not ours or is not there, NO LEDGER AT
+ * ALL (the ledger is how a project opts in), a state file we may not use, or no
+ * measurement.
+ */
+function handoffContext(event) {
+  if (!AUTO_HANDOFF.enabled) return null;
+  if (inSubagent(event)) return null;
+  const id = str(event.session_id);
+  if (!id) return null;
+  const found = ledgerDir(event);
+  if (!found || !found.exists) return null;
+  const names = ledgerNames(found.dir);
+  if (!names.length) return null;
+  const { state, usable } = readState(found.dir);
+  if (!usable) return null;
+  const m = measure(event);
+  if (!m) return null;
+  return { id, dir: found.dir, names, state, entry: isObject(state[id]) ? state[id] : null, m };
+}
+
+/**
+ * THE NUDGE. Past the threshold, once per crossing, one JSON object whose
+ * `additionalContext` Claude Code puts into the session's context — which is
+ * the whole reason this lives on `PostToolUse` and not on `PreCompact`, whose
+ * stdout is promised nowhere and which runs after the decision to compact.
+ *
+ * The crossing is recorded and the reminder said in the SAME run: auto-
+ * compaction is close by then, and the next tool call may never come. Below the
+ * threshold the crossing is dropped instead — a window that fell back was
+ * compacted or trimmed, and the sizes it recorded describe a context that is
+ * gone.
+ */
+function postToolUse(event) {
+  const ctx = handoffContext(event);
+  if (!ctx) return;
+  const { id, dir, names, state, m } = ctx;
+  if (m.percent < AUTO_HANDOFF.threshold) {
+    if (ctx.entry) { delete state[id]; writeState(dir, state, null); }
+    return;
+  }
+  const entry = ctx.entry || {
+    crossedAt: new Date().toISOString(), ledgers: ledgerSizes(dir, names), nudged: false, blocked: false,
+  };
+  const quiet = entry.nudged === true || freshHandoff(dir, names, entry);
+  if (quiet && ctx.entry) return; // the crossing is recorded and said: nothing changed, nothing written
+  if (!quiet) entry.nudged = true;
+  state[id] = entry;
+  writeState(dir, state, id);
+  if (quiet) return;
+  say(process.stdout, `${JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: nudgeText(m, names) },
+  })}\n`);
+}
+
+const blockText = (m, names) => `omelette-fleet: context at ${m.percent}% of ${m.window} tokens and no \`## Handoff\` `
+  + `block has been appended to ${ledgerTarget(names)} since the threshold was crossed. `
+  + 'Append it now (state, open findings, agents in flight, next action), then stop.';
+
+/** One session's crossing, dropped. Nothing else in the file is touched, and a state we may not use is left alone. */
+function resetHandoff(found, event) {
+  if (!found.exists) return;
+  const id = str(event.session_id);
+  if (!id) return;
+  const { state, usable } = readState(found.dir);
+  if (!usable || !isObject(state[id])) return;
+  delete state[id];
+  writeState(found.dir, state, null);
+}
+
+/**
+ * THE GATE. One turn, once per crossing: `decision: "block"` is the documented
+ * way a Stop hook refuses to let a turn end, and the reason reaches the model.
+ *
+ * Skipped when Claude Code is already continuing because of a stop hook
+ * (`stop_hook_active`), inside a sub-agent, and when there is no entry for this
+ * session — the threshold was never crossed, and a gate that fires on a session
+ * the guard never watched would be a guess.
+ *
+ * The measurement is RE-TAKEN here: the session may have written the handoff
+ * since the nudge, and it may have compacted since the crossing. A fresh block
+ * means no block; a context back under the threshold clears the crossing
+ * instead of holding a turn for a window that no longer exists.
+ *
+ * `blocked` is then set and the gate is done. If the session stops again with
+ * still no handoff, it stops: this guard reminds, it does not imprison.
+ */
+function stop(event) {
+  if (event.stop_hook_active) return;
+  const ctx = handoffContext(event);
+  if (!ctx) return;
+  const { id, dir, names, state, entry, m } = ctx;
+  if (!entry) return;
+  if (m.percent < AUTO_HANDOFF.threshold) { delete state[id]; writeState(dir, state, null); return; }
+  if (entry.blocked === true) return;
+  if (freshHandoff(dir, names, entry)) return;
+  entry.blocked = true;
+  writeState(dir, state, id);
+  say(process.stdout, `${JSON.stringify({ decision: 'block', reason: blockText(m, names) })}\n`);
+}
+
 const event = await readEvent();
 // Wrapped whole: nothing this guard reads — a cwd that is not a directory, a
 // ledger that changed under it, a stream that went away — may reach the harness
@@ -565,6 +972,8 @@ try {
     if (name === 'PreToolUse') preToolUse(event);
     else if (name === 'PreCompact') preCompact(event);
     else if (name === 'SessionStart') sessionStart(event);
+    else if (name === 'PostToolUse') postToolUse(event);
+    else if (name === 'Stop') stop(event);
     // Anything else: this guard has no opinion about it.
   }
 } catch { /* a guard that crashes is a session that stops working */ }

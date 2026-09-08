@@ -49,10 +49,10 @@ import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
-import { AGENT_SETTINGS_SCHEMA, KEY_SCHEMA, coerce, configPath, fleetHome, unitConfig, writeFleetConfig } from '../core/config.mjs';
+import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, coerce, configPath, fleetHome, handoffSettings, unitConfig, writeFleetConfig } from '../core/config.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import { HOOK_EVENTS, HOOK_FILES, KINDS, agentSettings, hookSettingsSnippet, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
+import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, agentSettings, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
 import { resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -165,20 +165,22 @@ const COMMANDS = {
     ],
   },
   show: {
-    args: '[<unit> | agents]',
+    args: '[<unit> | agents | handoff]',
     body: [
       'Every config key for one unit or all of them: value, where it came',
       'from (default / file:defaults / file / env:NAME), and the ceiling.',
-      '`agents` is the sub-agent block `rules --agents` renders from.',
+      '`agents` is the sub-agent block `rules --agents` renders from, and',
+      '`handoff` the auto-handoff block `rules --hooks` renders into the guard.',
     ],
   },
   set: {
-    args: '<unit>.<key>=<value> | agents.<agent>.<key>=<value> [...]',
+    args: '<unit>.<key>=<value> | agents.<agent>.<key>=<value> | handoff.<key>=<value> [...]',
     body: [
       'Change keys in <home>/fleet.config.json. Unknown units, agents,',
       'unknown keys and invalid values are refused; the rest of the file',
       'is kept. An agent setting reaches a session on the next',
-      '`omelette-fleet rules --agents`, which re-renders the definitions.',
+      '`omelette-fleet rules --agents`, and a handoff setting on the next',
+      '`omelette-fleet rules --hooks`, which re-render those files.',
     ],
   },
   call: {
@@ -662,6 +664,30 @@ function readClientEnv(name, { cwd = process.cwd(), env = process.env } = {}) {
   return { value: null, source: null };
 }
 
+/**
+ * One TOP-LEVEL setting out of Claude Code's own settings files — `readClientEnv`
+ * reads the `env` block, and this reads the file's own keys, which is where
+ * `autoCompactWindow` lives. The user scope only, local file first, exactly as
+ * the guard resolves it: a line describing a resolution the guard would not
+ * make is worse than no line.
+ *
+ * PARSED, NEVER WRITTEN, like every other settings read in this file.
+ *
+ * @returns {{value: string|null, source: string|null}}
+ */
+function readClientSetting(name, { global = true, cwd = process.cwd(), env = process.env } = {}) {
+  for (const { path } of settingsTargets({ global, cwd, env }).slice().reverse()) {
+    let parsed = null;
+    try { parsed = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
+    if (!isObj(parsed)) continue;
+    const raw = parsed[name];
+    if (raw === undefined || raw === null) continue;
+    if (!['string', 'number'].includes(typeof raw)) continue;
+    return { value: String(raw), source: path };
+  }
+  return { value: null, source: null };
+}
+
 /** A whole number of milliseconds, or null — a variable holding "30m" is not a bound. */
 const msValue = (raw, { min = 1 } = {}) => {
   const n = Number(raw);
@@ -848,6 +874,20 @@ function configRows(name, cfg, indent = '  ') {
 function agentRows(settings, indent = '  ') {
   const rows = Object.entries(AGENT_SETTINGS_SCHEMA).flatMap(([role, schema]) => Object.keys(schema)
     .map((key) => [`${role}.${key}`, fmtValue(settings[role][key]), settings.sources[role][key]]));
+  const w = Math.max(...rows.map((r) => r[0].length), 5);
+  const vw = Math.max(...rows.map((r) => r[1].length), 5);
+  return [
+    `${indent}${pad('KEY', w)}  ${pad('VALUE', vw)}  SOURCE`,
+    ...rows.map(([key, value, source]) => `${indent}${pad(key, w)}  ${pad(value, vw)}  ${source}`),
+  ];
+}
+
+/**
+ * The `handoff` block for `show`, in the same `key value source` shape as the
+ * rest of this file's tables.
+ */
+function handoffRows(settings, indent = '  ') {
+  const rows = Object.keys(HANDOFF_SCHEMA).map((key) => [key, fmtValue(settings[key]), settings.sources[key]]);
   const w = Math.max(...rows.map((r) => r[0].length), 5);
   const vw = Math.max(...rows.map((r) => r[1].length), 5);
   return [
@@ -1368,13 +1408,20 @@ function pruneEmptySkillDir(path) {
  * says which flag writes a kind, where its files live and how they render. The
  * whole command is this list plus syncManagedFile.
  */
-function managedFiles({ global = false, agents = false, hooks = false, version, settings } = {}) {
+function managedFiles({ global = false, agents = false, hooks = false, version, settings, handoff } = {}) {
   const asked = { agents: !!agents, hooks: !!hooks };
   // Always an explicit settings object: `renderAgentFile`'s own default would
   // read the config a second time, and a caller that forgot the argument would
   // render defaults with nothing to show for it. Only when it is needed, so a
   // run that writes no agent definition never reads the fleet config.
-  const resolved = agents ? (settings || agentSettings()) : undefined;
+  // Each kind renders from the CURRENT config — the agent block for the
+  // definitions, the handoff block for the guard — and only when this run
+  // actually writes that kind, so a `rules` run that writes neither never reads
+  // the fleet config at all.
+  const resolved = {
+    agents: agents ? (settings || agentSettings()) : undefined,
+    handoff: hooks ? (handoff || handoffSettings()) : undefined,
+  };
   const files = [];
   for (const [kind, spec] of Object.entries(KINDS)) {
     if (spec.flag !== null && !asked[spec.flag]) continue;
@@ -1412,7 +1459,12 @@ async function cmdRules(argv) {
   // as their own value.
   const settings = flags.agents ? agentSettings() : undefined;
   if (settings && !flags.remove) settings.warnings.forEach((w) => err(`omelette-fleet rules: ${w}`));
-  const files = managedFiles({ global: !!flags.global, agents: !!flags.agents, hooks: !!flags.hooks, version: PKG.version, settings });
+  // The guard's three handoff values are substituted into the script the same
+  // way, and for the same reason a bad one is said out loud rather than read
+  // back later as the operator's own number.
+  const handoff = flags.hooks ? handoffSettings() : undefined;
+  if (handoff && !flags.remove) handoff.warnings.forEach((w) => err(`omelette-fleet rules: ${w}`));
+  const files = managedFiles({ global: !!flags.global, agents: !!flags.agents, hooks: !!flags.hooks, version: PKG.version, settings, handoff });
 
   // --print touches nothing at all. Each rendered file already ends in a
   // newline, so out() must not add a second one.
@@ -1718,6 +1770,61 @@ const hooksLabel = (r, { wired, unreadable, matcherProblem }) => {
 };
 
 /**
+ * The window the installed guard will measure against, and where that number
+ * comes from — the same precedence the script itself applies, because this line
+ * exists to say what the hook will do rather than what the config says.
+ */
+function resolveContextWindow(contextWindow, { cwd = process.cwd(), env = process.env } = {}) {
+  if (Number.isInteger(contextWindow) && contextWindow > 0) return { window: contextWindow, source: 'handoff.contextWindow' };
+  const fromEnv = parseContextWindow(env[CONTEXT_WINDOW_ENV]);
+  if (fromEnv) return { window: fromEnv, source: CONTEXT_WINDOW_ENV };
+  const setting = readClientSetting(CONTEXT_WINDOW_SETTING, { global: true, cwd, env });
+  const fromFile = setting.value === null ? null : parseContextWindow(setting.value);
+  if (fromFile) return { window: fromFile, source: CONTEXT_WINDOW_SETTING };
+  return { window: CONTEXT_WINDOW_DEFAULT, source: 'default' };
+}
+
+/**
+ * THE AUTO-HANDOFF LINE: what the INSTALLED guard will do, read out of the
+ * script itself. The values are rendered into it by `rules --hooks`, and the
+ * version marker cannot tell a stale threshold from a current one — a changed
+ * value renders at the same version — so the config is not the source here.
+ * The project's guard first, then the global one, because that is the order a
+ * session would pick them up in.
+ *
+ * A guard that carries no rendered block (0.3.3 and earlier) gets NO line: the
+ * `hooks` line already asks for a refresh, and printing a value the script does
+ * not contain is exactly what reading it back exists to prevent.
+ *
+ * @returns {string|null} the line's text, or null when there is nothing to say.
+ */
+function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
+  let rendered = null;
+  for (const global of [false, true]) {
+    const { dir } = KINDS.hooks.dir({ global, cwd, env });
+    let text;
+    try { text = readFileSync(join(dir, HOOK_FILES[0]), 'utf8'); } catch { continue; }
+    if (!KINDS.hooks.parse(text)) continue; // somebody else's script says nothing about ours
+    rendered = parseHookHandoff(text);
+    if (rendered) break;
+  }
+  if (!rendered) return null;
+
+  // The ledger is the opt-in: with none, the hook measures nothing and says
+  // nothing, and an operator reading "nudge at 90%" would expect otherwise.
+  let ledgers = 0;
+  try {
+    const dir = join(cwd, '.omelette');
+    const st = lstatSync(dir);
+    if (st.isDirectory() && !st.isSymbolicLink()) ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).length;
+  } catch { /* absent is the normal case */ }
+  const found = ledgers ? `ledgers: ${ledgers}` : 'ledgers: none (hook silent — start .omelette/ledger-<plan>.md)';
+  if (!rendered.enabled) return `nudge off (handoff.enabled=false) · Stop gate off · ${found}`;
+  const ceiling = resolveContextWindow(rendered.contextWindow, { cwd, env });
+  return `nudge at ${rendered.threshold}% of ${ceiling.window} (${ceiling.source}) · Stop gate on · ${found}`;
+}
+
+/**
  * The ONE thing to do next, or null when nothing is missing — the first-run
  * path in the order it has to happen: register the servers, write the project
  * files, wire the guard up. It is INFORMATIONAL and never a fault: a machine
@@ -1883,6 +1990,11 @@ async function cmdDoctor(argv) {
   // The one managed kind that is inert until something else names it: the wiring
   // lives in settings.json, which doctor reads and nothing here ever writes.
   out(`hooks         ${dirReport('hooks', PKG.version).map((r) => `${r.scope}: ${hooksLabel(r, hookWiringAt({ global: r.scope === 'global' }))}`).join(' · ')}`);
+  // What the installed guard will do about the handoff — read out of the script
+  // itself, so a threshold changed in the config and never re-rendered reads as
+  // the value that is actually in force.
+  const handoff = handoffReport();
+  if (handoff) out(`handoff       ${handoff}`);
   // The client's own two walls, against what the enabled units can take.
   // Informational, exactly like the lines above it: an operator whose client
   // gives up at 900 s on a 1800 s unit has a working machine and a wall.
@@ -1959,15 +2071,16 @@ function cmdShow(argv) {
   const { positional, errors } = parseArgv(argv, {});
   if (positional.length > 1) errors.push(`unexpected argument: ${positional[1]}`);
   const only = positional[0];
-  if (only && only !== 'agents' && !UNITS[only]) {
-    errors.push(`unknown unit "${only}" — known units: ${UNIT_ORDER.join(', ')} (or "agents" for the sub-agent block)`);
+  const BLOCKS = ['agents', 'handoff'];
+  if (only && !BLOCKS.includes(only) && !UNITS[only]) {
+    errors.push(`unknown unit "${only}" — known units: ${UNIT_ORDER.join(', ')} (or "agents" / "handoff" for the top-level blocks)`);
   }
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet show: ${e}`)); return 1; }
 
   const path = configPath();
   out(`fleet config  ${path}${existsSync(path) ? '' : ' (absent — built-in defaults in force)'}`);
   out();
-  if (only !== 'agents') {
+  if (!only || UNITS[only]) {
     for (const name of only ? [only] : UNIT_ORDER) {
       const cfg = cfgFor(name);
       out(`${name}`);
@@ -1988,18 +2101,31 @@ function cmdShow(argv) {
     out('  note     `omelette-fleet rules --agents` renders these into .claude/agents/.');
     out();
   }
+  // The auto-handoff is config too, and it reaches a session the same way the
+  // agent block does: not until the file it renders is written again.
+  if (!only || only === 'handoff') {
+    const settings = handoffSettings();
+    out('handoff');
+    for (const line of handoffRows(settings, '  ')) out(line);
+    for (const w of settings.warnings) out(`  warning  ${w}`);
+    out('  note     `omelette-fleet rules --hooks` renders these into .claude/hooks/omelette-guard.mjs.');
+    out();
+  }
   return 0;
 }
 
 /** Both dotted forms `set` accepts, in one place: the usage line and every refusal quote it. */
-const SET_SHAPE = '<unit>.<key>=<value> or agents.<agent>.<key>=<value>';
+const SET_SHAPE = '<unit>.<key>=<value>, agents.<agent>.<key>=<value> or handoff.<key>=<value>';
 
-const describeSpec = (spec) => (
-  spec.type === 'enum' ? spec.values.join(' | ')
-    : spec.type === 'posint' ? 'a positive integer (a whole number — 0.5 and 1.9 are refused, not rounded)'
-      : spec.type === 'boolean' ? 'true | false'
-        : spec.type === 'line' ? 'a single printable line (no newline, tab or other control character)'
-          : 'a string');
+const describeSpec = (spec) => {
+  const range = spec.min !== undefined && spec.max !== undefined ? ` from ${spec.min} to ${spec.max}` : '';
+  return spec.type === 'enum' ? spec.values.join(' | ')
+    : spec.type === 'posint' ? `a positive integer${range} (a whole number — 0.5 and 1.9 are refused, not rounded)`
+      : spec.type === 'nonneg' ? `a whole number 0 or above${range}`
+        : spec.type === 'boolean' ? 'true | false'
+          : spec.type === 'line' ? 'a single printable line (no newline, tab or other control character)'
+            : 'a string';
+};
 
 /** Read the config file as bytes, not through the cache: `set` rewrites it and must not lose keys. */
 function readConfigRaw(env = process.env) {
@@ -2035,6 +2161,7 @@ function cmdSet(argv) {
 
   const assignments = [];      // units.<unit>.<key>
   const agentAssignments = []; // agents.<role>.<key>
+  const handoffAssignments = []; // handoff.<key>
   for (const a of positional) {
     const eq = a.indexOf('=');
     if (eq < 0) { errors.push(`"${a}" is not ${SET_SHAPE}`); continue; }
@@ -2051,6 +2178,17 @@ function cmdSet(argv) {
       const c = coerce(schema[key], raw);
       if (!c.ok) { errors.push(`invalid value for agents.${role}.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(schema[key])}`); continue; }
       agentAssignments.push({ role, key, value: c.value });
+      continue;
+    }
+    // `handoff` is the other top-level block, and it is one level shallower
+    // than `agents`: the guard is one file with three settings, not a role.
+    if (parts[0].toLowerCase() === 'handoff') {
+      if (parts.length !== 2 || parts.some((p) => !p)) { errors.push(`"${a}" is not handoff.<key>=<value>`); continue; }
+      const key = parts[1];
+      if (!(key in HANDOFF_SCHEMA)) { errors.push(`unknown key "${key}" for the handoff block — known keys: ${Object.keys(HANDOFF_SCHEMA).join(', ')}`); continue; }
+      const c = coerce(HANDOFF_SCHEMA[key], raw);
+      if (!c.ok) { errors.push(`invalid value for handoff.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(HANDOFF_SCHEMA[key])}`); continue; }
+      handoffAssignments.push({ key, value: c.value });
       continue;
     }
     if (parts.length !== 2 || parts.some((p) => !p)) { errors.push(`"${a}" is not ${SET_SHAPE}`); continue; }
@@ -2093,6 +2231,9 @@ function cmdSet(argv) {
       }
     }
   }
+  if (handoffAssignments.length && file.config.handoff !== undefined && !isObj(file.config.handoff)) {
+    shape.push(`"handoff" is ${jsonKind(file.config.handoff)}, not an object`);
+  }
   if (shape.length) {
     for (const m of shape) err(`omelette-fleet set: ${file.path}: ${m}`);
     err('omelette-fleet set: fix the file by hand first — refusing to replace it.');
@@ -2102,6 +2243,7 @@ function cmdSet(argv) {
   // Old values are the EFFECTIVE ones a unit would see, so a shadowing env var stays visible.
   const before = assignments.length ? new Map(UNIT_ORDER.map((n) => [n, cfgFor(n)])) : null;
   const beforeAgents = agentAssignments.length ? agentSettings() : null;
+  const beforeHandoff = handoffAssignments.length ? handoffSettings() : null;
   const next = JSON.parse(JSON.stringify(file.config));
   if (assignments.length) {
     next.units = isObj(next.units) ? next.units : {};
@@ -2116,6 +2258,10 @@ function cmdSet(argv) {
       next.agents[a.role] = isObj(next.agents[a.role]) ? next.agents[a.role] : {};
       next.agents[a.role][a.key] = a.value;
     }
+  }
+  if (handoffAssignments.length) {
+    next.handoff = isObj(next.handoff) ? next.handoff : {};
+    for (const a of handoffAssignments) next.handoff[a.key] = a.value;
   }
   const written = writeFleetConfig(next);
 
@@ -2139,6 +2285,13 @@ function cmdSet(argv) {
   // The definitions on disk were rendered from the OLD value: until they are
   // re-rendered, the config and what the session reads disagree.
   if (agentAssignments.length) out('  note: `omelette-fleet rules --agents` re-renders the definitions with the new value.');
+  for (const a of handoffAssignments) {
+    out(`handoff.${a.key}  ${fmtValue(beforeHandoff[a.key])} [${beforeHandoff.sources[a.key]}] → ${fmtValue(a.value)} [file]`);
+  }
+  // The guard on disk was rendered from the OLD value: until it is re-rendered,
+  // the config and the hook that is actually running disagree — and `doctor`
+  // reports the hook's value, not this one.
+  if (handoffAssignments.length) out('  note: `omelette-fleet rules --hooks` re-renders the guard with the new value.');
   out();
   out(`wrote ${written}`);
   return 0;

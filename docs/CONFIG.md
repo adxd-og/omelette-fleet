@@ -22,6 +22,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
     "coder":  { "model": "opus", "effort": "xhigh" },
     "tester": { "model": "sonnet", "effort": "xhigh", "maxTurns": 80 }
   },
+  "handoff": { "enabled": true, "threshold": 90, "contextWindow": 0 },
   "units": {
     "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
     "grok":   { "enabled": true, "mode": "read-only", "timeoutS": 1800, "maxTurns": 30 },
@@ -30,7 +31,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 }
 ```
 
-`defaults` applies to every unit; `units.<unit>` overrides it for one unit. Both accept the same keys. `agents` is a separate top-level block that has nothing to do with the units — it configures the Claude Code sub-agent definitions this package ships, and is described [below](#agent-settings). A `version` higher than 1 is accepted with a warning — known keys still apply, unknown ones are ignored.
+`defaults` applies to every unit; `units.<unit>` overrides it for one unit. Both accept the same keys. `agents` is a separate top-level block that has nothing to do with the units — it configures the Claude Code sub-agent definitions this package ships, and is described [below](#agent-settings). `handoff` is the third top-level block and configures the guard hook's auto-handoff, described [below](#handoff-settings). A `version` higher than 1 is accepted with a warning — known keys still apply, unknown ones are ignored.
 
 ### Top-level settings
 
@@ -71,6 +72,29 @@ agents.tester.maxTurns  80 [default] → 120 [file]
 ```
 
 Validation is deliberately forgiving in one direction: an unknown agent, an unknown key or an invalid value in the file is a **warning**, and the built-in default is used — because the alternative is `rules --agents` refusing to write a definition the session needs. Through `set` the same mistakes are refused outright and nothing is written. There are no environment overrides for this block.
+
+### Handoff settings
+
+The `handoff` block configures the other managed file that is rendered rather than read at call time: the guard hook's auto-handoff, which asks for the `## Handoff` block once the session's context passes a threshold and holds one `Stop` until it is written.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `handoff.enabled` | boolean | `true` | `false` renders a guard whose `PostToolUse` and `Stop` handlers do nothing at all |
+| `handoff.threshold` | integer 50–99 | `90` | Percent of the context window at which the reminder fires. Below 50 it arrives before there is anything to hand off; 100 would never arrive |
+| `handoff.contextWindow` | integer ≥ 0 | `0` | The window to measure against. **`0` means resolve it at run time**: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, then `autoCompactWindow` in your Claude Code user settings (`~/.claude/settings.json` or `$CLAUDE_CONFIG_DIR`, the `.local` file first), then Claude Code's 200 000. Both of those accept the `500k` / `1m` forms |
+
+The guard imports nothing from this package — it is one file copied into a project — so these three values are **substituted into the script** at `rules --hooks` time, exactly the way the agent definitions get theirs. A change here reaches a session on the next re-render, and not before:
+
+```bash
+omelette-fleet show handoff                 # values and where each came from
+omelette-fleet set handoff.threshold=85
+omelette-fleet rules --hooks                # re-render the guard, then paste nothing: the wiring is unchanged
+omelette-fleet doctor | grep '^handoff'     # what the INSTALLED guard will do
+```
+
+`doctor` reads the numbers back out of the installed script rather than out of this file, because the version marker cannot tell a stale threshold from a current one — a changed value renders at the same version. So `handoff       nudge at 90% of 200000 (default) · Stop gate on · ledgers: 1` is a statement about the hook, and `set` without `rules --hooks` visibly does not move it. The ceiling's source is named in parentheses: `handoff.contextWindow`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `autoCompactWindow` or `default`.
+
+Two things the block cannot switch on: the hook is silent unless the project keeps a `.omelette/ledger-*.md` (that file is the opt-in, and `doctor` says `ledgers: none (hook silent — start .omelette/ledger-<plan>.md)` when there is none), and it is silent inside a sub-agent, which has no ledger of its own. Validation is the same as everywhere else: an invalid value is a warning and the default, and `set` refuses it outright.
 
 ## Keys
 
@@ -172,7 +196,7 @@ An invalid value does not poison the key — it warns and falls through to the n
 
 ### Editing with `set`
 
-`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command, and `agents` is the only word accepted in the first position that is not a unit name. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
+`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command. A two-part path with `handoff` in front — `omelette-fleet set handoff.threshold=85` — edits the [handoff block](#handoff-settings); `agents` and `handoff` are the only words accepted in the first position that are not unit names. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
 
 ```
 codex.timeoutS  600 [default] → 900 [file]

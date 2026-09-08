@@ -125,7 +125,7 @@ test('doctor recognises a guard wired through the WINDOWS-quoted snippet, run on
   // make a real doctor run (on THIS host's platform) report it as unwired.
   assert.match(
     out,
-    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m,
+    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)/m,
     `a win32-quoted, correctly-targeted snippet must still read as wired:\n${out}`,
   );
 });

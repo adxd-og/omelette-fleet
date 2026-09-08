@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   unitConfig, effectiveMode, allowWriteUnits, loadFleetConfig, writeFleetConfig, fleetHome, fleetSettings,
-  coerce, AGENT_SETTINGS_SCHEMA, CONFIG_VERSION, KEY_SCHEMA,
+  coerce, AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, handoffSettings, CONFIG_VERSION, KEY_SCHEMA,
 } from '../core/config.mjs';
 
 function home(config) {
@@ -281,4 +281,72 @@ test('the result spool has three keys, resolved like every other one', () => {
   assert.equal(bad.values.resultsKeep, 50);
   assert.equal(bad.values.results, true);
   assert.equal(bad.warnings.filter((w) => /results/.test(w)).length, 2);
+});
+
+test('coerce: a bounded posint refuses what is outside its range, and `nonneg` is a whole number 0 or above', () => {
+  // The bounds live on the spec, so one coercion serves every key that has
+  // them — `handoff.threshold` is the first, and a percentage outside 50–99 is
+  // a typo rather than a preference.
+  const threshold = { type: 'posint', min: 50, max: 99, default: 90 };
+  assert.deepEqual(coerce(threshold, 50), { ok: true, value: 50 });
+  assert.deepEqual(coerce(threshold, '85'), { ok: true, value: 85 });
+  assert.deepEqual(coerce(threshold, 99), { ok: true, value: 99 });
+  for (const raw of [49, 100, 0, -1, '49', '100', 85.5, '85.5', 'high', '', '   ', true, null, []]) {
+    assert.deepEqual(coerce(threshold, raw), { ok: false }, JSON.stringify(raw));
+  }
+  // An unbounded posint keeps the behaviour every other key relies on.
+  assert.deepEqual(coerce({ type: 'posint' }, ' 900 '), { ok: true, value: 900 });
+  assert.deepEqual(coerce({ type: 'posint' }, 0), { ok: false });
+
+  // `nonneg` exists for a key whose 0 MEANS something — contextWindow: 0 is
+  // "resolve the window at run time" — so 0 is a value and not a refusal.
+  const window = { type: 'nonneg', default: 0 };
+  assert.deepEqual(coerce(window, 0), { ok: true, value: 0 });
+  assert.deepEqual(coerce(window, '0'), { ok: true, value: 0 });
+  assert.deepEqual(coerce(window, 500000), { ok: true, value: 500000 });
+  // `Number('')`, `Number(null)` and `Number([])` are all 0: a raw that is not
+  // a number or a non-blank string is not a value nobody wrote.
+  for (const raw of [-1, '-1', 1.5, '1.5', '', '   ', 'lots', null, true, [], {}]) {
+    assert.deepEqual(coerce(window, raw), { ok: false }, JSON.stringify(raw));
+  }
+});
+
+test('HANDOFF_SCHEMA: three keys, the bounds the spec fixes, and the defaults the guard renders', () => {
+  assert.deepEqual(Object.keys(HANDOFF_SCHEMA), ['enabled', 'threshold', 'contextWindow']);
+  assert.equal(HANDOFF_SCHEMA.enabled.default, true);
+  assert.equal(HANDOFF_SCHEMA.threshold.default, 90);
+  assert.equal(HANDOFF_SCHEMA.threshold.min, 50);
+  assert.equal(HANDOFF_SCHEMA.threshold.max, 99);
+  assert.equal(HANDOFF_SCHEMA.contextWindow.default, 0);
+  assert.equal(HANDOFF_SCHEMA.contextWindow.type, 'nonneg');
+});
+
+test('handoffSettings: file values with their sources, invalid ones warned and defaulted, never fatal', () => {
+  // No file at all: the built-in defaults, no warnings.
+  const bare = handoffSettings({ OMELETTE_HOME: home() });
+  assert.equal(bare.enabled, true);
+  assert.equal(bare.threshold, 90);
+  assert.equal(bare.contextWindow, 0);
+  assert.deepEqual(bare.warnings, []);
+  assert.deepEqual(bare.sources, { enabled: 'default', threshold: 'default', contextWindow: 'default' });
+  assert.match(bare.configPath, /fleet\.config\.json$/);
+
+  const set = handoffSettings({ OMELETTE_HOME: home({ version: 1, handoff: { threshold: 85, contextWindow: 500000, enabled: 'off' } }) });
+  assert.equal(set.threshold, 85);
+  assert.equal(set.contextWindow, 500000);
+  assert.equal(set.enabled, false, 'the boolean words coerce accepts work here like everywhere else');
+  assert.deepEqual(set.sources, { enabled: 'file', threshold: 'file', contextWindow: 'file' });
+
+  // An out-of-range value, an unknown key and a block that is not an object are
+  // warnings and the default — `rules --hooks` must never refuse to render.
+  const bad = handoffSettings({ OMELETTE_HOME: home({ handoff: { threshold: 100, nudgeAt: 80 } }) });
+  assert.equal(bad.threshold, 90);
+  assert.ok(bad.warnings.some((w) => /handoff\.threshold = 100 is invalid — ignored/.test(w)), bad.warnings.join(' | '));
+  assert.ok(bad.warnings.some((w) => /handoff\.nudgeAt is not a known key — ignored/.test(w)), bad.warnings.join(' | '));
+  const shape = handoffSettings({ OMELETTE_HOME: home({ handoff: 90 }) });
+  assert.equal(shape.threshold, 90);
+  assert.ok(shape.warnings.some((w) => /handoff is not an object — ignored/.test(w)), shape.warnings.join(' | '));
+  const broken = handoffSettings({ OMELETTE_HOME: home('{ not json') });
+  assert.equal(broken.threshold, 90);
+  assert.ok(broken.warnings.some((w) => /fleet config:/.test(w)));
 });
