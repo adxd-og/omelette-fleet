@@ -19,7 +19,7 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 - Write every decision as `Ruling: <what> — <why> — <cost if wrong>`, and mark each task complete with its commit.
 - **Tag what a line is, and never edit a wrong one.** A claim by a unit, a coder or a tester is `candidate` until the orchestrator verified it; then `verified` or `rejected`. A ruling that turned out wrong stays in place and gets a `Superseded by:` line — the reader after a compaction sees what was decided, why it changed, and what it cost.
 - **Before a compaction** — announced or suspected — **and at every natural pause, append a handoff block**: where the work stands, open findings, agents in flight, next action.
-- **After a compaction, re-read the ledger before doing anything else.** `omelette-fleet rules --hooks` installs a `PreCompact` hook that stamps the re-read line into every ledger for you; the discipline is the file, not the hook.
+- **After a compaction, re-read the ledger before doing anything else.** `omelette-fleet rules --hooks` installs both halves of that: a `PreCompact` hook that stamps the re-read line into every ledger, and a `SessionStart` hook matched on `compact` that prints each ledger's **last handoff block** back into the fresh context (bounded: 40 lines / 4 KB per ledger, 12 KB in all). Both read `<session cwd>/.omelette/ledger-*.md` — **a ledger kept in another repository gets neither the stamp nor the print.** The discipline is still the file, not the hook: what the hook prints is the handoff block you wrote.
 
 ## Tester flow
 

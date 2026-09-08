@@ -1,6 +1,6 @@
 {{marker}}
 /**
- * omelette-fleet :: the guard hook, one script for both events.
+ * omelette-fleet :: the guard hook, one script for all three events.
  *
  * WIRED BY THE OPERATOR, NEVER BY US. `omelette-fleet rules --hooks` writes this
  * file and PRINTS the settings.json snippet that calls it; Claude Code's
@@ -17,6 +17,13 @@
  * re-read, and the handoff reminder goes to stdout for the harness to pass on if
  * it does.
  *
+ * SessionStart (source `compact`) — the other half, and the half that is
+ * PROMISED: Claude Code's hooks reference says a SessionStart hook's stdout is
+ * added to the session's context, where PreCompact's is documented nowhere. So
+ * the session that opens after a compaction is handed the last handoff block of
+ * every ledger in the project, bounded, and nothing at all on a startup, a
+ * resume, a `/clear` or a fork — none of those lost a context.
+ *
  * IT NEVER THROWS AND IT NEVER BLOCKS ANYTHING ELSE. Malformed stdin, an
  * unknown event, a ledger it may not write, stdin past the cap, stdin that
  * never closes: exit 0. A hook that crashes is a session that stops working,
@@ -24,7 +31,7 @@
  *
  * Zero dependencies, Node >= 20, ESM — it is spawned as `node <this file>`.
  */
-import { appendFileSync, lstatSync, readdirSync } from 'node:fs';
+import { appendFileSync, closeSync, lstatSync, openSync, readSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -359,10 +366,121 @@ function preCompact(event) {
   process.stdout.write(`${HANDOFF}\n`);
 }
 
+/** A level-2 heading, and the one that opens a handoff block. `### Handoff` is neither. */
+const HEADING = /^##\s/;
+const HANDOFF_HEADING = /^##\s+handoff/i;
+
+/** A fenced block's delimiter, indented up to 3 spaces, as Markdown spells one. */
+const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+const TRUNCATED = '[… truncated]';
+
+/**
+ * THE LAST HANDOFF BLOCK of one ledger: from the last `## Handoff` heading to
+ * the next `## ` heading or the end of the file. The LAST one, because a ledger
+ * accumulates them and only the newest describes where the work stands.
+ *
+ * Headings inside a FENCED block are text, not headings — a ledger quoting its
+ * own vocabulary (this repository's does) would otherwise have its block cut in
+ * half by an example. Fences are tracked the way Markdown reads them: ``` or
+ * ~~~, closed only by the same character at least as long.
+ *
+ * Capped twice, because what this returns is pasted into a fresh model context
+ * and a ledger is somebody's free-form file: `maxLines` lines and `maxBytes`
+ * bytes, whichever runs out first, with a `[… truncated]` line saying the rest
+ * was dropped. The caps are HARD — a single line longer than `maxBytes` leaves
+ * the block as that one marker, which is the honest answer for a paste that is
+ * not a handoff.
+ *
+ * @returns {string} the block without its trailing blank lines, or '' when the
+ *   ledger has no handoff block at all.
+ */
+function lastHandoffBlock(text, { maxLines = 40, maxBytes = 4096 } = {}) {
+  const lines = String(text || '').split(/\r?\n/);
+  let fence = '';
+  let start = -1;
+  let end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const f = FENCE.exec(lines[i]);
+    if (f) {
+      if (!fence) fence = f[1];
+      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = '';
+      continue;
+    }
+    if (fence || !HEADING.test(lines[i])) continue;
+    // A later handoff heading replaces the one found so far, and reopens the
+    // search for the heading that ends it.
+    if (HANDOFF_HEADING.test(lines[i])) { start = i; end = lines.length; continue; }
+    if (start >= 0 && end === lines.length) end = i;
+  }
+  if (start < 0) return '';
+
+  const block = lines.slice(start, end);
+  while (block.length && !block[block.length - 1].trim()) block.pop();
+  const kept = [];
+  let bytes = 0;
+  for (const line of block) {
+    const size = Buffer.byteLength(line, 'utf8') + 1;
+    if (kept.length >= maxLines || bytes + size > maxBytes) { kept.push(TRUNCATED); break; }
+    kept.push(line);
+    bytes += size;
+  }
+  return kept.join('\n');
+}
+
+/** One ledger is read at most this far; the whole print is bounded on top of that. */
+const LEDGER_READ_MAX = 1024 * 1024; // 1 MiB
+const HANDOFF_TOTAL_MAX = 12 * 1024;
+
+/**
+ * The handoff, back into the context that just lost it. Only `source ===
+ * 'compact'`: a startup, a resume, a `/clear` and a fork have a context nobody
+ * lost, and printing a handoff into each of them is noise on every session.
+ *
+ * Same ledgers as PreCompact and the same rule about them — `<cwd>/.omelette/
+ * ledger-*.md`, sorted, lstat (never stat) so a symlink under that name is seen
+ * and skipped rather than followed out of the directory, and a FIFO is skipped
+ * rather than blocking the read. Each file is read at most 1 MiB, each block is
+ * bounded by lastHandoffBlock, and the print as a whole stops at 12 KB: a
+ * ledger that does not fit is dropped WHOLE, with one truncation line, because
+ * half a handoff read as a whole one is worse than a line saying it was left out.
+ *
+ * Nothing to print is printed as nothing: no header, no blank line, exit 0.
+ */
+function sessionStart(event) {
+  if (str(event.source) !== 'compact') return;
+  const dir = join(str(event.cwd, process.cwd()), '.omelette');
+  let ledgers = [];
+  try { ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).sort(); } catch { return; }
+  if (!ledgers.length) return;
+
+  const buf = Buffer.alloc(LEDGER_READ_MAX);
+  const parts = [];
+  let total = 0;
+  for (const name of ledgers) {
+    const path = join(dir, name);
+    let text = '';
+    try {
+      if (!lstatSync(path).isFile()) continue;
+      const fd = openSync(path, 'r');
+      try { text = buf.subarray(0, readSync(fd, buf, 0, LEDGER_READ_MAX, 0)).toString('utf8'); }
+      finally { closeSync(fd); }
+    } catch { continue; } // a ledger we may not read is not a reason to fail a session start
+    const block = lastHandoffBlock(text);
+    if (!block) continue;
+    const part = `${parts.length ? '\n' : ''}--- ${name} · last handoff ---\n${block}\n`;
+    const size = Buffer.byteLength(part, 'utf8');
+    if (total + size > HANDOFF_TOTAL_MAX) { parts.push(`${TRUNCATED}\n`); break; }
+    parts.push(part);
+    total += size;
+  }
+  if (parts.length) process.stdout.write(parts.join(''));
+}
+
 const event = await readEvent();
 if (event) {
   const name = str(event.hook_event_name);
   if (name === 'PreToolUse') preToolUse(event);
   else if (name === 'PreCompact') preCompact(event);
+  else if (name === 'SessionStart') sessionStart(event);
   // Anything else: this guard has no opinion about it.
 }

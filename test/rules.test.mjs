@@ -422,6 +422,7 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
   // runs `node /Users/me/My` at every single tool call.
   assert.ok(posix[1].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
   assert.ok(posix[2].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
+  assert.ok(posix[3].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
   assert.equal(hookSettingsSnippet(spaced, 'linux').join('\n'), posix.join('\n'));
 
   // cmd.exe knows nothing about POSIX single quotes, and the JSON layer is what
@@ -430,7 +431,7 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
   assert.ok(win[1].includes('"command": "node \\"/C\\\\Users\\\\me\\\\.claude\\\\hooks\\\\omelette-guard.mjs\\""'), win.join('\n'));
 
   // Whatever the platform, what it prints is a pasteable `hooks` object naming
-  // both events, and the script is still recognisable by name.
+  // every event, and the script is still recognisable by name.
   for (const platform of ['darwin', 'win32']) {
     const parsed = JSON.parse(hookSettingsSnippet(spaced, platform).join('\n'));
     assert.deepEqual(Object.keys(parsed.hooks), HOOK_EVENTS);
@@ -440,6 +441,28 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
 
   // The default is this machine's own platform — the CLI passes no argument.
   assert.deepEqual(hookSettingsSnippet(spaced), hookSettingsSnippet(spaced, process.platform));
+});
+
+test('the snippet wires all three events, and SessionStart is matched on `compact`', () => {
+  const script = '/Users/me/app/.claude/hooks/omelette-guard.mjs';
+  assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart']);
+  for (const platform of ['darwin', 'win32']) {
+    const snippet = hookSettingsSnippet(script, platform);
+    assert.equal(snippet.length, HOOK_EVENTS.length + 1, 'the opener line plus one line per event');
+    const parsed = JSON.parse(snippet.join('\n'));
+    assert.deepEqual(Object.keys(parsed.hooks), HOOK_EVENTS);
+    // PreToolUse is matched on a TOOL, SessionStart on a SOURCE, and PreCompact
+    // on nothing at all — every compaction is one.
+    assert.equal(parsed.hooks.PreToolUse[0].matcher, 'Bash');
+    assert.equal(parsed.hooks.SessionStart[0].matcher, 'compact');
+    assert.equal('matcher' in parsed.hooks.PreCompact[0], false);
+    for (const event of HOOK_EVENTS) {
+      assert.equal(parsed.hooks[event].length, 1);
+      assert.equal(parsed.hooks[event][0].hooks.length, 1);
+      assert.equal(parsed.hooks[event][0].hooks[0].type, 'command');
+      assert.ok(parsed.hooks[event][0].hooks[0].command.includes(HOOK_FILES[0]));
+    }
+  }
 });
 
 test('hookSettingsSnippet resolves a relative path: a hook runs from wherever the session is, not from where the CLI ran', () => {

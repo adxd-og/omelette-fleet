@@ -329,8 +329,8 @@ export function parseHookMarker(text) {
 /** Where `rules --hooks` writes: the project's .claude/hooks, or the global one. */
 export const hooksTarget = scopeDir('hooks');
 
-/** The two events the guard serves, in the order doctor reports them wired. */
-export const HOOK_EVENTS = ['PreToolUse', 'PreCompact'];
+/** The three events the guard serves, in the order doctor reports them wired. */
+export const HOOK_EVENTS = ['PreToolUse', 'PreCompact', 'SessionStart'];
 
 /**
  * QUOTING THE SCRIPT PATH FOR A SHELL, per platform. A hook `command` is a
@@ -358,6 +358,12 @@ const shellQuote = (s, platform) => (platform === 'win32'
  * resolution is always the host's, which is the only path shape that can exist
  * on it.
  *
+ * THE MATCHERS ARE NOT INTERCHANGEABLE. `PreToolUse` is matched against a TOOL
+ * name and `SessionStart` against the session's SOURCE — `startup`, `resume`,
+ * `clear`, `compact`, `fork` — and only `compact` is a context somebody just
+ * lost, which is the one the guard has anything to print into. `PreCompact` is
+ * matched on nothing: every compaction is one.
+ *
  * @returns {string[]} the snippet's lines, together a parseable JSON object.
  */
 export function hookSettingsSnippet(scriptPath, platform = process.platform) {
@@ -365,7 +371,8 @@ export function hookSettingsSnippet(scriptPath, platform = process.platform) {
   return [
     '{ "hooks": {',
     `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
-    `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
+    `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
+    `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
   ];
 }
 

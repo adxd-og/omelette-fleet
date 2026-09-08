@@ -1088,7 +1088,7 @@ async function cmdRules(argv) {
     // "Paste" was an instruction an operator could follow literally and lose
     // the hooks they already had: what follows is a whole `hooks` object, not a
     // whole settings file.
-    out(`The script only runs once ${settingsTarget({ global: !!flags.global }).path} calls it — omelette-fleet never writes that file. Merge this into your settings file (it is a whole hooks object — add the two events to an existing hooks block rather than replacing the file):`);
+    out(`The script only runs once ${settingsTarget({ global: !!flags.global }).path} calls it — omelette-fleet never writes that file. Merge this into your settings file (it is a whole hooks object — add the events it lists to an existing hooks block rather than replacing the file):`);
     out();
     for (const line of hookSettingsSnippet(path)) out(line);
   }
@@ -1200,45 +1200,56 @@ function unsafeManagedPaths({ cwd = process.cwd(), env = process.env } = {}) {
 }
 
 /**
- * A matcher made of nothing but tool names, their separators and spaces —
- * `"Bash"`, `"Bash|Edit"`, `"Bash, Write"`. Claude Code reads one of these as
- * an exact LIST rather than as a pattern, which is why `"Bashful"` and `"ash"`
- * cover no tool at all while the regex forms below would match `Bash` in both.
+ * A matcher made of nothing but names, their separators and spaces — `"Bash"`,
+ * `"Bash|Edit"`, `"compact, resume"`. Claude Code reads one of these as an exact
+ * LIST rather than as a pattern, which is why `"Bashful"` and `"ash"` cover no
+ * tool at all while the regex forms below would match `Bash` in both.
  */
 const EXACT_LIST = /^[A-Za-z0-9_ ,|-]+$/;
 
 /**
- * Whether one PreToolUse matcher lets the guard see a `Bash` call — and, when it
- * does not, WHY, because the ways of getting it wrong are fixed differently.
+ * Whether one matcher lets the guard see the thing its event is matched ON —
+ * a `Bash` call for `PreToolUse`, a `compact` source for `SessionStart` — and,
+ * when it does not, WHY, because the ways of getting it wrong are fixed
+ * differently.
  *
  * Claude Code's own matcher rules, in the order it applies them (hooks docs):
  * absent / `""` / `"*"` are the documented "everything" forms; a plain list of
- * names matches a tool name EXACTLY, item by item; anything else is a regex,
- * and it is tested UNANCHORED — `"mcp__.*"` is theirs, and `"ash$"` matches a
- * `Bash` call whether or not anybody meant it to. So `"Bash|Edit"` fires on
- * every Bash call and comparing the string literally reported it as NOT wired.
- * A pattern that does not COMPILE covers nothing either, but that is a typo in
- * the settings file rather than a guard aimed at another tool — and an operator
- * told "matcher is not Bash" about `(` would go looking for the wrong thing.
- * A matcher that is not a string at all is a third mistake, easy to write in
- * JSON and worth its own words.
+ * names matches EXACTLY, item by item; anything else is a regex, and it is
+ * tested UNANCHORED — `"mcp__.*"` is theirs, and `"ash$"` matches a `Bash` call
+ * whether or not anybody meant it to. So `"Bash|Edit"` fires on every Bash call
+ * and comparing the string literally reported it as NOT wired. A pattern that
+ * does not COMPILE covers nothing either, but that is a typo in the settings
+ * file rather than a guard aimed at another tool — and an operator told
+ * "matcher is not Bash" about `(` would go looking for the wrong thing. A
+ * matcher that is not a string at all is a third mistake, easy to write in JSON
+ * and worth its own words.
  *
- * @returns {string|null} null when it covers Bash, else the reason it does not.
+ * @returns {string|null} null when it covers `name`, else the reason it does not.
  */
-const bashMatcherProblem = (m) => {
-  // An ABSENT key is the documented "every tool" form; a key that is there
+const matcherProblemFor = (m, event, name) => {
+  // An ABSENT key is the documented "everything" form; a key that is there
   // holding `null` is not — it is a value that is not a pattern, and it is
   // reported as one.
   if (m === undefined || m === '' || m === '*') return null;
-  if (typeof m !== 'string') return 'PreToolUse matcher is not a string';
+  if (typeof m !== 'string') return `${event} matcher is not a string`;
   if (EXACT_LIST.test(m)) {
-    return m.split(/[|,]/).some((name) => name.trim() === 'Bash') ? null : 'PreToolUse matcher is not Bash';
+    return m.split(/[|,]/).some((item) => item.trim() === name) ? null : `${event} matcher is not ${name}`;
   }
   let re;
   try { re = new RegExp(m); }
-  catch { return `PreToolUse matcher ${JSON.stringify(m)} is not a valid regex`; }
-  return re.test('Bash') ? null : 'PreToolUse matcher is not Bash';
+  catch { return `${event} matcher ${JSON.stringify(m)} is not a valid regex`; }
+  return re.test(name) ? null : `${event} matcher is not ${name}`;
 };
+
+/**
+ * What each MATCHED event's entry has to cover. `PreCompact` is deliberately
+ * absent: it is matched on nothing at all — every compaction is one — so any
+ * entry that calls the guard counts. `SessionStart` is matched on the session's
+ * SOURCE (`startup`, `resume`, `clear`, `compact`, `fork`), and `compact` is the
+ * only one the guard has anything to print into.
+ */
+const MATCHED_ON = { PreToolUse: 'Bash', SessionStart: 'compact' };
 
 /**
  * Which of the guard's events one settings file calls it from. The test is the
@@ -1248,9 +1259,9 @@ const bashMatcherProblem = (m) => {
  * which we would recognise by comparing paths.
  *
  * @returns {{wired:string[], matcherProblem:string|null}} the events wired, plus
- *   why a PreToolUse entry that calls the guard will never fire on a Bash call —
- *   which looks installed from every angle and guards nothing, so it is reported
- *   instead of being counted either way.
+ *   why an entry that calls the guard will never fire on the thing its event is
+ *   matched on — which looks installed from every angle and guards nothing, so
+ *   it is reported instead of being counted either way.
  */
 function hookWiring(config) {
   const hooks = isObj(config) && isObj(config.hooks) ? config.hooks : {};
@@ -1261,11 +1272,12 @@ function hookWiring(config) {
     const calling = (Array.isArray(hooks[event]) ? hooks[event] : [])
       .filter((group) => isObj(group) && Array.isArray(group.hooks) && group.hooks.some(calls));
     if (!calling.length) continue;
-    // Only PreToolUse is matched against a tool name at all, and the guard has
-    // exactly one tool to guard. ONE entry covering Bash is enough; when none
-    // does, the first entry's reason is the one worth printing.
-    if (event === 'PreToolUse') {
-      const problems = calling.map((group) => bashMatcherProblem(group.matcher));
+    // Two of the three events are matched against something; PreCompact is not.
+    // ONE entry covering it is enough; when none does, the first entry's reason
+    // is the one worth printing.
+    const target = MATCHED_ON[event];
+    if (target) {
+      const problems = calling.map((group) => matcherProblemFor(group.matcher, event, target));
       if (problems.every(Boolean)) { matcherProblem = matcherProblem || problems[0]; continue; }
     }
     wired.push(event);
@@ -1302,6 +1314,13 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
  * One scope's guard script: ours or not, at which version — and whether anything
  * ever calls it. A script nobody calls is the failure mode worth a line of its
  * own, because everything about it looks installed.
+ *
+ * A REASON beats a count: an unreadable settings file and a matcher aimed
+ * elsewhere each explain why an event is not wired, and naming the event on top
+ * of them would send the operator to paste something that is already there. Only
+ * when neither applies — and something IS wired, so this is not a fresh install
+ * — is the missing event named, which is exactly the 0.3.2 wiring meeting a
+ * 0.3.3 guard.
  */
 const hooksLabel = (r, { wired, unreadable, matcherProblem }) => {
   if (r.state === 'absent') return 'absent';
@@ -1311,6 +1330,7 @@ const hooksLabel = (r, { wired, unreadable, matcherProblem }) => {
   const reasons = [];
   if (unreadable.length) reasons.push(`${unreadable.join(' and ')} unreadable`);
   if (matcherProblem) reasons.push(matcherProblem);
+  if (!reasons.length && wired.length) reasons.push(`missing ${HOOK_EVENTS.filter((e) => !wired.includes(e)).join(', ')}`);
   const why = reasons.length ? ` (${reasons.join('; ')})` : '';
   return `v${r.version} (NOT wired${why} — paste the snippet from rules --hooks)${stale}`;
 };

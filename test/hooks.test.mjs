@@ -435,3 +435,186 @@ test('PreToolUse: a command of nothing but option-shaped tokens is answered at o
     assert.ok(ms < 2000, `the option run tiled instead of scanning: ${ms}ms for ${command.length} characters`);
   }
 });
+
+/** A throwaway project with an empty `.omelette` beside the rendered guard. */
+function ledgerProject(g, name) {
+  const proj = join(g.dir, name);
+  mkdirSync(join(proj, '.omelette'), { recursive: true });
+  return proj;
+}
+
+const sessionStart = (over = {}) => ({ hook_event_name: 'SessionStart', source: 'compact', ...over });
+
+test('SessionStart(compact): the LAST handoff block is printed under the ledger it came from, and the ledger is not written to', () => {
+  const g = guard();
+  const proj = ledgerProject(g, 'blocks');
+  const ledger = join(proj, '.omelette', 'ledger-0.3.3.md');
+  const text = [
+    '# ledger 0.3.3',
+    '',
+    '## Handoff 2026-09-08T10:00Z',
+    'stale: the first block, superseded by the one below',
+    '',
+    '## Task 2 — done (commit abc1234)',
+    'Ruling: keep the cap — a truncated tail beats a flooded context — costs the oldest lines',
+    '',
+    '## Handoff 2026-09-08T18:00Z',
+    'Where it stands: T2 committed, T3 in review.',
+    '',
+    // A heading inside a fence is TEXT: a ledger quoting its own vocabulary
+    // must not cut the block it is quoted in.
+    '```md',
+    '## Handoff (an example inside a fence)',
+    '```',
+    'Next action: run npm test, then report.',
+    '',
+    '',
+  ].join('\n');
+  writeFileSync(ledger, text);
+
+  const r = fire(g.path, sessionStart({ cwd: proj }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.err, '');
+  assert.equal(r.out, [
+    '--- ledger-0.3.3.md · last handoff ---',
+    '## Handoff 2026-09-08T18:00Z',
+    'Where it stands: T2 committed, T3 in review.',
+    '',
+    '```md',
+    '## Handoff (an example inside a fence)',
+    '```',
+    'Next action: run npm test, then report.',
+    '',
+  ].join('\n'));
+  assert.equal(readFileSync(ledger, 'utf8'), text, 'SessionStart READS the ledger; only PreCompact writes one');
+});
+
+test('SessionStart(compact): a ledger with no handoff block prints nothing at all', () => {
+  const g = guard();
+  const proj = ledgerProject(g, 'noblock');
+  writeFileSync(join(proj, '.omelette', 'ledger-plain.md'), [
+    '# ledger',
+    '## Task 1 — done (commit abc1234)',
+    'Ruling: X — because Y — costs Z',
+    // The vocabulary is `## Handoff`: a level-3 heading and a `#` with no space
+    // after it are not level-2 headings at all.
+    '### Handoff notes',
+    '##Handoff',
+    'nothing here is a handoff block',
+  ].join('\n'));
+  const r = fire(g.path, sessionStart({ cwd: proj }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out, '', 'nothing to print is printed as nothing — no header, no blank line');
+  assert.equal(r.err, '');
+});
+
+test('SessionStart: only `compact` prints — a startup, a resume, a clear and a fork lost no context', () => {
+  const g = guard();
+  const proj = ledgerProject(g, 'sources');
+  writeFileSync(join(proj, '.omelette', 'ledger-x.md'), '## Handoff\nnext action: run npm test\n');
+  for (const source of ['startup', 'resume', 'clear', 'fork', '', 'Compact', 42, undefined]) {
+    const r = fire(g.path, sessionStart({ source, cwd: proj }));
+    assert.equal(r.code, 0, r.err);
+    assert.equal(r.out, '', `source ${JSON.stringify(source)} must print nothing`);
+    assert.equal(r.err, '');
+  }
+  const compacted = fire(g.path, sessionStart({ cwd: proj }));
+  assert.equal(compacted.out, '--- ledger-x.md · last handoff ---\n## Handoff\nnext action: run npm test\n');
+});
+
+test('SessionStart(compact): one ledger is capped at 40 lines and at 4 KB, and says the rest was dropped', () => {
+  const g = guard();
+  const lines = ledgerProject(g, 'caps-lines');
+  writeFileSync(join(lines, '.omelette', 'ledger-lines.md'),
+    ['# ledger', '## Handoff', ...Array.from({ length: 60 }, (_, i) => `line ${i}`)].join('\n'));
+  const capped = fire(g.path, sessionStart({ cwd: lines }));
+  assert.equal(capped.code, 0, capped.err);
+  const body = capped.out.split('\n');
+  assert.equal(body[0], '--- ledger-lines.md · last handoff ---');
+  assert.equal(body[1], '## Handoff');
+  assert.equal(body[40], 'line 38', '40 lines kept, the heading among them');
+  assert.equal(body[41], '[… truncated]');
+  assert.equal(capped.out.includes('line 39'), false);
+
+  // 301-byte lines: the BYTE cap bites long before the line cap does.
+  const bytes = ledgerProject(g, 'caps-bytes');
+  writeFileSync(join(bytes, '.omelette', 'ledger-wide.md'),
+    ['## Handoff', ...Array.from({ length: 20 }, () => 'x'.repeat(300))].join('\n'));
+  const wide = fire(g.path, sessionStart({ cwd: bytes }));
+  const wideLines = wide.out.split('\n');
+  assert.equal(wideLines.filter((l) => l.startsWith('xxx')).length, 13, '4096 bytes is the heading plus 13 of them');
+  assert.equal(wideLines[wideLines.length - 2], '[… truncated]');
+  assert.ok(Buffer.byteLength(wide.out, 'utf8') < 4096 + 64, `per-ledger cap: ${Buffer.byteLength(wide.out, 'utf8')} bytes`);
+});
+
+test('SessionStart(compact): the caps are hard — a handoff line longer than 4 KB leaves only the truncation marker', () => {
+  const g = guard();
+  const proj = ledgerProject(g, 'huge');
+  writeFileSync(join(proj, '.omelette', 'ledger-huge.md'), `## Handoff ${'x'.repeat(5000)}\nnext action: nothing\n`);
+  const r = fire(g.path, sessionStart({ cwd: proj }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out, '--- ledger-huge.md · last handoff ---\n[… truncated]\n');
+});
+
+test('SessionStart(compact): every ledger contributes its own block, in name order, with the same filter PreCompact uses', () => {
+  const g = guard();
+  const proj = ledgerProject(g, 'two');
+  writeFileSync(join(proj, '.omelette', 'ledger-b-second.md'), '## Handoff\nB: review pending\n');
+  writeFileSync(join(proj, '.omelette', 'ledger-a-first.md'), '## Handoff\nA: T3 in flight\n');
+  writeFileSync(join(proj, '.omelette', 'notes.md'), '## Handoff\nnot a ledger\n');
+  writeFileSync(join(proj, '.omelette', 'ledger-old.txt'), '## Handoff\nnot markdown\n');
+  const r = fire(g.path, sessionStart({ cwd: proj }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out, [
+    '--- ledger-a-first.md · last handoff ---',
+    '## Handoff',
+    'A: T3 in flight',
+    '',
+    '--- ledger-b-second.md · last handoff ---',
+    '## Handoff',
+    'B: review pending',
+    '',
+  ].join('\n'));
+});
+
+test('SessionStart(compact): the whole print is capped at 12 KB across ledgers, and a ledger past it is dropped whole', () => {
+  const g = guard();
+  const proj = ledgerProject(g, 'total');
+  const big = ['## Handoff', ...Array.from({ length: 39 }, (_, i) => `${'y'.repeat(99)}${i % 10}`)].join('\n');
+  for (const name of ['ledger-a.md', 'ledger-b.md', 'ledger-c.md', 'ledger-d.md']) {
+    writeFileSync(join(proj, '.omelette', name), big);
+  }
+  const r = fire(g.path, sessionStart({ cwd: proj }));
+  assert.equal(r.code, 0, r.err);
+  const size = Buffer.byteLength(r.out, 'utf8');
+  assert.ok(size <= 12 * 1024 + 32, `12 KB total, got ${size}`);
+  assert.ok(r.out.includes('--- ledger-a.md · last handoff ---'), r.out.slice(0, 200));
+  assert.ok(r.out.includes('--- ledger-b.md · last handoff ---'), r.out.slice(0, 200));
+  assert.equal(r.out.includes('ledger-d.md'), false, 'a ledger past the cap is dropped whole, never half-printed');
+  assert.equal(r.out.split('\n').filter(Boolean).pop(), '[… truncated]');
+});
+
+test('SessionStart(compact): a ledger that is not a regular file is skipped — the symlink is never read', { skip: process.platform === 'win32' && 'POSIX symlinks' }, () => {
+  const g = guard();
+  const proj = ledgerProject(g, 'special-start');
+  writeFileSync(join(proj, '.omelette', 'ledger-real.md'), '## Handoff\nreal: T4 next\n');
+  // A symlink out of .omelette is how a read reaches somewhere else entirely.
+  const outside = join(g.dir, 'outside-handoff.md');
+  writeFileSync(outside, '## Handoff\nSECRET from outside .omelette\n');
+  symlinkSync(outside, join(proj, '.omelette', 'ledger-link.md'));
+  const r = fire(g.path, sessionStart({ cwd: proj }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out, '--- ledger-real.md · last handoff ---\n## Handoff\nreal: T4 next\n');
+  assert.equal(r.out.includes('SECRET'), false, 'a symlinked ledger is skipped, not followed');
+});
+
+test('SessionStart(compact): no .omelette directory is silence, a clean exit, and nothing created', () => {
+  const g = guard();
+  const proj = join(g.dir, 'bare');
+  mkdirSync(proj);
+  const r = fire(g.path, sessionStart({ cwd: proj }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out, '');
+  assert.equal(r.err, '');
+  assert.deepEqual(readdirSync(proj), [], 'a missing ledger is not a reason to create one');
+});
