@@ -31,10 +31,10 @@ Claude Code loads `.claude/rules/*.md` and `~/.claude/rules/*.md` the way it loa
 The file's first line is a version marker, and that marker is the only proof of ownership. Re-running refreshes a marked file and prints which version it moved from; a file sitting at that path *without* the marker is left alone unless you pass `--force`. `--remove` deletes only a marked file, `--print` writes nothing at all, `--dry-run` prints every path and action (and, for `--hooks`, announces the settings snippet instead of printing it — a snippet naming a script that was never written is a snippet somebody pastes). All four managed kinds — the rules file, the agent definitions, the skill, the hook script — work exactly this way; only the comment syntax of the marker differs. `--remove` removes files and exactly one directory — the skill's own `.claude/skills/omelette-test/`, once its `SKILL.md` is gone, because a skill IS a directory and the empty one left behind still reads as an installed skill. It goes only while it is empty and is not a symlink: anything else in there makes the directory yours rather than ours, and a directory that cannot be removed is left alone in silence rather than turned into a refusal. `doctor` reports each kind on one informational line, both scopes, and never counts a missing file as a fault:
 
 ```
-rules         project: v0.3.2 · global: absent
-agents        project: v0.3.2 (2) · global: absent
-skills        project: v0.3.2 (1) · global: absent
-hooks         project: v0.3.2 (wired: PreToolUse, PreCompact, SessionStart) · global: absent
+rules         project: v0.3.3 · global: absent
+agents        project: v0.3.3 (2) · global: absent
+skills        project: v0.3.3 (1) · global: absent
+hooks         project: v0.3.3 (wired: PreToolUse, PreCompact, SessionStart) · global: absent
 ```
 
 While one of those four is missing from the project — or nothing is registered against this clone, or the guard is on disk and nothing calls it — `doctor` adds ONE `next` line above the units (`omelette-fleet install` → `omelette-fleet rules --agents --hooks` → `merge the hooks snippet into .claude/settings.json (rules --hooks prints it)`), and nothing once all three are done. It reads the project scope only, and it never changes the exit code. Since 0.3.3 one more step can follow, and only once the others are done: `raise MCP_TOOL_TIMEOUT to <n> ms`, when the client's wall-clock limit is below the longest call an enabled unit can make. It is tuning for a machine that already works, which is why it waits.

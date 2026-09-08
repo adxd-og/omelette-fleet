@@ -1934,6 +1934,46 @@ test('results: an empty spool is not a fault; an unknown unit and a bad id are',
   assert.equal(existsSync(join(dir, 'results')), false, 'reading never creates the spool');
 });
 
+test('results: one id and no unit is looked up across the fleet', () => {
+  const dir = home();
+  // What a reader has in hand is the id off a listing line or a status feed —
+  // the unit it came from is one more thing to remember, and the id says it.
+  spoolResult(dir, 'grok', {
+    resultId: '20260908T150000Z-1-1', tool: 'grok_research',
+    startedAt: '2026-09-08T15:00:00.000Z', endedAt: '2026-09-08T15:00:42.000Z', durationMs: 42,
+    status: 'ok', promptPreview: 'x', text: 'HALF AN ANSWER',
+  });
+
+  const found = cli(['results', '20260908T150000Z-1-1'], { dir });
+  assert.equal(found.code, 0, found.err);
+  assert.match(found.out, /^---\nunit: grok\n/);
+  assert.match(found.out, /\nHALF AN ANSWER\n$/);
+
+  const p = cli(['results', '20260908T150000Z-1-1', '--path'], { dir });
+  assert.equal(p.out.trim(), join(dir, 'results', 'grok', '20260908T150000Z-1-1.md'));
+
+  const missing = cli(['results', '20260908T142501Z-9-9'], { dir });
+  assert.equal(missing.code, 1);
+  assert.match(missing.err, /no spooled result "20260908T142501Z-9-9" in any unit/);
+  // A unit is still a unit, and a positional that is neither is still an error.
+  assert.equal(cli(['results', 'grok'], { dir }).code, 0);
+  assert.match(cli(['results', 'nope'], { dir }).err, /unknown unit "nope"/);
+});
+
+test('doctor prints the results budget in the unit it was written in — B, KB, MB', () => {
+  const dir = home();
+  const fake = fakeBin(dir);
+  const vendors = { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake };
+  // The last `results` line is codex's — UNIT_ORDER ends there.
+  const budget = () => cli(['doctor'], { dir, env: vendors }).out.split('\n').filter((l) => l.startsWith('  results     ')).pop();
+
+  assert.match(budget(), / · max 50 MB$/, 'the default, unchanged');
+  for (const [bytes, shown] of [[1048576, '1 MB'], [524288, '512 KB'], [1024, '1 KB'], [1000, '1000 B'], [1, '1 B']]) {
+    assert.equal(cli(['set', `codex.resultsMaxBytes=${bytes}`], { dir }).code, 0);
+    assert.match(budget(), new RegExp(` · max ${shown}$`), `${bytes} bytes reads as ${shown}`);
+  }
+});
+
 test('results is in the usage and has its own help page; doctor names the spool per unit', () => {
   const dir = home();
   assert.match(cli(['--help'], { dir }).out, /omelette-fleet results/);

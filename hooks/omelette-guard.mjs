@@ -31,8 +31,11 @@
  *
  * Zero dependencies, Node >= 20, ESM — it is spawned as `node <this file>`.
  */
-import { appendFileSync, closeSync, lstatSync, openSync, readSync, readdirSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
+
+/** O_NOFOLLOW where the platform defines it, 0 where it does not — as core/results.mjs does it. */
+const NOFOLLOW = constants.O_NOFOLLOW || 0;
 
 /**
  * One option token's VALUE. Written as "a quoted span or a character that is
@@ -336,34 +339,75 @@ async function readEvent() {
   } catch { return null; }
 }
 
+/**
+ * Anything this guard says, on a stream somebody else owns. A closed or broken
+ * pipe is not a reason to fail a tool call, a compaction or a session start —
+ * only a PreToolUse refusal ever leaves a non-zero code, and it sets that BEFORE
+ * it writes, so even a stderr that will not take the reason still blocks.
+ */
+function say(stream, text) {
+  try { stream.write(text); } catch { /* a pipe nobody is reading is not a finding */ }
+}
+
 /** Exit 2 = "do not run this", with the reason on stderr for the agent to read. */
 function preToolUse(event) {
   const input = event.tool_input && typeof event.tool_input === 'object' ? event.tool_input : {};
   if (event.agent_type !== GUARDED_AGENT || event.tool_name !== 'Bash') return;
   if (!forbidden(str(input.command))) return;
-  process.stderr.write(`${REFUSAL}\n`);
   // exitCode, not exit(): the process leaves on its own once stderr is flushed.
+  // Set first, so a stderr that cannot be written to still refuses the call.
   process.exitCode = 2;
+  say(process.stderr, `${REFUSAL}\n`);
+}
+
+/**
+ * This project's ledger directory, or null when neither event may touch it.
+ * `<cwd>/.omelette` is lstatted (never stat): a SYMLINK there sends every
+ * append and every read out of the project, and the per-ledger lstat below
+ * cannot see it — the files inside the link are perfectly regular. Anything
+ * else that is not a directory is refused the same way, in silence.
+ *
+ * A directory that is simply ABSENT is neither: that is a project with no
+ * ledger yet, which is normal and says nothing about what may be done.
+ *
+ * @returns {object|null} `dir` and `exists`, or null when the path is not ours
+ *   to touch. Written flat rather than as an inline type, because a doubled
+ *   brace is the renderer's placeholder syntax and never survives rendering.
+ */
+function ledgerDir(event) {
+  const dir = join(str(event.cwd, process.cwd()), '.omelette');
+  let st = null;
+  try { st = lstatSync(dir); } catch (e) { return e && e.code === 'ENOENT' ? { dir, exists: false } : null; }
+  return st.isDirectory() && !st.isSymbolicLink() ? { dir, exists: true } : null;
 }
 
 /** Mark every ledger in this project, then say so on stdout. */
 function preCompact(event) {
-  const dir = join(str(event.cwd, process.cwd()), '.omelette');
+  const found = ledgerDir(event);
+  if (!found) return; // a `.omelette` that is not ours to write: no marker, and nothing to announce
   const line = `\n## Compaction ${new Date().toISOString()} (trigger: ${str(event.trigger, 'unknown')}) — re-read this ledger before continuing\n`;
   let ledgers = [];
-  try { ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).sort(); } catch { ledgers = []; }
+  try { ledgers = found.exists ? readdirSync(found.dir).filter((f) => /^ledger-.*\.md$/.test(f)).sort() : []; } catch { ledgers = []; }
   for (const name of ledgers) {
     // A ledger we cannot write is not a reason to fail somebody's compaction —
     // and one that is not a REGULAR file is not a ledger at all: lstat (never
     // stat) so a symlink is seen as a symlink and skipped instead of followed
     // out of .omelette, and a FIFO named like a ledger is skipped instead of
     // blocking the append until somebody opens the other end.
+    //
+    // Then O_NOFOLLOW on the open itself, because the lstat and the append are
+    // two syscalls: a link planted between them is what the flag answers.
+    const path = join(found.dir, name);
+    let fd = null;
     try {
-      if (!lstatSync(join(dir, name)).isFile()) continue;
-      appendFileSync(join(dir, name), line);
-    } catch { /* ignore */ }
+      if (!lstatSync(path).isFile()) continue;
+      fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | NOFOLLOW);
+      writeSync(fd, line);
+    } catch { /* ignore */ } finally {
+      if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
+    }
   }
-  process.stdout.write(`${HANDOFF}\n`);
+  say(process.stdout, `${HANDOFF}\n`);
 }
 
 /** A level-2 heading, and the one that opens a handoff block. `### Handoff` is neither. */
@@ -430,6 +474,8 @@ function lastHandoffBlock(text, { maxLines = 40, maxBytes = 4096 } = {}) {
 /** One ledger is read at most this far; the whole print is bounded on top of that. */
 const LEDGER_READ_MAX = 1024 * 1024; // 1 MiB
 const HANDOFF_TOTAL_MAX = 12 * 1024;
+/** Said above a block that came out of a tail read, so nobody reads it as the whole file. */
+const TAIL_NOTE = '[… ledger larger than 1 MiB — read from its tail]';
 
 /**
  * The handoff, back into the context that just lost it. Only `source ===
@@ -437,50 +483,73 @@ const HANDOFF_TOTAL_MAX = 12 * 1024;
  * lost, and printing a handoff into each of them is noise on every session.
  *
  * Same ledgers as PreCompact and the same rule about them — `<cwd>/.omelette/
- * ledger-*.md`, sorted, lstat (never stat) so a symlink under that name is seen
- * and skipped rather than followed out of the directory, and a FIFO is skipped
- * rather than blocking the read. Each file is read at most 1 MiB, each block is
- * bounded by lastHandoffBlock, and the print as a whole stops at 12 KB: a
- * ledger that does not fit is dropped WHOLE, with one truncation line, because
- * half a handoff read as a whole one is worse than a line saying it was left out.
+ * ledger-*.md`, sorted, a directory that is not a symlink (ledgerDir), lstat
+ * (never stat) so a symlink under that name is seen and skipped rather than
+ * followed out of the directory, O_NOFOLLOW on the open against the race
+ * between those two syscalls, and a FIFO skipped rather than blocking the read.
+ *
+ * Each file is read at most 1 MiB FROM ITS TAIL — a ledger grows by appending,
+ * so the last handoff is at the END, and a head-first read of a long-running
+ * plan's ledger hands the next context a block that was superseded weeks ago.
+ * A tail read says so, above the block, because it is not the whole file.
+ *
+ * Each block is bounded by lastHandoffBlock, and the print as a whole stops at
+ * 12 KB: a ledger that does not fit is dropped WHOLE, with one truncation line,
+ * because half a handoff read as a whole one is worse than a line saying it was
+ * left out.
  *
  * Nothing to print is printed as nothing: no header, no blank line, exit 0.
  */
 function sessionStart(event) {
   if (str(event.source) !== 'compact') return;
-  const dir = join(str(event.cwd, process.cwd()), '.omelette');
+  const found = ledgerDir(event);
+  if (!found || !found.exists) return;
   let ledgers = [];
-  try { ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).sort(); } catch { return; }
+  try { ledgers = readdirSync(found.dir).filter((f) => /^ledger-.*\.md$/.test(f)).sort(); } catch { return; }
   if (!ledgers.length) return;
 
   const buf = Buffer.alloc(LEDGER_READ_MAX);
   const parts = [];
   let total = 0;
   for (const name of ledgers) {
-    const path = join(dir, name);
+    const path = join(found.dir, name);
     let text = '';
+    let tailed = false;
     try {
       if (!lstatSync(path).isFile()) continue;
-      const fd = openSync(path, 'r');
-      try { text = buf.subarray(0, readSync(fd, buf, 0, LEDGER_READ_MAX, 0)).toString('utf8'); }
-      finally { closeSync(fd); }
+      const fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+      try {
+        // fstat, on the descriptor actually opened: it is the size the read is
+        // about to use, and it settles what lstat only said a moment ago.
+        const st = fstatSync(fd);
+        if (!st.isFile()) continue;
+        const offset = Math.max(0, st.size - LEDGER_READ_MAX);
+        tailed = offset > 0;
+        text = buf.subarray(0, readSync(fd, buf, 0, LEDGER_READ_MAX, offset)).toString('utf8');
+      } finally { closeSync(fd); }
     } catch { continue; } // a ledger we may not read is not a reason to fail a session start
     const block = lastHandoffBlock(text);
     if (!block) continue;
-    const part = `${parts.length ? '\n' : ''}--- ${name} · last handoff ---\n${block}\n`;
+    const part = `${parts.length ? '\n' : ''}--- ${name} · last handoff ---\n${tailed ? `${TAIL_NOTE}\n` : ''}${block}\n`;
     const size = Buffer.byteLength(part, 'utf8');
     if (total + size > HANDOFF_TOTAL_MAX) { parts.push(`${TRUNCATED}\n`); break; }
     parts.push(part);
     total += size;
   }
-  if (parts.length) process.stdout.write(parts.join(''));
+  if (parts.length) say(process.stdout, parts.join(''));
 }
 
 const event = await readEvent();
-if (event) {
-  const name = str(event.hook_event_name);
-  if (name === 'PreToolUse') preToolUse(event);
-  else if (name === 'PreCompact') preCompact(event);
-  else if (name === 'SessionStart') sessionStart(event);
-  // Anything else: this guard has no opinion about it.
-}
+// Wrapped whole: nothing this guard reads — a cwd that is not a directory, a
+// ledger that changed under it, a stream that went away — may reach the harness
+// as a crash. A PreToolUse refusal is the ONE non-zero exit here, and it has
+// already set the code by the time anything can throw.
+try {
+  if (event) {
+    const name = str(event.hook_event_name);
+    if (name === 'PreToolUse') preToolUse(event);
+    else if (name === 'PreCompact') preCompact(event);
+    else if (name === 'SessionStart') sessionStart(event);
+    // Anything else: this guard has no opinion about it.
+  }
+} catch { /* a guard that crashes is a session that stops working */ }

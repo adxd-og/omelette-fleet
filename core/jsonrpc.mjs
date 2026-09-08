@@ -58,6 +58,12 @@ export function createHandler({
     const hasId = id !== undefined && id !== null;
     switch (method) {
       case 'initialize':
+        // JSON-RPC 2.0 §4: no `id` means a NOTIFICATION, and a server must not
+        // reply to one — a response with `id: null` is addressed to nobody and
+        // is read by a strict client as an error frame. Every request method
+        // below answers an id-less frame with silence; `tools/call` still runs
+        // the tool, because a client may fire one and forget it.
+        if (!hasId) return null;
         return {
           jsonrpc: '2.0',
           id,
@@ -86,9 +92,9 @@ export function createHandler({
         return null;
       }
       case 'ping':
-        return { jsonrpc: '2.0', id, result: {} };
+        return hasId ? { jsonrpc: '2.0', id, result: {} } : null;
       case 'tools/list':
-        return { jsonrpc: '2.0', id, result: { tools } };
+        return hasId ? { jsonrpc: '2.0', id, result: { tools } } : null;
       case 'tools/call': {
         const name = params && params.name;
         const args = (params && params.arguments) || {};
@@ -131,6 +137,9 @@ export function createHandler({
           log(`tools/call ${name} · cancelled · response dropped`);
           return null;
         }
+        // The tool ran; a notification is still a notification, and nothing at
+        // all goes back for one.
+        if (!hasId) return null;
         return {
           jsonrpc: '2.0',
           id,

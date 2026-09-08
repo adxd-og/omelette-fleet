@@ -78,7 +78,7 @@ Every unit understands these. Adapters may add their own (below).
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `enabled` | boolean | `true` | `false` makes every spawning tool of that unit return an error; catalog tools still answer |
+| `enabled` | boolean | `true` | `false` makes every spawning tool of that unit return an error; `<unit>_models` and `<unit>_result` still answer |
 | `mode` | `"read-only"` \| `"workspace-write"` | `"read-only"` | Requested capability level. Subject to the ceiling — see below |
 | `model` | string | `""` (vendor default) | Default model id for this unit. Must be in the unit's catalog, or it is ignored with a warning |
 | `effort` | string | `""` (vendor default) | Default reasoning effort. Only meaningful for units whose catalog declares effort levels |
@@ -147,15 +147,20 @@ with `CODEX_TIMEOUT_S=333` in the server's environment. `omelette-fleet show cod
 
 ```
 codex
-  KEY        VALUE          SOURCE
-  enabled    true           default
-  mode       read-only      default
-  model      gpt-5.6-terra  file
-  effort     high           default
-  timeoutS   333            env:CODEX_TIMEOUT_S
-  maxTurns   30             default
-  webSearch  false          file:defaults
-  status     true           default
+  KEY              VALUE          SOURCE
+  enabled          true           default
+  mode             read-only      default
+  model            gpt-5.6-terra  file
+  effort           high           default
+  timeoutS         333            env:CODEX_TIMEOUT_S
+  maxTurns         30             default
+  outputCap        400000         default
+  webSearch        false          file:defaults
+  status           true           default
+  results          true           default
+  resultsKeep      50             default
+  resultsMaxBytes  52428800       default
+  cancel           finish         default
   ceiling  closed — OMELETTE_ALLOW_WRITE does not list "codex" · effective mode: read-only
 ```
 
@@ -163,7 +168,7 @@ codex
 
 The `mode` row shows what the config *asked for*. When the ceiling clamps it, the clamp is spelled out inline — `workspace-write (clamped to read-only)` — so nobody reads the requested value off the table and believes it. `doctor` prints the same block per unit.
 
-An invalid value does not poison the key — it warns and falls through to the next-lower layer. `"timeoutS": "soon"` in the file leaves `timeoutS` at the built-in default and logs `grok.timeoutS = "soon" is invalid — ignored`.
+An invalid value does not poison the key — it warns and falls through to the next-lower layer. `"timeoutS": "soon"` in the file leaves `timeoutS` at the built-in default and logs `fleet config (file): grok.timeoutS = "soon" is invalid — ignored`.
 
 ### Editing with `set`
 
@@ -246,7 +251,7 @@ The `agents` block is the exception, and for a plain reason: nothing reads it at
 Disabling a unit is a runtime decision, not a registration one:
 
 - Every spawning tool returns an error result naming the config path: `Error: unit "grok" is disabled in the fleet config (/…/fleet.config.json).`
-- The unit's `<unit>_models` tool still answers — it is a local catalog read.
+- The unit's `<unit>_models` tool still answers — it is a local catalog read — and so does `<unit>_result`: what the spool serves was produced and paid for before anyone switched the unit off.
 - **The tool list does not change for the running session.** `tools/list` is built when the server starts, so the client still shows the tools; they just refuse. Re-enable and the next call works, again with no restart.
 
 To remove the tools from the client entirely, use `omelette-fleet uninstall` (or `claude mcp remove`) and restart Claude Code.
@@ -294,19 +299,19 @@ Two related guarantees, neither of them configurable:
 | **grok** | No CLI-side timeout flag exists, so the process-group SIGKILL at `timeoutS` is the only wall-clock bound. Default 300 s; the example config raises it to 1800 s — a thorough `grok_code_review` has been observed running 15 minutes, and a kill now returns the partial answer rather than nothing |
 | **codex** | Same — hard kill only, at `timeoutS`. Default 600 s, because `codex_code_review` over a directory is a long call |
 
-A hard kill is always reported as an error naming the unit and the limit, e.g. `codex hard-killed after 600s (raise codex.timeoutS in the fleet config)`. `gemini_deep_research` runs several stages (decompose, parallel gathers, synthesis) and each stage is bounded by `timeoutS` separately — the whole pipeline commonly takes 3–10 minutes.
+A hard kill is always reported as an error naming the unit and the limit, e.g. `codex hard-killed after 600s (raise codex.timeoutS in the fleet config)`. `gemini_deep_research` runs several stages (decompose, parallel gathers, synthesis), each bounded separately, and each stage's wall is `timeoutS + 60 s` — agy is handed `timeoutS` and the process-group SIGKILL sits 60 s above it. The whole pipeline commonly takes 3–10 minutes.
 
 ## Client timeouts
 
 `timeoutS` is the fleet's own bound. The **client** has two more, and a call dies at whichever comes first — `omelette-fleet doctor` prints both, as `mcp timeout`, and never as a fault:
 
 ```
-mcp timeout   wall-clock: MCP_TOOL_TIMEOUT=2000000 ms (~/.claude/settings.json env) ≥ 1860000 needed · ok
-              deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · within the wall-clock limit
+mcp timeout   wall-clock: MCP_TOOL_TIMEOUT=2000000 ms (~/.claude/settings.json env) ≥ 1800000 needed · ok
+              deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · ABOVE the wall-clock limit (2000000 ms) — run it deliberately
               idle: CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT unset → 30 min default; grok.timeoutS=1800 s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0 or a per-server "timeout"
 ```
 
-**Wall-clock — `MCP_TOOL_TIMEOUT`.** Milliseconds, one tool call. Unset means Claude Code's documented default of about 28 hours, which nothing here reaches; doctor reports that as `unset (default ~28 h) · ok`. What the fleet *needs* is the longest a single call can honestly take: the largest `timeoutS` among the **enabled** units, in milliseconds, plus 60 s for gemini because its hard kill sits that far above the timeout it hands agy. Below that, the line ends `· TOO LOW` and doctor prints the snippet to merge — `{"env":{"MCP_TOOL_TIMEOUT":"1860000"}}` — into `.claude/settings.json` or `~/.claude/settings.json`. It is a paste: this package reads those files and never writes them.
+**Wall-clock — `MCP_TOOL_TIMEOUT`.** Milliseconds, one tool call. Unset means Claude Code's documented default of about 28 hours, which nothing here reaches; doctor reports that as `unset (default ~28 h) · ok`. What the fleet *needs* is the longest a single call can honestly take: the largest over the **enabled** units of `timeoutS`, in milliseconds, with 60 s added for gemini only — its hard kill sits that far above the timeout it hands agy. With the example config (`grok.timeoutS: 1800`, `gemini.timeoutS: 300`, `codex.timeoutS: 600`) that is grok's 1 800 000 ms, because gemini's 300 + 60 s is nowhere near it. Below the needed value, the line ends `· TOO LOW` and doctor prints the snippet to merge — `{"env":{"MCP_TOOL_TIMEOUT":"1800000"}}` — into `.claude/settings.json` or `~/.claude/settings.json`. It is a paste: this package reads those files and never writes them.
 
 Doctor resolves the variable the way the client does — the process environment first, then the `env` block of `.claude/settings.local.json`, `.claude/settings.json`, and the user scope's files under `$CLAUDE_CONFIG_DIR` or `~/.claude` — and names the file it came from, because a wall read out of the wrong file is worse than no reading at all.
 

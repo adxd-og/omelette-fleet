@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +56,24 @@ const line = (out, head) => out.split('\n').find((l) => l.startsWith(head));
 const ours = (prefix) => Object.fromEntries(UNITS.map((u) => [`${prefix}-${u}`, { type: 'stdio', command: 'node', args: [server(u)] }]));
 
 const writeClaudeJson = (s, body) => writeFileSync(join(s.dir, '.claude.json'), JSON.stringify(body, null, 2));
+
+/**
+ * A stand-in vendor CLI for the one test that needs a unit ENABLED as well as
+ * registered — the per-server `timeout` line is printed for enabled units only,
+ * and an enabled unit with no binary is a FAULT and an exit 1 about the binary.
+ */
+function fakeBin(dir, name = 'fake-cli') {
+  const p = join(dir, name);
+  writeFileSync(p, [
+    `#!${process.execPath}`,
+    'const a = process.argv.slice(2);',
+    "if (a[0] === '--version') { console.log('fake-cli 9.9.9'); process.exit(0); }",
+    "if (a[0] === 'login' && a[1] === 'status') { process.stderr.write('Logged in using ChatGPT\\n'); process.exit(0); }",
+    'process.exit(0);',
+  ].join('\n'));
+  chmodSync(p, 0o755);
+  return p;
+}
 
 test('doctor adopts the prefix its own servers are actually registered under', () => {
   const s = sandbox();
@@ -134,7 +152,11 @@ test('doctor keeps omelette and names both when our servers wear two prefixes', 
     line(r.out, 'prefix'),
     'prefix        omelette — our servers are also registered as orion-*, review-*; pass --prefix <name> to look at one',
   );
-  assert.match(r.out, /omelette-codex not registered/);
+  // The prefix is ambiguous; the registrations are not. Each is reported under
+  // the name it wears, because each of them does run this checkout.
+  assert.match(r.out, /orion-codex registered \(user\) → node .*servers.*codex\.mjs \[file exists\]/);
+  assert.match(r.out, /review-gemini registered \(user\) → node .*servers.*gemini\.mjs \[file exists\]/);
+  assert.match(r.out, /omelette-grok not registered/, 'and the unit nobody registered still says so');
 
   // A name of ours pointing at ANOTHER clone is not a prefix of ours.
   writeClaudeJson(s, { mcpServers: { 'orion-codex': { command: 'node', args: [join(s.dir, 'other-clone', 'servers', 'codex.mjs')] } } });
@@ -142,6 +164,75 @@ test('doctor keeps omelette and names both when our servers wear two prefixes', 
   assert.equal(line(elsewhere.out, 'prefix'), undefined);
   assert.match(elsewhere.out, /omelette-codex not registered/);
   assert.deepEqual(nextLines(elsewhere.out), ['next          omelette-fleet install']);
+});
+
+test('doctor reads the scopes in Claude Code\'s precedence: the project entry in .claude.json, then .mcp.json, then user', () => {
+  const s = sandbox();
+  // codex enabled, with a binary that answers, so the per-server timeout line
+  // is printed and the run is not a fault about a missing CLI.
+  writeFileSync(join(s.dir, 'fleet.config.json'), JSON.stringify({
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 } },
+  }));
+  const codex = (timeout) => ({ 'omelette-codex': { type: 'stdio', command: 'node', args: [server('codex')], timeout } });
+  const run3 = () => run(s, ['doctor'], { CODEX_BIN: fakeBin(s.dir, 'fake-codex') });
+
+  // The same name in all three places, each with its own cap. Claude Code reads
+  // its "local" scope — this project's entry in .claude.json — first.
+  writeClaudeJson(s, { mcpServers: codex(3600000), projects: { [s.proj]: { mcpServers: codex(1000) } } });
+  writeFileSync(join(s.proj, '.mcp.json'), JSON.stringify({ mcpServers: codex(2000) }, null, 2));
+  const local = run3();
+  assert.equal(local.code, 0, local.out);
+  assert.match(local.out, /omelette-codex "timeout": 1000 ms \(project\) overrides it/, local.out);
+  assert.match(local.out, /omelette-codex registered \(project\) → /);
+
+  // Without it, `.mcp.json` — the checked-in project scope — beats the user's.
+  writeClaudeJson(s, { mcpServers: codex(3600000) });
+  const projectFile = run3();
+  assert.equal(projectFile.code, 0, projectFile.out);
+  assert.match(projectFile.out, /omelette-codex "timeout": 2000 ms \(\.mcp\.json\) overrides it/, projectFile.out);
+  assert.match(projectFile.out, /omelette-codex registered \(\.mcp\.json\) → /);
+
+  // And the user scope answers only when it is the only one left.
+  writeFileSync(join(s.proj, '.mcp.json'), JSON.stringify({ mcpServers: {} }, null, 2));
+  const user = run3();
+  assert.match(user.out, /omelette-codex "timeout": 3600000 ms \(user\) overrides it/, user.out);
+  assert.match(user.out, /omelette-codex registered \(user\) → /);
+});
+
+test('doctor finds a server of ours registered under a name that is not <prefix>-<unit>, and calls it by that name', () => {
+  const s = sandbox();
+  // A perfectly working install whose operator named the server for the job it
+  // does. Reporting `omelette-codex not registered` about it ends in an
+  // `install` that registers a second copy of what is already there.
+  writeClaudeJson(s, { mcpServers: { 'codex-review': { type: 'stdio', command: 'node', args: [server('codex')] } } });
+  const r = doctor(s);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /codex-review registered \(user\) → node .*servers.*codex\.mjs \[file exists\]/);
+  assert.doesNotMatch(r.out, /omelette-codex not registered/);
+  // …and `next` says what is actually missing, not "install".
+  assert.deepEqual(nextLines(r.out), ['next          omelette-fleet rules --agents --hooks']);
+  // The other two units are genuinely absent, and still say so.
+  assert.match(r.out, /omelette-gemini not registered/);
+});
+
+test('doctor calls a mixed install ambiguous even when one of the prefixes is omelette', () => {
+  const s = sandbox();
+  writeClaudeJson(s, {
+    mcpServers: {
+      'orion-codex': { command: 'node', args: [server('codex')] },
+      'omelette-gemini': { command: 'node', args: [server('gemini')] },
+    },
+  });
+  const r = doctor(s);
+  assert.equal(r.code, 0, r.out);
+  assert.equal(
+    line(r.out, 'prefix'),
+    'prefix        omelette — our servers are also registered as orion-*; pass --prefix <name> to look at one',
+    'two prefixes are two installs, and doctor reports on one of them',
+  );
+  // The default is kept, and both servers are found where they actually are.
+  assert.match(r.out, /omelette-gemini registered \(user\) → /);
+  assert.match(r.out, /orion-codex registered \(user\) → /);
 });
 
 test('doctor: a scope\'s settings files are read as a UNION — one event here, the rest there', () => {

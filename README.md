@@ -19,17 +19,17 @@ Three peers inside Claude Code, each on a subscription you already pay for, none
 
 ```console
 $ omelette-fleet doctor      # example output — all three units; config tables trimmed
-FLEET DOCTOR · omelette-fleet 0.3.2 · node v20.19.5 · darwin
-version       0.3.2 · latest 0.3.2
+FLEET DOCTOR · omelette-fleet 0.3.3 · node v20.19.5 · darwin
+version       0.3.3 · latest 0.3.3
 fleet home    ~/.omelette
 fleet config  ~/.omelette/fleet.config.json
 claude CLI    ~/.local/bin/claude
 claude config ~/.claude.json
-rules         project: v0.3.2 · global: absent
-agents        project: v0.3.2 (2) · global: absent
-skills        project: v0.3.2 (1) · global: absent
-hooks         project: v0.3.2 (wired: PreToolUse, PreCompact, SessionStart) · global: absent
-mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1860000 needed · ok
+rules         project: v0.3.3 · global: absent
+agents        project: v0.3.3 (2) · global: absent
+skills        project: v0.3.3 (1) · global: absent
+hooks         project: v0.3.3 (wired: PreToolUse, PreCompact, SessionStart) · global: absent
+mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1800000 needed · ok
               deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · within the wall-clock limit
               idle: CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT unset → 30 min default; grok.timeoutS=1800 s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0 or a per-server "timeout"
 
@@ -45,6 +45,7 @@ mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1860000 nee
               timeoutS   300                      file
   mcp         omelette-gemini registered (user) → node ~/omelette-fleet/servers/gemini.mjs [file exists]
   status feed ~/.omelette is writable
+  results     ~/.omelette/results/gemini · keep 50 · max 50 MB
 
 ── grok (Grok) ────────────────────────────────────────────────
   bin         grok → ~/.grok/bin/grok   [GROK_BIN=(unset)]
@@ -145,7 +146,7 @@ Optionally, install the guard hook — the coder's "never commits" rule, enforce
 ./bin/omelette-fleet.mjs rules --hooks  # writes .claude/hooks/omelette-guard.mjs
 ```
 
-It prints a settings snippet and you merge it in yourself, into `.claude/settings.json` or `.claude/settings.local.json`: a hook script does nothing until your settings call it, and omelette-fleet reads those files but never writes them. The snippet is a whole `hooks` object, so — as the printed line says — *"Merge this into your settings file (it is a whole `hooks` object — add the events it lists to an existing `hooks` block rather than replacing the file)"*. The script path in it is quoted for the platform the CLI runs on: POSIX single quotes on macOS and Linux, double quotes on Windows, where the JSON layer then doubles the backslashes of the path (`"node \"C:\\Users\\me\\.claude\\hooks\\omelette-guard.mjs\""`). Double quotes are a shell quoting, not an argv: under PowerShell or Git Bash a `$` in that path would expand, so a path holding one wants editing by hand — one more reason native Windows is not supported yet. `doctor` reads both files and reports `hooks         project: v0.3.2 (wired: PreToolUse, PreCompact, SessionStart)` — or `NOT wired`, which is the failure mode where everything looks installed; a `PreToolUse` entry whose matcher cannot see a `Bash` call is reported as `NOT wired (PreToolUse matcher is not Bash)`, since it will never see the call it exists to guard. A matcher is read the way Claude Code reads it: an **exact list or an unanchored regex**. A string of nothing but tool names, `|`, `,` and spaces is a list — `Bash|Edit` and `Bash, Write` are wired, `Bashful` and `ash` are not — and anything else is a regex tested against `Bash` unanchored, so `.*`, `Ba.` and `ash$` are wired too; an absent matcher, `""` and `"*"` mean every tool. One that does not compile counts as nothing and is named as what it is — `NOT wired (PreToolUse matcher "(" is not a valid regex)` — because that is a typo to fix, not a guard aimed at the wrong tool, and a matcher that is not a string at all is reported as `NOT wired (PreToolUse matcher is not a string)`. The `SessionStart` group is matched on the session's **source** rather than a tool: the snippet wires `"matcher": "compact"`, `startup` is reported as `NOT wired (SessionStart matcher is not compact)`, and a guard still wired the 0.3.2 way reads `NOT wired (missing SessionStart)`.
+It prints a settings snippet and you merge it in yourself, into `.claude/settings.json` or `.claude/settings.local.json`: a hook script does nothing until your settings call it, and omelette-fleet reads those files but never writes them. The snippet is a whole `hooks` object, so — as the printed line says — *"Merge this into your settings file (it is a whole `hooks` object — add the events it lists to an existing `hooks` block rather than replacing the file)"*. The script path in it is quoted for the platform the CLI runs on: POSIX single quotes on macOS and Linux, double quotes on Windows, where the JSON layer then doubles the backslashes of the path (`"node \"C:\\Users\\me\\.claude\\hooks\\omelette-guard.mjs\""`). Double quotes are a shell quoting, not an argv: under PowerShell or Git Bash a `$` in that path would expand, so a path holding one wants editing by hand — one more reason native Windows is not supported yet. `doctor` reads both files and reports `hooks         project: v0.3.3 (wired: PreToolUse, PreCompact, SessionStart)` — or `NOT wired`, which is the failure mode where everything looks installed; a `PreToolUse` entry whose matcher cannot see a `Bash` call is reported as `NOT wired (PreToolUse matcher is not Bash)`, since it will never see the call it exists to guard. A matcher is read the way Claude Code reads it: an **exact list or an unanchored regex**. A string of nothing but tool names, `|`, `,` and spaces is a list — `Bash|Edit` and `Bash, Write` are wired, `Bashful` and `ash` are not — and anything else is a regex tested against `Bash` unanchored, so `.*`, `Ba.` and `ash$` are wired too; an absent matcher, `""` and `"*"` mean every tool. One that does not compile counts as nothing and is named as what it is — `NOT wired (PreToolUse matcher "(" is not a valid regex)` — because that is a typo to fix, not a guard aimed at the wrong tool, and a matcher that is not a string at all is reported as `NOT wired (PreToolUse matcher is not a string)`. The `SessionStart` group is matched on the session's **source** rather than a tool: the snippet wires `"matcher": "compact"`, `startup` is reported as `NOT wired (SessionStart matcher is not compact)`, and a guard still wired the 0.3.2 way reads `NOT wired (missing SessionStart)`.
 
 Then check the install:
 
@@ -167,7 +168,7 @@ next          omelette-fleet rules --agents --hooks       # registered, but one 
 next          a managed file has no omelette-fleet marker (see the rules/agents/skills/hooks lines) — inspect it, then `omelette-fleet rules --agents --hooks --force` replaces it
 next          <path> is a symlink — omelette-fleet refuses to manage it; remove the link, then rules --agents --hooks
 next          merge the hooks snippet into .claude/settings.json (rules --hooks prints it)
-next          raise MCP_TOOL_TIMEOUT to 1860000 ms — merge {"env":{"MCP_TOOL_TIMEOUT":"1860000"}} into your settings file (omelette-fleet never writes it)
+next          raise MCP_TOOL_TIMEOUT to 1800000 ms — merge {"env":{"MCP_TOOL_TIMEOUT":"1800000"}} into your settings file (omelette-fleet never writes it)
 ```
 
 and nothing at all once they are done. The marker line and the symlink line are the exceptions to "run this command": a file at one of those paths that is not ours would be refused by the plain command, and a symlink is refused by `--force` as well — `rules` never writes through one — so `doctor` names the situation instead of sending you into a refusal. It is a hint, never a fault: it does not change the exit code. It looks at the **project** scope only — the scope the commands it suggests write — so a guard installed and wired globally still gets the merge hint here. The timeout line is last on purpose: it is tuning for a machine that already works, so it waits until every first-run step is done.

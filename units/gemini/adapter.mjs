@@ -89,9 +89,10 @@
  * Stage models are picked from the catalog by tier/effort so a generation
  * sweep never leaves a stale id behind (the old bridge hard-coded one and
  * silently ran on agy's default after 3.5 Flash was retired).
- * A cancelled request (cancel: kill) stops the pipeline between stages: the
- * gathers that have not started are skipped and the synthesis never runs, so
- * what comes back is the raw findings under a cancellation note.
+ * A cancelled request (cancel: kill) stops the pipeline: the gathers that have
+ * not started are skipped, and the synthesis is either never started or killed
+ * inside it — either way what comes back is the raw findings under a
+ * cancellation note, never an error that loses what was already paid for.
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -338,7 +339,8 @@ const DEGRADED_BANNER =
  * with it, because a reader who cannot see the stages cannot see the gap.
  * A gather that THREW is not a partial stage — it produced no text at all, and
  * its `_(gather failed: …)_` line already stands where the finding would be.
- * A cancelled run never reaches synthesis, so it is partial by definition.
+ * A cancelled run has no synthesis to speak of — the stage is either never
+ * started or killed inside it — so it comes back as the findings, partial.
  * @returns {Promise<{text:string, partial:boolean}>}
  */
 async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
@@ -391,15 +393,26 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
     return { text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n'), partial: true };
   }
 
-  const synth = await runAgyWithRetry(ctx, {
-    prompt:
-      NO_GIT_PREFIX +
-      'Synthesize the research findings below into a markdown report with the ' +
-      'sections: Summary, Findings, Sources, Gaps & Confidence. Merge duplicate ' +
-      'sources, flag contradictions, and be explicit about uncertainty.\n\n' +
-      `Original question: ${question}\n\n${findings.map((f) => f.text).join('\n\n---\n\n')}`,
-    model: stage.synth,
-  });
+  let synth;
+  try {
+    synth = await runAgyWithRetry(ctx, {
+      prompt:
+        NO_GIT_PREFIX +
+        'Synthesize the research findings below into a markdown report with the ' +
+        'sections: Summary, Findings, Sources, Gaps & Confidence. Merge duplicate ' +
+        'sources, flag contradictions, and be explicit about uncertainty.\n\n' +
+        `Original question: ${question}\n\n${findings.map((f) => f.text).join('\n\n---\n\n')}`,
+      model: stage.synth,
+    });
+  } catch (e) {
+    // The cancel can land INSIDE the synthesis: the SIGKILL leaves that stage
+    // with no text of its own, and letting the error out would throw away every
+    // gather the operator already paid for. Same salvage as the pre-synthesis
+    // return above — the findings, unsynthesised, under the same note.
+    if (!cancelled() && !/cancelled by the client|^cancelled$/i.test((e && e.message) || '')) throw e;
+    ctx.log('deep research · cancelled during synthesis — the findings are returned unsynthesised');
+    return { text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n'), partial: true };
+  }
 
   // The stages that RAN: decompose, one per sub-question, synthesis. A gather
   // that threw is counted here (it ran, it was paid for) and never in the

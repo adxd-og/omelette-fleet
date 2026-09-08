@@ -34,7 +34,10 @@
  * READS NEVER FOLLOW A SYMLINK: `lstat` first, regular files only, plus
  * O_NOFOLLOW where the platform defines it. Ids are validated against
  * RESULT_ID_RE before a path is built, so a traversal never reaches the
- * filesystem at all.
+ * filesystem at all. NEITHER DO THE DIRECTORIES ON THE WAY THERE: O_EXCL and
+ * O_NOFOLLOW answer for the leaf file only, so `<home>/results` and
+ * `<home>/results/<unit>` are lstatted before every write, listing, read and
+ * prune — a link planted at either of them would redirect the whole spool.
  */
 import {
   closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, readSync,
@@ -129,9 +132,43 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
   if (!usable) {
     log(`results: spool off — ${JSON.stringify(String(unit ?? ''))} under ${JSON.stringify(String(home ?? ''))} is not a place this fleet writes`);
   }
+  const root = usable ? join(home, 'results') : null;
   const dir = usable ? join(home, 'results', unit) : null;
   const keepN = posint(keep, 50);
   const capBytes = posint(maxBytes, 50 * 1024 * 1024);
+
+  /**
+   * May this spool be touched at all? Both directories, lstatted (never
+   * stat): a SYMLINK at either of them sends every write, listing and unlink
+   * below to wherever it points, and O_NOFOLLOW on the leaf file cannot see
+   * that. Anything that is not a plain directory is refused the same way — one
+   * log line, and the caller answers null / [] / nothing.
+   *
+   * A directory that is simply ABSENT is not a refusal: it is a spool nobody
+   * has written to yet, silent for a read and created for a write.
+   *
+   * @param {{create?:boolean}} o `create` — the write path, and only it.
+   */
+  function dirsReady({ create = false } = {}) {
+    if (!dir) return false; // an unusable store: already logged, once, at construction
+    for (const d of [root, dir]) {
+      let st = null;
+      try { st = lstatSync(d); } catch (e) {
+        if (!e || e.code !== 'ENOENT') { log(`results: spool off — ${d} could not be read: ${(e && e.message) || e}`); return false; }
+        if (!create) return false;
+        try { mkdirSync(d, { recursive: true, mode: 0o700 }); } catch (err) {
+          log(`results: spool off — ${d} could not be created: ${(err && err.message) || err}`);
+          return false;
+        }
+        continue;
+      }
+      if (st.isSymbolicLink() || !st.isDirectory()) {
+        log(`results: spool off — ${d} is ${st.isSymbolicLink() ? 'a symlink' : 'not a directory'}`);
+        return false;
+      }
+    }
+    return true;
+  }
 
   /** The header of one file, read as a bounded prefix — a listing must not pull whole answers into memory. */
   function headerOf(path) {
@@ -157,9 +194,11 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
    * Everything in the directory, newest `endedAt` first, the filename breaking
    * a tie. A file whose header we cannot read sorts OLDEST on purpose: it is
    * never listed, and retention takes it before a real answer.
+   *
+   * Called only behind `dirsReady`, so it never has to ask again — one refusal
+   * is one log line, whichever public call it came through.
    */
   function scan() {
-    if (!dir) return [];
     let names = [];
     try { names = readdirSync(dir); } catch { return []; }
     const rows = [];
@@ -196,11 +235,12 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
   function list(limit = 10) {
     const n = Number(limit);
     const take = Number.isInteger(n) && n >= 0 ? n : 10;
+    if (!dirsReady()) return [];
     return scan().filter((r) => r.readable).slice(0, take).map(publicShape);
   }
 
   function read(resultId) {
-    if (!dir || !isValidResultId(resultId)) return null;
+    if (!dir || !isValidResultId(resultId) || !dirsReady()) return null;
     const path = join(dir, `${resultId}.md`);
     let fd = null;
     try {
@@ -226,12 +266,12 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
       log(`results: not spooling — ${JSON.stringify(String(resultId ?? '').slice(0, 80))} is not a result id`);
       return null;
     }
+    if (!dirsReady({ create: true })) return null;
     const path = join(dir, `${resultId}.md`);
     const tmp = `${path}.${process.pid}.tmp`;
     let fd = null;
     let mine = false;
     try {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
       fd = openSync(tmp, 'wx', 0o600); // O_EXCL: a planted tmp fails the write rather than being followed
       mine = true;
       writeFileSync(fd, renderResult({ ...record, unit }));
@@ -251,7 +291,7 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
 
   /** Retention: the count, then the byte budget, then abandoned tmp files. Every unlink is guarded. */
   function prune() {
-    if (!dir) return;
+    if (!dirsReady()) return;
     const rows = scan();
     let total = 0;
     for (let i = 0; i < rows.length; i++) {

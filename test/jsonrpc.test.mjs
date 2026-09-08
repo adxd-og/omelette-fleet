@@ -48,6 +48,27 @@ test('a throwing tool becomes an isError result, never a protocol error', async 
   assert.equal(r.error, undefined);
 });
 
+test('a request method sent WITHOUT an id is a notification: it is answered with silence, and tools/call still runs', async () => {
+  // JSON-RPC 2.0 §4: a message with no `id` is a notification, and a server
+  // MUST NOT reply to one. A frame carrying `"id": null` is the same thing —
+  // answering it addresses a response to nobody.
+  const calls = [];
+  const h = createHandler({
+    serverInfo: { name: 'test', version: '0.0.0' },
+    tools,
+    callTool: async (name, args) => { calls.push([name, args]); return { text: 'ran' }; },
+  });
+  for (const method of ['initialize', 'ping', 'tools/list']) {
+    assert.equal(await h({ jsonrpc: '2.0', method }), null, `${method} without an id`);
+    assert.equal(await h({ jsonrpc: '2.0', id: null, method }), null, `${method} with a null id`);
+  }
+  // Fire-and-forget: the tool is a side effect the client asked for, so it runs;
+  // there is simply no request to answer.
+  assert.equal(await h({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'echo', arguments: { a: 1 } } }), null);
+  assert.deepEqual(calls, [['echo', { a: 1 }]]);
+  assert.equal(h.inflight(), 0, 'an id-less call is not tracked and leaves nothing behind');
+});
+
 test('unknown method: -32601 for requests, silence for notifications', async () => {
   const r = await handler({ jsonrpc: '2.0', id: 8, method: 'resources/list' });
   assert.equal(r.error.code, -32601);

@@ -222,6 +222,36 @@ test('read refuses a symlink, an id that is not one, and an id that is not there
   assert.equal(got.path, join(spool(dir), `${REC.resultId}.md`));
 });
 
+test('a symlinked spool directory is refused by write, list, read and prune — the link target is never touched',
+  { skip: !symlinksWork && 'POSIX symlinks' }, () => {
+    // O_EXCL and O_NOFOLLOW guard the leaf FILE; the two directories on the way
+    // to it are their own answer, and a link planted at either of them would
+    // otherwise redirect every write, listing, read and unlink out of the spool.
+    const planted = (linkAt) => {
+      const dir = home();
+      const outside = join(dir, 'elsewhere');
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(outside, '20260908T142501Z-19312-9.md'), renderResult({ ...REC, resultId: '20260908T142501Z-19312-9' }));
+      if (linkAt === 'unit') mkdirSync(join(dir, 'results'));
+      symlinkSync(outside, linkAt === 'unit' ? spool(dir) : join(dir, 'results'));
+      return { dir, outside };
+    };
+
+    for (const linkAt of ['unit', 'results']) {
+      const { dir, outside } = planted(linkAt);
+      const logged = [];
+      const s = createResultStore({ home: dir, unit: 'fake', log: (m) => logged.push(m) });
+      assert.equal(s.write(REC), null, `${linkAt}: a link is not a spool directory`);
+      assert.deepEqual(s.list(), [], `${linkAt}: nothing behind the link is listed`);
+      assert.equal(s.read('20260908T142501Z-19312-9'), null, `${linkAt}: nothing behind the link is read`);
+      assert.doesNotThrow(() => s.prune(), `${linkAt}: prune is a no-op, never an exception`);
+      assert.deepEqual(readdirSync(outside).sort(), ['20260908T142501Z-19312-9.md'],
+        `${linkAt}: nothing is created or deleted at the link target`);
+      assert.ok(logged.length >= 1, `${linkAt}: the refusal is logged`);
+      assert.ok(logged.every((m) => m.startsWith('results: spool off —')), logged.join(' | '));
+    }
+  });
+
 test('a file with a result-id name and no header of ours is never listed, and retention takes it first', () => {
   const dir = home();
   const s = createResultStore({ home: dir, unit: 'fake', keep: 1 });

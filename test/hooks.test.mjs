@@ -618,3 +618,68 @@ test('SessionStart(compact): no .omelette directory is silence, a clean exit, an
   assert.equal(r.err, '');
   assert.deepEqual(readdirSync(proj), [], 'a missing ledger is not a reason to create one');
 });
+
+test('a `.omelette` that is a symlink is refused by BOTH events — nothing appended, nothing read, nothing printed',
+  { skip: process.platform === 'win32' && 'POSIX symlinks' }, () => {
+    const g = guard();
+    const proj = join(g.dir, 'linked-dir');
+    mkdirSync(proj);
+    // The per-ledger lstat cannot see this one: the link is the DIRECTORY, and
+    // every ledger inside it is a perfectly regular file somewhere else.
+    const outside = join(g.dir, 'outside-omelette');
+    mkdirSync(outside);
+    const ledger = join(outside, 'ledger-x.md');
+    writeFileSync(ledger, '## Handoff\nSECRET from outside the project\n');
+    symlinkSync(outside, join(proj, '.omelette'));
+
+    const pre = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'auto', cwd: proj });
+    assert.equal(pre.code, 0, pre.err);
+    assert.equal(pre.out, '', 'a linked ledger directory is skipped whole — not even the handoff line');
+    assert.equal(readFileSync(ledger, 'utf8'), '## Handoff\nSECRET from outside the project\n', 'never appended to');
+
+    const start = fire(g.path, sessionStart({ cwd: proj }));
+    assert.equal(start.code, 0, start.err);
+    assert.equal(start.out, '', 'and never read into the next context');
+    assert.equal(start.err, '');
+  });
+
+test('a cwd that cannot be read is exit 0 and silence, for both events', () => {
+  const g = guard();
+  // A regular file where a project directory should be: every path under it
+  // fails with ENOTDIR, and none of that is worth an exit code or a word.
+  const file = join(g.dir, 'not-a-directory');
+  writeFileSync(file, 'a file where a project should be\n');
+  for (const event of [{ hook_event_name: 'PreCompact', trigger: 'auto', cwd: file }, sessionStart({ cwd: file })]) {
+    const r = fire(g.path, event);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(r.out, '', `${event.hook_event_name} printed: ${JSON.stringify(r.out)}`);
+    assert.equal(r.err, '');
+  }
+});
+
+test('SessionStart(compact): a ledger past 1 MiB is read from its TAIL, and the block says so', () => {
+  const g = guard();
+  const proj = ledgerProject(g, 'tail');
+  // The handoff a reader needs is the LAST one, and on a long-running plan it
+  // sits past the first megabyte — where a head-first read never finds it.
+  const filler = Array.from({ length: 12000 }, (_, i) => `Ruling: filler ${i} — ${'x'.repeat(80)}`).join('\n');
+  writeFileSync(join(proj, '.omelette', 'ledger-long.md'), [
+    '## Handoff 2026-09-01T00:00Z',
+    'STALE: the first handoff, a megabyte of ledger ago',
+    filler,
+    '## Handoff 2026-09-08T18:00Z',
+    'Where it stands: T4 in review.',
+    '',
+  ].join('\n'));
+
+  const r = fire(g.path, sessionStart({ cwd: proj }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out, [
+    '--- ledger-long.md · last handoff ---',
+    '[… ledger larger than 1 MiB — read from its tail]',
+    '## Handoff 2026-09-08T18:00Z',
+    'Where it stands: T4 in review.',
+    '',
+  ].join('\n'));
+  assert.equal(r.out.includes('STALE'), false, 'the stale first block is behind the tail, and stays there');
+});

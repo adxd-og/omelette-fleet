@@ -196,9 +196,9 @@ const COMMANDS = {
       '<home>/results/<unit>/<id>.md before the response is sent, so an',
       'answer a client dropped — a timeout, a cancellation, a restart — is',
       'still on disk. No arguments: the last 10 across the fleet, newest',
-      'first. A unit: its last 10. A unit and an id: that result, header',
-      'and text. --path prints the file path instead of the content.',
-      'Reads the files directly: no server, no vendor CLI, nothing spent.',
+      'first. A unit: its last 10. An id (with or without its unit): that',
+      'result, header and text. --path prints the file path instead of the',
+      'content. Reads the files directly: no server, no CLI, nothing spent.',
     ],
   },
 };
@@ -493,20 +493,25 @@ function readProjectMcp({ cwd = process.cwd() } = {}) {
 }
 
 /**
- * Every place a registration for THIS project can live, in the order doctor
- * reports them: the user scope, the project's own scope inside `.claude.json`
- * (the entry keyed by the directory doctor is running in — another project's
- * servers are not this project's), and the project's `.mcp.json`.
+ * Every place a registration for THIS project can live, IN CLAUDE CODE'S OWN
+ * PRECEDENCE, so the first entry found under a name is the one that actually
+ * runs: the project's own scope inside `.claude.json` (Claude's "local" scope —
+ * the entry keyed by the directory doctor is running in, because another
+ * project's servers are not this project's), then the project's checked-in
+ * `.mcp.json` ("project"), then the user's `mcpServers` last.
+ *
+ * The labels are what doctor prints: `project` for the `.claude.json` entry,
+ * `.mcp.json` for the file, `user` for the user scope.
  */
 function registrationBuckets(config, mcpJson, cwd) {
   const buckets = [];
-  if (isObj(config) && isObj(config.mcpServers)) buckets.push(['user', config.mcpServers]);
   if (isObj(config) && isObj(config.projects)) {
     for (const [dir, p] of Object.entries(config.projects)) {
       if (isObj(p) && isObj(p.mcpServers) && sameLocation(dir, cwd)) buckets.push(['project', p.mcpServers]);
     }
   }
   if (isObj(mcpJson) && isObj(mcpJson.mcpServers)) buckets.push(['.mcp.json', mcpJson.mcpServers]);
+  if (isObj(config) && isObj(config.mcpServers)) buckets.push(['user', config.mcpServers]);
   return buckets;
 }
 
@@ -565,11 +570,19 @@ function findOurRegistrations(config, mcpJson, unitPaths, { cwd = process.cwd() 
 function adoptPrefix(asked, found) {
   if (asked) return { prefix: asked, line: null };
   const prefixes = [...new Set(found.filter((r) => r.ours && r.prefix).map((r) => r.prefix))].sort();
-  if (!prefixes.length || prefixes.includes(DEFAULT_PREFIX)) return { prefix: DEFAULT_PREFIX, line: null };
-  if (prefixes.length === 1) return { prefix: prefixes[0], line: `${prefixes[0]} (found on the registrations)` };
+  if (!prefixes.length) return { prefix: DEFAULT_PREFIX, line: null };
+  if (prefixes.length === 1) {
+    return prefixes[0] === DEFAULT_PREFIX
+      ? { prefix: DEFAULT_PREFIX, line: null }
+      : { prefix: prefixes[0], line: `${prefixes[0]} (found on the registrations)` };
+  }
+  // More than one prefix is more than one install, and that is ambiguous
+  // whether or not `omelette` is among them: a machine carrying `orion-codex`
+  // and `omelette-gemini` has two half-installs, and silently reporting on the
+  // default hides the other half. The default is kept; the others are named.
   return {
     prefix: DEFAULT_PREFIX,
-    line: `${DEFAULT_PREFIX} — our servers are also registered as ${prefixes.map((p) => `${p}-*`).join(', ')}; pass --prefix <name> to look at one`,
+    line: `${DEFAULT_PREFIX} — our servers are also registered as ${prefixes.filter((p) => p !== DEFAULT_PREFIX).map((p) => `${p}-*`).join(', ')}; pass --prefix <name> to look at one`,
   };
 }
 
@@ -647,6 +660,15 @@ const msValue = (raw, { min = 1 } = {}) => {
 
 /** 1800000 → `30 min`; 90000 → `90 s`. Whichever shape the operator would recognise. */
 const fmtWindow = (ms) => (ms % 60000 === 0 ? `${ms / 60000} min` : `${Math.round(ms / 1000)} s`);
+
+/**
+ * A byte budget in the unit it was WRITTEN in: `52428800` → `50 MB`, `524288`
+ * → `512 KB`, `1000` → `1000 B`. Rounding a small budget into megabytes printed
+ * `max 0 MB` for a cap that is perfectly real — a number nobody could act on.
+ */
+const fmtBytes = (n) => (n >= 1024 * 1024
+  ? `${Math.round(n / (1024 * 1024))} MB`
+  : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
 
 /** 'process env' stands alone; a file is named with the block it was read from. */
 const envSource = (source) => (source === 'process env' ? 'process env' : `${source} env`);
@@ -1768,9 +1790,15 @@ async function probeCodexModels(binPath) {
   return lines;
 }
 
-/** What the registry says about this unit — and whether it is even ours (see findRegistration). */
+/**
+ * What the registry says about this unit — and whether it is even ours (see
+ * findRegistration). A registration is called by the name it actually WEARS:
+ * `<prefix>-<unit>` is what doctor went looking for, but a server of ours found
+ * under another name runs the same file, and printing the name it does not have
+ * would send an operator looking for an entry that is not in the file.
+ */
 function mcpLine(name, prefix, reg, expected) {
-  const server = `${prefix}-${name}`;
+  const server = reg ? reg.name : `${prefix}-${name}`;
   if (!reg) return `${server} not registered — run: omelette-fleet install --units ${name}`;
   const file = reg.exists ? '[file exists]' : '[FILE MISSING]';
   const cmd = reg.command ? `${reg.command} ` : '';
@@ -1804,7 +1832,17 @@ async function cmdDoctor(argv) {
   );
   const adopted = adoptPrefix(flags.prefix === undefined ? null : prefix, found);
   const effective = adopted.prefix;
-  const regFor = (n) => found.find((r) => r.unit === n && r.name === `${effective}-${n}`) || null;
+  // The name doctor went looking for, first — including one worn by somebody
+  // else's clone, which is how "registered elsewhere" is still reported. Then
+  // ANY registration of ours for that unit: a server named for the job it does
+  // (`codex-review`) runs this checkout all the same, and calling it missing
+  // ends in an `install` that registers a second copy of what is already there.
+  // NOT under an explicit `--prefix`: that flag says which install to look at,
+  // and an answer about a different one is not the answer that was asked for.
+  const askedPrefix = flags.prefix !== undefined;
+  const regFor = (n) => found.find((r) => r.unit === n && r.name === `${effective}-${n}`)
+    || (askedPrefix ? null : found.find((r) => r.ours && r.unit === n))
+    || null;
   const registeredHere = UNIT_ORDER.some((n) => { const r = regFor(n); return !!r && r.ours; });
   // The entry each unit is registered through, keyed by unit: its own `timeout`
   // field is a per-server override of the client's wall-clock limit.
@@ -1881,7 +1919,7 @@ async function cmdDoctor(argv) {
     out(`  mcp         ${mcpLine(name, effective, reg, server)}`);
     out(`  status feed ${cfg.values.status ? '' : '(disabled in config) '}${home.writable ? `${home.dir} is writable` : `${home.dir} is NOT writable — ${home.error}`}`);
     out(`  results     ${cfg.values.results
-      ? `${join(cfg.home, 'results', name)} · keep ${cfg.values.resultsKeep} · max ${Math.round(cfg.values.resultsMaxBytes / (1024 * 1024))} MB`
+      ? `${join(cfg.home, 'results', name)} · keep ${cfg.values.resultsKeep} · max ${fmtBytes(cfg.values.resultsMaxBytes)}`
       : '(disabled in config) — answers are not spooled'}`);
     // Enabled AND registered AND broken. A unit you never wired up is not a fault.
     if (cfg.values.enabled && reg && problems.length) {
@@ -2144,7 +2182,12 @@ const storeFor = (name) => {
 
 function cmdResults(argv) {
   const { flags, positional, errors } = parseArgv(argv, { booleans: ['path'] });
-  const [name, id] = positional;
+  // ONE positional that is a result id is an ID, not a unit: an id is what a
+  // listing line, a status feed and a `<unit>_result` answer all hand back, and
+  // it names its own file — no unit name can be a result id, so nothing is
+  // ambiguous. Without a unit the spool of each unit is asked in turn.
+  const idOnly = positional.length === 1 && isValidResultId(positional[0]);
+  const [name, id] = idOnly ? [undefined, positional[0]] : positional;
   if (positional.length > 2) errors.push(`unexpected argument: ${positional[2]}`);
   if (name !== undefined && !UNITS[name]) {
     errors.push(`unknown unit "${name}" — known units: ${UNIT_ORDER.join(', ')} (usage: omelette-fleet results [<unit>] [<id>] [--path])`);
@@ -2156,8 +2199,17 @@ function cmdResults(argv) {
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet results: ${e}`)); return 1; }
 
   if (id !== undefined) {
-    const found = storeFor(name).read(id);
-    if (!found) { err(`omelette-fleet results: no spooled result "${id}" for ${name} in ${join(fleetHome(), 'results', name)}`); return 1; }
+    let found = null;
+    for (const u of name === undefined ? UNIT_ORDER : [name]) {
+      found = storeFor(u).read(id);
+      if (found) break;
+    }
+    if (!found) {
+      err(name === undefined
+        ? `omelette-fleet results: no spooled result "${id}" in any unit`
+        : `omelette-fleet results: no spooled result "${id}" for ${name} in ${join(fleetHome(), 'results', name)}`);
+      return 1;
+    }
     out(flags.path ? found.path : renderResult({ ...found.header, text: found.text }));
     return 0;
   }

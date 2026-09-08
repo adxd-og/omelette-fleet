@@ -243,6 +243,53 @@ test('deep research under `cancel: kill`: a cancel stops the remaining gathers a
   assert.equal(snap.lastEvent.status, 'cancelled');
 });
 
+test('deep research under `cancel: kill`: a cancel DURING synthesis still returns the findings that were paid for', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-cancel-synth-'));
+  const fake = join(dir, 'fake-agy.mjs');
+  // Every gather answers at once; only the synthesis is slow, so the cancel
+  // lands inside the stage that has no salvage of its own.
+  writeFileSync(fake, [
+    'const argv = process.argv.slice(2);',
+    'const prompt = argv[argv.indexOf("-p") + 1] || "";',
+    'const say = (r) => process.stdout.write(JSON.stringify({ status: "SUCCESS", response: r }));',
+    'if (/Decompose the following/.test(prompt)) say(JSON.stringify(["q one", "q two"]));',
+    'else if (/Synthesize the research findings/.test(prompt)) setTimeout(() => say("a report"), 3000);',
+    'else say("a finding");',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { cancel: 'kill', timeoutS: 60 } } }));
+  const base = { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath };
+  const controller = new AbortController();
+  const spawns = [];
+  const rt = createUnitRuntime(
+    {
+      ...unit,
+      tools: unit.tools.map((t) => (t.run ? {
+        ...t,
+        run: (a, ctx) => t.run(a, {
+          ...ctx,
+          spawn: (o) => {
+            const args = o.args.join(' ');
+            spawns.push(args);
+            if (/Synthesize the research findings/.test(args)) controller.abort();
+            return ctx.spawn({ ...o, args: [fake, ...o.args] });
+          },
+        }),
+      } : t)),
+    },
+    { env: base },
+  );
+  const r = await rt.callTool('gemini_deep_research', { question: 'why' }, { id: 1, signal: controller.signal });
+  assert.equal(spawns.length, 4, `decompose + two gathers + the synthesis, got ${spawns.length}`);
+  assert.match(r.text, /Cancelled — the synthesis stage did not run/);
+  // The point of the salvage: two gathers ran, were billed, and come back.
+  assert.match(r.text, /### Sub-question 1: q one\n\na finding/);
+  assert.match(r.text, /### Sub-question 2: q two\n\na finding/);
+  assert.equal(r.isError, undefined, 'a cancelled run with findings is an answer, not an error');
+  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'cancelled');
+  assert.equal(snap.lastEvent.partial, true);
+});
+
 // --- output cap, through the real spawn --------------------------------------
 
 test('runtime with a fake agy: a capped run whose envelope survived is marked, a capped run whose envelope was cut open is refused and not retried', async () => {
