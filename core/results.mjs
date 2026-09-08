@@ -128,9 +128,18 @@ export function formatEntry(entry, { unit = '' } = {}) {
  * @param {{home:string, unit:string, keep?:number, maxBytes?:number, log?:(m:string)=>void}} o
  */
 export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 * 1024, log = () => {} } = {}) {
+  /**
+   * The one way this module says anything. `log` is the CALLER's sink — a
+   * unit's stderr, a test double, whatever a later caller passes — and a sink
+   * that throws would turn a fail-soft refusal into the exception the whole
+   * module exists not to raise, on the read paths especially, where the log
+   * call sits outside every try. Every `log(...)` in here goes through this.
+   */
+  const say = (msg) => { try { log(msg); } catch { /* a broken logger is not a broken spool */ } };
+
   const usable = typeof home === 'string' && home.trim() !== '' && typeof unit === 'string' && UNIT_RE.test(unit);
   if (!usable) {
-    log(`results: spool off — ${JSON.stringify(String(unit ?? ''))} under ${JSON.stringify(String(home ?? ''))} is not a place this fleet writes`);
+    say(`results: spool off — ${JSON.stringify(String(unit ?? ''))} under ${JSON.stringify(String(home ?? ''))} is not a place this fleet writes`);
   }
   const root = usable ? join(home, 'results') : null;
   const dir = usable ? join(home, 'results', unit) : null;
@@ -154,16 +163,16 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
     for (const d of [root, dir]) {
       let st = null;
       try { st = lstatSync(d); } catch (e) {
-        if (!e || e.code !== 'ENOENT') { log(`results: spool off — ${d} could not be read: ${(e && e.message) || e}`); return false; }
+        if (!e || e.code !== 'ENOENT') { say(`results: spool off — ${d} could not be read: ${(e && e.message) || e}`); return false; }
         if (!create) return false;
         try { mkdirSync(d, { recursive: true, mode: 0o700 }); } catch (err) {
-          log(`results: spool off — ${d} could not be created: ${(err && err.message) || err}`);
+          say(`results: spool off — ${d} could not be created: ${(err && err.message) || err}`);
           return false;
         }
         continue;
       }
       if (st.isSymbolicLink() || !st.isDirectory()) {
-        log(`results: spool off — ${d} is ${st.isSymbolicLink() ? 'a symlink' : 'not a directory'}`);
+        say(`results: spool off — ${d} is ${st.isSymbolicLink() ? 'a symlink' : 'not a directory'}`);
         return false;
       }
     }
@@ -263,7 +272,7 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
     if (!dir) return null;
     const resultId = record && record.resultId;
     if (!isValidResultId(resultId)) {
-      log(`results: not spooling — ${JSON.stringify(String(resultId ?? '').slice(0, 80))} is not a result id`);
+      say(`results: not spooling — ${JSON.stringify(String(resultId ?? '').slice(0, 80))} is not a result id`);
       return null;
     }
     if (!dirsReady({ create: true })) return null;
@@ -282,7 +291,7 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
       if (fd !== null) { try { closeSync(fd); } catch { /* gone */ } }
       // Only ever OUR leftover: a tmp we did not create is another server's live write.
       if (mine) { try { unlinkSync(tmp); } catch { /* gone */ } }
-      log(`results: could not spool ${resultId} — ${(e && e.message) || e}`);
+      say(`results: could not spool ${resultId} — ${(e && e.message) || e}`);
       return null;
     }
     prune();

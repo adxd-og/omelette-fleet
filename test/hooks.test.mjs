@@ -676,7 +676,7 @@ test('SessionStart(compact): a ledger past 1 MiB is read from its TAIL, and the 
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out, [
     '--- ledger-long.md · last handoff ---',
-    '[… ledger larger than 1 MiB — read from its tail]',
+    '[… ledger larger than 1 MiB — read from its tail; a fenced block cut by the read may hide or fake a heading]',
     '## Handoff 2026-09-08T18:00Z',
     'Where it stands: T4 in review.',
     '',

@@ -252,6 +252,30 @@ test('a symlinked spool directory is refused by write, list, read and prune — 
     }
   });
 
+test('a logger that throws is not a spool that throws — every refusal still answers fail-soft',
+  { skip: !symlinksWork && 'POSIX symlinks' }, () => {
+    // The log sink belongs to the caller (a unit's stderr, a test double), and
+    // the spool's whole contract is that nothing it does can break a tool call.
+    // A logger that throws must not turn a refusal into an exception.
+    const dir = home();
+    const outside = join(dir, 'elsewhere');
+    mkdirSync(outside, { recursive: true });
+    mkdirSync(join(dir, 'results'));
+    symlinkSync(outside, spool(dir));
+    const boom = () => { throw new Error('boom'); };
+
+    const s = createResultStore({ home: dir, unit: 'fake', log: boom });
+    assert.deepEqual(s.list(), []);
+    assert.equal(s.read('20260908T142501Z-19312-9'), null);
+    assert.equal(s.write(REC), null);
+    assert.doesNotThrow(() => s.prune());
+    // …including the one logged before any directory is looked at.
+    assert.doesNotThrow(() => createResultStore({ home: dir, unit: '../evil', log: boom }));
+    // …and the "not a result id" refusal on the write path.
+    const ok = createResultStore({ home: home(), unit: 'fake', log: boom });
+    assert.equal(ok.write({ ...REC, resultId: 'not-an-id' }), null);
+  });
+
 test('a file with a result-id name and no header of ours is never listed, and retention takes it first', () => {
   const dir = home();
   const s = createResultStore({ home: dir, unit: 'fake', keep: 1 });

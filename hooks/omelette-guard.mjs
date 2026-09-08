@@ -34,6 +34,16 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
+// A write to a pipe the harness has stopped reading fails ASYNCHRONOUSLY: the
+// EPIPE arrives as an 'error' event after the write() call has already
+// returned, so no try/catch around it is still on the stack, and an unhandled
+// one crashes the process. On stdout that is a hook that died for nothing; on
+// stderr it is worse — the crash replaces the exit 2 a refusal just chose with
+// a 1, and the tool call goes through. A pipe nobody reads is not a finding, so
+// both are swallowed and THE EXIT CODE THE HANDLER CHOSE SURVIVES.
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
+
 /** O_NOFOLLOW where the platform defines it, 0 where it does not — as core/results.mjs does it. */
 const NOFOLLOW = constants.O_NOFOLLOW || 0;
 
@@ -474,8 +484,13 @@ function lastHandoffBlock(text, { maxLines = 40, maxBytes = 4096 } = {}) {
 /** One ledger is read at most this far; the whole print is bounded on top of that. */
 const LEDGER_READ_MAX = 1024 * 1024; // 1 MiB
 const HANDOFF_TOTAL_MAX = 12 * 1024;
-/** Said above a block that came out of a tail read, so nobody reads it as the whole file. */
-const TAIL_NOTE = '[… ledger larger than 1 MiB — read from its tail]';
+/**
+ * Said above a block that came out of a tail read, so nobody reads it as the
+ * whole file — and so nobody trusts its structure either: the read starts
+ * mid-file, so an opening ``` above the offset is not seen, and the fence
+ * tracking below can take real headings for quoted ones or quoted ones for real.
+ */
+const TAIL_NOTE = '[… ledger larger than 1 MiB — read from its tail; a fenced block cut by the read may hide or fake a heading]';
 
 /**
  * The handoff, back into the context that just lost it. Only `source ===

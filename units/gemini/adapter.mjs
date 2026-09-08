@@ -339,8 +339,10 @@ const DEGRADED_BANNER =
  * with it, because a reader who cannot see the stages cannot see the gap.
  * A gather that THREW is not a partial stage — it produced no text at all, and
  * its `_(gather failed: …)_` line already stands where the finding would be.
- * A cancelled run has no synthesis to speak of — the stage is either never
- * started or killed inside it — so it comes back as the findings, partial.
+ * A cancelled run has no synthesis to speak of — the stage is never started,
+ * killed with nothing printed, or killed after a fragment — so all three come
+ * back as the FINDINGS, partial, with any fragment appended under a marker.
+ * The findings are what was paid for; a half-written report is not a report.
  * @returns {Promise<{text:string, partial:boolean}>}
  */
 async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
@@ -412,6 +414,21 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
     if (!cancelled() && !/cancelled by the client|^cancelled$/i.test((e && e.message) || '')) throw e;
     ctx.log('deep research · cancelled during synthesis — the findings are returned unsynthesised');
     return { text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n'), partial: true };
+  }
+
+  // A cancel that lands MID-SYNTHESIS while agy had already printed something
+  // never reaches the catch above: interpretAgy salvages that fragment as a
+  // partial answer and returns normally. Returning it alone would hand back
+  // half a report and silently drop every finding behind it — so the findings
+  // come back the same way they do on the other two cancellation paths, with
+  // the fragment kept under a marker saying what it is.
+  if (cancelled()) {
+    ctx.log('deep research · cancelled mid-synthesis — the findings are returned with the partial synthesis');
+    return {
+      text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n')
+        + (synth.text ? `\n\n---\n\n[gemini: partial synthesis, cancelled]\n\n${synth.text}` : ''),
+      partial: true,
+    };
   }
 
   // The stages that RAN: decompose, one per sub-question, synthesis. A gather

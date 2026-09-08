@@ -215,6 +215,29 @@ test('doctor finds a server of ours registered under a name that is not <prefix>
   assert.match(r.out, /omelette-gemini not registered/);
 });
 
+test('a name defined in a higher-precedence scope shadows the same name below it — ours or not', () => {
+  const s = sandbox();
+  // The same server name in two scopes, pointing at two different checkouts.
+  // Claude Code runs the project entry, so `codex-review` starts ANOTHER clone;
+  // the user entry under that name is dead config, however much it is ours.
+  const otherClone = join(s.dir, 'other-clone', 'servers', 'codex.mjs');
+  writeClaudeJson(s, {
+    projects: { [s.proj]: { mcpServers: { 'codex-review': { command: 'node', args: [otherClone] } } } },
+    mcpServers: { 'codex-review': { type: 'stdio', command: 'node', args: [server('codex')] } },
+  });
+
+  const r = doctor(s);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /omelette-codex not registered/, r.out);
+  assert.doesNotMatch(r.out, /codex-review registered/, 'the shadowed entry is not a registration of ours');
+  assert.deepEqual(nextLines(r.out), ['next          omelette-fleet install']);
+
+  // Drop the shadowing entry and the same user entry counts again — the rule is
+  // precedence, not a blanket refusal to look at the user scope.
+  writeClaudeJson(s, { mcpServers: { 'codex-review': { type: 'stdio', command: 'node', args: [server('codex')] } } });
+  assert.match(doctor(s).out, /codex-review registered \(user\) → node .*servers.*codex\.mjs \[file exists\]/);
+});
+
 test('doctor calls a mixed install ambiguous even when one of the prefixes is omelette', () => {
   const s = sandbox();
   writeClaudeJson(s, {

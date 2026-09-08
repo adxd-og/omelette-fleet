@@ -290,6 +290,57 @@ test('deep research under `cancel: kill`: a cancel DURING synthesis still return
   assert.equal(snap.lastEvent.partial, true);
 });
 
+test('deep research under `cancel: kill`: a synthesis KILLED MID-SENTENCE keeps the findings and marks its fragment', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-cancel-frag-'));
+  const fake = join(dir, 'fake-agy.mjs');
+  // The synthesis prints something and then hangs, so the cancel's SIGKILL
+  // finds output to salvage: interpretAgy returns that fragment as a partial
+  // answer and never throws, which is the path that used to drop the findings.
+  writeFileSync(fake, [
+    'const argv = process.argv.slice(2);',
+    'const prompt = argv[argv.indexOf("-p") + 1] || "";',
+    'const say = (r) => process.stdout.write(JSON.stringify({ status: "SUCCESS", response: r }));',
+    'if (/Decompose the following/.test(prompt)) say(JSON.stringify(["q one", "q two"]));',
+    'else if (/Synthesize the research findings/.test(prompt)) {',
+    '  process.stdout.write("half a report, cut off mid-");',
+    '  setTimeout(() => {}, 60000);',
+    '} else say("a finding");',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { cancel: 'kill', timeoutS: 60 } } }));
+  const base = { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath };
+  const controller = new AbortController();
+  const rt = createUnitRuntime(
+    {
+      ...unit,
+      tools: unit.tools.map((t) => (t.run ? {
+        ...t,
+        run: (a, ctx) => t.run(a, {
+          ...ctx,
+          spawn: (o) => {
+            const running = ctx.spawn({ ...o, args: [fake, ...o.args] });
+            // AFTER the spawn, so the fragment is written and captured before
+            // the kill — aborting first would leave nothing to salvage.
+            if (/Synthesize the research findings/.test(o.args.join(' '))) setTimeout(() => controller.abort(), 500);
+            return running;
+          },
+        }),
+      } : t)),
+    },
+    { env: base },
+  );
+  const r = await rt.callTool('gemini_deep_research', { question: 'why' }, { id: 1, signal: controller.signal });
+  assert.match(r.text, /Cancelled — the synthesis stage did not run/);
+  assert.match(r.text, /### Sub-question 1: q one\n\na finding/, `findings dropped:\n${r.text}`);
+  assert.match(r.text, /### Sub-question 2: q two\n\na finding/);
+  // …and the fragment is kept, under a marker that says what it is.
+  assert.match(r.text, /\[gemini: partial synthesis, cancelled\]/);
+  assert.match(r.text, /half a report, cut off mid-/);
+  assert.equal(r.isError, undefined);
+  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'cancelled');
+  assert.equal(snap.lastEvent.partial, true);
+});
+
 // --- output cap, through the real spawn --------------------------------------
 
 test('runtime with a fake agy: a capped run whose envelope survived is marked, a capped run whose envelope was cut open is refused and not retried', async () => {

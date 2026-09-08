@@ -534,8 +534,18 @@ function findOurRegistrations(config, mcpJson, unitPaths, { cwd = process.cwd() 
     try { return !!a && !!b && resolvePath(a) === resolvePath(b); } catch { return false; }
   };
   const found = [];
+  // Names resolve across the scopes BEFORE anything is asked about ownership:
+  // the first bucket that defines a name is the one Claude Code starts, so an
+  // entry further down under that same name is dead config and must not be
+  // counted — including when the entry that shadows it is not ours at all. A
+  // `codex-review` in the project scope pointing at another clone means
+  // `codex-review` runs that clone, however much the user scope's entry of the
+  // same name points here.
+  const seen = new Set();
   for (const [scope, servers] of registrationBuckets(config, mcpJson, cwd)) {
     for (const [name, entry] of Object.entries(servers)) {
+      if (seen.has(name)) continue;
+      seen.add(name);
       if (!isObj(entry)) continue;
       const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
       const target = args.find((a) => a.endsWith('.mjs')) || args[args.length - 1] || '';
