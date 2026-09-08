@@ -1962,6 +1962,21 @@ test('results: one id and no unit is looked up across the fleet', () => {
   assert.match(cli(['results', 'nope'], { dir }).err, /unknown unit "nope"/);
 });
 
+test('results: the model the runtime filed a result under survives the read, parentheses and all', () => {
+  const dir = home();
+  // Exactly what core/unit.mjs writes for a unit that leaves the choice to its
+  // CLI. The parentheses and the space are the kind of value a stricter header
+  // parser would mangle, and both readers must show the operator the same one.
+  spoolResult(dir, 'grok', {
+    resultId: '20260908T142501Z-1-4', tool: 'grok_research', model: '(vendor default)', effort: '',
+    startedAt: '2026-09-08T14:25:01.000Z', endedAt: '2026-09-08T14:25:42.000Z', durationMs: 41000,
+    status: 'ok', partial: false, detached: false, cwd: '', promptPreview: 'x', text: 'AN ANSWER',
+  });
+  const r = cli(['results', 'grok', '20260908T142501Z-1-4'], { dir });
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /\nmodel: \(vendor default\)\n/);
+});
+
 test('doctor prints the results budget in the unit it was written in — B, KB, MB', () => {
   const dir = home();
   const fake = fakeBin(dir);
@@ -2110,4 +2125,28 @@ test('doctor prints no handoff line when no guard of ours carries the block', ()
   const out = doctorIn2(proj, dir);
   assert.doesNotMatch(out, /^handoff /m, out);
   assert.match(out, /^hooks {9}project: v0\.3\.3 /m, out);
+});
+
+test('doctor says so when the handoff line came from the GLOBAL guard rather than the project one', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  // A 0.3.3-era project guard: ours by its marker, and carrying no rendered
+  // handoff block. handoffReport falls through to the global guard — and a
+  // threshold the operator reads here is one they would have to change with
+  // `rules --global --hooks`, so the line has to name whose value it is.
+  mkdirSync(join(proj, '.claude', 'hooks'), { recursive: true });
+  writeFileSync(join(proj, '.claude', 'hooks', 'omelette-guard.mjs'), MARKED_HOOK('0.3.3'));
+  assert.equal(rulesIn(proj, dir, ['--global', '--hooks']).status, 0);
+  assert.match(
+    doctorIn2(proj, dir),
+    /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\) · read from the global guard$/m,
+    doctorIn2(proj, dir),
+  );
+
+  // The project's own guard, re-rendered, carries the block: the value is this
+  // project's and the suffix goes away.
+  assert.equal(rulesIn(proj, dir, ['--hooks', '--force']).status, 0);
+  const own = doctorIn2(proj, dir);
+  assert.match(own, /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m, own);
+  assert.doesNotMatch(own, /read from the global guard/, own);
 });

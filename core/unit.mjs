@@ -39,7 +39,7 @@
  * of its own to every unit — `<unit>_result`, which hands back an answer the
  * client dropped — unless the adapter already declares that name.
  * Every other kind gets `run(args, ctx)` with ctx = { cfg, mode, model, effort,
- * spawn, retry, log, catalog, home, signal }
+ * spawn, retry, log, catalog, home, signal, usedModel }
  * and returns a string or { text, usage?, isError?, partial? }.
  * `ctx.spawn({ args, cwd?, stdinText?, extraEnv?, hardKillMs?, outputCap? })`
  * resolves to core/spawn.mjs's result — `{ stdout, stderr, code, signal,
@@ -58,6 +58,18 @@
  * (missing prompt, bad cwd, bad imagePath): the text is the error, MCP is told
  * so, and the status feed records "error" — a run that returns `Error: ...`
  * text without the flag would be reported to the caller as a success.
+ * `ctx.usedModel(id)` is how an adapter says which model it ACTUALLY asked the
+ * vendor for when the runtime named none — codex pins the catalog head because
+ * `--ignore-user-config` means the operator's own default never applies. It is
+ * a report, not a setting: `ctx.model` does not change, the status feed does
+ * not change, and the only thing it reaches is the `model:` line of the
+ * spooled result, which would otherwise be empty for exactly the runs whose
+ * model nobody could name afterwards. The first non-empty string wins and
+ * every later call is ignored, so a retried run cannot file two answers about
+ * one call; anything that is not a non-empty string is not a report; and it is
+ * never checked against the catalog, because what the CLI was told is the fact
+ * worth filing. A `local` tool gets a no-op of the same name: it produces no
+ * record, and an adapter helper shared with a spawn tool must not have to ask.
  */
 import { serve } from './jsonrpc.mjs';
 import { unitInstructions } from './rules.mjs';
@@ -85,6 +97,13 @@ export function makeResultId(seq, now = new Date()) {
 
 /** Git/deploy/publish intent stays with the manager — units are research and review peers. */
 export const MUTATE_RE = /\bgit (push|commit|merge|rebase|reset|tag)\b|\bnpm publish\b|\bdeploy\b/i;
+
+/**
+ * The `model:` a result is filed under when nobody named one. Grok and gemini
+ * hand the choice to their CLI and never learn the id it took, so an empty
+ * header line was the honest-but-useless answer; this is the honest one.
+ */
+export const VENDOR_DEFAULT_MODEL = '(vendor default)';
 
 export function defineUnit(spec) {
   const where = `defineUnit(${(spec && spec.name) || '?'})`;
@@ -289,6 +308,9 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
           log,
           catalog: unit.catalog,
           home: cfg.home,
+          // A no-op: there is no record for a report to reach. Present so an
+          // adapter helper shared with a spawn tool can call it unconditionally.
+          usedModel: () => {},
           // No `signal` either: a tool that never spawns has nothing to cancel.
         });
         const text = typeof r === 'string' ? r : (r && r.text) || '';
@@ -313,6 +335,15 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       if (unit.catalog.isAllowedEffort(cfg.values.effort)) effort = cfg.values.effort;
       else warnOnce(`config: default effort "${cfg.values.effort}" is not allowed — using the vendor default`);
     }
+
+    // What the adapter actually asked the vendor for, when the runtime named
+    // nothing. Declared here so `finish()` below closes over it.
+    let reportedModel = '';
+    const usedModel = (id) => {
+      if (reportedModel || typeof id !== 'string') return;
+      const trimmed = id.trim();
+      if (trimmed) reportedModel = trimmed;
+    };
 
     const promptText = typeof args.prompt === 'string' ? args.prompt : (typeof args.question === 'string' ? args.question : '');
     const resultId = makeResultId(++resultSeq);
@@ -386,7 +417,9 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
         recordResult({
           resultId,
           tool: name,
-          model,
+          // Never empty: what the caller or the config asked for, else what
+          // the adapter says it pinned, else the vendor's own choice, named.
+          model: model || reportedModel || VENDOR_DEFAULT_MODEL,
           effort,
           startedAt,
           endedAt: new Date().toISOString(),
@@ -426,6 +459,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       model,
       effort,
       log,
+      usedModel,
       catalog: unit.catalog,
       home: cfg.home,
       spawn: (o) => spawnFor(cfg, o, killSignal),
@@ -465,7 +499,7 @@ export function startUnit(unit, opts = {}) {
   rt.log(
     `up · bin=${resolveBin(unit, opts.env)} · mode=${cfg.values.mode}` +
     `${cfg.values.requestedMode !== cfg.values.mode ? ` (requested ${cfg.values.requestedMode}, ceiling closed)` : ''}` +
-    ` · hard-kill=${cfg.values.timeoutS}s · default-model=${cfg.values.model || '(vendor default)'}` +
+    ` · hard-kill=${cfg.values.timeoutS}s · default-model=${cfg.values.model || VENDOR_DEFAULT_MODEL}` +
     ` · status=${cfg.values.status ? cfg.home : 'off'} · config=${cfg.configPath}`,
   );
   // "There is a newer fleet" is worth one stderr line and nothing more: the

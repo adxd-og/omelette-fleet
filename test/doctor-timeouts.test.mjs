@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -391,4 +391,71 @@ test('doctor: the whole mcp timeout block, in the order the spec sets', () => {
     `idle: ${IDLE} unset → 30 min default; grok.timeoutS=1800 s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set ${IDLE}=0 or a per-server "timeout"`,
   ]);
   assert.equal(low.code, 0, 'the whole block is informational');
+});
+
+// ─── an unreadable settings file (P3 · spec 3c) ───────────────────────────────
+
+/** Every `settings: … unreadable` line doctor printed, in order, label column stripped. */
+const unreadableLines = (out) => out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('settings: '));
+
+const said = (path) => `settings: ${path} unreadable — env values in it were not consulted`;
+
+test('doctor names a settings file that exists and cannot be parsed — once, however many readers opened it', () => {
+  const s = sandbox();
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 600 } } });
+
+  // Nothing broken: nothing said.
+  assert.deepEqual(unreadableLines(doctor(s).out), []);
+
+  // A project settings.json with a trailing comma. TWO readers open it — the
+  // env lookup behind the wall lines and the hook-wiring report behind the
+  // hooks line — and the operator gets ONE line about it.
+  mkdirSync(join(s.proj, '.claude'), { recursive: true });
+  writeFileSync(join(s.proj, '.claude', 'settings.json'), '{ "env": { "MCP_TOOL_TIMEOUT": "1800000", } }');
+  const project = join(realpathSync(s.proj), '.claude', 'settings.json');
+  const one = doctor(s);
+  assert.equal(one.code, 0, 'an unparseable settings file is never a fault');
+  assert.deepEqual(unreadableLines(one.out), [said(project)]);
+  // …and it is not pedantry: the wall really did fall back to the client's
+  // default, because the value the operator wrote was never read.
+  assert.equal(
+    lineStartingWith(one.out, 'wall-clock:'),
+    `wall-clock: ${WALL} unset (default ~28 h) ≥ 600000 needed · ok`,
+  );
+
+  // A second broken file, at the user scope, whose top level is not an object:
+  // one line each, still one per file, in the order they are read.
+  mkdirSync(join(s.dir, '.claude'), { recursive: true });
+  writeFileSync(join(s.dir, '.claude', 'settings.local.json'), '[1, 2]');
+  // The user scope's path comes from homedir(), which is $HOME verbatim; the
+  // project's arrives through process.cwd() and is already resolved.
+  const user = join(s.dir, '.claude', 'settings.local.json');
+  assert.deepEqual(unreadableLines(doctor(s).out), [said(project), said(user)]);
+
+  // A file that parses and simply has nothing to say is not "unreadable".
+  writeFileSync(join(s.dir, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: [] } }));
+  assert.deepEqual(unreadableLines(doctor(s).out), [said(project)]);
+
+  // Neither is a file that is not there at all.
+  rmSync(join(s.proj, '.claude', 'settings.json'));
+  assert.deepEqual(unreadableLines(doctor(s).out), []);
+});
+
+test('doctor names the unreadable file even when there is no wall to report', () => {
+  const s = sandbox();
+  // No enabled unit: `timeoutWalls` answers with an empty report and prints no
+  // block at all. The file is still named, because the hook-wiring reader
+  // opened it too — which is the whole point of merging the two lists.
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } } });
+  mkdirSync(join(s.proj, '.claude'), { recursive: true });
+  writeFileSync(join(s.proj, '.claude', 'settings.local.json'), 'not json at all');
+  const project = join(realpathSync(s.proj), '.claude', 'settings.local.json');
+
+  const r = doctor(s);
+  assert.equal(r.code, 0);
+  assert.deepEqual(timeoutBlock(r.out), [], 'no enabled unit, no timeout block');
+  assert.deepEqual(unreadableLines(r.out), [said(project)]);
+  // The hooks line says nothing here — no guard is installed in this sandbox —
+  // so this line is the only place the operator learns the file is broken.
+  assert.match(r.out, /^hooks {9}project: absent/m);
 });

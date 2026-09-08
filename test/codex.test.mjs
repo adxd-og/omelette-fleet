@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import unit, { buildArgs, extractResult, catalog } from '../units/codex/adapter.mjs';
 import { ALLOWLIST, CODEX_MODELS, DEFAULT_MODEL } from '../units/codex/models.js';
 import { createUnitRuntime } from '../core/unit.mjs';
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { parseResult } from '../core/results.mjs';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -408,4 +409,59 @@ test('catalog: gpt-6-astra is the catalog head (= the fleet default) at effort h
   assert.equal(DEFAULT_MODEL, '');
   assert.equal(CODEX_MODELS[0].id, 'gpt-6-astra', 'the catalog head is what the adapter pins when no model is configured');
   assert.equal(CODEX_MODELS[1].id, 'gpt-5.6-terra');
+});
+
+// --- the model a spooled codex result is filed under (P3 · spec 3a) ----------
+
+/** A fake `codex` that answers with the `-m` value it was handed. */
+function fakeModelCodex(dir, name) {
+  const fake = join(dir, name);
+  writeFileSync(fake, [
+    'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
+    '  const a=process.argv.slice(2);',
+    '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
+    '  line({type:"item.completed",item:{type:"agent_message",text:"model="+a[a.indexOf("-m")+1]}});',
+    '  line({type:"turn.completed",usage:{input_tokens:1,output_tokens:1}});',
+    '});',
+  ].join('\n'));
+  return fake;
+}
+
+/** The one spooled result in a throwaway fleet home, as a header. */
+function onlySpooledHeader(dir) {
+  const d = join(dir, 'results', 'codex');
+  const names = readdirSync(d).filter((n) => n.endsWith('.md'));
+  assert.equal(names.length, 1, `expected exactly one spooled result in ${d}`);
+  return parseResult(readFileSync(join(d, names[0]), 'utf8')).header;
+}
+
+test('a spooled codex result names the model the CLI was told — the pinned catalog head, or the explicit one', async () => {
+  const scripts = mkdtempSync(join(tmpdir(), 'omelette-codex-model-'));
+  const fake = fakeModelCodex(scripts, 'fake-model-codex.mjs');
+
+  // Nothing configured: --ignore-user-config means the operator's own default
+  // never applies, so the adapter pins the catalog head — and the spool has to
+  // say which one, because nothing else in the record could.
+  const bare = mkdtempSync(join(tmpdir(), 'omelette-codex-home-'));
+  const r = await wrapCodex({ ...process.env, OMELETTE_HOME: bare, CODEX_BIN: process.execPath }, fake)
+    .callTool('codex_research', { prompt: 'nothing configured' });
+  assert.equal(r.isError, undefined, r.text);
+  assert.equal(r.text, `model=${catalog.ids[0]}`, 'the CLI really was told the catalog head');
+  assert.equal(onlySpooledHeader(bare).model, catalog.ids[0]);
+
+  // An explicit model: the runtime already knew it, and the adapter's report
+  // cannot displace it.
+  const asked = mkdtempSync(join(tmpdir(), 'omelette-codex-home-'));
+  const r2 = await wrapCodex({ ...process.env, OMELETTE_HOME: asked, CODEX_BIN: process.execPath }, fake)
+    .callTool('codex_research', { prompt: 'asked for one', model: catalog.ids[1] });
+  assert.equal(r2.text, `model=${catalog.ids[1]}`);
+  assert.equal(onlySpooledHeader(asked).model, catalog.ids[1]);
+
+  // A configured default: same answer, through the config rather than the arg.
+  const cfg = mkdtempSync(join(tmpdir(), 'omelette-codex-home-'));
+  writeFileSync(join(cfg, 'fleet.config.json'), JSON.stringify({ version: 1, units: { codex: { model: catalog.ids[1] } } }));
+  const r3 = await wrapCodex({ ...process.env, OMELETTE_HOME: cfg, CODEX_BIN: process.execPath }, fake)
+    .callTool('codex_research', { prompt: 'configured' });
+  assert.equal(r3.text, `model=${catalog.ids[1]}`);
+  assert.equal(onlySpooledHeader(cfg).model, catalog.ids[1]);
 });

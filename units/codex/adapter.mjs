@@ -301,6 +301,11 @@ async function runOnce(ctx, { prompt, cwd, mode, webSearch, effort }) {
   // unpinned run would take whatever the CLI hard-codes. Pin the catalog head.
   const model = ctx.model || catalog.ids[0];
   if (!ctx.model) ctx.log(`no model configured — pinning the catalog default ${model} (--ignore-user-config means ~/.codex/config.toml is not consulted)`);
+  // The runtime named nothing, so this function is the only place that knows
+  // which model the run used: report it, or the spooled answer is filed under
+  // no model at all. Unconditional and idempotent — when ctx.model IS set the
+  // runtime's own value wins, and the report changes nothing.
+  ctx.usedModel(model);
   const web = webSearch === undefined ? ctx.cfg.webSearch : webSearch;
   const eff = effort === undefined ? ctx.effort : effort;
   const args = buildArgs({ model, effort: eff, cwd, mode, webSearch: web });

@@ -460,7 +460,7 @@ test('finish hands P2 the whole result record — once per finished spawn call, 
   assert.equal(records[2].status, 'ok');
 });
 
-test('the reduced ctx of a `local` tool is exactly cfg, mode, log, catalog, home — no signal, even under `cancel: kill`', async () => {
+test('the reduced ctx of a `local` tool is exactly cfg, mode, log, catalog, home, usedModel — no signal, even under `cancel: kill`', async () => {
   let keys = null;
   const rt = createUnitRuntime(
     fakeUnit({
@@ -478,7 +478,10 @@ test('the reduced ctx of a `local` tool is exactly cfg, mode, log, catalog, home
   c.abort();
   // A tool that never spawns has nothing to cancel, in either cancel mode.
   assert.equal((await rt.callTool('fake_keys', {}, { id: 1, signal: c.signal })).text, 'ok');
-  assert.equal(keys, 'catalog,cfg,home,log,mode');
+  // `usedModel` is present and is a no-op: an adapter helper shared with a
+  // spawn tool may call it unconditionally, and a tool that never spawns
+  // produces no record for it to reach.
+  assert.equal(keys, 'catalog,cfg,home,log,mode,usedModel');
 });
 
 // ─── the result spool (P2) ───────────────────────────────────────────────────
@@ -636,4 +639,120 @@ test('an adapter that declares its own <unit>_result keeps it', () => {
   const found = rt.tools.filter((x) => x.name === 'fake_result');
   assert.equal(found.length, 1);
   assert.equal(found[0].description, 'mine');
+});
+
+// ─── the model a result is filed under (P3 · spec 3a) ─────────────────────────
+
+/** The fake unit plus one tool that reports the model it pinned itself. */
+const pinningUnit = (id) => fakeUnit({
+  tools: [
+    ...fakeUnit().tools,
+    {
+      name: 'fake_pin', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+      run(_a, ctx) { ctx.usedModel(id); return `pinned=${id};ctx.model=${ctx.model}`; },
+    },
+  ],
+});
+
+/** The fake unit plus one tool that runs `body(ctx)` and answers 'ok'. */
+const reportingUnit = (name, body) => fakeUnit({
+  tools: [
+    ...fakeUnit().tools,
+    { name, kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} }, run(_a, ctx) { body(ctx); return 'ok'; } },
+  ],
+});
+
+test('the spooled model: the explicit one, the configured one, the one the adapter pinned, else the vendor default', async () => {
+  // Nothing anywhere. The header says so IN WORDS: an empty `model:` line told
+  // a reader nothing, and these are exactly the runs whose model nobody could
+  // name afterwards.
+  const plain = env(null);
+  await createUnitRuntime(fakeUnit(), { env: plain.env }).callTool('fake_research', { prompt: 'x' });
+  assert.equal(readSpooled(plain.dir, spooled(plain.dir)[0]).header.model, '(vendor default)');
+
+  // An explicit argument.
+  const explicit = env(null);
+  await createUnitRuntime(fakeUnit(), { env: explicit.env }).callTool('fake_research', { prompt: 'x', model: 'm-deep' });
+  assert.equal(readSpooled(explicit.dir, spooled(explicit.dir)[0]).header.model, 'm-deep');
+
+  // A configured default the catalog accepts.
+  const configured = env({ units: { fake: { model: 'm-fast' } } });
+  await createUnitRuntime(fakeUnit(), { env: configured.env }).callTool('fake_research', { prompt: 'x' });
+  assert.equal(readSpooled(configured.dir, spooled(configured.dir)[0]).header.model, 'm-fast');
+
+  // Nothing configured and the adapter pinned one itself — codex's case.
+  const pinned = env(null);
+  const r = await createUnitRuntime(pinningUnit('m-deep'), { env: pinned.env }).callTool('fake_pin', {});
+  assert.equal(r.isError, undefined, r.text);
+  assert.equal(r.text, 'pinned=m-deep;ctx.model=', 'a report never changes ctx.model');
+  assert.equal(readSpooled(pinned.dir, spooled(pinned.dir)[0]).header.model, 'm-deep');
+});
+
+test('usedModel is a report, not an override: the caller wins, the first call wins, and junk is not a report', async () => {
+  // An explicit model is what the caller asked for; an adapter cannot rename it.
+  const over = env(null);
+  const r = await createUnitRuntime(pinningUnit('m-deep'), { env: over.env }).callTool('fake_pin', { model: 'm-fast' });
+  assert.equal(r.isError, undefined, r.text);
+  assert.equal(readSpooled(over.dir, spooled(over.dir)[0]).header.model, 'm-fast');
+
+  // Idempotent: a retried run reports twice, and one call cannot end up with
+  // two different answers about which model it used.
+  const twice = env(null);
+  await createUnitRuntime(reportingUnit('fake_twice', (ctx) => {
+    ctx.usedModel('m-fast'); ctx.usedModel('m-deep'); ctx.usedModel('m-deep');
+  }), { env: twice.env }).callTool('fake_twice', {});
+  assert.equal(readSpooled(twice.dir, spooled(twice.dir)[0]).header.model, 'm-fast');
+
+  // Anything that is not a non-empty string is not a report.
+  const junk = env(null);
+  await createUnitRuntime(reportingUnit('fake_junk', (ctx) => {
+    for (const bad of ['', '   ', null, undefined, 42, { id: 'm-deep' }, ['m-deep'], () => 'm-deep']) ctx.usedModel(bad);
+  }), { env: junk.env }).callTool('fake_junk', {});
+  assert.equal(readSpooled(junk.dir, spooled(junk.dir)[0]).header.model, '(vendor default)');
+
+  // A report is a FACT about the run, not a request: it is NOT checked against
+  // the catalog. The id the CLI was actually told is the id worth filing.
+  const unlisted = env(null);
+  await createUnitRuntime(pinningUnit('m-unlisted-9'), { env: unlisted.env }).callTool('fake_pin', {});
+  assert.equal(readSpooled(unlisted.dir, spooled(unlisted.dir)[0]).header.model, 'm-unlisted-9');
+});
+
+test('the status feed keeps its own model field, and a local tool gets a usedModel that does nothing', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(pinningUnit('m-deep'), { env: e });
+  await rt.callTool('fake_pin', {});
+  // Schema 1 is unchanged: `start` still records what the RUNTIME resolved,
+  // which is nothing here, and `end` never carried a model at all. The
+  // adapter's report reaches the spool and stops there.
+  const lines = readFileSync(join(dir, 'fleet-log.ndjson'), 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+  assert.equal(lines.find((l) => l.event === 'start').model, null);
+  assert.equal(rt.status.lastEvent.model, undefined);
+  assert.equal(readSpooled(dir, spooled(dir)[0]).header.model, 'm-deep');
+
+  // A `local` tool answers from disk. Its usedModel is a no-op, and calling it
+  // is not an error an adapter has to guard against.
+  const local = env(null);
+  const lt = createUnitRuntime(fakeUnit({
+    tools: [...fakeUnit().tools, {
+      name: 'fake_localpin', kind: 'local', description: 'd', inputSchema: { type: 'object', properties: {} },
+      run(_a, ctx) { ctx.usedModel('m-deep'); return 'ok'; },
+    }],
+  }), { env: local.env });
+  assert.equal((await lt.callTool('fake_localpin', {})).text, 'ok');
+  assert.deepEqual(spooled(local.dir), [], 'a local tool is still never spooled');
+});
+
+test('`<unit>_result` hands back exactly the string the spool file carries', async () => {
+  const { dir, env: e } = env(null);
+  const rt = createUnitRuntime(fakeUnit(), { env: e });
+  await rt.callTool('fake_research', { prompt: 'x' });
+  const body = readFileSync(join(spoolDir(dir), spooled(dir)[0]), 'utf8');
+  assert.match(body, /\nmodel: \(vendor default\)\n/);
+  const back = await rt.callTool('fake_result', {});
+  assert.equal(back.isError, undefined, back.text);
+  // The tool re-renders the file it just read, so the two cannot drift — and
+  // `omelette-fleet results <unit> <id>` renders the same expression over the
+  // same file (bin/omelette-fleet.mjs, cmdResults).
+  assert.ok(back.text.startsWith(body), 'the tool answers with the file, verbatim, then the listing');
+  assert.match(back.text, /\nmodel: \(vendor default\)\n/);
 });

@@ -629,6 +629,19 @@ const DEEP_STAGES = 3;
 const DEEP_ATTEMPTS = 2;
 
 /**
+ * The settings files a read tripped over, each named ONCE. Two readers open
+ * the same four files for different blocks — `readClientEnv` for `env`,
+ * `hookWiringAt` for `hooks` — and an operator with one broken file wants one
+ * line about it, not one per reader. First-seen order, which is the client's
+ * own precedence for the env half.
+ */
+function mergeUnreadable(...lists) {
+  const seen = new Set();
+  for (const list of lists) for (const p of list || []) seen.add(p);
+  return [...seen];
+}
+
+/**
  * One variable out of CLAUDE CODE's environment, as the client itself would
  * resolve it: the process environment first, then the `env` block of each
  * settings file in Claude Code's own precedence — the project's
@@ -638,30 +651,45 @@ const DEEP_ATTEMPTS = 2;
  * so each scope's pair is reversed here.
  *
  * PARSED, NEVER WRITTEN, like every other settings read in this file. A file
- * that is absent, is not JSON, or has no `env` object is skipped in silence —
- * this is a diagnosis of the client's environment, not of its settings files.
- * A value that is not a scalar is skipped too: the client could not pass it to
- * a child either.
+ * that is ABSENT is skipped in silence — most machines have at most two of
+ * these four. A file that EXISTS and cannot be parsed into an object is
+ * skipped too, and NAMED: a variable written into a file with a trailing
+ * comma is a variable the client never saw, and a report that says nothing
+ * about it sends the operator looking at the wrong thing. A file that parses
+ * and has no `env` object is readable and simply says nothing. A value that is
+ * not a scalar is skipped: the client could not pass it to a child either.
  *
- * @returns {{value: string|null, source: string|null}} `source` is
- *   'process env' or the absolute path of the file the value came from.
+ * The scan stops at the first hit, so `unreadable` names the files this lookup
+ * actually opened — the ones AHEAD of the value in the client's precedence,
+ * which are exactly the ones whose contents were lost. Doctor merges the list
+ * with `hookWiringAt`'s, which always opens all four.
+ *
+ * @returns {{value: string|null, source: string|null, unreadable: string[]}}
+ *   `source` is 'process env' or the absolute path of the file the value came
+ *   from; `unreadable` holds absolute paths.
  */
 function readClientEnv(name, { cwd = process.cwd(), env = process.env } = {}) {
-  if (env[name] !== undefined && String(env[name]) !== '') return { value: String(env[name]), source: 'process env' };
+  if (env[name] !== undefined && String(env[name]) !== '') return { value: String(env[name]), source: 'process env', unreadable: [] };
   const files = [
     ...settingsTargets({ global: false, cwd, env }).slice().reverse(),
     ...settingsTargets({ global: true, cwd, env }).slice().reverse(),
   ];
+  const unreadable = [];
   for (const { path } of files) {
+    let text;
+    // ENOENT is the normal case. Anything else — a directory at that name, a
+    // file this user cannot open — means the contents are there and lost.
+    try { text = readFileSync(path, 'utf8'); } catch (e) { if (!e || e.code !== 'ENOENT') unreadable.push(path); continue; }
     let parsed = null;
-    try { parsed = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
-    if (!isObj(parsed) || !isObj(parsed.env)) continue;
+    try { parsed = JSON.parse(text); } catch { parsed = null; }
+    if (!isObj(parsed)) { unreadable.push(path); continue; }
+    if (!isObj(parsed.env)) continue; // readable, and says nothing about this variable
     const raw = parsed.env[name];
     if (raw === undefined || raw === null) continue;
     if (!['string', 'number', 'boolean'].includes(typeof raw)) continue;
-    return { value: String(raw), source: path };
+    return { value: String(raw), source: path, unreadable };
   }
-  return { value: null, source: null };
+  return { value: null, source: null, unreadable };
 }
 
 /**
@@ -722,7 +750,8 @@ const envSource = (source) => (source === 'process env' ? 'process env' : `${sou
  *   can stay silent under its own timeout.
  */
 function idleWall({ longest, cwd = process.cwd(), env = process.env, read = readClientEnv } = {}) {
-  const { value, source } = read(IDLE_ENV, { cwd, env });
+  // `read` is injectable, so a caller's double may answer without the field.
+  const { value, source, unreadable } = read(IDLE_ENV, { cwd, env });
   const parsed = value === null ? null : msValue(value, { min: 0 });
   const disabled = parsed === 0;
   const ms = parsed === null || disabled ? IDLE_DEFAULT_MS : parsed;
@@ -739,7 +768,7 @@ function idleWall({ longest, cwd = process.cwd(), env = process.env, read = read
     : reaches
       ? `; ${longest.unit}.timeoutS=${longest.timeoutS} s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set ${IDLE_ENV}=0 or a per-server "timeout"`
       : `; the longest run is ${longest.unit}.timeoutS=${longest.timeoutS} s · ok`;
-  return { line: `idle: ${head}${tail}`, ms, disabled, raw: value, source, reaches };
+  return { line: `idle: ${head}${tail}`, ms, disabled, raw: value, source, reaches, unreadable: unreadable || [] };
 }
 
 /**
@@ -763,13 +792,15 @@ function idleWall({ longest, cwd = process.cwd(), env = process.env, read = read
  *   `registration[unit].entry.timeout` is the client's per-server override,
  *   `.name` and `.scope` are what the line calls it.
  * @returns {{wall:object|null, idle:object|null, deep:object|null,
- *            lines:string[], next:string|null, snippet:string|null}}
+ *            lines:string[], next:string|null, snippet:string|null,
+ *            unreadable:string[]}} `unreadable` holds the absolute path of
+ *   every settings file the two env lookups could not parse, each named once.
  */
 function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env = process.env, read = readClientEnv } = {}) {
   const enabled = units.filter((u) => u.enabled);
   // No enabled unit, no call to bound: an empty report rather than a line about
   // limits nothing can reach.
-  if (!enabled.length) return { wall: null, idle: null, deep: null, lines: [], next: null, snippet: null };
+  if (!enabled.length) return { wall: null, idle: null, deep: null, lines: [], next: null, snippet: null, unreadable: [] };
 
   const needFor = (u) => (u.timeoutS + (u.unit === 'gemini' ? GEMINI_HARD_KILL_S : 0)) * 1000;
   const because = (u) => (u.unit === 'gemini'
@@ -778,7 +809,7 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
   const worst = enabled.reduce((a, b) => (needFor(b) > needFor(a) ? b : a));
   const needed = needFor(worst);
 
-  const { value, source } = read(WALL_ENV, { cwd, env });
+  const { value, source, unreadable: wallUnreadable } = read(WALL_ENV, { cwd, env });
   const parsed = value === null ? null : msValue(value);
   // Absent, or set to something that is not milliseconds: the client falls back
   // to its own default, and nothing here can reach it.
@@ -841,6 +872,8 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
   return {
     wall: { needed, neededBy: worst.unit, value, source, effective, ok, servers },
     idle, deep, lines, next, snippet,
+    // Both env lookups walked the same files; the caller wants each named once.
+    unreadable: mergeUnreadable(wallUnreadable, idle.unreadable),
   };
 }
 
@@ -1722,7 +1755,8 @@ function hookWiring(config) {
  * would send an operator to re-paste something that is already there.
  */
 function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env } = {}) {
-  const unreadable = [];
+  const unreadable = [];       // the short names the hooks line prints
+  const unreadablePaths = [];  // the absolute paths doctor's settings line prints
   const wired = new Set();
   let matcherProblem = null;
   for (const { name, path } of settingsTargets({ global, cwd, env })) {
@@ -1730,7 +1764,7 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
     try { raw = readFileSync(path, 'utf8'); } catch { continue; } // absent is the normal case
     let config = null;
     try { config = JSON.parse(raw); } catch { config = null; }
-    if (!isObj(config)) { unreadable.push(name); continue; }
+    if (!isObj(config)) { unreadable.push(name); unreadablePaths.push(path); continue; }
     const here = hookWiring(config);
     matcherProblem = matcherProblem || here.matcherProblem;
     for (const event of here.wired) wired.add(event);
@@ -1741,7 +1775,7 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
   // HOOK_EVENTS rather than against a named event, so a release that adds one
   // needs no edit here.
   if (wired.size === HOOK_EVENTS.length) matcherProblem = null;
-  return { wired: HOOK_EVENTS.filter((e) => wired.has(e)), unreadable, matcherProblem };
+  return { wired: HOOK_EVENTS.filter((e) => wired.has(e)), unreadable, unreadablePaths, matcherProblem };
 }
 
 /**
@@ -1790,7 +1824,8 @@ function resolveContextWindow(contextWindow, { cwd = process.cwd(), env = proces
  * version marker cannot tell a stale threshold from a current one — a changed
  * value renders at the same version — so the config is not the source here.
  * The project's guard first, then the global one, because that is the order a
- * session would pick them up in.
+ * session would pick them up in — and a line read off the global guard says so,
+ * because the command that changes those values is `rules --global --hooks`.
  *
  * A guard that carries no rendered block (0.3.3 and earlier) gets NO line: the
  * `hooks` line already asks for a refresh, and printing a value the script does
@@ -1800,15 +1835,20 @@ function resolveContextWindow(contextWindow, { cwd = process.cwd(), env = proces
  */
 function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
   let rendered = null;
+  let fromGlobal = false;
   for (const global of [false, true]) {
     const { dir } = KINDS.hooks.dir({ global, cwd, env });
     let text;
     try { text = readFileSync(join(dir, HOOK_FILES[0]), 'utf8'); } catch { continue; }
     if (!KINDS.hooks.parse(text)) continue; // somebody else's script says nothing about ours
     rendered = parseHookHandoff(text);
-    if (rendered) break;
+    if (rendered) { fromGlobal = global; break; }
   }
   if (!rendered) return null;
+  // WHOSE values these are. A project without its own rendered block reads the
+  // global guard's numbers, and changing them is `rules --global --hooks` — a
+  // line that did not say so would send the operator to re-render the project.
+  const scope = fromGlobal ? ' · read from the global guard' : '';
 
   // The ledger is the opt-in: with none, the hook measures nothing and says
   // nothing, and an operator reading "nudge at 90%" would expect otherwise.
@@ -1819,9 +1859,9 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
     if (st.isDirectory() && !st.isSymbolicLink()) ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).length;
   } catch { /* absent is the normal case */ }
   const found = ledgers ? `ledgers: ${ledgers}` : 'ledgers: none (hook silent — start .omelette/ledger-<plan>.md)';
-  if (!rendered.enabled) return `nudge off (handoff.enabled=false) · Stop gate off · ${found}`;
+  if (!rendered.enabled) return `nudge off (handoff.enabled=false) · Stop gate off · ${found}${scope}`;
   const ceiling = resolveContextWindow(rendered.contextWindow, { cwd, env });
-  return `nudge at ${rendered.threshold}% of ${ceiling.window} (${ceiling.source}) · Stop gate on · ${found}`;
+  return `nudge at ${rendered.threshold}% of ${ceiling.window} (${ceiling.source}) · Stop gate on · ${found}${scope}`;
 }
 
 /**
@@ -1989,7 +2029,10 @@ async function cmdDoctor(argv) {
   out(`skills        ${dirReport('skills', PKG.version).map((r) => `${r.scope}: ${dirLabel(r)}`).join(' · ')}`);
   // The one managed kind that is inert until something else names it: the wiring
   // lives in settings.json, which doctor reads and nothing here ever writes.
-  out(`hooks         ${dirReport('hooks', PKG.version).map((r) => `${r.scope}: ${hooksLabel(r, hookWiringAt({ global: r.scope === 'global' }))}`).join(' · ')}`);
+  // Both scopes' wiring, read ONCE: the hooks line names the events, and the
+  // settings line below names the files this reader could not parse either.
+  const wiring = { project: hookWiringAt({}), global: hookWiringAt({ global: true }) };
+  out(`hooks         ${dirReport('hooks', PKG.version).map((r) => `${r.scope}: ${hooksLabel(r, r.scope === 'global' ? wiring.global : wiring.project)}`).join(' · ')}`);
   // What the installed guard will do about the handoff — read out of the script
   // itself, so a threshold changed in the config and never re-rendered reads as
   // the value that is actually in force.
@@ -2000,6 +2043,15 @@ async function cmdDoctor(argv) {
   // gives up at 900 s on a 1800 s unit has a working machine and a wall.
   const walls = timeoutWalls({ units: unitBounds, registration: ourEntries, cwd: process.cwd(), env: process.env });
   walls.lines.forEach((line, i) => out(`${i === 0 ? 'mcp timeout   ' : '              '}${line}`));
+  // Every settings file doctor could not parse, named once whichever reader
+  // tripped over it: `readClientEnv` skipped its `env` block, so the wall
+  // lines above may be reporting the client's defaults instead of what the
+  // operator wrote, and `hookWiringAt` skipped its `hooks` block. Read-only
+  // and never a fault — a file nobody can parse is a fact about the machine,
+  // and this CLI does not repair settings files, it names them.
+  for (const path of mergeUnreadable(walls.unreadable, wiring.project.unreadablePaths, wiring.global.unreadablePaths)) {
+    out(`              settings: ${path} unreadable — env values in it were not consulted`);
+  }
   // ONE line, and only while something is missing — see nextStep. Never a fault.
   // The first-run steps come first and the timeout wall only once they are
   // done: "raise MCP_TOOL_TIMEOUT" is tuning advice for a machine that works,
