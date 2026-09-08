@@ -6,11 +6,13 @@
  * file and PRINTS the settings.json snippet that calls it; Claude Code's
  * settings.json is read by this package and written by nobody but the operator.
  *
- * PreToolUse (matcher Bash) — the coder's git guard. The operating model says
- * "coder sub-agents never commit"; a settings-level hook is what MAKES it true:
- * the stdin event carries `agent_type` for a sub-agent and nothing for the main
- * thread, so the block lands on the coder and on nothing else. Exit 2 is what
- * stops the call and hands the reason back to that agent.
+ * PreToolUse (matcher Bash) — the git guard on the two sub-agent roles this
+ * package ships. The operating model says "coder sub-agents never commit" and
+ * asks the same of the tester, which reports what it saw rather than moving the
+ * tree; a settings-level hook is what MAKES both true: the stdin event carries
+ * `agent_type` for a sub-agent and nothing for the main thread, so the block
+ * lands on omelette-coder and omelette-tester and on nothing else. Exit 2 is
+ * what stops the call, and the reason it hands back names the agent it caught.
  *
  * PreCompact — the ledger's re-read marker. A compaction is where a plan loses
  * its context, so every `.omelette/ledger-*.md` gets a line saying it must be
@@ -103,7 +105,7 @@ const WRITES_HISTORY = 'commit|merge|cherry-pick|revert|am|pull|push|stash|workt
 const BRANCH_WRITES = '-[mMcCfu]|--force|--set-upstream';
 
 /**
- * What the coder is never allowed to run, whatever it was asked to do — matched
+ * What a guarded role is never allowed to run, whatever it was asked to do — matched
  * against real git syntax rather than its tidiest form:
  *   - a longer subcommand that merely starts like a forbidden one is NOT this:
  *     `git commit-tree` writes an object and commits nothing, and `merge-base`
@@ -303,16 +305,73 @@ function tagWrites(args) {
 
 /**
  * `git rebase` writes in every form but the ones that UNDO or explain, and
- * those may sit anywhere among the arguments (`git rebase -q --abort`):
- * `--abort` is the recovery an agent stuck mid-rebase needs, `--quit` drops the
- * rebase state, and `--help`/`-h` only print. `--continue` and `--skip` each
- * create a commit, and a bare `git rebase` starts one.
+ * those may sit anywhere among the arguments: `--abort` is the recovery an
+ * agent stuck mid-rebase needs, `--quit` drops the rebase state, and
+ * `--help`/`-h` only print. `--continue` and `--skip` each create a commit, and
+ * a bare `git rebase` starts one.
+ *
+ * WHERE THE WORD SITS DECIDES WHAT IT IS, which is why this reads the arguments
+ * the way tagWrites does rather than asking whether `--abort` occurs. An option
+ * that takes a VALUE takes the next word whatever it looks like: `git rebase
+ * --exec --abort main` is a rebase whose exec command is `--abort` — git 2.38.1
+ * replays the commit, answers `error: cannot run --abort`, and leaves the
+ * repository in `.git/rebase-merge`. The same for `-x`, for the last letter of
+ * a short cluster (`-qx --abort main`), for `--onto`, `--strategy`/`-s` and
+ * `--strategy-option`/`-X`, and for the attached `--exec=--abort` form, whose
+ * token was never the bare word anyway. And after a bare `--` every token is a
+ * POSITIONAL: `git rebase -- --abort` hands `--abort` to git as the upstream
+ * (`fatal: invalid upstream '--abort'`), which is a rebase it tried to start.
+ *
+ * `-S`/`--gpg-sign` is here on purpose although git would not read the next word
+ * as its value — the key-id is optional and git takes it attached only
+ * (`-Skeyid`, `--gpg-sign=keyid`). The difference can only ever reach a command
+ * git itself refuses: an action option must be the WHOLE argument list, so
+ * `git rebase -S --abort` is `usage: git rebase …`, exit 129, and nothing
+ * happens. Refusing a command git will not run costs the coder nothing; missing
+ * one it will run costs a branch. `git rebase -q --abort` is that same usage
+ * error, and it keeps passing — nothing is written either way.
  */
 const REBASE_READS = new Set(['--abort', '--quit', '--help', '-h']);
-const rebaseWrites = (args) => !args.some(({ text, quoted }) => !quoted && REBASE_READS.has(text));
 
 /**
- * Everything the coder may not run, in one question: the comments come off, the
+ * The rebase options whose value arrives as the NEXT WORD. Short letters are
+ * read inside a cluster, so a value-taking letter ends the run exactly as it
+ * does in tagWrites: the rest of the token is that value (`-xcmd`), and a
+ * letter sitting last takes the word after it.
+ */
+const REBASE_VALUE_SHORT = new Set([...'xsXS']);
+const REBASE_VALUE_LONG = new Set(['--exec', '--gpg-sign', '--onto', '--strategy', '--strategy-option']);
+
+/**
+ * Does this `git rebase` write? Only an undo or an explain flag standing on its
+ * OWN account says no: one that arrived inside quotes is text, one sitting in an
+ * option's value position is that value, and one behind a `--` is a positional.
+ */
+function rebaseWrites(args) {
+  let afterSeparator = false;
+  let takesValue = false;
+  for (const { text, quoted } of args) {
+    if (afterSeparator) continue; //                    a positional, however it is spelled
+    if (takesValue) { takesValue = false; continue; } // the previous option's value
+    if (quoted) continue; //                            `--exec 'echo --abort now'` is a command
+    if (text === '--') { afterSeparator = true; continue; }
+    if (REBASE_READS.has(text)) return false;
+    if (text === '-' || !text.startsWith('-')) continue;
+    if (text.startsWith('--')) {
+      // An attached value (`--exec=--abort`) needs no skip: the token is not the
+      // bare word, so nothing behind it was ever a candidate.
+      if (!text.includes('=') && REBASE_VALUE_LONG.has(text)) takesValue = true;
+      continue;
+    }
+    for (let k = 1; k < text.length; k++) {
+      if (REBASE_VALUE_SHORT.has(text[k])) { takesValue = k === text.length - 1; break; }
+    }
+  }
+  return true;
+}
+
+/**
+ * Everything a guarded role may not run, in one question: the comments come off, the
  * command is tokenized once, and the three classifiers read that. Each step is a
  * single pass, so a 10 KB command costs milliseconds and never a tiling.
  */
@@ -323,8 +382,22 @@ const forbidden = (raw) => {
   return invocations(TAG_CALL, command, tokens).some(tagWrites)
     || invocations(REBASE_CALL, command, tokens).some(rebaseWrites);
 };
-const REFUSAL = 'omelette-coder never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead';
-const GUARDED_AGENT = 'omelette-coder';
+/**
+ * THE ROLES THIS GUARD CONTAINS. Both shipped definitions run the same Bash
+ * tool and the operating model asks the same thing of both — the coder reports
+ * instead of committing, the tester runs the suite and reports what it saw —
+ * but until 0.3.4 only the coder's half was ENFORCED and the tester's was prose.
+ * A tester that stashed the tree to get a clean run was hiding the very diff the
+ * orchestrator was about to review, and nothing stopped it.
+ *
+ * A name is matched WHOLE: `omelette-coder-2` is somebody else's agent, and the
+ * main thread carries no `agent_type` at all.
+ *
+ * The refusal NAMES the agent it caught. Two roles reading one another's line is
+ * how an agent decides the block was meant for somebody else.
+ */
+const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-tester']);
+const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
 const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
 
 /**
@@ -345,7 +418,7 @@ const isObject = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
  * WHAT `rules --hooks` RENDERED HERE. This script imports nothing from the
  * package — it is copied into a project as one file — so the operator's
  * `handoff` block arrives as a JSON literal substituted at render time, exactly
- * the way `{{marker}}` is. `doctor` reads THIS LINE back out of the installed
+ * the way the version marker is. `doctor` reads THIS LINE back out of the installed
  * script, which is how a threshold changed in the config and never re-rendered
  * is visible instead of merely wrong.
  */
@@ -398,12 +471,13 @@ function say(stream, text) {
 /** Exit 2 = "do not run this", with the reason on stderr for the agent to read. */
 function preToolUse(event) {
   const input = event.tool_input && typeof event.tool_input === 'object' ? event.tool_input : {};
-  if (event.agent_type !== GUARDED_AGENT || event.tool_name !== 'Bash') return;
+  const agent = str(event.agent_type);
+  if (!GUARDED_AGENTS.has(agent) || event.tool_name !== 'Bash') return;
   if (!forbidden(str(input.command))) return;
   // exitCode, not exit(): the process leaves on its own once stderr is flushed.
   // Set first, so a stderr that cannot be written to still refuses the call.
   process.exitCode = 2;
-  say(process.stderr, `${REFUSAL}\n`);
+  say(process.stderr, `${REFUSAL(agent)}\n`);
 }
 
 /**

@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   AGENT_FILES, AGENT_MARKER, AGENT_ROLES, CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, FLEET_CONTRACT,
@@ -548,4 +548,77 @@ test('parseContextWindow: 200000, 500k, 1M — and nothing else is a window', ()
   for (const raw of ['', '   ', '0', '-1', '1.5m', '200_000', '200000 tokens', 'lots', 'k', null, undefined, true, {}, [], 0, -1, 1.5]) {
     assert.equal(parseContextWindow(raw), null, JSON.stringify(raw));
   }
+});
+
+test('hookSettingsSnippet: a path holding `$1`, a space and a single quote survives the quoting on both platforms', () => {
+  // Everything an operator's path can hold that a shell would otherwise read as
+  // syntax: a `$` in front of a digit (a positional parameter under `sh`), a
+  // space (the reason the quoting exists at all), and the one character POSIX
+  // single quotes cannot contain.
+  const hostile = "/Users/me/My $1 Dir/it's/.claude/hooks/omelette-guard.mjs";
+
+  // POSIX single quotes take everything literally; the quote itself is closed,
+  // escaped and reopened — `'…it'\''s…'`.
+  const posix = JSON.parse(hookSettingsSnippet(hostile, 'darwin').join('\n'));
+  for (const event of HOOK_EVENTS) {
+    assert.equal(
+      posix.hooks[event][0].hooks[0].command,
+      `node '/Users/me/My $1 Dir/it'\\''s/.claude/hooks/omelette-guard.mjs'`,
+      `${event}: the POSIX quoting must survive whole`,
+    );
+  }
+
+  // cmd.exe knows nothing about POSIX single quotes or about `$1`, and a Windows
+  // path cannot contain a `"` — so double quotes need no escaping inside them,
+  // and the JSON layer is the only thing that escapes anything.
+  const win = JSON.parse(hookSettingsSnippet(hostile, 'win32').join('\n'));
+  for (const event of HOOK_EVENTS) {
+    assert.equal(win.hooks[event][0].hooks[0].command, `node "/Users/me/My $1 Dir/it's/.claude/hooks/omelette-guard.mjs"`);
+  }
+
+  // The snippet is one pasteable JSON object on either platform — the two parses
+  // above are that proof, and every event is still wired to the same script.
+  assert.deepEqual(Object.keys(posix.hooks), HOOK_EVENTS);
+  assert.deepEqual(Object.keys(win.hooks), HOOK_EVENTS);
+});
+
+test('the pasted command LINE runs the guard at such a path: a shell reads it back whole and the refusal still lands',
+  { skip: process.platform === 'win32' && 'a POSIX shell' }, () => {
+    const dir = join(mkdtempSync(join(tmpdir(), 'omelette-quote-')), "My $1 Dir it's");
+    mkdirSync(dir, { recursive: true });
+    const script = join(dir, 'omelette-guard.mjs');
+    writeFileSync(script, renderHookFile(HOOK_FILES[0], '1.2.3'));
+
+    const command = JSON.parse(hookSettingsSnippet(script, 'darwin').join('\n')).hooks.PreToolUse[0].hooks[0].command;
+    // A hook `command` is a command LINE handed to a shell, so a shell is what
+    // has to read the path back: `$1` unexpanded, the space intact, the quote
+    // intact. `printf %s` is the shortest thing that shows what the shell saw.
+    const echoed = spawnSync('/bin/sh', ['-c', `printf %s ${command.slice('node '.length)}`], { encoding: 'utf8' });
+    assert.equal(echoed.stdout, script, `the shell did not read the path back whole: ${echoed.stdout}${echoed.stderr}`);
+
+    // …and end to end: the line exactly as the operator would paste it, the
+    // event on stdin, exit 2 with the refusal.
+    const r = spawnSync('/bin/sh', ['-c', command], {
+      input: JSON.stringify({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        agent_type: 'omelette-coder',
+        tool_input: { command: 'git commit -m x' },
+      }),
+      encoding: 'utf8',
+      timeout: 20000,
+      // The snippet spells the interpreter `node`, by name. Point PATH at the
+      // one running this suite so the test cannot depend on which node happens
+      // to come first on the machine.
+      env: { ...process.env, PATH: `${dirname(process.execPath)}:${process.env.PATH}` },
+    });
+    assert.equal(r.status, 2, `the guard did not run: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /^omelette-coder never commits/);
+  });
+
+test('the tester definition says the guard contains it too — the role is enforced, not merely asked', () => {
+  const text = renderAgentFile('omelette-tester.md', '1.2.3');
+  assert.match(text, /guard hook/, 'the tester is told the guard exists');
+  assert.match(text, /Never stash or move the tree/, 'and why moving the tree is the one thing it must not do');
+  assert.ok(!text.includes('{{'), 'no placeholder survives rendering');
 });

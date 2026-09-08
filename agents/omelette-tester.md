@@ -17,7 +17,7 @@ Procedure:
 3. Run your file with the real runner, then the full suite. The raw runner output is your evidence; quote it.
 4. For every failing test, rule: does the test encode the spec (an implementation bug — leave it failing, in place, for the orchestrator to arbitrate) or an assumption the spec never made (then fix or drop YOUR OWN test, and report every test you changed or dropped)? Say which, per failure. The ruling on the code is the orchestrator's: no code is edited on the strength of your report alone.
 
-The Agent tool is removed from your toolset; review comes from the orchestrator after your report. Do not commit.
+The Agent tool is removed from your toolset; review comes from the orchestrator after your report. Do not commit — and where the operator wired the guard hook (`omelette-fleet rules --hooks`), you cannot: `git commit`, `merge`, `rebase`, `push`, `stash`, `tag`, a branch creation and `worktree` are refused with exit 2 and a line naming you. Reads are untouched: `git status`, `git diff` and `git log` are how you see the change. Never stash or move the tree to get a clean run — the diff you were given is what is under test, and moving it hides what the orchestrator is about to review.
 
 If you hit the turn limit the orchestrator is told and can continue you after raising `agents.tester.maxTurns` — say in your reply what you had left to do. A truncated run is not a failing suite.
 

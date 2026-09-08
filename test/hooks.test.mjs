@@ -12,12 +12,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HOOK_FILES, HOOK_MARKER, parseHookMarker, renderHookFile } from '../core/rules.mjs';
 
-const REFUSAL = 'omelette-coder never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead';
+/** The refusal names the agent it caught, so two guarded roles never read each other's line. */
+const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
 
 /** The guard exactly as `rules --hooks` writes it, in a throwaway directory. */
 function guard() {
@@ -133,7 +134,7 @@ test('PreToolUse: the coder is blocked with exit 2 and the refusal on stderr', (
   ]) {
     const r = fire(g.path, preToolUse({ tool_input: { command } }));
     assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
-    assert.equal(r.err.trim(), REFUSAL);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
     assert.equal(r.out, '', 'a block says nothing on stdout');
   }
 });
@@ -165,8 +166,8 @@ test('PreToolUse: everything else runs — other git commands, other tools, othe
     preToolUse({ tool_input: { command: 'git branch -d x' } }),
     preToolUse({ tool_input: { command: 'git branch -D x' } }),
     preToolUse({ tool_input: { command: 'git branch --list feature-c' } }),
-    // the same command from anything that is not the coder
-    preToolUse({ agent_type: 'omelette-tester' }),
+    // the same command from anything that is not one of the two guarded roles
+    // (`omelette-tester` sat here until 0.3.4 — it is guarded now, below)
     preToolUse({ agent_type: undefined }), //         the main thread carries no agent_type
     preToolUse({ agent_type: 'omelette-coder-2' }),
     // …and a coder that is not running a shell command
@@ -296,7 +297,7 @@ test('PreToolUse: `git tag` reads and `git rebase --abort` pass; the tag writes 
   ]) {
     const r = fire(g.path, preToolUse({ tool_input: { command } }));
     assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
-    assert.equal(r.err.trim(), REFUSAL);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
   }
 });
 
@@ -682,4 +683,198 @@ test('SessionStart(compact): a ledger past 1 MiB is read from its TAIL, and the 
     '',
   ].join('\n'));
   assert.equal(r.out.includes('STALE'), false, 'the stale first block is behind the tail, and stays there');
+});
+
+test('PreToolUse: both shipped roles are guarded, and the refusal names the agent it caught', () => {
+  const g = guard();
+  for (const agent of ['omelette-coder', 'omelette-tester']) {
+    for (const command of [
+      'git commit -m "wip"',
+      'git stash',
+      'git push origin main',
+      'git checkout -b feat/x',
+      'git worktree add ../wt',
+      'git tag v1.0.0',
+      'git rebase main',
+    ]) {
+      const r = fire(g.path, preToolUse({ agent_type: agent, tool_input: { command } }));
+      assert.equal(r.code, 2, `${agent}: ${command} should be blocked: ${r.out}${r.err}`);
+      assert.equal(r.err.trim(), REFUSAL(agent), 'the refusal names the agent that was caught');
+      assert.equal(r.out, '', 'a block says nothing on stdout');
+    }
+    // …and neither role loses a read: the tester runs the suite and reads the
+    // diff it was handed, the coder reads its own history. Containment is about
+    // what moves the tree, and nothing here moves it.
+    for (const command of ['git status', 'git diff HEAD', 'git log --oneline -3', 'git branch --list', 'npm test']) {
+      const r = fire(g.path, preToolUse({ agent_type: agent, tool_input: { command } }));
+      assert.equal(r.code, 0, `${agent}: ${command} should pass: ${r.out}${r.err}`);
+      assert.equal(r.err, '');
+    }
+  }
+});
+
+test('PreToolUse: the guarded set is EXACT — the main thread is nobody, and a name that merely contains one is not one', () => {
+  const g = guard();
+  for (const agent_type of [
+    undefined,               // the main thread carries no agent_type at all
+    null, '', 42, { name: 'omelette-coder' },
+    'omelette-coder-2', 'omelette-tester-2', 'my-omelette-coder', 'omelette',
+    'OMELETTE-CODER',        // matched whole and case-sensitively, as Claude Code spells it
+  ]) {
+    const r = fire(g.path, preToolUse({ agent_type, tool_input: { command: 'git commit -m "x"' } }));
+    assert.equal(r.code, 0, `agent_type ${JSON.stringify(agent_type)} is not guarded: ${r.out}${r.err}`);
+    assert.equal(r.err, '', `agent_type ${JSON.stringify(agent_type)} printed to stderr`);
+  }
+});
+
+/**
+ * `git rebase` OPTION VALUES. Every expectation below was measured against a
+ * real git (2.38.1) before it was written down, and the comment beside each
+ * case says what git DOES with it — that, and not the shape of the word, is
+ * what decides whether the guard may let it through.
+ */
+test('PreToolUse: a rebase option VALUE that reads like `--abort` is a value — git rebases, and the guard refuses', () => {
+  const g = guard();
+  for (const command of [
+    // `--exec`/`-x` take the next word as a shell command to run after every
+    // commit. git: "Rebasing (2/2) … Executing: --abort … error: cannot run
+    // --abort", and the repository is left in `.git/rebase-merge`. That is a
+    // rebase, whatever the word in the value position says.
+    'git rebase --exec --abort main',
+    'git rebase -x --abort main',
+    // A short run is a cluster and only its LAST letter takes the next word:
+    // `-qx --abort main` is `-q` plus `-x --abort` — measured, the same rebase.
+    'git rebase -qx --abort main',
+    // The attached form was already refused before 0.3.4 (the token is not the
+    // bare `--abort`), and it stays refused: git runs the same rebase.
+    'git rebase --exec=--abort main',
+    // `--onto`, `-s`/`--strategy` and `-X`/`--strategy-option` each REQUIRE a
+    // value too. git on `--onto --abort main`: "fatal: Does not point to a
+    // valid commit '--abort'" — a rebase it tried to start; on `--strategy
+    // --abort main` the rebase runs with a strategy called `--abort`.
+    'git rebase --onto --abort main',
+    'git rebase --strategy --abort main',
+    'git rebase -s --abort main',
+    'git rebase --strategy-option --abort main',
+    'git rebase -X --abort main',
+    // `-S`/`--gpg-sign` is the one deliberate over-reach. Its key-id is
+    // OPTIONAL and git only accepts it attached (`-Skeyid`, `--gpg-sign=keyid`),
+    // so git does not read `--abort` as its value — and it does not read it as
+    // an abort either, because an action option must be the WHOLE argument
+    // list: git answers this with `usage: git rebase …` and exit 129, and does
+    // nothing at all. Refusing a command git refuses costs the coder nothing;
+    // guessing the other way costs a branch.
+    'git rebase -S --abort',
+    'git rebase --gpg-sign --abort',
+    // After a bare `--` every token is a POSITIONAL: git reads `--abort` as the
+    // upstream ("fatal: invalid upstream '--abort'"), which is a rebase it
+    // tried to start rather than one it undid.
+    'git rebase -- --abort',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+
+  for (const command of [
+    // The recovery forms keep passing — they are why the rule is a value SKIP
+    // and not a blanket refusal of anything with an option in it.
+    'git rebase --abort',
+    'git rebase --quit',
+    'git rebase --help',
+    'git rebase -h',
+    'git -C /x rebase --abort',
+    // `-q` takes no value, so `--abort` is still an action word here. git
+    // answers `git rebase -q --abort` with `usage: git rebase …` and exit 129 —
+    // an action option must be the whole argument list — so nothing is written
+    // either way, and the guard keeps the reading it has had since 0.3.2.
+    'git rebase -q --abort',
+    // …and the same for a bare `--abort` behind a quoted exec value: the quoted
+    // word is the exec command, the bare one is an action, and git rejects the
+    // combination with that same usage error rather than rebasing.
+    "git rebase --exec 'echo --abort' --abort",
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+});
+
+const gitAvailable = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
+
+/** A throwaway repository where `feature` and `main` have each moved on by one commit. */
+function gitRepo() {
+  const repo = mkdtempSync(join(tmpdir(), 'omelette-git-rebase-'));
+  const run = (...args) => spawnSync('git', args, {
+    cwd: repo,
+    encoding: 'utf8',
+    env: {
+      PATH: process.env.PATH,
+      HOME: repo,
+      GIT_CONFIG_GLOBAL: join(repo, 'no-gitconfig'),
+      GIT_CONFIG_SYSTEM: join(repo, 'no-gitconfig'),
+      GIT_AUTHOR_NAME: 'x',
+      GIT_AUTHOR_EMAIL: 'x@x',
+      GIT_COMMITTER_NAME: 'x',
+      GIT_COMMITTER_EMAIL: 'x@x',
+    },
+  });
+  assert.equal(run('init', '-q', '-b', 'main').status, 0);
+  assert.equal(run('commit', '-q', '--allow-empty', '-m', 'init').status, 0);
+  assert.equal(run('checkout', '-q', '-b', 'feature').status, 0);
+  assert.equal(run('commit', '-q', '--allow-empty', '-m', 'f1').status, 0);
+  assert.equal(run('checkout', '-q', 'main').status, 0);
+  assert.equal(run('commit', '-q', '--allow-empty', '-m', 'm1').status, 0);
+  assert.equal(run('checkout', '-q', 'feature').status, 0);
+  return { repo, run };
+}
+
+test('git itself: `--exec --abort` REBASES and `-q --abort` aborts nothing — the two readings the classifier encodes',
+  { skip: !gitAvailable && 'git is not installed' }, () => {
+    const { repo, run } = gitRepo();
+    // The word in the value position is the exec command, and the rebase starts:
+    // it replays the commit, fails to run `--abort` as a program, and stops with
+    // the repository in a rebase state. A failure here is git disagreeing with
+    // the classifier, not a typo in the test.
+    const rebased = run('rebase', '--exec', '--abort', 'main');
+    assert.match(`${rebased.stdout}${rebased.stderr}`, /--abort/);
+    assert.ok(
+      existsSync(join(repo, '.git', 'rebase-merge')) || existsSync(join(repo, '.git', 'rebase-apply')),
+      `a rebase should be in progress: ${rebased.stdout}${rebased.stderr}`,
+    );
+    assert.equal(run('rebase', '--abort').status, 0, 'and the real --abort undoes it');
+
+    // …while an action option is only an action when it is the whole argument
+    // list: `-q --abort` is a usage error, not an abort.
+    const quiet = run('rebase', '-q', '--abort');
+    assert.equal(quiet.status, 129, `${quiet.stdout}${quiet.stderr}`);
+    assert.match(`${quiet.stdout}${quiet.stderr}`, /usage: git rebase/);
+  });
+
+test('PreToolUse: `git tag --sort` swallows the flag behind it — the listing passes, a name behind it is still a creation', () => {
+  const g = guard();
+  // `--sort` takes a value, so the token behind it is that value and selects no
+  // listing mode. Measured on git 2.38.1:
+  //   git tag --sort --list      → `fatal: unknown field name: -list`; no tag
+  //                                written, nothing listed. There is no name in
+  //                                the command to create, so the guard passes it.
+  //   git tag --list --sort v1   → `--list` selects the listing and `v1` is the
+  //                                sort key: `fatal: unknown field name: v1`,
+  //                                nothing written. Order is what decides.
+  for (const command of ['git tag --sort --list', 'git tag --list --sort v1', 'git tag --sort=-v:refname']) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+  // …and with a NAME behind the swallowed flag the command has the SHAPE of a
+  // creation, which is what the guard classifies. On git 2.38.1 the bad sort key
+  // is rejected before anything is written, so that version creates nothing
+  // either — but strike the `--sort` and `git tag --list v1` lists while `git
+  // tag v1` creates, and which of those the operator meant is not the guard's
+  // to guess. It refuses, as it has since 0.3.3.
+  for (const command of ['git tag --sort --list v1', 'git tag --sort refname v1']) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
 });
