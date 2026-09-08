@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createStatus, STATUS_SCHEMA } from '../core/status.mjs';
+import { createStatus, previewText, STATUS_SCHEMA } from '../core/status.mjs';
 
 function make(enabled = true) {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-status-'));
@@ -55,4 +55,41 @@ test('errors are truncated to 500 chars and marked as status error', () => {
   const snap = JSON.parse(readFileSync(join(dir, 'status-testunit.json'), 'utf8'));
   assert.equal(snap.lastEvent.status, 'error');
   assert.equal(snap.lastEvent.error.length, 500);
+});
+
+test('a result id rides the whole pair: the active entry, both log lines and lastEvent', () => {
+  const { dir, st } = make();
+  const rid = '20260908T142501Z-19312-1';
+  const tok = st.start('t_research', 'x', 'm1', 'high', rid);
+  assert.equal(tok.resultId, rid);
+  let snap = JSON.parse(readFileSync(join(dir, 'status-testunit.json'), 'utf8'));
+  assert.equal(snap.active[0].resultId, rid);
+  // A cancelled request: a third status, and `detached` travels like `partial`.
+  st.end(tok, 'cancelled', null, { detached: true });
+  snap = JSON.parse(readFileSync(join(dir, 'status-testunit.json'), 'utf8'));
+  assert.equal(snap.schema, STATUS_SCHEMA, 'a new field never bumps the schema');
+  assert.equal(snap.lastEvent.status, 'cancelled');
+  assert.equal(snap.lastEvent.detached, true);
+  assert.equal(snap.lastEvent.resultId, rid);
+  const lines = readFileSync(join(dir, 'fleet-log.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => l.resultId), [rid, rid]);
+  assert.equal(lines[1].status, 'cancelled');
+  assert.equal(lines[1].detached, true);
+});
+
+test('an omitted result id is null everywhere it appears, never undefined', () => {
+  const { dir, st } = make();
+  const tok = st.start('t_research', 'x');
+  st.end(tok, 'ok');
+  const snap = JSON.parse(readFileSync(join(dir, 'status-testunit.json'), 'utf8'));
+  assert.equal(snap.active.length, 0);
+  assert.equal(snap.lastEvent.resultId, null);
+  const start = readFileSync(join(dir, 'fleet-log.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))[0];
+  assert.equal(start.resultId, null);
+});
+
+test('previewText is the one preview rule, exported so the result record shares it', () => {
+  assert.equal(previewText('hello\nworld\u0001!'), 'hello world !');
+  assert.equal(previewText(null), '');
+  assert.equal(previewText('x'.repeat(400)).length, 200);
 });

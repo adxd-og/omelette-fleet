@@ -8,7 +8,7 @@
  *     "agents": { "coder": { model, effort }, "tester": { model, effort, maxTurns } },
  *     "defaults": { ...keys applied to every unit... },
  *     "units": { "<unit>": { enabled, mode, model, effort, timeoutS, maxTurns,
- *                            outputCap, webSearch, status, ... } } }
+ *                            outputCap, webSearch, status, cancel, ... } } }
  *
  * RESOLUTION, per key: built-in default → file `defaults` → file `units.<unit>`
  * → environment variable (the unit's legacy env names, e.g. GROK_TIMEOUT_S).
@@ -52,6 +52,11 @@ export const KEY_SCHEMA = {
   outputCap: { type: 'posint', default: 400000 },
   webSearch: { type: 'boolean', default: true },
   status: { type: 'boolean', default: true },
+  // What a client's `notifications/cancelled` does to the run it names.
+  // `finish`: the vendor CLI is left to end and the result is recorded — a
+  // cancel is usually a client-side timeout, and the run is already paid for.
+  // `kill`: every process group the request owns is SIGKILLed at once.
+  cancel: { type: 'enum', values: ['finish', 'kill'], default: 'finish' },
 };
 
 export function fleetHome(env = process.env) {

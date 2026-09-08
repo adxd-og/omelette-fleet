@@ -237,7 +237,9 @@ test('serve: stdin end waits for a call in flight, answers it, and only then exi
     'serve({',
     '  serverInfo: { name: "slow", version: "0" },',
     '  tools: [{ name: "slow", description: "d", inputSchema: { type: "object", properties: {} } }],',
-    '  callTool: async () => { await new Promise((r) => setTimeout(r, 600)); return { text: "late answer" }; },',
+    // A megabyte: far more than a pipe holds, so the write CANNOT complete
+    // synchronously and the exit has to wait for it to flush.
+    '  callTool: async () => { await new Promise((r) => setTimeout(r, 600)); return { text: "late answer " + "x".repeat(1024 * 1024) }; },',
     '});',
   ].join('\n'));
   const child = spawn(process.execPath, [script], { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -251,4 +253,11 @@ test('serve: stdin end waits for a call in flight, answers it, and only then exi
   const code = await new Promise((r) => child.on('close', r));
   assert.equal(code, 0);
   assert.match(out, /late answer/, 'the answer was written before the exit');
+  // Written is not the same as delivered: a frame cut off mid-way still starts
+  // with the answer. The client only has it if the whole frame parses.
+  const frames = out.split('\n').filter(Boolean);
+  assert.equal(frames.length, 1);
+  const msg = JSON.parse(frames[0]);
+  assert.equal(msg.id, 1);
+  assert.equal(msg.result.content[0].text.length, 'late answer '.length + 1024 * 1024);
 });

@@ -1771,3 +1771,15 @@ test('client: an absurd timeout is clamped instead of overflowing into an instan
   assert.equal(r.isError, false);
   assert.equal(MAX_TIMEOUT_S, 86400);
 });
+
+test('the cancel key reaches `set` and `show` with no CLI change — it comes from KEY_SCHEMA', () => {
+  const dir = home();
+  assert.match(cli(['show', 'grok'], { dir }).out, /^\s+cancel\s+finish\s+default$/m);
+  const s = cli(['set', 'grok.cancel=kill'], { dir });
+  assert.equal(s.code, 0, s.err);
+  assert.match(s.out, /grok\.cancel\s+finish \[default\] → kill \[file\]/);
+  assert.match(cli(['show', 'grok'], { dir }).out, /^\s+cancel\s+kill\s+file$/m);
+  const bad = cli(['set', 'grok.cancel=maybe'], { dir });
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /invalid value for grok\.cancel/);
+});

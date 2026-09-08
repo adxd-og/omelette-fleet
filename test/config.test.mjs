@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   unitConfig, effectiveMode, allowWriteUnits, loadFleetConfig, writeFleetConfig, fleetHome, fleetSettings,
-  coerce, AGENT_SETTINGS_SCHEMA, CONFIG_VERSION,
+  coerce, AGENT_SETTINGS_SCHEMA, CONFIG_VERSION, KEY_SCHEMA,
 } from '../core/config.mjs';
 
 function home(config) {
@@ -236,4 +236,24 @@ test('writeFleetConfig writes atomically with version and 0600', () => {
   assert.equal(back.version, CONFIG_VERSION);
   assert.equal(back.units.codex.timeoutS, 7);
   assert.equal(loadFleetConfig(env).config.units.codex.timeoutS, 7);
+});
+
+test('cancel: an enum key like any other — `finish` by default, per unit or fleet-wide', () => {
+  const plain = unitConfig({ unit: 'codex', supportedModes: MODES_CODEX, env: { OMELETTE_HOME: home() } });
+  assert.equal(plain.values.cancel, 'finish');
+  assert.equal(plain.sources.cancel, 'default');
+  const env = { OMELETTE_HOME: home({ defaults: { cancel: 'kill' }, units: { grok: { cancel: 'finish' }, codex: { cancel: 'stop' } } }) };
+  const fleetWide = unitConfig({ unit: 'gemini', supportedModes: MODES_CODEX, env });
+  assert.equal(fleetWide.values.cancel, 'kill');
+  assert.equal(fleetWide.sources.cancel, 'file:defaults');
+  const perUnit = unitConfig({ unit: 'grok', supportedModes: MODES_GROK, env });
+  assert.equal(perUnit.values.cancel, 'finish');
+  assert.equal(perUnit.sources.cancel, 'file');
+  const bad = unitConfig({ unit: 'codex', supportedModes: MODES_CODEX, env });
+  assert.equal(bad.values.cancel, 'kill', 'the invalid unit value falls through to `defaults`');
+  assert.ok(bad.warnings.some((w) => /codex\.cancel = "stop" is invalid/.test(w)));
+  // The enum is exact: no case folding, no third value.
+  assert.deepEqual(coerce(KEY_SCHEMA.cancel, 'kill'), { ok: true, value: 'kill' });
+  assert.deepEqual(coerce(KEY_SCHEMA.cancel, 'KILL'), { ok: false });
+  assert.deepEqual(KEY_SCHEMA.cancel.values, ['finish', 'kill']);
 });

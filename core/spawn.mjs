@@ -2,7 +2,8 @@
  * omelette-fleet :: core/spawn.mjs
  * One headless vendor-CLI run, bounded in every direction:
  *   - own process group (`detached`) so a wall-clock timeout can SIGKILL the
- *     whole tree, not just the top process;
+ *     whole tree, not just the top process
+ *     (the same kill answers a cancelled request when one is passed a `signal`);
  *   - stdout kept to a tail cap (a runaway model cannot exhaust memory), the
  *     result carrying `capped: true` when the cap actually dropped characters —
  *     a TAIL cap drops the BEGINNING, so a parser reading a stream from the top
@@ -93,17 +94,21 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
 /**
  * @param {{bin:string, args:string[], cwd?:string, env?:object, envPassthrough?:string[],
  *          extraEnv?:object, scrubEnv?:string[], inheritEnv?:boolean, hardKillMs?:number,
- *          outputCap?:number, stdinText?:string, notFoundHelp?:string, log?:(m:string)=>void}} o
+ *          outputCap?:number, stdinText?:string, notFoundHelp?:string, log?:(m:string)=>void,
+ *          signal?:AbortSignal}} o
  *   env is the PARENT environment to select from — never the child env itself.
  *   inheritEnv: hand the parent env over untouched (operator tools only, see header).
  *   outputCap: tail-keeping cap on stdout — the unit's `outputCap` config value.
+ *   signal: when it aborts, the process GROUP is SIGKILLed exactly as the
+ *     hard-kill timeout does, and the result carries `cancelled: true`.
  * @returns {Promise<{stdout:string, stderr:string, code:number|null, signal:string|null,
- *                    killed:boolean, capped:boolean}>}
+ *                    killed:boolean, capped:boolean, cancelled:boolean}>}
  *   capped: the cap dropped characters, so `stdout` starts mid-stream.
+ *   cancelled: the run was killed because the REQUEST was cancelled, not because it ran long.
  */
 export function runProcess({
   bin, args, cwd, env = process.env, envPassthrough = [], extraEnv, scrubEnv = [], inheritEnv = false,
-  hardKillMs = 0, outputCap = OUTPUT_CAP, stdinText, notFoundHelp, log = () => {},
+  hardKillMs = 0, outputCap = OUTPUT_CAP, stdinText, notFoundHelp, log = () => {}, signal,
 }) {
   return new Promise((resolve, reject) => {
     const childEnv = inheritEnv
@@ -144,17 +149,36 @@ export function runProcess({
     }
 
     let killed = false;
+    let cancelled = false;
     let settled = false;
+    // A process GROUP, not a process: `detached: true` above made this child a
+    // group leader precisely so one signal reaches the tree it spawned.
+    const killGroup = () => {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
+    };
     const timer = hardKillMs > 0
-      ? setTimeout(() => {
-        killed = true;
-        try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
-      }, hardKillMs)
+      ? setTimeout(() => { killed = true; killGroup(); }, hardKillMs)
       : null;
     if (timer && timer.unref) timer.unref();
+    // Cancellation is the same hard kill under another name: a request the
+    // client abandoned must not leave a vendor CLI running on the operator's
+    // subscription. (Only `cancel: kill` passes a signal down here — see
+    // core/unit.mjs; `cancel: finish` deliberately lets the run end.)
+    const onAbort = () => { killed = true; cancelled = true; killGroup(); };
+    let detachAbort = () => {};
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else {
+        signal.addEventListener('abort', onAbort, { once: true });
+        // One request can own many spawns (a deep-research pipeline): a listener
+        // left behind per spawn would pile up on the same signal.
+        detachAbort = () => { try { signal.removeEventListener('abort', onAbort); } catch { /* not a real signal */ } };
+      }
+    }
 
     child.on('error', (e) => {
       if (timer) clearTimeout(timer);
+      detachAbort();
       if (settled) return;
       settled = true;
       if (e && e.code === 'ENOENT') {
@@ -163,12 +187,13 @@ export function runProcess({
       }
       reject(new Error(`${bin} process error: ${(e && e.message) || e}`));
     });
-    child.on('close', (code, signal) => {
+    child.on('close', (code, sig) => {
       if (timer) clearTimeout(timer);
+      detachAbort();
       if (settled) return;
       settled = true;
-      log(`exit ${bin} · code=${code} · signal=${signal || '-'}${killed ? ' · HARD-KILLED' : ''}${capped ? ` · OUTPUT-CAPPED at ${outputCap}` : ''}`);
-      resolve({ stdout: out, stderr: errBuf, code, signal, killed, capped });
+      log(`exit ${bin} · code=${code} · signal=${sig || '-'}${killed ? ' · HARD-KILLED' : ''}${cancelled ? ' · CANCELLED' : ''}${capped ? ` · OUTPUT-CAPPED at ${outputCap}` : ''}`);
+      resolve({ stdout: out, stderr: errBuf, code, signal: sig, killed, capped, cancelled });
     });
   });
 }

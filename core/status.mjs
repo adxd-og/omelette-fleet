@@ -6,8 +6,8 @@
  * FILE CONTRACT (schema 1 — readers are built against this; changes bump the
  * number, never silently reshape a field):
  *   <home>/status-<unit>.json   per-unit snapshot, written ATOMICALLY (tmp + rename)
- *     { schema, unit, active: [{id, tool, model, effort, promptPreview, startedAt}],
- *       lastEvent: {tool, status, endedAt, durationMs, error, ...extra} | null, updatedAt }
+ *     { schema, unit, active: [{id, tool, model, effort, promptPreview, startedAt, resultId}],
+ *       lastEvent: {tool, status, endedAt, durationMs, error, resultId, ...extra} | null, updatedAt }
  *     `active` = tool calls running in THIS process right now (parallel calls
  *     are possible; a multi-spawn pipeline is ONE entry for the whole run).
  *   <home>/fleet-log.ndjson     shared append log, one compact JSON per line,
@@ -27,6 +27,13 @@ const LOG_TRIM_BYTES = 500 * 1024;
 const LOG_KEEP_LINES = 1000;
 
 /**
+ * The one preview rule: control characters collapsed to spaces, trimmed, 200
+ * characters. Exported because the result record (core/unit.mjs) must show the
+ * SAME preview the feed shows — two rules would drift.
+ */
+export const previewText = (t) => String(t || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+
+/**
  * @param {{unit:string, spawnTools:Set<string>, resolve:()=>{dir:string, enabled:boolean}}} o
  *   spawnTools: only tools that spawn a CLI are tracked — catalog reads never are.
  */
@@ -39,7 +46,6 @@ export function createStatus({ unit, spawnTools, resolve }) {
     const { dir } = resolve();
     return { dir, snapshot: join(dir, `status-${unit}.json`), log: join(dir, 'fleet-log.ndjson') };
   };
-  const preview = (t) => String(t || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
 
   function writeSnapshot() {
     try {
@@ -86,22 +92,31 @@ export function createStatus({ unit, spawnTools, resolve }) {
     } catch { /* fail-soft */ }
   }
 
-  /** Returns a token for end(), or null for untracked tools / disabled feed — end(null) is a no-op, callers never branch. */
-  function start(tool, promptText, model, effort) {
+  /**
+   * Returns a token for end(), or null for untracked tools / disabled feed —
+   * end(null) is a no-op, callers never branch. `resultId` is the runtime's own
+   * id for this call (core/unit.mjs `makeResultId`), independent of the feed: it
+   * is what a reader uses to find the spooled result, so it rides both events.
+   */
+  function start(tool, promptText, model, effort, resultId = null) {
     if (!spawnTools.has(tool)) return null;
     try {
       if (!resolve().enabled) return null;
       const id = `${process.pid}-${++seq}`;
       const startedAt = new Date().toISOString();
-      const promptPreview = preview(promptText);
-      active.set(id, { id, tool, model: model || null, effort: effort || null, promptPreview, startedAt });
+      const promptPreview = previewText(promptText);
+      const rid = resultId || null;
+      active.set(id, { id, tool, model: model || null, effort: effort || null, promptPreview, startedAt, resultId: rid });
       writeSnapshot();
-      logLine({ ts: startedAt, unit, event: 'start', id, tool, model: model || null, promptPreview });
-      return { id, tool, t0: Date.now() };
+      logLine({ ts: startedAt, unit, event: 'start', id, tool, model: model || null, promptPreview, resultId: rid });
+      return { id, tool, t0: Date.now(), resultId: rid };
     } catch { return null; }
   }
 
-  /** Close an entry. `extra` (e.g. token usage) is merged into lastEvent and the log line. */
+  /**
+   * Close an entry. `status` is 'ok' | 'error' | 'cancelled'. `extra` (token
+   * usage, `partial`, `detached`) is merged into lastEvent and the log line.
+   */
   function end(token, status, error, extra) {
     if (!token) return;
     try {
@@ -109,10 +124,14 @@ export function createStatus({ unit, spawnTools, resolve }) {
       const endedAt = new Date().toISOString();
       const durationMs = Date.now() - token.t0;
       const errText = error ? String(error).slice(0, 500) : null;
-      lastEvent = { tool: token.tool, status, endedAt, durationMs, error: errText, ...(extra || {}) };
+      lastEvent = {
+        tool: token.tool, status, endedAt, durationMs, error: errText,
+        resultId: token.resultId || null, ...(extra || {}),
+      };
       writeSnapshot();
       logLine({
         ts: endedAt, unit, event: 'end', id: token.id, tool: token.tool, status, durationMs,
+        resultId: token.resultId || null,
         ...(errText ? { error: errText } : {}), ...(extra || {}),
       });
     } catch { /* fail-soft */ }

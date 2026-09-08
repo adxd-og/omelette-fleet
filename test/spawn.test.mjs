@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runProcess, buildChildEnv, ALLOWED_ENV } from '../core/spawn.mjs';
 
 const node = process.execPath;
@@ -125,4 +128,68 @@ test('a missing binary rejects with the actionable help text', async () => {
     runProcess({ bin: 'omelette-definitely-missing-bin', args: [], notFoundHelp: 'install the thing' }),
     /install the thing/,
   );
+});
+
+// --- cancellation: the abort path is the hard-kill path ----------------------
+
+/**
+ * A child that spawns a GRANDCHILD in the same process group and then exits on
+ * its own after 400 ms. The grandchild writes `marker` 1.5 s in — long after
+ * both the cancel and the parent's own exit — so the marker answers exactly one
+ * question: did the whole GROUP die, or only the process we hold a handle to?
+ */
+function groupFixture(marker) {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-group-'));
+  const script = join(dir, 'parent.mjs');
+  const inner = `setTimeout(() => require("fs").writeFileSync(${JSON.stringify(marker)}, "x"), 1500)`;
+  writeFileSync(script, [
+    'import { spawn } from "node:child_process";',
+    `spawn(process.execPath, ["-e", ${JSON.stringify(inner)}], { stdio: "ignore" });`,
+    'setTimeout(() => process.exit(0), 400);',
+  ].join('\n'));
+  return script;
+}
+
+test('an aborted signal SIGKILLs the whole process group and the result says `cancelled`', async () => {
+  const marker = join(mkdtempSync(join(tmpdir(), 'omelette-marker-')), 'grandchild-ran');
+  const script = groupFixture(marker);
+  const controller = new AbortController();
+  const abort = setTimeout(() => controller.abort(), 150);
+  if (abort.unref) abort.unref();
+  const t0 = Date.now();
+  const r = await runProcess({ bin: node, args: [script], signal: controller.signal });
+  assert.equal(r.cancelled, true);
+  assert.equal(r.killed, true);
+  assert.ok(Date.now() - t0 < 3000, 'the run ended with the cancel, not on its own schedule');
+  await new Promise((res) => setTimeout(res, 1800));
+  assert.equal(existsSync(marker), false, 'the grandchild died with the group');
+});
+
+test('…and the same fixture left alone DOES write the marker — the guard above is not vacuous', async () => {
+  const marker = join(mkdtempSync(join(tmpdir(), 'omelette-marker-')), 'grandchild-ran');
+  const script = groupFixture(marker);
+  const r = await runProcess({ bin: node, args: [script] });
+  assert.equal(r.cancelled, false);
+  assert.equal(r.killed, false);
+  await new Promise((res) => setTimeout(res, 1800));
+  assert.equal(existsSync(marker), true, 'nothing killed the group, so the grandchild ran');
+});
+
+test('a signal that is already aborted kills at once; one that never fires changes nothing', async () => {
+  const fired = new AbortController();
+  fired.abort();
+  const t0 = Date.now();
+  const r = await runProcess({ bin: node, args: ['-e', 'setTimeout(() => {}, 20000)'], signal: fired.signal });
+  assert.equal(r.cancelled, true);
+  assert.equal(r.killed, true);
+  assert.ok(Date.now() - t0 < 5000);
+  const quiet = await runProcess({
+    bin: node, args: ['-e', 'process.stdout.write("done")'], signal: new AbortController().signal,
+  });
+  assert.equal(quiet.stdout, 'done');
+  assert.equal(quiet.cancelled, false);
+  assert.equal(quiet.killed, false);
+  // No signal at all: today's behaviour, with the flag reported as false.
+  const plain = await runProcess({ bin: node, args: ['-e', 'process.stdout.write("x")'] });
+  assert.equal(plain.cancelled, false);
 });

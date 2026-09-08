@@ -223,9 +223,14 @@ export function serve({ serverInfo, tools, callTool, instructions, log = () => {
     // setImmediate, not a bare exit: the drain resolves inside the handler's
     // `finally`, one microtask BEFORE the response is handed to `send`. The
     // check phase runs after every pending microtask, so the answer is written.
+    // Written is not flushed: a write to a PIPE is asynchronous, and a response
+    // larger than the pipe buffer is still queued when the check phase runs —
+    // process.exit() there would cut the frame off mid-string. The callback of
+    // an empty write runs only once every write queued before it has gone out,
+    // so this exits on the last byte of the answer, not on the first.
     handle.drain().then(
-      () => setImmediate(() => process.exit(0)),
-      () => setImmediate(() => process.exit(0)),
+      () => setImmediate(() => process.stdout.write('', () => process.exit(0))),
+      () => setImmediate(() => process.stdout.write('', () => process.exit(0))),
     );
   });
 }
