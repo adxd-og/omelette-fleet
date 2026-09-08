@@ -293,6 +293,26 @@ Two related guarantees, neither of them configurable:
 
 A hard kill is always reported as an error naming the unit and the limit, e.g. `codex hard-killed after 600s (raise codex.timeoutS in the fleet config)`. `gemini_deep_research` runs several stages (decompose, parallel gathers, synthesis) and each stage is bounded by `timeoutS` separately — the whole pipeline commonly takes 3–10 minutes.
 
+## Client timeouts
+
+`timeoutS` is the fleet's own bound. The **client** has two more, and a call dies at whichever comes first — `omelette-fleet doctor` prints both, as `mcp timeout`, and never as a fault:
+
+```
+mcp timeout   wall-clock: MCP_TOOL_TIMEOUT=2000000 ms (~/.claude/settings.json env) ≥ 1860000 needed · ok
+              deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · within the wall-clock limit
+              idle: CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT unset → 30 min default; grok.timeoutS=1800 s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0 or a per-server "timeout"
+```
+
+**Wall-clock — `MCP_TOOL_TIMEOUT`.** Milliseconds, one tool call. Unset means Claude Code's documented default of about 28 hours, which nothing here reaches; doctor reports that as `unset (default ~28 h) · ok`. What the fleet *needs* is the longest a single call can honestly take: the largest `timeoutS` among the **enabled** units, in milliseconds, plus 60 s for gemini because its hard kill sits that far above the timeout it hands agy. Below that, the line ends `· TOO LOW` and doctor prints the snippet to merge — `{"env":{"MCP_TOOL_TIMEOUT":"1860000"}}` — into `.claude/settings.json` or `~/.claude/settings.json`. It is a paste: this package reads those files and never writes them.
+
+Doctor resolves the variable the way the client does — the process environment first, then the `env` block of `.claude/settings.local.json`, `.claude/settings.json`, and the user scope's files under `$CLAUDE_CONFIG_DIR` or `~/.claude` — and names the file it came from, because a wall read out of the wrong file is worse than no reading at all.
+
+**Per server.** A registration entry may carry its own `"timeout"` (milliseconds, at least 1000), which overrides the variable for that one server. Doctor reads it off the registration it already found and gives it a line of its own; a value the client would refuse is reported as ignored rather than counted as a bound.
+
+**Idle — `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`.** Milliseconds; `0` disables it. A stdio tool call that sends neither a response nor a `notifications/progress` for **30 minutes** is aborted for idleness whatever the wall-clock limit says, so a unit whose `timeoutS` reaches 1800 s sits exactly on it. Since 0.3.3 the units send progress every 30 s **while the client passes a progress token** with the call, which is what keeps a long review alive; where a client does not, set the variable to `0` or give that server its own `"timeout"`. Doctor names the unit that reaches the window.
+
+**Deep research** gets one more line while gemini is enabled: `gemini_deep_research` runs three stages, each retried once, each bounded by `timeoutS + 60 s`, so the worst case is `3 × 2 × (timeoutS + 60)` seconds. It is informational — that tool is one to run deliberately — and it never produces a `next` line.
+
 ## What `outputCap` does
 
 Each run's stdout is held in memory, so it is bounded: the fleet keeps the **last** `outputCap` characters and drops what came before, which is what stops a runaway model from exhausting the server. The default of 400 000 characters is far above any answer a unit gives; the cap exists for the pathological run.

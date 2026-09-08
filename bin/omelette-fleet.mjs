@@ -431,6 +431,135 @@ function findRegistration(config, serverName, expected) {
   return null;
 }
 
+/**
+ * `<prefix>-<unit>` → the prefix, or null when the name is not that shape.
+ * The prefix is reported, never used to build a path, so nothing here filters
+ * its characters: the name an operator actually registered is the name doctor
+ * has to talk about.
+ */
+function prefixOf(name, unit) {
+  const suffix = `-${unit}`;
+  const s = String(name || '');
+  return s.length > suffix.length && s.endsWith(suffix) ? s.slice(0, -suffix.length) : null;
+}
+
+/**
+ * Two paths naming the same directory — by resolution first, then through
+ * links. Claude Code keys a project scope by the directory the session ran in,
+ * and on macOS a temp directory reaches the same place as /var/… and
+ * /private/var/…, so comparing the strings would call a project's own
+ * registration somebody else's.
+ */
+const sameLocation = (a, b) => {
+  if (!a || !b) return false;
+  try { if (resolvePath(a) === resolvePath(b)) return true; } catch { return false; }
+  try { return realpathSync(a) === realpathSync(b); } catch { return false; }
+};
+
+/**
+ * The project's checked-in `.mcp.json` — the third place Claude Code takes MCP
+ * registrations from, and one doctor did not read before 0.3.3. PARSED, NEVER
+ * WRITTEN, exactly like `.claude.json`. Absence is the normal case.
+ */
+function readProjectMcp({ cwd = process.cwd() } = {}) {
+  const path = join(cwd, '.mcp.json');
+  let raw;
+  try { raw = readFileSync(path, 'utf8'); }
+  catch (e) {
+    if (e && e.code === 'ENOENT') return { path, exists: false, config: null, error: null };
+    return { path, exists: true, config: null, error: (e && e.message) || String(e) };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return isObj(parsed)
+      ? { path, exists: true, config: parsed, error: null }
+      : { path, exists: true, config: null, error: 'top-level is not an object' };
+  } catch (e) {
+    return { path, exists: true, config: null, error: (e && e.message) || String(e) };
+  }
+}
+
+/**
+ * Every place a registration for THIS project can live, in the order doctor
+ * reports them: the user scope, the project's own scope inside `.claude.json`
+ * (the entry keyed by the directory doctor is running in — another project's
+ * servers are not this project's), and the project's `.mcp.json`.
+ */
+function registrationBuckets(config, mcpJson, cwd) {
+  const buckets = [];
+  if (isObj(config) && isObj(config.mcpServers)) buckets.push(['user', config.mcpServers]);
+  if (isObj(config) && isObj(config.projects)) {
+    for (const [dir, p] of Object.entries(config.projects)) {
+      if (isObj(p) && isObj(p.mcpServers) && sameLocation(dir, cwd)) buckets.push(['project', p.mcpServers]);
+    }
+  }
+  if (isObj(mcpJson) && isObj(mcpJson.mcpServers)) buckets.push(['.mcp.json', mcpJson.mcpServers]);
+  return buckets;
+}
+
+/**
+ * Our servers, found by WHERE THEY POINT rather than by what they are called.
+ * An entry is ours when its command is node and its args path is exactly this
+ * checkout's `servers/<unit>.mjs` — the same test `findRegistration` makes —
+ * and the name it was registered under is reported, whatever prefix that is.
+ * An entry that merely WEARS one of our names is returned too, with
+ * `ours: false`, so doctor can go on saying "registered elsewhere" about it
+ * instead of pretending the name is free.
+ *
+ * @param {object} unitPaths { <unit>: <this checkout's server path> }
+ * @returns {{unit:string, name:string, prefix:string|null, scope:string,
+ *            ours:boolean, entry:object, command:string, target:string,
+ *            exists:boolean}[]}
+ */
+function findOurRegistrations(config, mcpJson, unitPaths, { cwd = process.cwd() } = {}) {
+  const samePath = (a, b) => {
+    try { return !!a && !!b && resolvePath(a) === resolvePath(b); } catch { return false; }
+  };
+  const found = [];
+  for (const [scope, servers] of registrationBuckets(config, mcpJson, cwd)) {
+    for (const [name, entry] of Object.entries(servers)) {
+      if (!isObj(entry)) continue;
+      const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
+      const target = args.find((a) => a.endsWith('.mjs')) || args[args.length - 1] || '';
+      const command = typeof entry.command === 'string' ? entry.command : '';
+      const isNode = command === process.execPath || /^node(\.exe)?$/i.test(basename(command));
+      const byPath = UNIT_ORDER.find((u) => isNode && samePath(target, unitPaths[u]));
+      const byName = UNIT_ORDER.find((u) => prefixOf(name, u) !== null);
+      const unit = byPath || byName;
+      if (!unit) continue;
+      found.push({
+        unit, name, prefix: prefixOf(name, unit), scope,
+        ours: !!byPath, entry, command, target,
+        exists: !!target && existsSync(target),
+      });
+    }
+  }
+  return found;
+}
+
+/**
+ * The prefix doctor reports on. An explicit `--prefix` is the answer, always.
+ * Without one: when nothing of ours is registered as `omelette-*` and our
+ * servers are found under exactly ONE other prefix, that prefix is what this
+ * machine actually runs — reporting `omelette-* not registered` about a working
+ * install is a lie that ends in a pointless `install`. Two prefixes are
+ * ambiguous, so doctor names both and keeps the default rather than guessing
+ * which install the operator meant.
+ *
+ * @param {string|null} asked the value of --prefix, or null when it was omitted.
+ * @returns {{prefix:string, line:string|null}} `line` is the report line's body.
+ */
+function adoptPrefix(asked, found) {
+  if (asked) return { prefix: asked, line: null };
+  const prefixes = [...new Set(found.filter((r) => r.ours && r.prefix).map((r) => r.prefix))].sort();
+  if (!prefixes.length || prefixes.includes(DEFAULT_PREFIX)) return { prefix: DEFAULT_PREFIX, line: null };
+  if (prefixes.length === 1) return { prefix: prefixes[0], line: `${prefixes[0]} (found on the registrations)` };
+  return {
+    prefix: DEFAULT_PREFIX,
+    line: `${DEFAULT_PREFIX} — our servers are also registered as ${prefixes.map((p) => `${p}-*`).join(', ')}; pass --prefix <name> to look at one`,
+  };
+}
+
 /** The status feed is only real if the home directory takes a write — prove it, do not assume it. */
 function probeHome(env = process.env) {
   const dir = fleetHome(env);
@@ -443,6 +572,205 @@ function probeHome(env = process.env) {
   } catch (e) {
     return { dir, writable: false, error: (e && e.message) || String(e) };
   }
+}
+
+// ─── the client's timeout walls ──────────────────────────────────────────────
+
+/** Claude Code's wall-clock limit for one MCP tool call. Unset = ~28 h. */
+const WALL_ENV = 'MCP_TOOL_TIMEOUT';
+const WALL_DEFAULT_NOTE = 'default ~28 h';
+/** Its idle wall: a stdio call that neither answers nor sends progress dies at 30 min. `0` disables it. */
+const IDLE_ENV = 'CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT';
+const IDLE_DEFAULT_MS = 1800000;
+/** A per-server `timeout` below this is refused by the client, so it bounds nothing. */
+const MIN_SERVER_TIMEOUT_MS = 1000;
+/** gemini's process-group SIGKILL sits 60 s above the timeout it hands agy. */
+const GEMINI_HARD_KILL_S = 60;
+/** gemini_deep_research: decompose, gather, synthesise — each stage retried once. */
+const DEEP_STAGES = 3;
+const DEEP_ATTEMPTS = 2;
+
+/**
+ * One variable out of CLAUDE CODE's environment, as the client itself would
+ * resolve it: the process environment first, then the `env` block of each
+ * settings file in Claude Code's own precedence — the project's
+ * settings.local.json, the project's settings.json, then the user scope's pair
+ * under $CLAUDE_CONFIG_DIR or ~/.claude. `settingsTargets` lists a scope in
+ * WRITE order (settings.json first) and the client READS the local one first,
+ * so each scope's pair is reversed here.
+ *
+ * PARSED, NEVER WRITTEN, like every other settings read in this file. A file
+ * that is absent, is not JSON, or has no `env` object is skipped in silence —
+ * this is a diagnosis of the client's environment, not of its settings files.
+ * A value that is not a scalar is skipped too: the client could not pass it to
+ * a child either.
+ *
+ * @returns {{value: string|null, source: string|null}} `source` is
+ *   'process env' or the absolute path of the file the value came from.
+ */
+function readClientEnv(name, { cwd = process.cwd(), env = process.env } = {}) {
+  if (env[name] !== undefined && String(env[name]) !== '') return { value: String(env[name]), source: 'process env' };
+  const files = [
+    ...settingsTargets({ global: false, cwd, env }).slice().reverse(),
+    ...settingsTargets({ global: true, cwd, env }).slice().reverse(),
+  ];
+  for (const { path } of files) {
+    let parsed = null;
+    try { parsed = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
+    if (!isObj(parsed) || !isObj(parsed.env)) continue;
+    const raw = parsed.env[name];
+    if (raw === undefined || raw === null) continue;
+    if (!['string', 'number', 'boolean'].includes(typeof raw)) continue;
+    return { value: String(raw), source: path };
+  }
+  return { value: null, source: null };
+}
+
+/** A whole number of milliseconds, or null — a variable holding "30m" is not a bound. */
+const msValue = (raw, { min = 1 } = {}) => {
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= min ? n : null;
+};
+
+/** 1800000 → `30 min`; 90000 → `90 s`. Whichever shape the operator would recognise. */
+const fmtWindow = (ms) => (ms % 60000 === 0 ? `${ms / 60000} min` : `${Math.round(ms / 1000)} s`);
+
+/** 'process env' stands alone; a file is named with the block it was read from. */
+const envSource = (source) => (source === 'process env' ? 'process env' : `${source} env`);
+
+/**
+ * The IDLE wall. Since Claude Code 2.1.203 a stdio tool call that sends neither
+ * a response nor `notifications/progress` for 30 minutes is aborted for
+ * idleness, whatever the wall-clock limit says — which is the wall Grok's
+ * 1800 s sits exactly on. Informational: the units send progress, and this line
+ * says whether the client is even listening for it.
+ *
+ * @param {{unit:string, timeoutS:number}} longest the enabled unit with the
+ *   largest `timeoutS` — the idle window is compared with the plain value, not
+ *   with gemini's hard-kill margin, because what matters is how long one run
+ *   can stay silent under its own timeout.
+ */
+function idleWall({ longest, cwd = process.cwd(), env = process.env, read = readClientEnv } = {}) {
+  const { value, source } = read(IDLE_ENV, { cwd, env });
+  const parsed = value === null ? null : msValue(value, { min: 0 });
+  const disabled = parsed === 0;
+  const ms = parsed === null || disabled ? IDLE_DEFAULT_MS : parsed;
+  const head = value === null
+    ? `${IDLE_ENV} unset → 30 min default`
+    : disabled
+      ? `${IDLE_ENV}=0 (${envSource(source)}) → disabled`
+      : parsed === null
+        ? `${IDLE_ENV}=${value} (${envSource(source)}) is not a whole number of ms — ignored, 30 min default`
+        : `${IDLE_ENV}=${parsed} ms (${envSource(source)}) → ${fmtWindow(parsed)}`;
+  const reaches = !disabled && longest.timeoutS * 1000 >= ms;
+  const tail = disabled
+    ? ' · ok'
+    : reaches
+      ? `; ${longest.unit}.timeoutS=${longest.timeoutS} s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set ${IDLE_ENV}=0 or a per-server "timeout"`
+      : `; the longest run is ${longest.unit}.timeoutS=${longest.timeoutS} s · ok`;
+  return { line: `idle: ${head}${tail}`, ms, disabled, raw: value, source, reaches };
+}
+
+/**
+ * Both walls as lines, NEVER a fault. Pure: everything it reads comes through
+ * `read`, so the whole report is decided by its arguments.
+ *
+ * WALL-CLOCK. `MCP_TOOL_TIMEOUT` bounds one tool call. Needed is the longest a
+ * single call can honestly take: `timeoutS` per unit, plus gemini's 60 s
+ * hard-kill margin, in milliseconds. Unset means the client's documented ~28 h,
+ * which no fleet call reaches — reported as ok rather than as a finding.
+ * A per-server `timeout` on the registration overrides the env for that ONE
+ * server, so it gets its own line instead of moving the shared one.
+ *
+ * DEEP RESEARCH is a bound of its own and deliberately NOT part of `needed`:
+ * `gemini_deep_research` is documented as a tool to run deliberately, and
+ * sizing every session's wall for it would be advice nobody asked for.
+ *
+ * @param {object} o
+ * @param {{unit:string, enabled:boolean, timeoutS:number}[]} o.units every unit, enabled or not.
+ * @param {object} o.registration our registration records keyed by unit —
+ *   `registration[unit].entry.timeout` is the client's per-server override,
+ *   `.name` and `.scope` are what the line calls it.
+ * @returns {{wall:object|null, idle:object|null, deep:object|null,
+ *            lines:string[], next:string|null, snippet:string|null}}
+ */
+function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env = process.env, read = readClientEnv } = {}) {
+  const enabled = units.filter((u) => u.enabled);
+  // No enabled unit, no call to bound: an empty report rather than a line about
+  // limits nothing can reach.
+  if (!enabled.length) return { wall: null, idle: null, deep: null, lines: [], next: null, snippet: null };
+
+  const needFor = (u) => (u.timeoutS + (u.unit === 'gemini' ? GEMINI_HARD_KILL_S : 0)) * 1000;
+  const because = (u) => (u.unit === 'gemini'
+    ? `gemini.timeoutS=${u.timeoutS} s + ${GEMINI_HARD_KILL_S} s hard kill`
+    : `${u.unit}.timeoutS=${u.timeoutS} s`);
+  const worst = enabled.reduce((a, b) => (needFor(b) > needFor(a) ? b : a));
+  const needed = needFor(worst);
+
+  const { value, source } = read(WALL_ENV, { cwd, env });
+  const parsed = value === null ? null : msValue(value);
+  // Absent, or set to something that is not milliseconds: the client falls back
+  // to its own default, and nothing here can reach it.
+  const effective = parsed;
+  const ok = effective === null || effective >= needed;
+  const clause = value === null
+    ? `${WALL_ENV} unset (${WALL_DEFAULT_NOTE})`
+    : parsed === null
+      ? `${WALL_ENV}=${value} (${envSource(source)}) is not a whole number of ms — ignored, ${WALL_DEFAULT_NOTE}`
+      : `${WALL_ENV}=${parsed} ms (${envSource(source)})`;
+  const lines = [`wall-clock: ${clause} ${ok ? '≥' : '<'} ${needed} needed${ok ? '' : ` (${because(worst)})`} · ${ok ? 'ok' : 'TOO LOW'}`];
+
+  // The snippet follows the line it answers, where the eye already is. It is a
+  // paste, never a write: this CLI does not edit settings files.
+  const snippet = ok ? null : `{"env":{"${WALL_ENV}":"${needed}"}}`;
+  if (snippet) lines.push(`raise it: ${snippet} — merge into .claude/settings.json or ~/.claude/settings.json (omelette-fleet never writes them)`);
+
+  const servers = [];
+  for (const u of enabled) {
+    const reg = registration[u.unit];
+    const raw = reg && isObj(reg.entry) ? reg.entry.timeout : undefined;
+    if (raw === undefined) continue;
+    const own = msValue(raw, { min: MIN_SERVER_TIMEOUT_MS });
+    const need = needFor(u);
+    if (own === null) {
+      servers.push({ unit: u.unit, name: reg.name, ms: null, ok: true });
+      lines.push(`${reg.name} "timeout": ${JSON.stringify(raw)} is not an integer ≥ ${MIN_SERVER_TIMEOUT_MS} ms — the client ignores it`);
+      continue;
+    }
+    const fits = own >= need;
+    servers.push({ unit: u.unit, name: reg.name, ms: own, ok: fits });
+    lines.push(`${reg.name} "timeout": ${own} ms (${reg.scope}) overrides it for that server ${fits ? '≥' : '<'} ${need} needed${fits ? '' : ` (${because(u)})`} · ${fits ? 'ok' : 'TOO LOW'}`);
+  }
+
+  const gemini = enabled.find((u) => u.unit === 'gemini');
+  let deep = null;
+  if (gemini) {
+    const seconds = DEEP_STAGES * DEEP_ATTEMPTS * (gemini.timeoutS + GEMINI_HARD_KILL_S);
+    const own = servers.find((s) => s.unit === 'gemini' && s.ms !== null);
+    const wall = own ? own.ms : effective;
+    const fits = wall === null || seconds * 1000 <= wall;
+    deep = { stages: DEEP_STAGES, attempts: DEEP_ATTEMPTS, timeoutS: gemini.timeoutS, seconds, ok: fits };
+    lines.push(`deep research: gemini_deep_research worst case: ${DEEP_STAGES} stages × ${DEEP_ATTEMPTS} attempts × (${gemini.timeoutS} + ${GEMINI_HARD_KILL_S} s) = ${seconds} s${fits ? ' · within the wall-clock limit' : ` · ABOVE the wall-clock limit (${wall} ms) — run it deliberately`}`);
+  }
+
+  const idle = idleWall({ longest: enabled.reduce((a, b) => (b.timeoutS > a.timeoutS ? b : a)), cwd, env, read });
+  lines.push(idle.line);
+
+  // ONE next, and only for a wall that is actually short: the shared env first,
+  // because it bounds every unit; a single server's own cap otherwise. The idle
+  // wall never produces one — progress notifications are the answer to it, and
+  // the units send them.
+  const low = servers.find((s) => !s.ok);
+  const next = !ok
+    ? `raise ${WALL_ENV} to ${needed} ms — merge ${snippet} into your settings file (omelette-fleet never writes it)`
+    : low
+      ? `the ${low.name} registration caps its own calls at ${low.ms} ms — raise its "timeout" to ${needFor(enabled.find((u) => u.unit === low.unit))} ms or drop the field (omelette-fleet never writes .claude.json or .mcp.json)`
+      : null;
+
+  return {
+    wall: { needed, neededBy: worst.unit, value, source, effective, ok, servers },
+    idle, deep, lines, next, snippet,
+  };
 }
 
 // ─── shared rendering ────────────────────────────────────────────────────────
@@ -1288,14 +1616,17 @@ function hookWiring(config) {
 /**
  * Both of a scope's settings files — PARSED, NEVER WRITTEN, exactly like
  * .claude.json above: `rules --hooks` prints a snippet and the operator pastes
- * it wherever they keep their settings. A file is `wired` when ONE of them wires
- * BOTH events; an absent file is normal, and one we cannot read is named rather
- * than counted, because "not wired" about a file nobody could parse would send
- * an operator to re-paste something that is already there.
+ * it wherever they keep their settings. The answer is the UNION of the two:
+ * an operator who keeps the tool guard in settings.json and the rest in
+ * settings.local.json (the file a project usually gitignores) has a guard that
+ * runs, and taking whichever single file listed the most events reported that
+ * machine as unwired. An absent file is normal, and one we cannot read is named
+ * rather than counted, because "not wired" about a file nobody could parse
+ * would send an operator to re-paste something that is already there.
  */
 function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env } = {}) {
   const unreadable = [];
-  let wired = [];
+  const wired = new Set();
   let matcherProblem = null;
   for (const { name, path } of settingsTargets({ global, cwd, env })) {
     let raw;
@@ -1305,9 +1636,15 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
     if (!isObj(config)) { unreadable.push(name); continue; }
     const here = hookWiring(config);
     matcherProblem = matcherProblem || here.matcherProblem;
-    if (here.wired.length > wired.length) wired = here.wired;
+    for (const event of here.wired) wired.add(event);
   }
-  return { wired, unreadable, matcherProblem };
+  // A matcher that covers nothing is only a finding while something is still
+  // missing: once the files together wire every event, the guard does see the
+  // call and there is nothing for the operator to fix. Counted against
+  // HOOK_EVENTS rather than against a named event, so a release that adds one
+  // needs no edit here.
+  if (wired.size === HOOK_EVENTS.length) matcherProblem = null;
+  return { wired: HOOK_EVENTS.filter((e) => wired.has(e)), unreadable, matcherProblem };
 }
 
 /**
@@ -1345,14 +1682,11 @@ const hooksLabel = (r, { wired, unreadable, matcherProblem }) => {
  * The scope is the project, because that is what the commands it suggests
  * write; an operator who installed globally chose that and knows it.
  */
-function nextStep(prefix, claude) {
-  // OURS, not merely present: a name registered against another clone runs that
-  // clone's servers, and `install` here is exactly what repoints it.
-  const registeredHere = UNIT_ORDER.some((n) => {
-    const reg = findRegistration(claude.config, `${prefix}-${n}`, serverPathFor(n));
-    return !!reg && reg.ours;
-  });
-  // The prefix doctor was ASKED about is the one the suggested command has to
+function nextStep(prefix, registeredHere) {
+  // `registeredHere` is decided by findOurRegistrations: OURS, not merely
+  // present — a name registered against another clone runs that clone's
+  // servers, and `install` here is exactly what repoints it.
+  // The prefix doctor REPORTS ON is the one the suggested command has to
   // register: plain `install` would create `omelette-*` and leave the names
   // this run went looking for exactly as missing as it found them.
   if (!registeredHere) return `omelette-fleet install${prefix === DEFAULT_PREFIX ? '' : ` --prefix ${prefix}`}`;
@@ -1439,8 +1773,33 @@ async function cmdDoctor(argv) {
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet doctor: ${e}`)); return 1; }
 
   const claude = readClaudeConfig();
+  const mcpJson = readProjectMcp();
   const home = probeHome();
   const claudePath = whichBin('claude');
+  // Resolved ONCE, above the header: the timeout walls need every unit's
+  // timeoutS before the per-unit blocks print, and the blocks below reuse these
+  // same objects so the report cannot describe two different resolutions.
+  const cfgs = Object.fromEntries(UNIT_ORDER.map((n) => [n, cfgFor(n)]));
+  const unitBounds = UNIT_ORDER.map((n) => ({ unit: n, enabled: cfgs[n].values.enabled, timeoutS: cfgs[n].values.timeoutS }));
+  // Every registration of ours this project can see, found by where it POINTS,
+  // and the prefix that follows from it. `install` and `uninstall` still work
+  // by name (findRegistration) — only the diagnosis looks wider.
+  const found = findOurRegistrations(
+    claude.config, mcpJson.config,
+    Object.fromEntries(UNIT_ORDER.map((n) => [n, serverPathFor(n)])),
+    { cwd: process.cwd() },
+  );
+  const adopted = adoptPrefix(flags.prefix === undefined ? null : prefix, found);
+  const effective = adopted.prefix;
+  const regFor = (n) => found.find((r) => r.unit === n && r.name === `${effective}-${n}`) || null;
+  const registeredHere = UNIT_ORDER.some((n) => { const r = regFor(n); return !!r && r.ours; });
+  // The entry each unit is registered through, keyed by unit: its own `timeout`
+  // field is a per-server override of the client's wall-clock limit.
+  const ourEntries = {};
+  for (const n of UNIT_ORDER) {
+    const r = regFor(n);
+    if (r && r.ours) ourEntries[n] = { name: r.name, scope: r.scope, entry: r.entry };
+  }
 
   out(`FLEET DOCTOR · omelette-fleet ${PKG.version} · node ${process.version} · ${process.platform}`);
   // Fail-soft, and cached for a day: doctor is a diagnosis of THIS machine, and
@@ -1451,6 +1810,10 @@ async function cmdDoctor(argv) {
   out(`fleet config  ${configPath()}${existsSync(configPath()) ? '' : ' (absent — built-in defaults in force)'}`);
   out(`claude CLI    ${claudePath || 'not found in PATH'}`);
   out(`claude config ${claude.path}${claude.error ? ` (${claude.error})` : ''}${claude.source === 'CLAUDE_CONFIG_DIR' ? '   [via CLAUDE_CONFIG_DIR]' : ''}`);
+  // Named because it is READ: "not registered" against a file doctor never
+  // opened is exactly the lie the claude config line exists to prevent.
+  if (mcpJson.exists) out(`mcp.json      ${mcpJson.path}${mcpJson.error ? ` (${mcpJson.error})` : ''}`);
+  if (adopted.line) out(`prefix        ${adopted.line}`);
   // The managed files, both scopes, read-only and never a fault: a project
   // without them is a perfectly healthy project.
   out(`rules         ${rulesReport(PKG.version).map((r) => `${r.scope}: ${rulesLabel(r)}`).join(' · ')}`);
@@ -1459,8 +1822,16 @@ async function cmdDoctor(argv) {
   // The one managed kind that is inert until something else names it: the wiring
   // lives in settings.json, which doctor reads and nothing here ever writes.
   out(`hooks         ${dirReport('hooks', PKG.version).map((r) => `${r.scope}: ${hooksLabel(r, hookWiringAt({ global: r.scope === 'global' }))}`).join(' · ')}`);
+  // The client's own two walls, against what the enabled units can take.
+  // Informational, exactly like the lines above it: an operator whose client
+  // gives up at 900 s on a 1800 s unit has a working machine and a wall.
+  const walls = timeoutWalls({ units: unitBounds, registration: ourEntries, cwd: process.cwd(), env: process.env });
+  walls.lines.forEach((line, i) => out(`${i === 0 ? 'mcp timeout   ' : '              '}${line}`));
   // ONE line, and only while something is missing — see nextStep. Never a fault.
-  const next = nextStep(prefix, claude);
+  // The first-run steps come first and the timeout wall only once they are
+  // done: "raise MCP_TOOL_TIMEOUT" is tuning advice for a machine that works,
+  // and it would be noise to somebody who has not registered a server yet.
+  const next = nextStep(effective, registeredHere) || walls.next;
   if (next) out(`next          ${next}`);
   out();
 
@@ -1469,9 +1840,9 @@ async function cmdDoctor(argv) {
     const unit = UNITS[name];
     const bin = resolveBin(unit);
     const binPath = whichBin(bin);
-    const cfg = cfgFor(name);
+    const cfg = cfgs[name];
     const server = serverPathFor(name);
-    const reg = findRegistration(claude.config, `${prefix}-${name}`, server);
+    const reg = regFor(name);
     const problems = [];
 
     out(`── ${name} (${unit.label}) ${'─'.repeat(Math.max(0, 56 - name.length - String(unit.label).length))}`);
@@ -1494,7 +1865,7 @@ async function cmdDoctor(argv) {
     // A registration whose server file is gone cannot start at all — that is a
     // fault in its own right, however healthy the vendor CLI looks.
     if (reg && !reg.exists) problems.push(`the registered server file is missing (${reg.target || 'no args'})`);
-    out(`  mcp         ${mcpLine(name, prefix, reg, server)}`);
+    out(`  mcp         ${mcpLine(name, effective, reg, server)}`);
     out(`  status feed ${cfg.values.status ? '' : '(disabled in config) '}${home.writable ? `${home.dir} is writable` : `${home.dir} is NOT writable — ${home.error}`}`);
     // Enabled AND registered AND broken. A unit you never wired up is not a fault.
     if (cfg.values.enabled && reg && problems.length) {

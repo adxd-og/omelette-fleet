@@ -200,7 +200,7 @@ The guard is **containment for a delegated agent, not a boundary against a hosti
 - **It never hands a vendor CLI the parent environment.** The allowlist is the only path in.
 - **It never lets Codex read your `~/.codex/config.toml`** — the pattern to follow for any future unit whose config file can carry executable behaviour.
 - **It never retries an image run or a write-mode run.** The one bounded retry on empty output exists because re-issuing a read-only one-shot is safe. Re-issuing a generation bills image quota twice, and re-issuing a run that may already have written something is not idempotent — both paths skip the retry. That covers **every** image tool in the fleet: `grok_image`, `grok_image_edit`, `codex_image` and `gemini_image` each run exactly once. Deterministic failures (auth, quota, hard-kill, missing binary, CLI error) are never retried either.
-- **It never writes Claude Code's config.** `~/.claude.json` is parsed for `doctor`, and so are `settings.json` and `settings.local.json` at both scopes — read to say whether the guard hook is wired, and printed as a snippet by `rules --hooks` for you to paste. The only writers of those files are `claude` and you.
+- **It never writes Claude Code's config.** `~/.claude.json` is parsed for `doctor`, and so are the project's `.mcp.json` and `settings.json` / `settings.local.json` at both scopes — read to say whether the guard hook is wired, where the units are registered, and what the client's timeout walls are set to, and printed as a snippet by `rules --hooks` for you to paste. The only writers of those files are `claude` and you.
 
 ## What is best-effort
 
