@@ -319,6 +319,12 @@ test('HANDOFF_SCHEMA: three keys, the bounds the spec fixes, and the defaults th
   assert.equal(HANDOFF_SCHEMA.threshold.max, 99);
   assert.equal(HANDOFF_SCHEMA.contextWindow.default, 0);
   assert.equal(HANDOFF_SCHEMA.contextWindow.type, 'nonneg');
+  // A window past the safe integer range is not a window: the guard measures
+  // `fill * 100 / window` and refuses anything it cannot hold exactly, so a
+  // config value it would refuse has to be refused here too.
+  assert.equal(HANDOFF_SCHEMA.contextWindow.max, Number.MAX_SAFE_INTEGER);
+  assert.deepEqual(coerce(HANDOFF_SCHEMA.contextWindow, Number.MAX_SAFE_INTEGER), { ok: true, value: Number.MAX_SAFE_INTEGER });
+  assert.deepEqual(coerce(HANDOFF_SCHEMA.contextWindow, 9007199254740992), { ok: false });
 });
 
 test('handoffSettings: file values with their sources, invalid ones warned and defaulted, never fatal', () => {
@@ -339,6 +345,10 @@ test('handoffSettings: file values with their sources, invalid ones warned and d
 
   // An out-of-range value, an unknown key and a block that is not an object are
   // warnings and the default — `rules --hooks` must never refuse to render.
+  const huge = handoffSettings({ OMELETTE_HOME: home({ handoff: { contextWindow: 9007199254740992 } }) });
+  assert.equal(huge.contextWindow, 0, 'a window past the safe integer range is the default, not a ceiling');
+  assert.ok(huge.warnings.some((w) => /handoff\.contextWindow = 9007199254740992 is invalid — ignored/.test(w)), huge.warnings.join(' | '));
+
   const bad = handoffSettings({ OMELETTE_HOME: home({ handoff: { threshold: 100, nudgeAt: 80 } }) });
   assert.equal(bad.threshold, 90);
   assert.ok(bad.warnings.some((w) => /handoff\.threshold = 100 is invalid — ignored/.test(w)), bad.warnings.join(' | '));

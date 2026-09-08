@@ -260,8 +260,10 @@ function guard(version = '1.2.3') {
   // Through the renderer `rules --hooks` itself uses: the shipped template
   // carries more than one placeholder — `{{marker}}` and, since 0.3.4, the
   // `{{handoff}}` JSON literal — and it is not runnable until every one of them
-  // is filled in.
-  writeFileSync(path, renderHookFile(HOOK_FILES[0], version));
+  // is filled in. The block is spelled out rather than defaulted: the default
+  // is the OPERATOR's live fleet config, and a test that read it would pass or
+  // fail on a threshold somebody set this morning.
+  writeFileSync(path, renderHookFile(HOOK_FILES[0], version, { enabled: true, threshold: 90, contextWindow: 0 }));
   return path;
 }
 

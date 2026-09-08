@@ -387,18 +387,28 @@ test('the guard never throws: malformed, empty, hostile and unknown input all ex
   }
 });
 
-test('stdin over the 1 MiB cap is treated as malformed: the guard stops reading and exits 0', async () => {
+test('stdin over the 8 MiB cap is treated as malformed: the guard stops reading and exits 0', async () => {
   const g = guard();
   // The event WOULD block if it were read: the forbidden command is the first
-  // thing in it, and the 2 MiB of padding comes after. Exit 0 is the cap.
+  // thing in it, and the 9 MiB of padding comes after. Exit 0 is the cap.
   const oversized = JSON.stringify(preToolUse({
-    tool_input: { command: 'git push origin main' }, padding: 'x'.repeat(2 * 1024 * 1024),
+    tool_input: { command: 'git push origin main' }, padding: 'x'.repeat(9 * 1024 * 1024),
   }));
   const r = await fireOpenStdin(g.path, { write: oversized });
   assert.equal(r.code, 0, `${r.out}${r.err}`);
   assert.equal(r.signal, null);
   assert.equal(r.err, '', 'a capped read is silent, not a refusal');
   assert.ok(r.ms < 15000, `the guard should give up at once, took ${r.ms}ms`);
+
+  // …and an event UNDER the cap is still read whole, however big it is: a
+  // PostToolUse event carries the tool's own response, and a few megabytes of
+  // command output on one call is ordinary. At 1 MiB this refusal was lost.
+  const large = JSON.stringify(preToolUse({
+    tool_input: { command: 'git push origin main' }, tool_response: { stdout: 'x'.repeat(4 * 1024 * 1024) },
+  }));
+  const read = await fireOpenStdin(g.path, { write: large });
+  assert.equal(read.code, 2, `a 4 MiB event is still an event: ${read.out}${read.err}`);
+  assert.equal(read.err.trim(), REFUSAL('omelette-coder'));
 });
 
 test('stdin that never closes: the guard gives up at its deadline and exits 0 rather than holding the session', async () => {
@@ -498,9 +508,15 @@ test('SessionStart(compact): a ledger with no handoff block prints nothing at al
     '## Task 1 — done (commit abc1234)',
     'Ruling: X — because Y — costs Z',
     // The vocabulary is `## Handoff`: a level-3 heading and a `#` with no space
-    // after it are not level-2 headings at all.
+    // after it are not level-2 headings at all, a heading ABOUT handoffs is not
+    // one either, and `##` and `Handoff` on two lines is two things — the same
+    // grammar the Stop gate reads, since a block the gate refuses must not be
+    // the block the next context is handed.
     '### Handoff notes',
     '##Handoff',
+    '## Handoffs, and why we write them',
+    '##',
+    'Handoff 2026-09-09T09:00Z',
     'nothing here is a handoff block',
   ].join('\n'));
   const r = fire(g.path, sessionStart({ cwd: proj }));
@@ -757,15 +773,14 @@ test('PreToolUse: a rebase option VALUE that reads like `--abort` is a value —
     'git rebase -s --abort main',
     'git rebase --strategy-option --abort main',
     'git rebase -X --abort main',
-    // `-S`/`--gpg-sign` is the one deliberate over-reach. Its key-id is
-    // OPTIONAL and git only accepts it attached (`-Skeyid`, `--gpg-sign=keyid`),
-    // so git does not read `--abort` as its value — and it does not read it as
-    // an abort either, because an action option must be the WHOLE argument
-    // list: git answers this with `usage: git rebase …` and exit 129, and does
-    // nothing at all. Refusing a command git refuses costs the coder nothing;
-    // guessing the other way costs a branch.
-    'git rebase -S --abort',
-    'git rebase --gpg-sign --abort',
+    // The three measured for 0.3.4 (git 2.38.1, see the git-driven test below):
+    // each reads the next word as its own value and complains about the VALUE —
+    // `fatal: Invalid whitespace option: '--abort'`, `fatal: unrecognized empty
+    // type '--abort'`, ``fatal: switch `C' expects a numerical value`` — so not
+    // one of them is the abort the word looks like.
+    'git rebase --whitespace --abort main',
+    'git rebase --empty --abort main',
+    'git rebase -C --abort main',
     // After a bare `--` every token is a POSITIONAL: git reads `--abort` as the
     // upstream ("fatal: invalid upstream '--abort'"), which is a rebase it
     // tried to start rather than one it undid.
@@ -793,6 +808,54 @@ test('PreToolUse: a rebase option VALUE that reads like `--abort` is a value —
     // word is the exec command, the bare one is an action, and git rejects the
     // combination with that same usage error rather than rebasing.
     "git rebase --exec 'echo --abort' --abort",
+    // `-S`/`--gpg-sign` takes its key-id ATTACHED only (`-Skeyid`,
+    // `--gpg-sign=keyid`), so the word behind it was never its value: 0.3.3 kept
+    // them in the value set and cost the coder `git rebase -S -h`, a command
+    // that prints usage and writes nothing. git answers all of these with
+    // `usage: git rebase …` and exit 129 — an action option must be the WHOLE
+    // argument list — so nothing is written either way.
+    'git rebase -S -h',
+    'git rebase -S --abort',
+    'git rebase --gpg-sign --abort',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+});
+
+test('PreToolUse: a QUOTED rebase option still takes its value, and an abbreviation of one does too', () => {
+  const g = guard();
+  for (const command of [
+    // The shell strips the quotes before git sees them, so a quoted option is
+    // an option: `"--exec"` takes the next word exactly as the bare form does,
+    // and the classifier's quote rule belongs to the ACTION words alone.
+    'git rebase "--exec" --abort main',
+    "git rebase '--onto' --abort main",
+    'git rebase "-x" --abort main',
+    // git accepts any unambiguous abbreviation of a long option, and the value
+    // it takes is the same value: `--ex` is `--exec`. Anything three characters
+    // and up that opens one of the value-taking options is read as that option
+    // — over-blocking an abbreviation git itself would refuse as ambiguous
+    // costs a command that does nothing anyway.
+    'git rebase --ex --abort main',
+    'git rebase --exe --abort main',
+    'git rebase --ont --abort main',
+    'git rebase --strat --abort main',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+
+  for (const command of [
+    // A long option that opens NO value-taking option keeps its old reading:
+    // the action word behind it is an action word.
+    'git rebase --verbose --abort',
+    'git rebase --no-verify --abort',
+    // …and a quoted ACTION word is still text rather than an action: quoting is
+    // how `--exec 'echo --abort now'` says the word is data.
+    "git rebase --exec 'echo --abort now' --quit",
   ]) {
     const r = fire(g.path, preToolUse({ tool_input: { command } }));
     assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
@@ -849,6 +912,36 @@ test('git itself: `--exec --abort` REBASES and `-q --abort` aborts nothing — t
     const quiet = run('rebase', '-q', '--abort');
     assert.equal(quiet.status, 129, `${quiet.stdout}${quiet.stderr}`);
     assert.match(`${quiet.stdout}${quiet.stderr}`, /usage: git rebase/);
+  });
+
+test('git itself: `--whitespace`, `--empty` and `-C` swallow the word behind them — measured, not assumed',
+  { skip: !gitAvailable && 'git is not installed' }, () => {
+    // The three options 0.3.4 added to the value set, each pinned against the
+    // git on this machine: what makes them values is that git complains about
+    // the VALUE `--abort` rather than aborting anything. Measured on 2.38.1:
+    //   --whitespace --abort main  → fatal: Invalid whitespace option: '--abort'
+    //   --empty --abort main       → fatal: unrecognized empty type '--abort'
+    //   -C --abort main            → fatal: switch `C' expects a numerical value
+    // None of them starts a rebase and none of them undoes one, so a coder that
+    // ran one would be running a rebase whose value happened to be malformed.
+    for (const [option, complaint] of [
+      ['--whitespace', /whitespace option: '?--abort/],
+      ['--empty', /empty type '?--abort/],
+      ['-C', /expects a numerical value|--abort/],
+    ]) {
+      const { repo, run } = gitRepo();
+      const head = run('rev-parse', 'HEAD').stdout.trim();
+      const r = run('rebase', option, '--abort', 'main');
+      const output = `${r.stdout}${r.stderr}`;
+      assert.notEqual(r.status, 0, `git rebase ${option} --abort main should fail: ${output}`);
+      assert.match(output, complaint, `git rebase ${option} --abort main: ${output}`);
+      assert.equal(
+        existsSync(join(repo, '.git', 'rebase-merge')) || existsSync(join(repo, '.git', 'rebase-apply')),
+        false,
+        `git rebase ${option} --abort main should not leave a rebase in progress: ${output}`,
+      );
+      assert.equal(run('rev-parse', 'HEAD').stdout.trim(), head, 'and it moves nothing — the value was refused');
+    }
   });
 
 test('PreToolUse: `git tag --sort` swallows the flag behind it — the listing passes, a name behind it is still a creation', () => {

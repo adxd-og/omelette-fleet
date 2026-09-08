@@ -6,6 +6,7 @@
  *   { "version": 1,
  *     "updateCheck": true,
  *     "agents": { "coder": { model, effort }, "tester": { model, effort, maxTurns } },
+ *     "handoff": { enabled, threshold, contextWindow },
  *     "defaults": { ...keys applied to every unit... },
  *     "units": { "<unit>": { enabled, mode, model, effort, timeoutS, maxTurns,
  *                            outputCap, webSearch, status, cancel, ... } } }
@@ -216,12 +217,15 @@ export const AGENT_SETTINGS_SCHEMA = {
  * never arrives at all. `contextWindow` is the window to measure against, where
  * **0 means "resolve it at run time"** — the environment, then Claude Code's own
  * `autoCompactWindow`, then its documented 200 000 — so it is `nonneg` rather
- * than `posint`: the zero is the default and not a refusal.
+ * than `posint`: the zero is the default and not a refusal. Its ceiling is the
+ * safe integer range, because that is the arithmetic the guard does with it:
+ * the script's own parser refuses a window it cannot hold exactly, and a config
+ * value it would refuse has no business rendering into it.
  */
 export const HANDOFF_SCHEMA = {
   enabled: { type: 'boolean', default: true },
   threshold: { type: 'posint', min: 50, max: 99, default: 90 },
-  contextWindow: { type: 'nonneg', default: 0 },
+  contextWindow: { type: 'nonneg', max: Number.MAX_SAFE_INTEGER, default: 0 },
 };
 
 /**

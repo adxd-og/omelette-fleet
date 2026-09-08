@@ -1,6 +1,6 @@
 {{marker}}
 /**
- * omelette-fleet :: the guard hook, one script for all three events.
+ * omelette-fleet :: the guard hook, one script for all five events.
  *
  * WIRED BY THE OPERATOR, NEVER BY US. `omelette-fleet rules --hooks` writes this
  * file and PRINTS the settings.json snippet that calls it; Claude Code's
@@ -60,6 +60,15 @@ process.stderr.on('error', () => {});
 
 /** O_NOFOLLOW where the platform defines it, 0 where it does not — as core/results.mjs does it. */
 const NOFOLLOW = constants.O_NOFOLLOW || 0;
+/**
+ * O_NONBLOCK, on every open this script makes. An lstat is checked before each
+ * one, but the open is a SECOND syscall: a FIFO planted between the two would
+ * hold `open()` until somebody opened the other end, and a hook that never
+ * returns is a session that never runs another tool. With the flag the open
+ * returns at once and the fstat behind it refuses whatever is not a regular
+ * file. On a regular file the flag means nothing at all, which is the point.
+ */
+const NONBLOCK = constants.O_NONBLOCK || 0;
 
 /**
  * One option token's VALUE. Written as "a quoted span or a character that is
@@ -322,14 +331,13 @@ function tagWrites(args) {
  * POSITIONAL: `git rebase -- --abort` hands `--abort` to git as the upstream
  * (`fatal: invalid upstream '--abort'`), which is a rebase it tried to start.
  *
- * `-S`/`--gpg-sign` is here on purpose although git would not read the next word
- * as its value — the key-id is optional and git takes it attached only
- * (`-Skeyid`, `--gpg-sign=keyid`). The difference can only ever reach a command
- * git itself refuses: an action option must be the WHOLE argument list, so
- * `git rebase -S --abort` is `usage: git rebase …`, exit 129, and nothing
- * happens. Refusing a command git will not run costs the coder nothing; missing
- * one it will run costs a branch. `git rebase -q --abort` is that same usage
- * error, and it keeps passing — nothing is written either way.
+ * `-S`/`--gpg-sign` is NOT a value-taking option here, though it was until
+ * 0.3.4: its key-id is optional and git takes it attached only (`-Skeyid`,
+ * `--gpg-sign=keyid`), so the word behind it was never its value — and reading
+ * one cost the coder `git rebase -S -h`, a command that prints usage and writes
+ * nothing. `git rebase -q --abort` is the same usage error (an action option
+ * must be the WHOLE argument list), and both keep passing: nothing is written
+ * either way.
  */
 const REBASE_READS = new Set(['--abort', '--quit', '--help', '-h']);
 
@@ -338,14 +346,42 @@ const REBASE_READS = new Set(['--abort', '--quit', '--help', '-h']);
  * read inside a cluster, so a value-taking letter ends the run exactly as it
  * does in tagWrites: the rest of the token is that value (`-xcmd`), and a
  * letter sitting last takes the word after it.
+ *
+ * `--whitespace`, `--empty` and `-C` were MEASURED into this set for 0.3.4 (git
+ * 2.38.1): each answers `git rebase <option> --abort main` by complaining about
+ * the value it was handed — `fatal: Invalid whitespace option: '--abort'`,
+ * `fatal: unrecognized empty type '--abort'`, ``fatal: switch `C' expects a
+ * numerical value`` — so the word behind them is a value and never the abort it
+ * spells. None of the three aborts anything.
  */
-const REBASE_VALUE_SHORT = new Set([...'xsXS']);
-const REBASE_VALUE_LONG = new Set(['--exec', '--gpg-sign', '--onto', '--strategy', '--strategy-option']);
+const REBASE_VALUE_SHORT = new Set([...'xsXC']);
+const REBASE_VALUE_LONG = new Set(['--empty', '--exec', '--onto', '--strategy', '--strategy-option', '--whitespace']);
+
+/**
+ * The value-taking options an ABBREVIATION spells. git accepts any unambiguous
+ * prefix of a long option, and the prefix takes the same value the full name
+ * does: `git rebase --ex --abort main` is `--exec --abort main`. Two letters and
+ * up behind the dashes (`--ex` and longer), because that is where an
+ * abbreviation somebody typed on purpose starts; an ambiguous one git would
+ * refuse costs nothing to over-block, since the command it refuses writes
+ * nothing.
+ */
+const rebaseTakesValue = (name) => REBASE_VALUE_LONG.has(name)
+  || (name.length >= 4 && [...REBASE_VALUE_LONG].some((full) => full.startsWith(name)));
+
+/** A token's text with its quoting removed — what the shell hands git. */
+const unquote = (text) => text.replaceAll('"', '').replaceAll("'", '');
 
 /**
  * Does this `git rebase` write? Only an undo or an explain flag standing on its
  * OWN account says no: one that arrived inside quotes is text, one sitting in an
  * option's value position is that value, and one behind a `--` is a positional.
+ *
+ * QUOTING HIDES AN ACTION WORD AND NOTHING ELSE. The shell strips the quotes
+ * before git sees them, so `"--exec"` is `--exec` and takes the next word
+ * exactly as the bare form does; it is only the ACTION words — `--abort` and
+ * the rest of REBASE_READS — that a quoted token cannot be, because quoting is
+ * how `--exec 'echo --abort now'` says the word is data.
  */
 function rebaseWrites(args) {
   let afterSeparator = false;
@@ -353,18 +389,18 @@ function rebaseWrites(args) {
   for (const { text, quoted } of args) {
     if (afterSeparator) continue; //                    a positional, however it is spelled
     if (takesValue) { takesValue = false; continue; } // the previous option's value
-    if (quoted) continue; //                            `--exec 'echo --abort now'` is a command
-    if (text === '--') { afterSeparator = true; continue; }
-    if (REBASE_READS.has(text)) return false;
-    if (text === '-' || !text.startsWith('-')) continue;
-    if (text.startsWith('--')) {
+    if (!quoted && REBASE_READS.has(text)) return false;
+    const token = quoted ? unquote(text) : text;
+    if (token === '--') { afterSeparator = true; continue; }
+    if (token === '-' || !token.startsWith('-')) continue;
+    if (token.startsWith('--')) {
       // An attached value (`--exec=--abort`) needs no skip: the token is not the
       // bare word, so nothing behind it was ever a candidate.
-      if (!text.includes('=') && REBASE_VALUE_LONG.has(text)) takesValue = true;
+      if (!token.includes('=') && rebaseTakesValue(token)) takesValue = true;
       continue;
     }
-    for (let k = 1; k < text.length; k++) {
-      if (REBASE_VALUE_SHORT.has(text[k])) { takesValue = k === text.length - 1; break; }
+    for (let k = 1; k < token.length; k++) {
+      if (REBASE_VALUE_SHORT.has(token[k])) { takesValue = k === token.length - 1; break; }
     }
   }
   return true;
@@ -405,8 +441,13 @@ const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
  * it can simply never close. Both are answered the same way — stop, and exit 0
  * — because a guard that buffers without bound or waits without end is a
  * session that hangs on every tool call.
+ *
+ * The cap is 8 MiB rather than a tidier 1: a `PostToolUse` event carries the
+ * tool's own `tool_response`, and a few megabytes of command output on one call
+ * is ordinary. Giving up on an event that large would drop the very reminder
+ * this guard exists to send — and, on a `PreToolUse`, a refusal.
  */
-const MAX_STDIN = 1024 * 1024; // 1 MiB — orders of magnitude above a real hook event
+const MAX_STDIN = 8 * 1024 * 1024; // 8 MiB — well above a real hook event, and above a big one
 const STDIN_DEADLINE_MS = 5000;
 
 const str = (v, fallback = '') => (typeof v === 'string' && v ? v : fallback);
@@ -520,7 +561,8 @@ function preCompact(event) {
     let fd = null;
     try {
       if (!lstatSync(path).isFile()) continue;
-      fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | NOFOLLOW);
+      fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | NOFOLLOW | NONBLOCK);
+      if (!fstatSync(fd).isFile()) continue;
       writeSync(fd, line);
     } catch { /* ignore */ } finally {
       if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
@@ -536,7 +578,22 @@ function preCompact(event) {
 
 /** A level-2 heading, and the one that opens a handoff block. `### Handoff` is neither. */
 const HEADING = /^##\s/;
-const HANDOFF_HEADING = /^##\s+handoff/i;
+
+/**
+ * THE HANDOFF HEADING, in ONE grammar for the two readers that ask about it —
+ * the SessionStart print and the freshness gate. They disagreed until 0.3.4,
+ * and a heading the gate refused while the print showed it is the worst of both
+ * answers: the turn is held for a block the next context is then handed.
+ *
+ * `[ \t]` and not `\s`, because a `\s` spans the newline and `##\nHandoff` is
+ * two lines, neither of them a handoff heading. `\b` and not the bare word,
+ * because `## Handoffs, and why we write them` is a heading ABOUT handoffs.
+ * The grammar is one string and the flags are what differ: the print reads a
+ * line at a time, the gate scans a whole buffer.
+ */
+const HANDOFF_HEADING_SOURCE = '^##[ \\t]+handoff\\b';
+const HANDOFF_HEADING = new RegExp(HANDOFF_HEADING_SOURCE, 'i');
+const FRESH_HANDOFF = new RegExp(HANDOFF_HEADING_SOURCE, 'im');
 
 /** A fenced block's delimiter, indented up to 3 spaces, as Markdown spells one. */
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
@@ -645,7 +702,7 @@ function sessionStart(event) {
     let tailed = false;
     try {
       if (!lstatSync(path).isFile()) continue;
-      const fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+      const fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
       try {
         // fstat, on the descriptor actually opened: it is the size the read is
         // about to use, and it settles what lstat only said a moment ago.
@@ -698,6 +755,9 @@ const USAGE_KEYS = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_i
  * `follow` is the one exception, and it is only ever used for Claude Code's own
  * settings files: a dotfile setup legitimately keeps those behind a link, one
  * integer is read out of them, and nothing is ever written through the read.
+ * That read has no lstat to lean on, which is precisely why the open carries
+ * O_NONBLOCK: the fstat is what refuses a pipe, and it only runs if the open
+ * came back.
  *
  * @returns {string|null} the bytes as UTF-8, or null when there is nothing here
  *   this guard may read.
@@ -706,7 +766,7 @@ function readBounded(path, maxBytes, { tail = false, from = 0, follow = false } 
   let fd = null;
   try {
     if (!follow && !lstatSync(path).isFile()) return null;
-    fd = openSync(path, constants.O_RDONLY | (follow ? 0 : NOFOLLOW));
+    fd = openSync(path, constants.O_RDONLY | NONBLOCK | (follow ? 0 : NOFOLLOW));
     const st = fstatSync(fd);
     if (!st.isFile()) return null;
     const start = tail ? Math.max(from, st.size - maxBytes) : from;
@@ -746,6 +806,14 @@ function parseWindow(raw) {
  * record is at its end — so the first line of that read is usually half a
  * record. It simply fails to parse, like any other line that is not one.
  *
+ * A COUNTER THAT IS PRESENT HAS TO BE A COUNT: a whole, non-negative, safe
+ * number, and their sum one too. `Number()` would take `[180000]`, `"180000"`
+ * and `true` for counts, and a `1e308` would make a percentage out of a value
+ * no arithmetic here can hold. None of that is a measurement, and the record
+ * before it is not one either: it describes a context two turns old, so an
+ * unreadable newest record answers null rather than falling back to it. Absent
+ * is different from unreadable and still counts as 0.
+ *
  * @returns {number|null} null when there is no measurement to be had.
  */
 function transcriptFill(path) {
@@ -761,10 +829,12 @@ function transcriptFill(path) {
     if (!isObject(usage)) continue;
     let fill = 0;
     for (const key of USAGE_KEYS) {
-      const n = Number(usage[key]);
-      if (Number.isFinite(n) && n > 0) fill += n;
+      const n = usage[key];
+      if (n === undefined) continue; // a counter this request did not use
+      if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) return null;
+      fill += n;
     }
-    return fill;
+    return Number.isSafeInteger(fill) ? fill : null;
   }
   return null;
 }
@@ -831,8 +901,6 @@ const STATE_MAX_ENTRIES = 64;
 const STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** How far past a ledger's recorded size the freshness scan reads. */
 const APPEND_READ_MAX = 64 * 1024;
-/** The heading that counts as a handoff — the grammar SessionStart already prints on. */
-const FRESH_HANDOFF = /^##\s+handoff\b/im;
 
 /**
  * THE STATE, or the fact that there is none to be had. One entry per session:
@@ -866,14 +934,37 @@ function readState(dir) {
  * link is never written through. A tmp file that is already there belongs to
  * somebody else and is left exactly as it is.
  *
- * Pruned on every write, because this file is one per project and sessions are
- * many: entries older than 7 days go, and the newest 64 survive. `keep` is the
- * session being written and survives both, whatever its age says.
+ * ONE SESSION'S CHANGE, ONTO THE MAP AS IT IS NOW. The file is re-read here
+ * rather than written back from the snapshot the handler read at the top of its
+ * run: this file is one per PROJECT and two sessions in it overlap constantly —
+ * one reads, the other crosses and writes, the first writes its snapshot back
+ * and the second session's crossing is gone. So the change is a `set` or a
+ * `remove` of ONE id, applied to what is on disk at this instant.
  *
- * A write that fails is silent. A hook that cannot record its own note is still
- * a hook that must not fail somebody's turn.
+ * Pruned on every write, because sessions are many: entries older than 7 days
+ * go and the newest 64 survive; then, while the JSON is still past the size
+ * this file is READ under, the oldest go one at a time — a state file past
+ * STATE_READ_MAX is one readState refuses from then on, which would switch the
+ * mechanism off for that project for good. `keep` is the session being written
+ * and survives all three, and when its entry ALONE does not fit, nothing is
+ * written at all.
+ *
+ * A write that fails is silent, and its caller says nothing either: a hook that
+ * could not record that it nudged would nudge again on every tool call.
+ *
+ * @param change one of two shapes — `set` with the id and its entry, or
+ *   `remove` with the id to drop. Written flat rather than as an inline type,
+ *   because a doubled brace is the renderer's placeholder syntax and never
+ *   survives rendering.
+ * @returns {boolean} whether the rename actually happened.
  */
-function writeState(dir, state, keep) {
+function writeState(dir, change) {
+  const { state, usable } = readState(dir);
+  if (!usable) return false;
+  const keep = change.set ? change.set[0] : null;
+  if (change.set) state[keep] = change.set[1];
+  else if (change.remove) delete state[change.remove];
+
   const now = Date.now();
   const age = (entry) => {
     const t = Date.parse(isObject(entry) ? entry.crossedAt : '');
@@ -883,25 +974,39 @@ function writeState(dir, state, keep) {
     .filter(([id, entry]) => isObject(entry) && (id === keep || age(entry) <= STATE_MAX_AGE_MS))
     .sort((a, b) => (a[0] === keep ? -1 : b[0] === keep ? 1 : age(a[1]) - age(b[1])))
     .slice(0, STATE_MAX_ENTRIES);
-  const next = {};
-  for (const [id, entry] of kept) next[id] = entry;
+  const serialise = (entries) => {
+    const next = {};
+    for (const [id, entry] of entries) next[id] = entry;
+    return JSON.stringify(next);
+  };
+  // `keep` sorts first, so the tail of the list is the oldest entry there is.
+  let entries = kept;
+  let json = serialise(entries);
+  while (Buffer.byteLength(json) > STATE_READ_MAX && entries.length > (keep ? 1 : 0)) {
+    entries = entries.slice(0, -1);
+    json = serialise(entries);
+  }
+  if (Buffer.byteLength(json) > STATE_READ_MAX) return false;
 
   const path = join(dir, STATE_FILE);
   const tmp = `${path}.${process.pid}.tmp`;
   let fd = null;
   let created = false;
+  let renamed = false;
   try {
     fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
     created = true;
-    writeSync(fd, JSON.stringify(next));
+    writeSync(fd, json);
     closeSync(fd);
     fd = null;
     renameSync(tmp, path);
     created = false; // the rename took the name with it
+    renamed = true;
   } catch { /* a note we could not write is not a reason to fail a turn */ } finally {
     if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
     if (created) { try { unlinkSync(tmp); } catch { /* nothing to clean up */ } }
   }
+  return renamed;
 }
 
 /**
@@ -913,13 +1018,32 @@ function writeState(dir, state, keep) {
  *
  * A ledger created after the crossing has no recorded size and counts from its
  * first byte, which is the whole of it.
+ *
+ * THE READ STARTS ONE BYTE EARLY, because `^` is only a line start if a line
+ * ended there. A ledger whose last line carried no newline — a half-written
+ * `Ruling:`, a `printf` without one — makes `…mid-line## Handoff` out of the
+ * next append, which is text, and reading from the recorded offset alone would
+ * see `## Handoff` sitting at byte 0 and call it a heading. So the byte before
+ * the offset is read too: a newline there means the appended bytes open a line
+ * of their own, and anything else means the first line of the read is the tail
+ * of an older one and is dropped. Offset 0 is exempt — a file's first byte
+ * begins a line by definition.
  */
 function freshHandoff(dir, names, entry) {
   const recorded = isObject(entry) && isObject(entry.ledgers) ? entry.ledgers : {};
   for (const name of names) {
     const size = recorded[name];
-    const from = Number.isInteger(size) && size > 0 ? size : 0;
-    const text = readBounded(join(dir, name), APPEND_READ_MAX, { from });
+    const offset = Number.isInteger(size) && size > 0 ? size : 0;
+    const from = offset > 0 ? offset - 1 : 0;
+    let text = readBounded(join(dir, name), APPEND_READ_MAX, { from });
+    if (!text) continue;
+    if (offset > 0 && text[0] !== '\n') {
+      // The read opened mid-line: everything up to the first newline belongs to
+      // a line that started before the crossing, and the newline itself is kept
+      // so the line after it is still a line start.
+      const nl = text.indexOf('\n');
+      text = nl < 0 ? '' : text.slice(nl);
+    }
     if (text && FRESH_HANDOFF.test(text)) return true;
   }
   return false;
@@ -952,7 +1076,9 @@ function handoffContext(event) {
   if (!usable) return null;
   const m = measure(event);
   if (!m) return null;
-  return { id, dir: found.dir, names, state, entry: isObject(state[id]) ? state[id] : null, m };
+  // The map itself does not travel: writeState re-reads it, so a handler that
+  // carried it would only be tempted to write a snapshot back.
+  return { id, dir: found.dir, names, entry: isObject(state[id]) ? state[id] : null, m };
 }
 
 /**
@@ -970,9 +1096,9 @@ function handoffContext(event) {
 function postToolUse(event) {
   const ctx = handoffContext(event);
   if (!ctx) return;
-  const { id, dir, names, state, m } = ctx;
+  const { id, dir, names, m } = ctx;
   if (m.percent < AUTO_HANDOFF.threshold) {
-    if (ctx.entry) { delete state[id]; writeState(dir, state, null); }
+    if (ctx.entry) writeState(dir, { remove: id });
     return;
   }
   const entry = ctx.entry || {
@@ -981,9 +1107,10 @@ function postToolUse(event) {
   const quiet = entry.nudged === true || freshHandoff(dir, names, entry);
   if (quiet && ctx.entry) return; // the crossing is recorded and said: nothing changed, nothing written
   if (!quiet) entry.nudged = true;
-  state[id] = entry;
-  writeState(dir, state, id);
-  if (quiet) return;
+  // Said only once it is RECORDED: a nudge whose `nudged: true` never reached
+  // the disk would be said again on the next tool call, and the one after that.
+  const recorded = writeState(dir, { set: [id, entry] });
+  if (quiet || !recorded) return;
   say(process.stdout, `${JSON.stringify({
     hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: nudgeText(m, names) },
   })}\n`);
@@ -1000,8 +1127,7 @@ function resetHandoff(found, event) {
   if (!id) return;
   const { state, usable } = readState(found.dir);
   if (!usable || !isObject(state[id])) return;
-  delete state[id];
-  writeState(found.dir, state, null);
+  writeState(found.dir, { remove: id });
 }
 
 /**
@@ -1025,13 +1151,15 @@ function stop(event) {
   if (event.stop_hook_active) return;
   const ctx = handoffContext(event);
   if (!ctx) return;
-  const { id, dir, names, state, entry, m } = ctx;
+  const { id, dir, names, entry, m } = ctx;
   if (!entry) return;
-  if (m.percent < AUTO_HANDOFF.threshold) { delete state[id]; writeState(dir, state, null); return; }
+  if (m.percent < AUTO_HANDOFF.threshold) { writeState(dir, { remove: id }); return; }
   if (entry.blocked === true) return;
   if (freshHandoff(dir, names, entry)) return;
   entry.blocked = true;
-  writeState(dir, state, id);
+  // Held only once it is RECORDED, for the same reason the nudge is: a gate
+  // that could not write `blocked: true` would hold every turn from here on.
+  if (!writeState(dir, { set: [id, entry] })) return;
   say(process.stdout, `${JSON.stringify({ decision: 'block', reason: blockText(m, names) })}\n`);
 }
 

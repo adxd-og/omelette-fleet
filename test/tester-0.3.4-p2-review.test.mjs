@@ -51,11 +51,16 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
 
-/** The guard exactly as `rules --hooks` writes it, in a throwaway directory. */
+/**
+ * The guard exactly as `rules --hooks` writes it, in a throwaway directory —
+ * with the handoff block spelled out rather than defaulted, because the default
+ * is the OPERATOR's live fleet config and a test that reads it would pass or
+ * fail on a threshold somebody set this morning.
+ */
 function guard() {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-guard-p2-'));
   const path = join(dir, 'omelette-guard.mjs');
-  writeFileSync(path, renderHookFile(HOOK_FILES[0], '1.2.3'));
+  writeFileSync(path, renderHookFile(HOOK_FILES[0], '1.2.3', { enabled: true, threshold: 90, contextWindow: 0 }));
   return path;
 }
 

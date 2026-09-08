@@ -33,7 +33,8 @@
  * tool.kind: research | review | image | pipeline | catalog | local. `catalog`
  * tools never spawn and are answered by the runtime from the unit's catalog;
  * `local` tools never spawn either but DO get `run(args, ctx)` with a reduced
- * ctx (`cfg, mode, log, catalog, home` — no `spawn`, no `retry`), and like a
+ * ctx (`cfg, mode, log, catalog, home`, plus a `usedModel` that does nothing —
+ * there is no record for a report to reach — and no `spawn`, no `retry`), and like a
  * catalog read they are answered in-process, never tracked by the status feed
  * and never written to the result spool. The runtime appends one `local` tool
  * of its own to every unit — `<unit>_result`, which hands back an answer the

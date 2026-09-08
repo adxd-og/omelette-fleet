@@ -13,8 +13,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
@@ -185,6 +185,18 @@ test('PostToolUse: the ceiling is the first source that yields a positive intege
     'garbage in the environment falls through to the settings file',
   );
 
+  // A value in the local file that is not a window is skipped and the next file
+  // is read — the same fall-through doctor makes, so the line it prints and the
+  // window the hook measures against cannot disagree.
+  writeFileSync(join(g.dir, '.claude', 'settings.local.json'), JSON.stringify({ autoCompactWindow: 'garbage' }));
+  writeFileSync(settings, JSON.stringify({ autoCompactWindow: '500k' }));
+  writeTranscript(p.transcript, 460000); // 92% of 500000
+  assert.equal(
+    nudged(fire(g, post(p, { session_id: 'fresh-garbage' }))),
+    NUDGE(92, 500000, 'autoCompactWindow'),
+    'garbage in the local settings file falls through to the shared one',
+  );
+
   // 1. The rendered `handoff.contextWindow` beats everything: it is the value
   // the operator put in the fleet config and re-rendered.
   const pinned = guard({ contextWindow: 400000 });
@@ -203,6 +215,36 @@ test('PostToolUse: the ceiling is the first source that yields a positive intege
     nudged(fire(g, post(p, { session_id: 'fresh-6' }), { env: { CLAUDE_CONFIG_DIR: cfg } })),
     NUDGE(92, 250000, 'autoCompactWindow'),
   );
+});
+
+test('the guard\'s window parser answers the same table core/rules.mjs answers — the two are one grammar in two files', () => {
+  // The guard imports nothing from the package, so `parseWindow` is a COPY of
+  // `parseContextWindow`, and a copy drifts. This is the same table
+  // test/rules.test.mjs pins the original against, driven through the only door
+  // the script has: the environment variable, a real transcript, and the window
+  // the nudge then names.
+  const g = guard();
+  const p = project(g, 'window-forms');
+  let i = 0;
+  for (const [raw, window] of [['200000', 200000], [' 500k ', 500000], ['500K', 500000], ['1m', 1000000], ['1M', 1000000]]) {
+    writeTranscript(p.transcript, window - 1000); // 99% of whatever it parsed to
+    assert.equal(
+      nudged(fire(g, post(p, { session_id: `form-${i++}` }), { env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: raw } })),
+      NUDGE(99, window, 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'),
+      `${JSON.stringify(raw)} is ${window}`,
+    );
+  }
+  // …and everything that is NOT a window falls through to the next source
+  // rather than being guessed at — here, with no settings file anywhere under
+  // this HOME, to Claude Code's documented 200 000.
+  writeTranscript(p.transcript, 182000);
+  for (const raw of ['', '   ', '0', '-1', '1.5m', '200_000', '200000 tokens', 'lots', 'k', '9007199254740992']) {
+    assert.equal(
+      nudged(fire(g, post(p, { session_id: `bad-${i++}` }), { env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: raw } })),
+      NUDGE(91, 200000, 'default'),
+      `${JSON.stringify(raw)} is not a window`,
+    );
+  }
 });
 
 test('PostToolUse: a sub-agent is never nudged — it has no ledger of its own', () => {
@@ -548,6 +590,234 @@ test('PreCompact clears the crossing, and the next window crosses on its own ter
   // has NOW — the `## Compaction` stamp is not a handoff.
   assert.equal(nudged(fire(g, post(p))), NUDGE(91, 200000, 'default'));
   assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000));
+});
+
+/** A named pipe, or null where `mkfifo` is not to be had — the one file that makes a read HANG. */
+function fifo(path) {
+  if (process.platform === 'win32') return null;
+  const r = spawnSync('mkfifo', [path], { encoding: 'utf8' });
+  return r.status === 0 ? path : null;
+}
+
+test('a FIFO where a file should be never holds the hook: nobody opens the other end, and it exits at once', (t) => {
+  const g = guard();
+  // 50 % — everything is read on the way to the measurement, and nothing is
+  // said about it, so what this test sees is the READING and not the nudge.
+  const p = project(g, 'fifo', { fill: 100000 });
+  mkdirSync(join(g.dir, '.claude'), { recursive: true });
+
+  // The user's own settings file: the ONE read this guard follows a symlink for,
+  // and so the one that cannot lean on an lstat to refuse a pipe.
+  const settings = fifo(join(g.dir, '.claude', 'settings.local.json'));
+  if (!settings) { t.skip('mkfifo is not available here'); return; }
+  const started = Date.now();
+  silent(fire(g, post(p)), 'a FIFO where the user settings should be');
+  assert.ok(Date.now() - started < 2000, `the guard waited on the pipe: ${Date.now() - started}ms`);
+
+  // …and the transcript, which is read on every single tool call.
+  const pipe = fifo(join(g.dir, 'transcript.fifo'));
+  assert.ok(pipe, 'mkfifo worked a line ago; a failure here is the test, not the guard');
+  const startedAgain = Date.now();
+  silent(fire(g, post(p, { transcript_path: pipe })), 'a FIFO where the transcript should be');
+  assert.ok(Date.now() - startedAgain < 2000, `the guard waited on the pipe: ${Date.now() - startedAgain}ms`);
+});
+
+test('PostToolUse: a usage counter that is not a whole, safe, non-negative NUMBER is no measurement at all', () => {
+  const g = guard();
+  const p = project(g, 'usage-shapes');
+  const record = (usage) => JSON.stringify({ type: 'assistant', message: { role: 'assistant', usage } });
+  const whole = { input_tokens: 32, cache_creation_input_tokens: 1208, cache_read_input_tokens: 180760 };
+
+  // The fixture crosses while the counters are numbers…
+  writeFileSync(p.transcript, `${record(whole)}\n`);
+  assert.equal(nudged(fire(g, post(p, { session_id: 'shapes-ok' }))), NUDGE(91, 200000, 'default'));
+
+  // …and every one of these is silence instead of a guess. The record with the
+  // unreadable counter is the newest one, and the guard does NOT fall back to
+  // the record before it: that one describes a context two turns old, and a
+  // percentage nobody can check is exactly what "no measurement" is for.
+  let i = 0;
+  for (const [why, usage] of [
+    ['an array Number() would happily coerce', { ...whole, input_tokens: [180000] }],
+    ['a numeric string', { ...whole, input_tokens: '180000' }],
+    ['null', { ...whole, input_tokens: null }],
+    ['a boolean', { ...whole, input_tokens: true }],
+    ['a fraction', { ...whole, input_tokens: 0.5 }],
+    ['a negative count', { ...whole, input_tokens: -5 }],
+    ['past the safe integer range', { input_tokens: 1e308, cache_read_input_tokens: 1e308 }],
+    ['a SUM past the safe integer range', { input_tokens: 9e15, cache_read_input_tokens: 9e15 }],
+  ]) {
+    writeFileSync(p.transcript, [record(whole), record(usage)].join('\n') + '\n');
+    silent(fire(g, post(p, { session_id: `shapes-${i++}` })), why);
+  }
+  // A counter that is simply ABSENT is still 0, which is what the spec fixes.
+  writeFileSync(p.transcript, `${record({ input_tokens: 182000 })}\n`);
+  assert.equal(nudged(fire(g, post(p, { session_id: 'shapes-absent' }))), NUDGE(91, 200000, 'default'));
+});
+
+test('Stop: a handoff heading counts only on a LINE OF ITS OWN — not glued to an unterminated line, not `##\\nHandoff`', () => {
+  const g = guard();
+  // A ledger whose last line has no newline on it: the block appended after it
+  // reads as `…mid-line## Handoff`, which is text and not a heading. Reading
+  // from the recorded offset alone would see `## Handoff` at byte 0 and call it
+  // one, so the read starts ONE BYTE EARLIER and asks what that byte was.
+  const glued = project(g, 'glued', { ledgers: { 'ledger-0.3.4.md': '# ledger\nRuling: the last line has no newline' } });
+  cross(g, glued);
+  appendFileSync(glued.ledger(), '## Handoff 2026-09-09T09:00Z\nnot a heading — it is the tail of the line above\n');
+  assert.equal(blocked(fire(g, stopEvent(glued))), BLOCK(91, 200000));
+
+  // `##` and `Handoff` on two lines is two things, neither of them a handoff.
+  const split = project(g, 'split-heading');
+  cross(g, split);
+  appendFileSync(split.ledger(), '\n##\nHandoff 2026-09-09T09:00Z\nstate: nowhere\n');
+  assert.equal(blocked(fire(g, stopEvent(split))), BLOCK(91, 200000));
+
+  // `## Handoffs` is a heading about handoffs, not a handoff block.
+  const plural = project(g, 'plural-heading');
+  cross(g, plural);
+  appendFileSync(plural.ledger(), '\n## Handoffs, and why we write them\nnot a handoff either\n');
+  assert.equal(blocked(fire(g, stopEvent(plural))), BLOCK(91, 200000));
+
+  // …while the same block on a line of its own, after a terminated one, counts.
+  const clean = project(g, 'clean-heading');
+  cross(g, clean);
+  appendFileSync(clean.ledger(), '\n## Handoff 2026-09-09T09:05Z\nWhere it stands: T2 in review.\n');
+  silent(fire(g, stopEvent(clean)), 'a heading on its own line is the block');
+});
+
+/**
+ * A directory the guard may READ and may not WRITE. Where chmod means nothing —
+ * Windows, or a run as root, which ignores the mode entirely — there is no such
+ * directory to be had and the test says so instead of pretending.
+ */
+function makeUnwritable(dir) {
+  if (process.platform === 'win32') return false;
+  if (typeof process.getuid === 'function' && process.getuid() === 0) return false;
+  chmodSync(dir, 0o500);
+  try { writeFileSync(join(dir, 'probe'), 'x'); return false; } catch { return true; }
+}
+
+test('a note the guard could not write is a note it does not act on: no nudge, no gate, no state', (t) => {
+  const g = guard();
+  const p = project(g, 'unwritable');
+  const omelette = join(p.dir, '.omelette');
+  if (!makeUnwritable(omelette)) { t.skip('this platform has no unwritable directory for this user'); return; }
+  try {
+    // The crossing cannot be recorded, so it is not announced either: a nudge
+    // that is said and forgotten is said on every tool call afterwards.
+    silent(fire(g, post(p)), 'the crossing could not be recorded');
+    assert.equal(existsSync(p.statePath), false, 'and nothing was written');
+  } finally { chmodSync(omelette, 0o700); }
+
+  // The same for the gate: a crossing recorded while the directory was
+  // writable, and a Stop that cannot mark the turn as held.
+  cross(g, p);
+  if (!makeUnwritable(omelette)) { t.skip('this platform has no unwritable directory for this user'); return; }
+  try {
+    silent(fire(g, stopEvent(p)), 'the gate could not record that it fired');
+    assert.equal(p.state()['s-1'].blocked, false, 'and the entry is untouched');
+  } finally { chmodSync(omelette, 0o700); }
+});
+
+test('the state file never grows past the cap it is read under — the oldest crossings go, the live one stays', () => {
+  const g = guard();
+  // Many ledgers: a crossing records one offset per ledger, so this project's
+  // own entry is kilobytes rather than bytes — which is how a state file that
+  // was fine yesterday stops being readable today.
+  const ledgers = {};
+  for (let i = 0; i < 400; i++) ledgers[`ledger-plan-${String(i).padStart(3, '0')}.md`] = `# plan ${i}\n`;
+  const p = project(g, 'bytecap', { ledgers });
+
+  const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+  const bulky = (n) => {
+    const offsets = {};
+    for (let i = 0; i < 200; i++) offsets[`ledger-plan-${String(i).padStart(3, '0')}.md`] = 1000 + i;
+    return { crossedAt: iso(n * 60000), ledgers: offsets, nudged: true, blocked: true };
+  };
+  // Just under the cap, and under the 64-entry cap as well, so it is the BYTES
+  // that do the trimming below and not the count.
+  const seeded = {};
+  let n = 0;
+  while (n < 63) {
+    seeded[`filler-${String(n).padStart(2, '0')}`] = bulky(n);
+    if (JSON.stringify(seeded).length > 255 * 1024) { delete seeded[`filler-${String(n).padStart(2, '0')}`]; break; }
+    n++;
+  }
+  assert.ok(JSON.stringify(seeded).length > 200 * 1024, 'the fixture has to start near the cap to test it');
+  assert.ok(n <= 63, 'and under the entry cap, or the count would do the trimming');
+  writeFileSync(p.statePath, JSON.stringify(seeded));
+
+  assert.equal(nudged(fire(g, post(p))), NUDGE(91, 200000, 'default', 'one of the ledgers in .omelette/'));
+  const size = statSync(p.statePath).size;
+  assert.ok(size <= 256 * 1024, `a state file past its own read cap is a state file nobody reads again: ${size}`);
+  const state = p.state();
+  assert.ok(state['s-1'], 'the crossing being recorded survives the trim');
+  assert.equal(Object.keys(state['s-1'].ledgers).length, 400, 'with every ledger offset it took');
+  assert.ok(Object.keys(state).length < n + 1, 'and the oldest entries are the ones that went');
+  assert.ok(state['filler-00'], 'the newest of them are kept');
+  assert.equal(state[`filler-${String(n - 1).padStart(2, '0')}`], undefined, 'the oldest is dropped first');
+});
+
+/** How long a spawned guard has been running, and its answer once it is over. */
+function fireSlowly(g, input, { cwd, bootMs = 300 } = {}) {
+  const child = spawn(process.execPath, [g.path], {
+    cwd, stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH, HOME: g.dir },
+  });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  child.stderr.on('data', () => {});
+  child.stdin.on('error', () => {});
+  const done = new Promise((resolve) => child.on('close', () => resolve(out)));
+  // Booted and waiting on stdin: the guard reads the event before it reads
+  // anything else, so closing stdin is what starts its clock.
+  const started = new Promise((resolve) => setTimeout(() => {
+    child.stdin.end(JSON.stringify(input));
+    resolve();
+  }, bootMs));
+  return { done, started };
+}
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('two sessions crossing at once: the write merges onto the CURRENT map instead of restoring a stale one', async (t) => {
+  // The window is real and small: the guard reads the state file early and
+  // writes it at the end of its run, and another session's guard can land in
+  // between. Opening it from a test means making one run slow between those
+  // two points — 4000 ledgers to size and scan for a handoff, measured at
+  // ~120 ms against ~10 ms to the read — and writing the other session's entry
+  // while it is busy. The three outcomes are told apart below, so a run that
+  // was simply too fast is retried rather than reported either way.
+  const g = guard();
+  const dir = join(g.dir, 'merge');
+  mkdirSync(join(dir, '.omelette'), { recursive: true });
+  for (let i = 0; i < 4000; i++) {
+    writeFileSync(join(dir, '.omelette', `ledger-${String(i).padStart(4, '0')}.md`), `# ledger ${i}\n${'x'.repeat(512)}\n`);
+  }
+  const transcript = join(dir, 'transcript.jsonl');
+  writeTranscript(transcript, 182000);
+  const statePath = join(dir, '.omelette', 'handoff-state.json');
+  const entry = () => ({ crossedAt: new Date().toISOString(), ledgers: {}, nudged: true, blocked: false });
+  const event = {
+    hook_event_name: 'PostToolUse', session_id: 'slow', transcript_path: transcript, cwd: dir,
+    tool_name: 'Bash', tool_input: { command: 'npm test' },
+  };
+
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    // What the slow run will read: one entry, and it is not its own.
+    writeFileSync(statePath, JSON.stringify({ before: entry() }));
+    const slow = fireSlowly(g, event, { cwd: dir });
+    await slow.started;
+    await delay(30 * attempt); // the read is a handful of syscalls past the event
+    // Another session's guard, landing while the slow one is still scanning.
+    writeFileSync(statePath, JSON.stringify({ before: entry(), other: entry() }));
+    await slow.done;
+
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    if (state.slow && state.other) return; // merged: the write read the file again
+    assert.ok(!state.slow, 'the stale snapshot was written back and the other session\'s crossing was lost');
+    // The slow run finished before the other session wrote: no window, no proof.
+  }
+  t.skip('the race window never opened on this machine — the guard finished before the second writer');
 });
 
 test('the two events together: nudge, gate, handoff, silence', () => {

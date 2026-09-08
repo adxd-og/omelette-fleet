@@ -2046,6 +2046,7 @@ test('set handoff.<key> edits the top-level block, show prints it, and the bound
     ['handoff.threshold=100', /invalid value for handoff\.threshold: "100"/],
     ['handoff.threshold=0.5', /invalid value for handoff\.threshold: "0\.5"/],
     ['handoff.contextWindow=-1', /invalid value for handoff\.contextWindow: "-1" — expected a whole number 0 or above/],
+    ['handoff.contextWindow=9007199254740992', /invalid value for handoff\.contextWindow: "9007199254740992"/],
     ['handoff.enabled=maybe', /invalid value for handoff\.enabled: "maybe" — expected true \| false/],
     ['handoff.nudgeAt=80', /unknown key "nudgeAt" for the handoff block — known keys: enabled, threshold, contextWindow/],
     ['handoff=90', /"handoff=90" is not handoff\.<key>=<value>/],
@@ -2139,7 +2140,7 @@ test('doctor says so when the handoff line came from the GLOBAL guard rather tha
   assert.equal(rulesIn(proj, dir, ['--global', '--hooks']).status, 0);
   assert.match(
     doctorIn2(proj, dir),
-    /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\) · read from the global guard$/m,
+    /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\) · the project guard carries no handoff block — showing the global guard's values$/m,
     doctorIn2(proj, dir),
   );
 
@@ -2148,5 +2149,33 @@ test('doctor says so when the handoff line came from the GLOBAL guard rather tha
   assert.equal(rulesIn(proj, dir, ['--hooks', '--force']).status, 0);
   const own = doctorIn2(proj, dir);
   assert.match(own, /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m, own);
-  assert.doesNotMatch(own, /read from the global guard/, own);
+  assert.doesNotMatch(own, /showing the global guard/, own);
+});
+
+test('doctor: an autoCompactWindow that is not a window is skipped and the next file is read — the hook reads them the same way', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  mkdirSync(join(dir, '.claude'), { recursive: true });
+  // The client reads settings.local.json first, and the guard keeps looking
+  // past a value it cannot parse. A doctor that stopped at the garbage would
+  // report the 200 000 default for a hook measuring against half a million —
+  // the one thing this line exists to prevent.
+  writeFileSync(join(dir, '.claude', 'settings.local.json'), JSON.stringify({ autoCompactWindow: 'garbage' }));
+  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: '500k' }));
+  const out = doctorIn2(proj, dir);
+  assert.match(out, /^handoff {7}nudge at 90% of 500000 \(autoCompactWindow\) · Stop gate on/m, out);
+
+  // …and with nothing readable in either file it is Claude Code's documented
+  // 200 000, named as the default rather than as a setting.
+  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: '1.5m' }));
+  const fallback = doctorIn2(proj, dir);
+  assert.match(fallback, /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on/m, fallback);
+});
+
+test('doctor --help names the handoff line, because it is a line an operator has to be able to look up', () => {
+  const help = spawnSync(process.execPath, [BIN, 'help', 'doctor'], {
+    encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home(), OMELETTE_UPDATE_CHECK: '0' },
+  }).stdout;
+  assert.match(help, /`handoff` line/);
 });

@@ -196,7 +196,7 @@ An invalid value does not poison the key — it warns and falls through to the n
 
 ### Editing with `set`
 
-`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command. A two-part path with `handoff` in front — `omelette-fleet set handoff.threshold=85` — edits the [handoff block](#handoff-settings); `agents` and `handoff` are the only words accepted in the first position that are not unit names. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
+`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command. A two-part path with `handoff` in front — `omelette-fleet set handoff.threshold=85` — edits the [handoff block](#handoff-settings); `agents` and `handoff` are the only words accepted in the first position that are not unit names. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` / `handoff` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
 
 ```
 codex.timeoutS  600 [default] → 900 [file]
@@ -268,7 +268,7 @@ The file is `stat`ed on **every** resolution and re-parsed only when its mtime c
 
 A malformed file is a **warning, never an exception**: the last good parse of that same file stays in force, and if there never was one, the built-in defaults do. The config layer cannot throw into a tool call. Warnings are logged once per process (stderr, prefixed with the unit name) rather than repeated on every call.
 
-The `agents` block is the exception, and for a plain reason: nothing reads it at call time. It is rendered into files on disk by `rules --agents`, and until you run that, the config and the definitions a session is reading disagree.
+The `agents` and `handoff` blocks are the exception, and for a plain reason: nothing reads either of them at call time. They are rendered into files on disk — `agents` into the sub-agent definitions by `rules --agents`, `handoff` into the guard script by `rules --hooks` — and until you run that command, the config and the files a session is reading disagree.
 
 ## `enabled: false`
 

@@ -153,7 +153,11 @@ const COMMANDS = {
       'First the machine: the fleet home and config, the claude CLI and the',
       'file its registrations live in, then one line per managed kind —',
       'rules, agents, skills, hooks — for both scopes, saying whose each',
-      'file is and, for hooks, which events actually call the guard. While',
+      'file is and, for hooks, which events actually call the guard. Under',
+      'them a `handoff` line says what the INSTALLED guard will do about',
+      'the auto-handoff — the threshold, the context window and where that',
+      'window came from, whether the Stop gate is on, and how many ledgers',
+      'there are to guard — read back out of the script itself. While',
       'something is missing it adds ONE `next` line naming the command that',
       'fixes it; none of that ever changes the exit code.',
       'Then per unit: the vendor binary, its --version, the login state, the',
@@ -699,11 +703,21 @@ function readClientEnv(name, { cwd = process.cwd(), env = process.env } = {}) {
  * the guard resolves it: a line describing a resolution the guard would not
  * make is worse than no line.
  *
+ * `accept` IS PART OF THE SCAN, not something the caller applies afterwards.
+ * The guard tries each file in turn and keeps looking past a value it cannot
+ * read, so `settings.local.json` holding `"autoCompactWindow": "garbage"` and
+ * `settings.json` holding `"500k"` resolves to 500 000 — and a doctor that
+ * stopped at the garbage would report the 200 000 default for a hook that is
+ * measuring against half a million.
+ *
  * PARSED, NEVER WRITTEN, like every other settings read in this file.
  *
- * @returns {{value: string|null, source: string|null}}
+ * @param {{global?:boolean, cwd?:string, env?:object, accept?:Function}} o
+ *   `accept` turns the raw string into the value worth having, or null when
+ *   this file's is not one.
+ * @returns {{value: any, source: string|null}}
  */
-function readClientSetting(name, { global = true, cwd = process.cwd(), env = process.env } = {}) {
+function readClientSetting(name, { global = true, cwd = process.cwd(), env = process.env, accept = (v) => v } = {}) {
   for (const { path } of settingsTargets({ global, cwd, env }).slice().reverse()) {
     let parsed = null;
     try { parsed = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
@@ -711,7 +725,9 @@ function readClientSetting(name, { global = true, cwd = process.cwd(), env = pro
     const raw = parsed[name];
     if (raw === undefined || raw === null) continue;
     if (!['string', 'number'].includes(typeof raw)) continue;
-    return { value: String(raw), source: path };
+    const value = accept(String(raw));
+    if (value === null || value === undefined) continue; // not a value: the next file may hold one
+    return { value, source: path };
   }
   return { value: null, source: null };
 }
@@ -1701,11 +1717,13 @@ const matcherProblemFor = (m, event, name) => {
 };
 
 /**
- * What each MATCHED event's entry has to cover. `PreCompact` is deliberately
- * absent: it is matched on nothing at all — every compaction is one — so any
- * entry that calls the guard counts. `SessionStart` is matched on the session's
- * SOURCE (`startup`, `resume`, `clear`, `compact`, `fork`), and `compact` is the
- * only one the guard has anything to print into.
+ * What each MATCHED event's entry has to cover — two of the five. `PreCompact`,
+ * `PostToolUse` and `Stop` are deliberately absent: none of them is matched on
+ * anything, because every compaction, every tool call and every Stop is one the
+ * guard has something to say about, so any entry that calls it counts.
+ * `SessionStart` is matched on the session's SOURCE (`startup`, `resume`,
+ * `clear`, `compact`, `fork`), and `compact` is the only one the guard has
+ * anything to print into.
  */
 const MATCHED_ON = { PreToolUse: 'Bash', SessionStart: 'compact' };
 
@@ -1730,9 +1748,9 @@ function hookWiring(config) {
     const calling = (Array.isArray(hooks[event]) ? hooks[event] : [])
       .filter((group) => isObj(group) && Array.isArray(group.hooks) && group.hooks.some(calls));
     if (!calling.length) continue;
-    // Two of the three events are matched against something; PreCompact is not.
-    // ONE entry covering it is enough; when none does, the first entry's reason
-    // is the one worth printing.
+    // Two of the five events are matched against something; the other three are
+    // matched on nothing at all. ONE entry covering the matcher is enough; when
+    // none does, the first entry's reason is the one worth printing.
     const target = MATCHED_ON[event];
     if (target) {
       const problems = calling.map((group) => matcherProblemFor(group.matcher, event, target));
@@ -1812,9 +1830,8 @@ function resolveContextWindow(contextWindow, { cwd = process.cwd(), env = proces
   if (Number.isInteger(contextWindow) && contextWindow > 0) return { window: contextWindow, source: 'handoff.contextWindow' };
   const fromEnv = parseContextWindow(env[CONTEXT_WINDOW_ENV]);
   if (fromEnv) return { window: fromEnv, source: CONTEXT_WINDOW_ENV };
-  const setting = readClientSetting(CONTEXT_WINDOW_SETTING, { global: true, cwd, env });
-  const fromFile = setting.value === null ? null : parseContextWindow(setting.value);
-  if (fromFile) return { window: fromFile, source: CONTEXT_WINDOW_SETTING };
+  const setting = readClientSetting(CONTEXT_WINDOW_SETTING, { global: true, cwd, env, accept: parseContextWindow });
+  if (setting.value) return { window: setting.value, source: CONTEXT_WINDOW_SETTING };
   return { window: CONTEXT_WINDOW_DEFAULT, source: 'default' };
 }
 
@@ -1848,7 +1865,7 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
   // WHOSE values these are. A project without its own rendered block reads the
   // global guard's numbers, and changing them is `rules --global --hooks` — a
   // line that did not say so would send the operator to re-render the project.
-  const scope = fromGlobal ? ' · read from the global guard' : '';
+  const scope = fromGlobal ? ' · the project guard carries no handoff block — showing the global guard\'s values' : '';
 
   // The ledger is the opt-in: with none, the hook measures nothing and says
   // nothing, and an operator reading "nudge at 90%" would expect otherwise.

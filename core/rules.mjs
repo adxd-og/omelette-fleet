@@ -296,7 +296,7 @@ export function parseSkillMarker(text) {
 export const skillsTarget = scopeDir('skills');
 
 /**
- * THE GUARD. One script serves both hook events (`rules --hooks` writes it, and
+ * THE GUARD. One script serves all five hook events (`rules --hooks` writes it, and
  * PRINTS the settings.json snippet that calls it — Claude Code's settings.json
  * is read by this package and written only by the operator). Its marker is a
  * `//` comment on LINE 1: the file is JavaScript, so there is no frontmatter to
