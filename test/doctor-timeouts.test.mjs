@@ -398,7 +398,9 @@ test('doctor: the whole mcp timeout block, in the order the spec sets', () => {
 /** Every `settings: … unreadable` line doctor printed, in order, label column stripped. */
 const unreadableLines = (out) => out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('settings: '));
 
-const said = (path) => `settings: ${path} unreadable — env values in it were not consulted`;
+// The wording is one sentence for every source: three of doctor's readers can
+// trip over the same file, and only one of them is about `env` values.
+const said = (path) => `settings: ${path} unreadable — its values were not consulted`;
 
 test('doctor names a settings file that exists and cannot be parsed — once, however many readers opened it', () => {
   const s = sandbox();

@@ -121,7 +121,7 @@ test('doctor: a settings file broken enough to trip BOTH the timeout-wall reader
   const unreadableLines = out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('settings: '));
   assert.deepEqual(
     unreadableLines,
-    [`settings: ${settingsPath} unreadable — env values in it were not consulted`],
+    [`settings: ${settingsPath} unreadable — its values were not consulted`],
     `mergeUnreadable's own docstring: "an operator with one broken file wants one line about it, not one per reader" — got:\n${out}`,
   );
 });

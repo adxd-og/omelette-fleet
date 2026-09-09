@@ -398,6 +398,34 @@ export function parseContextWindow(raw) {
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
+/**
+ * THE ONE THING A MODEL ID SAYS ABOUT THE WINDOW. Claude Code writes the model
+ * it is running into the user's settings, suffix and all, and the `[1m]` suffix
+ * IS the 1 000 000-token context — `claude-opus-5[1m]`, `claude-fable-5-1[1m]`.
+ * Nothing else about the id is read and no catalog of model names is kept here:
+ * a name this package has never heard of still says what its suffix says.
+ *
+ * It is the FOURTH step of the ceiling chain — below `autoCompactWindow`,
+ * because a window an operator capped on purpose was meant, and above Claude
+ * Code's 200 000, which is wrong for every 1M session and read one as 144 %
+ * full on the day 0.3.4 shipped.
+ *
+ * Case-insensitive, trimmed first, and the suffix has to END the id:
+ * `claude-opus-5[1m] (old)` is a note somebody left behind, not a window. The
+ * guard carries a COPY of this test (it imports nothing from here) and the two
+ * are pinned against the same table.
+ */
+export const MODEL_ENV = 'ANTHROPIC_MODEL';
+export const MODEL_SETTING = 'model';
+export const MODEL_WINDOW = 1000000;
+export const MODEL_WINDOW_SOURCE = 'model[1m]';
+
+const ONE_M_SUFFIX = /\[1m\]$/i;
+
+export function parseModelWindow(raw) {
+  return typeof raw === 'string' && ONE_M_SUFFIX.test(raw.trim()) ? MODEL_WINDOW : null;
+}
+
 /** Where `rules --hooks` writes: the project's .claude/hooks, or the global one. */
 export const hooksTarget = scopeDir('hooks');
 

@@ -52,7 +52,7 @@ import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, coerce, configPath, fleetHome, handoffSettings, unitConfig, writeFleetConfig } from '../core/config.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, agentSettings, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
+import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
 import { resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -699,9 +699,9 @@ function readClientEnv(name, { cwd = process.cwd(), env = process.env } = {}) {
 /**
  * One TOP-LEVEL setting out of Claude Code's own settings files — `readClientEnv`
  * reads the `env` block, and this reads the file's own keys, which is where
- * `autoCompactWindow` lives. The user scope only, local file first, exactly as
- * the guard resolves it: a line describing a resolution the guard would not
- * make is worse than no line.
+ * `autoCompactWindow` and `model` live. The user scope only, local file first,
+ * exactly as the guard resolves it: a line describing a resolution the guard
+ * would not make is worse than no line.
  *
  * `accept` IS PART OF THE SCAN, not something the caller applies afterwards.
  * The guard tries each file in turn and keeps looking past a value it cannot
@@ -710,26 +710,39 @@ function readClientEnv(name, { cwd = process.cwd(), env = process.env } = {}) {
  * stopped at the garbage would report the 200 000 default for a hook that is
  * measuring against half a million.
  *
- * PARSED, NEVER WRITTEN, like every other settings read in this file.
+ * PARSED, NEVER WRITTEN, like every other settings read in this file. A file
+ * that is ABSENT is skipped in silence — most machines have at most one of
+ * these two. One that EXISTS and cannot be read, or does not parse into an
+ * object, is skipped and NAMED, by the same rule `readClientEnv` uses: the
+ * window this scan resolved may be the one that file was meant to change, and a
+ * report that says nothing about it sends the operator looking at the wrong
+ * thing. `unreadable` holds the files THIS scan opened — the ones ahead of the
+ * value in the client's own order — and doctor merges the list with the ones
+ * `readClientEnv` and `hookWiringAt` collect.
  *
  * @param {{global?:boolean, cwd?:string, env?:object, accept?:Function}} o
  *   `accept` turns the raw string into the value worth having, or null when
  *   this file's is not one.
- * @returns {{value: any, source: string|null}}
+ * @returns {{value: any, source: string|null, unreadable: string[]}}
  */
 function readClientSetting(name, { global = true, cwd = process.cwd(), env = process.env, accept = (v) => v } = {}) {
+  const unreadable = [];
   for (const { path } of settingsTargets({ global, cwd, env }).slice().reverse()) {
+    let text;
+    // ENOENT is the normal case. Anything else — a directory at that name, a
+    // file this user cannot open — means the contents are there and lost.
+    try { text = readFileSync(path, 'utf8'); } catch (e) { if (!e || e.code !== 'ENOENT') unreadable.push(path); continue; }
     let parsed = null;
-    try { parsed = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
-    if (!isObj(parsed)) continue;
+    try { parsed = JSON.parse(text); } catch { parsed = null; }
+    if (!isObj(parsed)) { unreadable.push(path); continue; }
     const raw = parsed[name];
     if (raw === undefined || raw === null) continue;
     if (!['string', 'number'].includes(typeof raw)) continue;
     const value = accept(String(raw));
     if (value === null || value === undefined) continue; // not a value: the next file may hold one
-    return { value, source: path };
+    return { value, source: path, unreadable };
   }
-  return { value: null, source: null };
+  return { value: null, source: null, unreadable };
 }
 
 /** A whole number of milliseconds, or null — a variable holding "30m" is not a bound. */
@@ -1825,14 +1838,34 @@ const hooksLabel = (r, { wired, unreadable, matcherProblem }) => {
  * The window the installed guard will measure against, and where that number
  * comes from — the same precedence the script itself applies, because this line
  * exists to say what the hook will do rather than what the config says.
+ *
+ * A `[1m]` passed only on the command line (`claude --model …[1m]`) is not a
+ * source here, because it is not one for a hook either: the guard sees the
+ * environment and the settings files, never the client's argv.
+ *
+ * The settings files this walks are carried up as `unreadable` rather than
+ * swallowed: doctor prints one line per broken file whichever of its readers
+ * opened it, and the ceiling is one of the things such a file was likely to
+ * carry.
  */
 function resolveContextWindow(contextWindow, { cwd = process.cwd(), env = process.env } = {}) {
-  if (Number.isInteger(contextWindow) && contextWindow > 0) return { window: contextWindow, source: 'handoff.contextWindow' };
+  if (Number.isInteger(contextWindow) && contextWindow > 0) return { window: contextWindow, source: 'handoff.contextWindow', unreadable: [] };
   const fromEnv = parseContextWindow(env[CONTEXT_WINDOW_ENV]);
-  if (fromEnv) return { window: fromEnv, source: CONTEXT_WINDOW_ENV };
+  if (fromEnv) return { window: fromEnv, source: CONTEXT_WINDOW_ENV, unreadable: [] };
   const setting = readClientSetting(CONTEXT_WINDOW_SETTING, { global: true, cwd, env, accept: parseContextWindow });
-  if (setting.value) return { window: setting.value, source: CONTEXT_WINDOW_SETTING };
-  return { window: CONTEXT_WINDOW_DEFAULT, source: 'default' };
+  if (setting.value) return { window: setting.value, source: CONTEXT_WINDOW_SETTING, unreadable: setting.unreadable };
+  // The fourth step, and the reason it is fourth: `autoCompactWindow` is what an
+  // operator set on purpose, and a model id is what the client happens to be
+  // running. `ANTHROPIC_MODEL` first, then the `model` key of the same two
+  // files — the identical lookup the guard makes, in the identical order, with
+  // the identical acceptance, because the two must not describe one machine
+  // differently.
+  if (parseModelWindow(env[MODEL_ENV])) return { window: MODEL_WINDOW, source: MODEL_WINDOW_SOURCE, unreadable: setting.unreadable };
+  const model = readClientSetting(MODEL_SETTING, { global: true, cwd, env, accept: parseModelWindow });
+  // Both scans walked the same two files; the caller wants each named once.
+  const unreadable = mergeUnreadable(setting.unreadable, model.unreadable);
+  if (model.value) return { window: MODEL_WINDOW, source: MODEL_WINDOW_SOURCE, unreadable };
+  return { window: CONTEXT_WINDOW_DEFAULT, source: 'default', unreadable };
 }
 
 /**
@@ -1848,7 +1881,9 @@ function resolveContextWindow(contextWindow, { cwd = process.cwd(), env = proces
  * `hooks` line already asks for a refresh, and printing a value the script does
  * not contain is exactly what reading it back exists to prevent.
  *
- * @returns {string|null} the line's text, or null when there is nothing to say.
+ * @returns {{line: string, unreadable: string[]}|null} the line's text and every
+ *   settings file the ceiling lookup could not read, or null when there is
+ *   nothing to say at all — which is also nothing read.
  */
 function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
   let rendered = null;
@@ -1876,9 +1911,12 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
     if (st.isDirectory() && !st.isSymbolicLink()) ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).length;
   } catch { /* absent is the normal case */ }
   const found = ledgers ? `ledgers: ${ledgers}` : 'ledgers: none (hook silent — start .omelette/ledger-<plan>.md)';
-  if (!rendered.enabled) return `nudge off (handoff.enabled=false) · Stop gate off · ${found}${scope}`;
+  if (!rendered.enabled) return { line: `nudge off (handoff.enabled=false) · Stop gate off · ${found}${scope}`, unreadable: [] };
   const ceiling = resolveContextWindow(rendered.contextWindow, { cwd, env });
-  return `nudge at ${rendered.threshold}% of ${ceiling.window} (${ceiling.source}) · Stop gate on · ${found}${scope}`;
+  return {
+    line: `nudge at ${rendered.threshold}% of ${ceiling.window} (${ceiling.source}) · Stop gate on · ${found}${scope}`,
+    unreadable: ceiling.unreadable,
+  };
 }
 
 /**
@@ -2054,20 +2092,25 @@ async function cmdDoctor(argv) {
   // itself, so a threshold changed in the config and never re-rendered reads as
   // the value that is actually in force.
   const handoff = handoffReport();
-  if (handoff) out(`handoff       ${handoff}`);
+  if (handoff) out(`handoff       ${handoff.line}`);
   // The client's own two walls, against what the enabled units can take.
   // Informational, exactly like the lines above it: an operator whose client
   // gives up at 900 s on a 1800 s unit has a working machine and a wall.
   const walls = timeoutWalls({ units: unitBounds, registration: ourEntries, cwd: process.cwd(), env: process.env });
   walls.lines.forEach((line, i) => out(`${i === 0 ? 'mcp timeout   ' : '              '}${line}`));
   // Every settings file doctor could not parse, named once whichever reader
-  // tripped over it: `readClientEnv` skipped its `env` block, so the wall
-  // lines above may be reporting the client's defaults instead of what the
-  // operator wrote, and `hookWiringAt` skipped its `hooks` block. Read-only
-  // and never a fault — a file nobody can parse is a fact about the machine,
-  // and this CLI does not repair settings files, it names them.
-  for (const path of mergeUnreadable(walls.unreadable, wiring.project.unreadablePaths, wiring.global.unreadablePaths)) {
-    out(`              settings: ${path} unreadable — env values in it were not consulted`);
+  // tripped over it: `readClientEnv` skipped its `env` block, so the wall lines
+  // above may be reporting the client's defaults instead of what the operator
+  // wrote; `hookWiringAt` skipped its `hooks` block; and `readClientSetting`
+  // skipped the keys behind the `handoff` line's ceiling. Three readers, three
+  // different blocks of the same file — which is why the line says "its values"
+  // and not "env values". Read-only and never a fault: a file nobody can parse
+  // is a fact about the machine, and this CLI does not repair settings files,
+  // it names them.
+  for (const path of mergeUnreadable(
+    walls.unreadable, handoff ? handoff.unreadable : [], wiring.project.unreadablePaths, wiring.global.unreadablePaths,
+  )) {
+    out(`              settings: ${path} unreadable — its values were not consulted`);
   }
   // ONE line, and only while something is missing — see nextStep. Never a fault.
   // The first-run steps come first and the timeout wall only once they are

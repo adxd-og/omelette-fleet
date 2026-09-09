@@ -895,3 +895,115 @@ test('the two events together: nudge, gate, handoff, silence', () => {
   // The ledger was never written to by the guard: only PreCompact appends.
   assert.equal(readFileSync(p.ledger(), 'utf8').includes('## Compaction'), false);
 });
+
+test('PostToolUse: a model id ending in `[1m]` is a 1 000 000 ceiling — from the environment, from either user settings file, and never above autoCompactWindow', () => {
+  const g = guard();
+  const p = project(g, 'model-1m', { fill: 950000 }); // 95% of 1000000
+  mkdirSync(join(g.dir, '.claude'), { recursive: true });
+  const local = join(g.dir, '.claude', 'settings.local.json');
+  const shared = join(g.dir, '.claude', 'settings.json');
+
+  // 4a. ANTHROPIC_MODEL in the hook's own environment. Every step below uses a
+  // session id of its own, so each run is a fresh crossing.
+  assert.equal(
+    nudged(fire(g, post(p, { session_id: 'model-env' }), { env: { ANTHROPIC_MODEL: 'claude-fable-5-1[1m]' } })),
+    NUDGE(95, 1000000, 'model[1m]'),
+  );
+
+  // 4b. The `model` key of the USER's own settings, the local file first, as
+  // the client reads them.
+  writeFileSync(local, JSON.stringify({ model: 'claude-fable-5-1[1m]' }));
+  assert.equal(nudged(fire(g, post(p, { session_id: 'model-local' }))), NUDGE(95, 1000000, 'model[1m]'));
+
+  // …settings.json when the local file says nothing about a model, with the
+  // suffix read case-insensitively and past the whitespace a hand-edited file
+  // carries.
+  writeFileSync(local, JSON.stringify({ permissions: { allow: [] } }));
+  writeFileSync(shared, JSON.stringify({ model: '  claude-opus-5[1M]  ' }));
+  assert.equal(nudged(fire(g, post(p, { session_id: 'model-shared' }))), NUDGE(95, 1000000, 'model[1m]'));
+
+  // A local file that does not parse is skipped and the next one is read — the
+  // same fall-through `autoCompactWindow` makes, and the same one doctor makes.
+  writeFileSync(local, '{ "model": "claude-opus-5[1m]", }');
+  assert.equal(nudged(fire(g, post(p, { session_id: 'model-broken-local' }))), NUDGE(95, 1000000, 'model[1m]'));
+
+  // 3 BEATS 4: an operator who capped the window on purpose meant it, whatever
+  // model the session happens to be running.
+  writeFileSync(local, JSON.stringify({ autoCompactWindow: '500k', model: 'claude-opus-5[1m]' }));
+  writeTranscript(p.transcript, 460000); // 92% of 500000
+  assert.equal(
+    nudged(fire(g, post(p, { session_id: 'cap-beats-model' }), { env: { ANTHROPIC_MODEL: 'claude-fable-5-1[1m]' } })),
+    NUDGE(92, 500000, 'autoCompactWindow'),
+  );
+
+  // …and so does the environment variable, over both of them.
+  writeTranscript(p.transcript, 230000); // 92% of 250000
+  assert.equal(
+    nudged(fire(g, post(p, { session_id: 'env-beats-model' }), {
+      env: { ANTHROPIC_MODEL: 'claude-opus-5[1m]', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '250k' },
+    })),
+    NUDGE(92, 250000, 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'),
+  );
+
+  // …and so does the rendered `handoff.contextWindow`, which is the value the
+  // operator put in the fleet config and re-rendered.
+  const pinned = guard({ contextWindow: 400000 });
+  const q = project(pinned, 'pinned-over-model', { fill: 380000 }); // 95% of 400000
+  assert.equal(
+    nudged(fire(pinned, post(q), { env: { ANTHROPIC_MODEL: 'claude-opus-5[1m]' } })),
+    NUDGE(95, 400000, 'handoff.contextWindow'),
+  );
+
+  // A CLAUDE_CONFIG_DIR is honoured for the `model` key exactly as it is for
+  // `autoCompactWindow`: same directory rule, same two files, same order.
+  const cfg = join(g.dir, 'cfgdir');
+  mkdirSync(cfg, { recursive: true });
+  writeFileSync(join(cfg, 'settings.json'), JSON.stringify({ model: 'claude-opus-5[1m]' }));
+  writeTranscript(p.transcript, 950000);
+  assert.equal(
+    nudged(fire(g, post(p, { session_id: 'model-configdir' }), { env: { CLAUDE_CONFIG_DIR: cfg } })),
+    NUDGE(95, 1000000, 'model[1m]'),
+  );
+});
+
+test('PostToolUse: a model that does not end in `[1m]` is not a window — and the PROJECT\'s settings are not the user\'s', () => {
+  const g = guard();
+  const p = project(g, 'model-not-1m', { fill: 182000 }); // 91% of 200000
+  mkdirSync(join(g.dir, '.claude'), { recursive: true });
+  const shared = join(g.dir, '.claude', 'settings.json');
+
+  // The user scope only. A `[1m]` in the project's own settings changes nothing:
+  // this hook reads the user's pair, exactly as doctor does.
+  mkdirSync(join(p.dir, '.claude'), { recursive: true });
+  writeFileSync(join(p.dir, '.claude', 'settings.json'), JSON.stringify({ model: 'claude-opus-5[1m]' }));
+  assert.equal(nudged(fire(g, post(p, { session_id: 'project-scope' }))), NUDGE(91, 200000, 'default'));
+
+  // The suffix has to END the id.
+  let i = 0;
+  for (const model of ['claude-opus-5', 'claude-opus-5[1m] (default)', 'claude-opus-5[1m]x', 'claude-1m', 'opus[2m]', '[1m]-opus', '']) {
+    assert.equal(
+      nudged(fire(g, post(p, { session_id: `model-bad-env-${i++}` }), { env: { ANTHROPIC_MODEL: model } })),
+      NUDGE(91, 200000, 'default'),
+      JSON.stringify(model),
+    );
+  }
+
+  // A `model` key that is not a string is not an id: a number, a boolean, a
+  // null, an array and an object are each skipped rather than stringified into
+  // something that might end in the suffix.
+  for (const model of [1000000, true, null, ['claude-opus-5[1m]'], { id: 'claude-opus-5[1m]' }]) {
+    writeFileSync(shared, JSON.stringify({ model }));
+    assert.equal(
+      nudged(fire(g, post(p, { session_id: `model-bad-file-${i++}` }))),
+      NUDGE(91, 200000, 'default'),
+      JSON.stringify(model),
+    );
+  }
+
+  // A file that is not JSON at all and one whose top level is not an object are
+  // skipped in silence, and with nothing readable anywhere the ceiling is
+  // Claude Code's documented default.
+  writeFileSync(join(g.dir, '.claude', 'settings.local.json'), 'not json at all');
+  writeFileSync(shared, '[1, 2]');
+  assert.equal(nudged(fire(g, post(p, { session_id: 'model-unparseable' }))), NUDGE(91, 200000, 'default'));
+});

@@ -773,9 +773,26 @@ const inSubagent = (event) => present(event.agent_id) || present(event.agent_typ
 const CEILING_ENV = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
 const CEILING_SETTING = 'autoCompactWindow';
 const CEILING_DEFAULT = 200000;
+/**
+ * …and the other thing a 1M session says about itself. Claude Code writes the
+ * model it is running into the user's settings, suffix and all, and `[1m]` IS
+ * the 1 000 000-token window: `claude-opus-5[1m]`, `claude-fable-5-1[1m]`. It
+ * is read only once `autoCompactWindow` has said nothing — a window capped on
+ * purpose was meant — and it beats the 200 000 default, which is wrong for
+ * every 1M session and read one as 144 % full on the day 0.3.4 shipped.
+ *
+ * `core/rules.mjs` carries the same rule as `parseModelWindow`. This script
+ * imports nothing, so what is below is a COPY, and the two are pinned against
+ * one table.
+ */
+const MODEL_ENV = 'ANTHROPIC_MODEL';
+const MODEL_SETTING = 'model';
+const MODEL_WINDOW = 1000000;
+const MODEL_WINDOW_SOURCE = 'model[1m]';
+const ONE_M_SUFFIX = /\[1m\]$/i;
 /** How much of the transcript is read: the answer is always at its end. */
 const TRANSCRIPT_TAIL_MAX = 256 * 1024;
-/** One integer is taken out of a settings file, and even that read is bounded. */
+/** One integer and one model id are taken out of a settings file, and even those reads are bounded. */
 const SETTINGS_READ_MAX = 1024 * 1024;
 /** The counters that make up the PROMPT that was just sent. `output_tokens` is the answer, not the prompt. */
 const USAGE_KEYS = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
@@ -875,27 +892,77 @@ function transcriptFill(path) {
 }
 
 /**
- * The window the fill is measured against, and WHERE that number came from —
- * the nudge says so, because "91% of 200000" is only actionable next to the
- * reason it is 200000. First source that yields a positive integer wins: the
- * rendered `handoff.contextWindow`, then the variable Claude Code documents,
- * then `autoCompactWindow` in the USER's own settings (the local file first, as
- * the client reads them), then Claude Code's 200 000.
+ * ONE TOP-LEVEL KEY out of the USER's own Claude Code settings: the pair under
+ * `$CLAUDE_CONFIG_DIR` or `~/.claude`, the local file first, as the client
+ * reads them. The first file whose value `accept` takes wins; a file that is
+ * absent, unreadable, not JSON, not an object, or simply silent about this key
+ * is skipped and the NEXT one is read.
+ *
+ * That fall-through is the whole contract. `settings.local.json` holding
+ * `"autoCompactWindow": "garbage"` and `settings.json` holding `"500k"` is a
+ * 500 000 window, and doctor's `readClientSetting` walks the same two files the
+ * same way — so the line it prints and the window this hook measures against
+ * cannot disagree. The project's own settings are not read here: a `.claude`
+ * anywhere but the user's scope belongs to a project, and this window does not.
+ *
+ * @returns {any} whatever `accept` returned for the first file that had one, or
+ *   null when none did — a falsy answer from `accept` means "not this file's".
  */
-function contextCeiling(env) {
-  if (AUTO_HANDOFF.contextWindow > 0) return { window: AUTO_HANDOFF.contextWindow, source: 'handoff.contextWindow' };
-  const fromEnv = parseWindow(env[CEILING_ENV]);
-  if (fromEnv) return { window: fromEnv, source: CEILING_ENV };
+function userSetting(env, key, accept) {
   const dir = String(env.CLAUDE_CONFIG_DIR || '').trim() || join(homedir(), '.claude');
   for (const name of ['settings.local.json', 'settings.json']) {
     const text = readBounded(join(dir, name), SETTINGS_READ_MAX, { follow: true });
     if (text === null) continue;
     let parsed = null;
     try { parsed = JSON.parse(text); } catch { continue; }
-    const value = isObject(parsed) ? parseWindow(parsed[CEILING_SETTING]) : null;
-    if (value) return { window: value, source: CEILING_SETTING };
+    if (!isObject(parsed)) continue;
+    const value = accept(parsed[key]);
+    if (value) return value;
   }
-  return { window: CEILING_DEFAULT, source: 'default' };
+  return null;
+}
+
+/** The `[1m]` suffix, and only the suffix: trimmed, case-insensitive, and it has to END the id. */
+const isOneM = (raw) => typeof raw === 'string' && ONE_M_SUFFIX.test(raw.trim());
+
+/**
+ * THE 1M WINDOW A MODEL ID ANNOUNCES: `ANTHROPIC_MODEL` in this hook's own
+ * environment first, then the `model` key of the same two settings files.
+ * Nothing else about the id is read — a name this script has never heard of
+ * still says what its suffix says — and nothing about it is ever printed.
+ *
+ * NOT INFERRED: a `[1m]` passed only on the command line (`claude --model
+ * …[1m]`). A hook sees the environment and the settings files, never the
+ * client's argv, so that session wants `handoff.contextWindow` or the setting.
+ *
+ * @returns {object|null} `window` and `source`, or null when nothing said 1M.
+ */
+function modelWindow(env) {
+  const found = isOneM(env[MODEL_ENV]) || userSetting(env, MODEL_SETTING, (raw) => (isOneM(raw) ? MODEL_WINDOW : null));
+  return found ? { window: MODEL_WINDOW, source: MODEL_WINDOW_SOURCE } : null;
+}
+
+/**
+ * The window the fill is measured against, and WHERE that number came from —
+ * the nudge says so, because "91% of 200000" is only actionable next to the
+ * reason it is 200000. First source that yields a positive integer wins: the
+ * rendered `handoff.contextWindow`, then the variable Claude Code documents,
+ * then `autoCompactWindow` in the USER's own settings (the local file first, as
+ * the client reads them), then a model id ending in `[1m]`, then Claude Code's
+ * 200 000.
+ *
+ * The order is by SOURCE and not by file: `autoCompactWindow` is resolved
+ * across both files before a `model` key is looked at in either, so a window
+ * the operator capped in `settings.json` beats the suffix in
+ * `settings.local.json`.
+ */
+function contextCeiling(env) {
+  if (AUTO_HANDOFF.contextWindow > 0) return { window: AUTO_HANDOFF.contextWindow, source: 'handoff.contextWindow' };
+  const fromEnv = parseWindow(env[CEILING_ENV]);
+  if (fromEnv) return { window: fromEnv, source: CEILING_ENV };
+  const fromSettings = userSetting(env, CEILING_SETTING, parseWindow);
+  if (fromSettings) return { window: fromSettings, source: CEILING_SETTING };
+  return modelWindow(env) || { window: CEILING_DEFAULT, source: 'default' };
 }
 
 /**

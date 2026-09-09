@@ -8,9 +8,10 @@ import { dirname, join } from 'node:path';
 import {
   AGENT_FILES, AGENT_MARKER, AGENT_ROLES, CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, FLEET_CONTRACT,
   HOOK_EVENTS, HOOK_FILES, HOOK_MARKER, HOOK_TEMPLATE_DIR, KINDS,
+  MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE,
   RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH, SETTINGS_FILES, SKILL_FILES, SKILL_MARKER,
   SKILL_TEMPLATE_DIR,
-  agentSettings, agentsTarget, hookSettingsSnippet, hooksTarget, parseAgentMarker, parseContextWindow, parseHookHandoff, parseHookMarker, parseRulesMarker, parseSkillMarker,
+  agentSettings, agentsTarget, hookSettingsSnippet, hooksTarget, parseAgentMarker, parseContextWindow, parseHookHandoff, parseHookMarker, parseModelWindow, parseRulesMarker, parseSkillMarker,
   renderAgentFile, renderHookFile, renderRulesFile, renderSkillFile, rulesTarget, settingsTarget, settingsTargets,
   skillsTarget, unitInstructions,
 } from '../core/rules.mjs';
@@ -547,6 +548,34 @@ test('parseContextWindow: 200000, 500k, 1M — and nothing else is a window', ()
   assert.equal(parseContextWindow('1M'), 1000000);
   for (const raw of ['', '   ', '0', '-1', '1.5m', '200_000', '200000 tokens', 'lots', 'k', null, undefined, true, {}, [], 0, -1, 1.5]) {
     assert.equal(parseContextWindow(raw), null, JSON.stringify(raw));
+  }
+});
+
+test('parseModelWindow: a model id that ends in `[1m]` is a 1 000 000 window, and nothing else is one', () => {
+  assert.equal(MODEL_ENV, 'ANTHROPIC_MODEL');
+  assert.equal(MODEL_SETTING, 'model');
+  assert.equal(MODEL_WINDOW, 1000000);
+  assert.equal(MODEL_WINDOW_SOURCE, 'model[1m]');
+
+  // The suffix Claude Code writes into the id of a 1M-context model, in the
+  // forms a settings file or an environment variable can carry it: either case,
+  // and past the whitespace a hand-edited file leaves behind.
+  assert.equal(parseModelWindow('claude-opus-5[1m]'), 1000000);
+  assert.equal(parseModelWindow('claude-fable-5-1[1M]'), 1000000);
+  assert.equal(parseModelWindow('  claude-opus-5[1m]  '), 1000000);
+  // Nonsense to write and harmless to honour: the rule is the suffix, and a
+  // second rule about what must precede it is a rule the guard's own copy would
+  // have to match exactly.
+  assert.equal(parseModelWindow('[1m]'), 1000000);
+
+  // The suffix has to END the id. Everything below names a perfectly good model
+  // and says nothing whatever about the window — and a value that is not a
+  // string is not an id at all.
+  for (const raw of [
+    'claude-opus-5', 'claude-opus-5[1m] (default)', 'claude-opus-5[1m]x', 'claude-1m', 'opus[2m]',
+    '[1m]-opus', '1m', '', '   ', null, undefined, true, 1000000, {}, [],
+  ]) {
+    assert.equal(parseModelWindow(raw), null, JSON.stringify(raw));
   }
 });
 

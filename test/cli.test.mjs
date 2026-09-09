@@ -2179,3 +2179,155 @@ test('doctor --help names the handoff line, because it is a line an operator has
   }).stdout;
   assert.match(help, /`handoff` line/);
 });
+
+/** Every `settings: … unreadable` line doctor printed, in order, label column stripped. */
+const settingsLines = (out) => out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('settings: '));
+
+test('doctor: one unparseable user settings file is named exactly ONCE, whichever of the three readers tripped over it', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  assert.equal(rulesIn(proj, dir, ['--global', '--hooks']).status, 0);
+  mkdirSync(join(dir, '.claude'), { recursive: true });
+  // A trailing comma in the file the client reads FIRST. Three readers open it:
+  // the env lookup behind the mcp timeout lines, the hook-wiring report behind
+  // the hooks line, and the ceiling lookup behind the handoff line.
+  writeFileSync(
+    join(dir, '.claude', 'settings.local.json'),
+    '{ "env": { "MCP_TOOL_TIMEOUT": "1800000", }, "autoCompactWindow": "1m" }',
+  );
+  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: '500k' }));
+  const out = doctorIn2(proj, dir);
+
+  // 1. The wall fell back to the client's default: the value in the broken file
+  // was never read…
+  assert.match(out, /wall-clock: MCP_TOOL_TIMEOUT unset \(default ~28 h\)/, out);
+  // 2. …the wiring reader names it as the reason the GLOBAL guard is not wired…
+  assert.match(out, /global: v[\d.]+ \(NOT wired \(settings\.local\.json unreadable\)/, out);
+  // 3. …and the ceiling came from the file that DOES parse, not from the `1m`
+  // in the one that does not.
+  assert.match(out, /^handoff {7}nudge at 90% of 500000 \(autoCompactWindow\)/m, out);
+
+  // One line, not three — and the wording no longer claims only `env` values
+  // were lost, because two of those three readers were never after one.
+  assert.deepEqual(
+    settingsLines(out),
+    [`settings: ${join(dir, '.claude', 'settings.local.json')} unreadable — its values were not consulted`],
+    out,
+  );
+});
+
+test('doctor: the ceiling reader names a settings file it ALONE could not read', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  mkdirSync(join(dir, '.claude'), { recursive: true });
+  // A DIRECTORY where the client expects a file: readFileSync throws EISDIR,
+  // which `hookWiringAt` treats as absent, and with both timeout variables in
+  // the process environment `readClientEnv` returns before it opens anything at
+  // all. The ceiling lookup behind the `handoff` line is the only reader left —
+  // and the operator still gets the line, because the window it resolved may be
+  // the one that directory was meant to change.
+  mkdirSync(join(dir, '.claude', 'settings.local.json'));
+  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: '500k' }));
+  const out = doctorIn2(proj, dir, { MCP_TOOL_TIMEOUT: '2000000', CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: '0' });
+
+  assert.match(out, /^handoff {7}nudge at 90% of 500000 \(autoCompactWindow\)/m, out);
+  assert.deepEqual(
+    settingsLines(out),
+    [`settings: ${join(dir, '.claude', 'settings.local.json')} unreadable — its values were not consulted`],
+    out,
+  );
+});
+
+/**
+ * One assistant record, the shape Claude Code writes into a transcript: the
+ * three input counters are the prompt that was just sent, and `output_tokens`
+ * is deliberately outside that sum.
+ */
+const transcriptLine = (fill) => JSON.stringify({
+  type: 'assistant',
+  message: {
+    role: 'assistant',
+    model: 'claude-opus-5',
+    usage: { input_tokens: 32, cache_creation_input_tokens: 1208, cache_read_input_tokens: fill - 1240, output_tokens: 485 },
+  },
+  timestamp: '2026-09-09T12:00:00.000Z',
+});
+
+let guardRun = 0;
+/** The INSTALLED guard, fired with one PostToolUse event: `<window> (<source>)` off its nudge. */
+function guardCeiling(proj, dir, env = {}) {
+  const r = spawnSync(process.execPath, [join(proj, '.claude', 'hooks', 'omelette-guard.mjs')], {
+    input: JSON.stringify({
+      hook_event_name: 'PostToolUse',
+      session_id: `parity-${guardRun++}`, // a fresh crossing every time: the guard nudges once per session
+      transcript_path: join(proj, 'transcript.jsonl'),
+      cwd: proj,
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test' },
+      tool_response: { stdout: 'ok' },
+    }),
+    cwd: proj, encoding: 'utf8', timeout: 20000,
+    env: { PATH: process.env.PATH, HOME: dir, ...env },
+  });
+  const m = /context at \d+% of (\d+) tokens \(([^)]+)\)\./.exec(r.stdout || '');
+  return m ? `${m[1]} (${m[2]})` : `no nudge: ${JSON.stringify(r.stdout)}${r.stderr}`;
+}
+
+/** …and the same two values off doctor's `handoff` line. */
+function doctorCeiling(proj, dir, env = {}) {
+  const out = doctorIn2(proj, dir, env);
+  const m = /^handoff {7}nudge at \d+% of (\d+) \(([^)]+)\)/m.exec(out);
+  return m ? `${m[1]} (${m[2]})` : `no handoff line:\n${out}`;
+}
+
+test('doctor and the INSTALLED guard resolve the same ceiling from the same machine, source for source', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  // The guard is silent without a ledger, and measures nothing without a
+  // transcript: 990000 tokens is past 90 % of every window tested below.
+  mkdirSync(join(proj, '.omelette'), { recursive: true });
+  writeFileSync(join(proj, '.omelette', 'ledger-0.3.5.md'), '# ledger 0.3.5\n');
+  writeFileSync(join(proj, 'transcript.jsonl'), `${transcriptLine(990000)}\n`);
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  const claude = join(dir, '.claude');
+  mkdirSync(claude, { recursive: true });
+
+  const agree = (expected, env = {}) => {
+    assert.equal(guardCeiling(proj, dir, env), expected, 'the guard');
+    assert.equal(doctorCeiling(proj, dir, env), expected, 'doctor');
+  };
+
+  // 5. Nothing set anywhere: Claude Code's documented default.
+  agree('200000 (default)');
+
+  // …and the PROJECT's own settings are not the user's, on either side.
+  mkdirSync(join(proj, '.claude'), { recursive: true });
+  writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ model: 'claude-opus-5[1m]' }));
+  agree('200000 (default)');
+
+  // 4. A `[1m]` model id — the environment first…
+  agree('1000000 (model[1m])', { ANTHROPIC_MODEL: 'claude-fable-5-1[1m]' });
+
+  // …then the `model` key of the user's pair, the local file read first, with a
+  // value that is not a 1M id falling through to the next file rather than
+  // ending the scan.
+  writeFileSync(join(claude, 'settings.local.json'), JSON.stringify({ model: 'claude-opus-5' }));
+  writeFileSync(join(claude, 'settings.json'), JSON.stringify({ model: 'claude-opus-5[1M]' }));
+  agree('1000000 (model[1m])');
+
+  // 3. `autoCompactWindow` beats the suffix — by SOURCE and not by file: it is
+  // in the local file here, and it would win from the shared one too.
+  writeFileSync(join(claude, 'settings.local.json'), JSON.stringify({ autoCompactWindow: '500k', model: 'claude-opus-5[1m]' }));
+  agree('500000 (autoCompactWindow)');
+
+  // 2. The environment variable beats both files…
+  agree('250000 (CLAUDE_CODE_AUTO_COMPACT_WINDOW)', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '250k' });
+
+  // 1. …and the rendered `handoff.contextWindow` beats everything, once it has
+  // actually been rendered into the script.
+  assert.equal(cli(['set', 'handoff.contextWindow=400000'], { dir }).code, 0);
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  agree('400000 (handoff.contextWindow)', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '250k', ANTHROPIC_MODEL: 'claude-opus-5[1m]' });
+});

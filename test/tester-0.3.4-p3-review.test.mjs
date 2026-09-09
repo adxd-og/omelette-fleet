@@ -79,7 +79,7 @@ const lineStartingWith = (out, head) => timeoutBlock(out).find((l) => l.startsWi
 
 /** Every `settings: … unreadable` line doctor printed, in order, label stripped. */
 const unreadableLines = (out) => out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('settings: '));
-const said = (path) => `settings: ${path} unreadable — env values in it were not consulted`;
+const said = (path) => `settings: ${path} unreadable — its values were not consulted`;
 
 // ─── 3c: readClientEnv stops at the first hit; hookWiringAt does not ─────────
 
