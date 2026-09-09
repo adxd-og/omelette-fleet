@@ -30,7 +30,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -131,6 +131,10 @@ test('doctor --probe-sandbox: a probe directory this process can no longer read 
     // strip its own directory's read/execute bits, the same way an unusually
     // strict sandbox or a race with another process could leave doctor
     // looking at a directory it can no longer list.
+    // Say which directory this run locked, so the test can unlock THAT one —
+    // never a sweep of the shared temp dir, which would race a sibling test
+    // file's probe running in another process.
+    `fs.writeFileSync(${JSON.stringify(join(dir, 'locked.txt'))}, cwd);`,
     'try { fs.chmodSync(cwd, 0o000); } catch (e) { console.error(String(e)); }',
     "console.log('refused');",
     'process.exit(0);',
@@ -144,11 +148,11 @@ test('doctor --probe-sandbox: a probe directory this process can no longer read 
     // (bin/omelette-fleet.mjs's probeUnit, `finally` block) — put the
     // permissions back so this run does not leave 0000 debris in the OS temp
     // dir for whoever cleans it next.
-    for (const name of readdirSync(tmpdir())) {
-      if (!name.startsWith('omelette-probe-grok-')) continue;
-      const p = join(tmpdir(), name);
-      leftBehind.push(p);
-      try { chmodSync(p, 0o700); rmSync(p, { recursive: true, force: true }); } catch { /* best effort */ }
+    let locked = '';
+    try { locked = readFileSync(join(dir, 'locked.txt'), 'utf8').trim(); } catch { locked = ''; }
+    if (locked && existsSync(locked)) {
+      leftBehind.push(locked);
+      try { chmodSync(locked, 0o700); rmSync(locked, { recursive: true, force: true }); } catch { /* best effort */ }
     }
   }
   if (!/skipped \(could not inspect:/.test(r.out) && leftBehind.length === 0) {

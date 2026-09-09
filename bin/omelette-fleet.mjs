@@ -2242,6 +2242,9 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
   } finally {
     // EVERY path — verdict, timeout or throw: the directory does not outlive
     // the probe. A removal that fails is one line, never a lost diagnosis.
+    // A unit that stripped the directory's own bits (the "could not inspect"
+    // case) would otherwise leave it behind: reopen it, then remove it.
+    try { chmodSync(dir, 0o700); } catch { /* gone, or not ours to reopen */ }
     try { rmSync(dir, { recursive: true, force: true }); }
     catch (e) { log(`probe: could not remove ${dir}: ${(e && e.message) || e}`); }
   }
