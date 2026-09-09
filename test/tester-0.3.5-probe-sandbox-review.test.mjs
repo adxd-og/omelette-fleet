@@ -45,10 +45,10 @@
  * process, every run gets its own OMELETTE_HOME/HOME, the vendor CLI is a
  * fake node script, and nothing here reaches the network (OMELETTE_UPDATE_CHECK=0).
  */
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,9 +57,20 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
 
 /** A fresh fleet home per test; HOME follows it so nothing leaks into the real one. */
+const HOMES = [];
 function home() {
-  return mkdtempSync(join(tmpdir(), 'omelette-probe-review-'));
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-probe-review-'));
+  HOMES.push(dir);
+  return dir;
 }
+// Every temp home goes when the file is done — a 0000-permission leftover from
+// the "could not inspect" test is reopened first so rmSync can list it.
+after(() => {
+  for (const dir of HOMES) {
+    try { chmodSync(dir, 0o700); } catch { /* already gone or not ours */ }
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
 
 /** Run the CLI with a clean-ish env, exactly like test/cli.test.mjs's `cli()`. */
 function cli(args, { dir, env = {} } = {}) {
