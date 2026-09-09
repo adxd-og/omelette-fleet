@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import unit, { interpretAgy, parseSubquestions, stageModels, catalog } from '../units/gemini/adapter.mjs';
+import unit, { deepResearchModel, interpretAgy, parseSubquestions, stageModels, catalog } from '../units/gemini/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
+import { parseResult } from '../core/results.mjs';
 
 const ok = (over = {}) => ({ stdout: '', stderr: '', code: 0, killed: false, ...over });
 const envelope = (o) => JSON.stringify({ status: 'SUCCESS', response: 'answer', usage: { input_tokens: 10, output_tokens: 3 }, ...o });
@@ -143,6 +144,29 @@ test('stageModels picks by catalog shape so a generation sweep never strands an 
   assert.match(s.decompose, /Flash \(Medium\)$/);
   assert.match(s.synth, /Flash \(High\)$/);
   assert.deepEqual(stageModels(catalog, 'X'), { decompose: 'X', gather: 'X', synth: 'X' });
+});
+
+test('deepResearchModel: the stage ids the run asked for, collapsed when every stage shares one', () => {
+  // The composite a default run is filed under: decompose and gather share an
+  // id by construction, so it is named once, with the synthesis id beside it.
+  assert.equal(
+    deepResearchModel({ decompose: 'M', gather: 'M', synth: 'H' }),
+    'M (decompose, gather) + H (synth)',
+  );
+  // One id everywhere — an explicit `model`, or a catalog with a single
+  // balanced entry — says it once rather than twice.
+  assert.equal(deepResearchModel({ decompose: 'X', gather: 'X', synth: 'X' }), 'X');
+  // Against the REAL catalog: exactly the pair stageModels picks, in that order.
+  const s = stageModels(catalog);
+  assert.equal(deepResearchModel(s), `${s.gather} (decompose, gather) + ${s.synth} (synth)`);
+  assert.match(deepResearchModel(s), /Flash \(Medium\) \(decompose, gather\) \+ .*Flash \(High\) \(synth\)$/);
+  // Half a pair is still an id; no id at all is not a report, and core/unit.mjs
+  // ignores an empty string — the result stays filed under `(vendor default)`.
+  assert.equal(deepResearchModel({ decompose: 'M', gather: 'M', synth: undefined }), 'M');
+  assert.equal(deepResearchModel({ decompose: undefined, gather: undefined, synth: 'H' }), 'H');
+  assert.equal(deepResearchModel({ decompose: undefined, gather: undefined, synth: undefined }), '');
+  assert.equal(deepResearchModel({ decompose: '  ', gather: '  ', synth: '  ' }), '');
+  assert.equal(deepResearchModel({}), '');
 });
 
 test('unit contract: four tools, billing scrub list, both modes declared', () => {
@@ -483,4 +507,145 @@ test('gemini_deep_research: the partial line sits UNDER the degraded banner, and
   assert.doesNotMatch(clean.text, /Degraded run/);
   const cleanSnap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
   assert.equal(cleanSnap.lastEvent.partial, undefined);   // absent, never false
+});
+
+// --- the model a spooled deep-research result is filed under (P2 · spec §4) --
+
+/** The one spooled result in a throwaway fleet home, as a header. */
+function onlySpooledHeader(dir) {
+  const d = join(dir, 'results', 'gemini');
+  const names = readdirSync(d).filter((n) => n.endsWith('.md'));
+  assert.equal(names.length, 1, `expected exactly one spooled result in ${d}`);
+  return parseResult(readFileSync(join(d, names[0]), 'utf8')).header;
+}
+
+/**
+ * A fake `agy` that plays every stage of the pipeline: one sub-question out of
+ * decompose, a finding out of a gather, a report out of the synthesis. Three
+ * one-shots per deep-research call.
+ */
+function writeFakeDeepAgy(dir, name) {
+  const fake = join(dir, name);
+  writeFileSync(fake, [
+    'const argv = process.argv.slice(2);',
+    'const prompt = argv[argv.indexOf("-p") + 1] || "";',
+    'const say = (r) => process.stdout.write(JSON.stringify({ status: "SUCCESS", response: r }));',
+    'if (/Decompose the following/.test(prompt)) say(JSON.stringify({ subquestions: ["alpha"] }));',
+    'else if (/Synthesize the research findings/.test(prompt)) say("## Summary\\nthe report");',
+    'else say("a finding");',
+  ].join('\n'));
+  return fake;
+}
+
+/** The unit with every spawn routed through a fake binary, as elsewhere in this file. */
+const wrapDeep = (env, fake) => createUnitRuntime(
+  { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+  { env },
+);
+
+test('a spooled deep-research result names the stage models the run asked for — the composite, or the configured id', async () => {
+  const scripts = mkdtempSync(join(tmpdir(), 'omelette-gemini-deepmodel-'));
+  const fake = writeFakeDeepAgy(scripts, 'fake-deep-agy.mjs');
+  const s = stageModels(catalog);
+  const COMPOSITE = `${s.gather} (decompose, gather) + ${s.synth} (synth)`;
+
+  // Nothing configured: the runtime resolved no model at all, so this record
+  // used to read `(vendor default)` for a pipeline that had just picked two.
+  const bare = mkdtempSync(join(tmpdir(), 'omelette-gemini-home-'));
+  writeFileSync(join(bare, 'fleet.config.json'), JSON.stringify({ units: { gemini: { timeoutS: 30 } } }));
+  const r = await wrapDeep({ ...process.env, OMELETTE_HOME: bare, AGY_BIN: process.execPath }, fake)
+    .callTool('gemini_deep_research', { question: 'why' });
+  assert.ok(!r.isError, r.text);
+  assert.match(r.text, /## Summary/);
+  assert.equal(onlySpooledHeader(bare).model, COMPOSITE);
+  // The status feed is NOT a second place this is reported: it still records
+  // what the runtime resolved, which here is nothing at all.
+  const snap = JSON.parse(readFileSync(join(bare, 'status-gemini.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'ok');
+  assert.equal(snap.lastEvent.model, undefined);
+
+  // A configured model: stageModels gives every stage that id, the composite
+  // collapses to it, and the runtime's own value outranks the report anyway.
+  const cfg = mkdtempSync(join(tmpdir(), 'omelette-gemini-home-'));
+  writeFileSync(join(cfg, 'fleet.config.json'), JSON.stringify({ units: { gemini: { model: catalog.ids[3], timeoutS: 30 } } }));
+  const r2 = await wrapDeep({ ...process.env, OMELETTE_HOME: cfg, AGY_BIN: process.execPath }, fake)
+    .callTool('gemini_deep_research', { question: 'why' });
+  assert.ok(!r2.isError, r2.text);
+  const configured = onlySpooledHeader(cfg);
+  assert.equal(configured.model, catalog.ids[3]);
+  assert.doesNotMatch(configured.model, /\(decompose, gather\)/);
+
+  // An explicit `model` argument: same answer, through the argument.
+  const asked = mkdtempSync(join(tmpdir(), 'omelette-gemini-home-'));
+  writeFileSync(join(asked, 'fleet.config.json'), JSON.stringify({ units: { gemini: { timeoutS: 30 } } }));
+  const r3 = await wrapDeep({ ...process.env, OMELETTE_HOME: asked, AGY_BIN: process.execPath }, fake)
+    .callTool('gemini_deep_research', { question: 'why', model: catalog.ids[4] });
+  assert.ok(!r3.isError, r3.text);
+  assert.equal(onlySpooledHeader(asked).model, catalog.ids[4]);
+
+  // …and gemini_research still reports nothing: agy picks the model and never
+  // says which, so `(vendor default)` stays the honest header for that tool.
+  const plain = mkdtempSync(join(tmpdir(), 'omelette-gemini-home-'));
+  writeFileSync(join(plain, 'fleet.config.json'), JSON.stringify({ units: { gemini: { timeoutS: 30 } } }));
+  const r4 = await wrapDeep({ ...process.env, OMELETTE_HOME: plain, AGY_BIN: process.execPath }, fake)
+    .callTool('gemini_research', { prompt: 'q' });
+  assert.ok(!r4.isError, r4.text);
+  assert.equal(onlySpooledHeader(plain).model, '(vendor default)');
+});
+
+test('a deep-research run that is cancelled or capped is still filed under the stage models it asked for', async () => {
+  const s = stageModels(catalog);
+  const COMPOSITE = `${s.gather} (decompose, gather) + ${s.synth} (synth)`;
+
+  // (1) CANCELLED as the first gather is issued. The report happened before
+  // the decompose spawn, so the record names both stage models even though the
+  // synthesis never ran and the answer is the raw findings.
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-deepcancel-'));
+  const fake = join(dir, 'fake-agy.mjs');
+  writeFileSync(fake, [
+    'const argv = process.argv.slice(2);',
+    'const prompt = argv[argv.indexOf("-p") + 1] || "";',
+    'const say = (r) => process.stdout.write(JSON.stringify({ status: "SUCCESS", response: r }));',
+    'if (/Decompose the following/.test(prompt)) say(JSON.stringify(["q one", "q two"]));',
+    'else setTimeout(() => say("a finding"), 3000);',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { cancel: 'kill', timeoutS: 60 } } }));
+  const controller = new AbortController();
+  let spawns = 0;
+  const rt = createUnitRuntime(
+    {
+      ...unit,
+      tools: unit.tools.map((t) => (t.run ? {
+        ...t,
+        run: (a, ctx) => t.run(a, {
+          ...ctx,
+          spawn: (o) => {
+            if (++spawns === 2) controller.abort();   // the cancel lands on the first gather
+            return ctx.spawn({ ...o, args: [fake, ...o.args] });
+          },
+        }),
+      } : t)),
+    },
+    { env: { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath } },
+  );
+  const r = await rt.callTool('gemini_deep_research', { question: 'why' }, { id: 1, signal: controller.signal });
+  assert.match(r.text, /Cancelled — the synthesis stage did not run/);
+  const cancelled = onlySpooledHeader(dir);
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.model, COMPOSITE);
+
+  // (2) CAPPED on the very first stage: the decompose envelope is cut open, the
+  // throw is deterministic so nothing is retried, and the failed call is
+  // spooled — under the same two ids, which is the point of reporting early.
+  const cut = mkdtempSync(join(tmpdir(), 'omelette-gemini-deepcap-'));
+  const fakeCut = join(cut, 'fake-agy-cut.mjs');
+  writeFileSync(fakeCut, 'process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "z".repeat(400) }))');
+  writeFileSync(join(cut, 'fleet.config.json'), JSON.stringify({ units: { gemini: { outputCap: 160, timeoutS: 30 } } }));
+  const capped = await wrapDeep({ ...process.env, OMELETTE_HOME: cut, AGY_BIN: process.execPath }, fakeCut)
+    .callTool('gemini_deep_research', { question: 'why' });
+  assert.equal(capped.isError, true);
+  assert.match(capped.text, /exceeded the 160 char cap and the answer envelope was lost/);
+  const header = onlySpooledHeader(cut);
+  assert.equal(header.status, 'error');
+  assert.equal(header.model, COMPOSITE);
 });

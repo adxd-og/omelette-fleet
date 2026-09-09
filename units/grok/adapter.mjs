@@ -149,7 +149,7 @@
  * "raise grok.timeoutS" would send the operator after a limit that held.
  *
  * OUTPUT CAP: core/spawn.mjs keeps only the LAST `outputCap` characters of
- * stdout, and this unit's built-in raises it to 2 000 000 (config `outputCap`,
+ * stdout, and this unit's built-in raises it to 10 000 000 (config `outputCap`,
  * fleet default 400 000) because the whole stream — thinking deltas, tool
  * arguments, one JSON envelope per text delta — rides where the answer does.
  * A cap that bites drops the FRONT of the stream, and the run's authoritative
@@ -179,15 +179,22 @@ export const catalog = makeCatalog({
 });
 
 /**
- * Grok's built-in `outputCap` — five times the fleet default (400 000). The
- * streaming NDJSON carries the answer, every thinking delta, every tool call
- * and their arguments, and each text delta is wrapped in its own JSON envelope:
- * the stream is far larger than the answer, and the run's authoritative
- * `result` line comes LAST. A tail cap that bites therefore takes the front of
- * the stream, and a cap small enough to cut into the final line loses the
- * answer outright — see interpretGrok.
+ * Grok's built-in `outputCap` — twenty-five times the fleet default (400 000).
+ * The streaming NDJSON carries the answer, every thinking delta, every tool
+ * call and their arguments, and each text delta is wrapped in its own JSON
+ * envelope: the stream is far larger than the answer, and the run's
+ * authoritative `result` line comes LAST. A tail cap that bites therefore
+ * takes the front of the stream, and a cap small enough to cut into the final
+ * line loses the answer outright — see interpretGrok.
+ * 2 000 000 was not enough, and the 0.3.4 release review found out how: an
+ * 869-second `grok_code_review` whose stream carried every file Grok read hit
+ * the cap, and the answer survived only because the authoritative `result`
+ * line is the last thing printed. The cost of the higher number is memory,
+ * bounded by the cap itself — the tail buffer is never larger than it — and
+ * 10 MB while one call is in flight is affordable for a unit that runs one
+ * process at a time.
  */
-export const GROK_OUTPUT_CAP = 2000000;
+export const GROK_OUTPUT_CAP = 10000000;
 
 const BILLING_RISK_ENV = ['XAI_API_KEY'];
 const AUTH_RE = /not signed in|not authenticated/i;

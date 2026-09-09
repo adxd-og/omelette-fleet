@@ -93,6 +93,13 @@
  * not started are skipped, and the synthesis is either never started or killed
  * inside it — either way what comes back is the raw findings under a
  * cancellation note, never an error that loses what was already paid for.
+ * The stage ids are REPORTED through ctx.usedModel the moment stageModels
+ * resolves and before the first stage spawns, so the spooled result names them
+ * whether the run finished, was cancelled or died on the output cap:
+ * `<id> (decompose, gather) + <id> (synth)`, collapsed to the single id when an
+ * explicit model made every stage the same (deepResearchModel). gemini_research
+ * and gemini_image report NOTHING on purpose — agy picks their model and never
+ * says which — so those stay filed under `(vendor default)`.
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -321,6 +328,25 @@ export function stageModels(cat, explicit) {
   return { decompose: medium && medium.id, gather: medium && medium.id, synth: high && high.id };
 }
 
+/**
+ * The `model:` one deep-research call is filed under, for core/unit.mjs's
+ * `ctx.usedModel`. `stageModels` hands decompose and gather the SAME id by
+ * construction, so the composite names that one and the synthesis id —
+ * `<id> (decompose, gather) + <id> (synth)` — and collapses to the id alone
+ * when the two are the same, which is every explicit `model` and any catalog
+ * offering a single balanced entry. An id is a non-empty string and nothing
+ * else: a catalog that offers no balanced Flash produces no report, and no
+ * report leaves the result filed under `(vendor default)`, exactly as it was
+ * before this existed. Exported for tests.
+ */
+export function deepResearchModel(stage) {
+  const id = (v) => (typeof v === 'string' ? v.trim() : '');
+  const gather = id(stage && stage.gather) || id(stage && stage.decompose);
+  const synth = id(stage && stage.synth) || gather;
+  if (!gather || synth === gather) return gather || synth;
+  return `${gather} (decompose, gather) + ${synth} (synth)`;
+}
+
 /** The synthesis produced NOTHING: it was never started, or killed with an empty hand. */
 const CANCELLED_NOTE =
   '> **Cancelled — the synthesis stage did not run.** What follows is the raw ' +
@@ -358,6 +384,12 @@ const DEGRADED_BANNER =
 async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
   const cap = Math.min(5, Math.max(1, Number(maxSubquestions) || 3));
   const stage = stageModels(ctx.catalog, model);
+  // Filed BEFORE the first stage spawns, so a run that is cancelled or capped
+  // on its way through is still recorded under the models it ASKED for — the
+  // only models anyone could name afterwards. An explicit or configured id
+  // outranks this report in core/unit.mjs's finish(), and an empty one is not
+  // a report at all.
+  ctx.usedModel(deepResearchModel(stage));
   // `ctx.signal` exists only under `cancel: kill` (core/unit.mjs). A cancelled
   // request buys nothing by starting another stage: the spawn would be
   // SIGKILLed the moment it started, on quota the operator already spent.

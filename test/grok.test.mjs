@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit, {
-  buildArgs, interpretGrok, parseStream, catalog,
+  buildArgs, interpretGrok, parseStream, catalog, GROK_OUTPUT_CAP,
   READONLY_TOOLS, READONLY_TOOLS_NOWEB, IMAGE_GEN_TOOLS,
 } from '../units/grok/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
@@ -398,8 +398,12 @@ test('unit contract: five tools, efforts from the catalog, workspace-write decla
   assert.deepEqual(unit.billingRiskEnv, ['XAI_API_KEY']);
   assert.equal(unit.extraSchema.imageMaxTurns.default, 8);
   // Thinking deltas ride the same stream as the answer, so Grok's tail cap is
-  // five times the fleet default — a long review must not lose its result line.
-  assert.equal(unit.builtin.outputCap, 2000000);
+  // twenty-five times the fleet default — a long review must not lose its
+  // result line (0.3.4 release review: an 869 s grok_code_review reached the
+  // old 2 000 000). THE number lives in one place; this is the pin on it, and
+  // every other test derives its expectations from the constant.
+  assert.equal(GROK_OUTPUT_CAP, 10000000);
+  assert.equal(unit.builtin.outputCap, GROK_OUTPUT_CAP);
 });
 
 test('runtime with a fake grok: the streamed answer is assembled, usage reaches the status feed, image edit validates its source', async () => {
