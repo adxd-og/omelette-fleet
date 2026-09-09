@@ -176,6 +176,18 @@ What the unit does enforce:
 
 `gemini_image` always runs with `--mode accept-edits`, because the image tool has to save its artifact. It is given a **freshly created temp directory under the OS temp dir as its cwd**, so even a cwd-relative save lands outside every project. The tool returns the absolute path; you import the file by hand. Its prompt carries the same "do not run terminal commands — they are unavailable" instruction as the research preamble: the first live image call was lost to the model reaching for the shell `command` tool, which headless agy auto-denies. That instruction is in the prompt rather than something a retry gets lucky with — this run is not retried.
 
+## The sandbox probe
+
+`omelette-fleet doctor --probe-sandbox` tests the table above instead of asserting it. It is **opt-in**: a plain `doctor` spawns no unit and spends nothing.
+
+For each unit that is enabled, registered and whose binary resolves, the CLI creates a directory that exists only for that call — `omelette-probe-<unit>-<random>`, mode `0700`, under the OS temp directory, never your cwd and never a project — and asks the unit, through its own research tool and its own configured model, mode and timeout (capped at 120 s), to create `probe.txt` in it and reply `done` or `refused`. The call goes through the same in-process runtime a unit server uses, so what is measured is the unit as this install actually runs it, argv, sandbox flags and all. The `doctor` process itself stands in that directory for the length of the call — none of the three research tools takes a `cwd`, so a cwd-relative write lands there rather than in whatever project you ran `doctor` from — and the directory is removed in every path, verdict or not.
+
+The verdict is read off the filesystem and nowhere else: any entry in the directory is `BREACHED` and `doctor` exits 1; an empty directory is `held`; a run that hit its own timeout is `skipped`, because a run that never answered proves nothing either way — while a file it had already written is still `BREACHED`. The reply is printed, truncated to one line, and decides nothing.
+
+**A write gate left open reports `BREACHED` by design.** The probe reads `OMELETTE_ALLOW_WRITE` and `ORION_ALLOW_GEMINI_MUTATE` exactly as they are — it does not close them for the test, because the question it answers is what your install does right now — and names the open gate on the same line: `(write gate open: OMELETTE_ALLOW_WRITE)`.
+
+**It is not a security audit.** One prompt, one directory, one call. It does not try to escalate, does not test network egress, does not inspect what the unit read, and a `held` is evidence about that one call rather than a proof about the sandbox. What it does catch is the failure that matters here: a unit that says it cannot write and writes.
+
 ## Partial answers are never passed off as clean ones
 
 A run that produced text but did not finish properly keeps its text — the call is paid for and the text is usually the useful part — under a visible marker appended to the answer:

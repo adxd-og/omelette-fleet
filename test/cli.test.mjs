@@ -515,6 +515,185 @@ test('doctor exits 1 when a unit is enabled AND registered AND its binary is gon
   assert.match(r.out, /omelette-codex registered \(user\) → node .*servers.*codex\.mjs \[file exists\]/);
 });
 
+// ─── doctor --probe-sandbox (spec §2) ────────────────────────────────────────
+
+/**
+ * A fake vendor CLI that also answers a RESEARCH RUN, so `--probe-sandbox` has
+ * something to probe. It answers doctor's version and login probes like
+ * `fakeBin`, and for anything else — a real run — it appends its own cwd to a
+ * marker file first. That marker is the proof, in the no-flag test, that no
+ * unit was spawned at all, and everywhere else it names the probe directory
+ * the CLI created, so the test can check it was removed.
+ *
+ * `mode`: 'refuse' replies and writes nothing · 'write' writes probe.txt into
+ * its cwd and replies · 'sleep' never answers (killed at the unit's timeoutS)
+ * · 'write-then-sleep' writes and then hangs.
+ */
+function probeBin(dir, { name = 'probe-cli', mode = 'refuse', sleepMs = 30000 } = {}) {
+  const path = join(dir, name);
+  const marker = join(dir, `${name}.spawned`);
+  const writes = mode === 'write' || mode === 'write-then-sleep';
+  const hangs = mode === 'sleep' || mode === 'write-then-sleep';
+  writeFileSync(path, [
+    `#!${process.execPath}`,
+    "const fs = require('fs');",
+    "const p = require('path');",
+    'const a = process.argv.slice(2);',
+    "if (a[0] === '--version') { console.log('fake-cli 9.9.9'); process.exit(0); }",
+    "if (a[0] === 'models') { console.log('model-a'); console.log('model-b'); process.exit(0); }",
+    "if (a[0] === 'login' && a[1] === 'status') { process.stderr.write('Logged in using ChatGPT\\n'); process.exit(0); }",
+    `fs.appendFileSync(${JSON.stringify(marker)}, process.cwd() + '\\n');`,
+    ...(writes ? ["fs.writeFileSync(p.join(process.cwd(), 'probe.txt'), 'probe');"] : []),
+    ...(hangs
+      ? [`setTimeout(() => {}, ${sleepMs});`]
+      : [`console.log(${writes ? "'done'" : "'refused'"}); process.exit(0);`]),
+  ].join('\n'));
+  chmodSync(path, 0o755);
+  return { path, marker };
+}
+
+/** grok registered as OURS, so the probe's "enabled AND registered" gate opens for it. */
+function registerOurs(dir, units) {
+  const mcpServers = {};
+  for (const u of units) mcpServers[`omelette-${u}`] = { command: 'node', args: [join(ROOT, 'servers', `${u}.mjs`)] };
+  writeFileSync(join(dir, '.claude.json'), JSON.stringify({ mcpServers }));
+}
+
+/** Every directory a fake reported running in — one line per real run. */
+const spawnedIn = (marker) => readFileSync(marker, 'utf8').trim().split('\n').filter(Boolean);
+
+test('doctor --probe-sandbox: a unit that writes into the probe directory is BREACHED, and doctor exits 1', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeBin(dir, { mode: 'write' });
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone } });
+  const m = /sandbox\s+BREACHED — (\S+) was created \(\d+ s\)/.exec(r.out);
+  assert.ok(m, r.out + r.err);
+  // The path named is the file inside the probe directory the CLI created…
+  assert.match(m[1], /omelette-probe-grok-[^/\\]+[/\\]probe\.txt$/);
+  // …and neither it nor its directory outlives the probe.
+  assert.equal(existsSync(m[1]), false);
+  assert.equal(existsSync(dirname(m[1])), false);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /1 unit\(s\) BREACHED the sandbox probe — see the sandbox lines above\./);
+  // The other two could not be asked at all — and were not spawned.
+  assert.equal(r.out.match(/sandbox\s+skipped \(not registered\)/g).length, 2);
+});
+
+test('doctor --probe-sandbox: a unit that only replies holds, and the answer is spooled like any call', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeBin(dir, { mode: 'refuse' });
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone } });
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.match(r.out, /sandbox\s+held \(\d+ s, replied "refused"\)/);
+  assert.doesNotMatch(r.out, /BREACHED/);
+  // It really ran, in a directory of its own, and that directory is gone.
+  const ran = spawnedIn(fake.marker);
+  assert.equal(ran.length, 1);
+  assert.match(ran[0], /omelette-probe-grok-/);
+  assert.equal(existsSync(ran[0]), false);
+  // Spooled like any other call: same store, same header.
+  const spool = readdirSync(join(dir, 'results', 'grok')).filter((f) => f.endsWith('.md'));
+  assert.equal(spool.length, 1);
+  const body = readFileSync(join(dir, 'results', 'grok', spool[0]), 'utf8');
+  assert.match(body, /\ntool: grok_research\n/);
+  assert.match(body, /\ncwd: .*omelette-probe-grok-/);
+  assert.match(body, /\nrefused/);
+});
+
+test('doctor --probe-sandbox: a unit that never answers is skipped as timed out, and the directory still goes', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeBin(dir, { mode: 'sleep' });
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], {
+    dir,
+    env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone, GROK_TIMEOUT_S: '1' },
+  });
+  assert.match(r.out, /sandbox\s+skipped \(timed out after 1 s\)/);
+  // A timeout proves nothing either way, so it is not a verdict and not an exit code.
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /BREACHED|held/);
+  const ran = spawnedIn(fake.marker);
+  assert.equal(ran.length, 1);
+  assert.equal(existsSync(ran[0]), false);
+});
+
+test('doctor --probe-sandbox: a file on disk is BREACHED even when the run then hung past the cap', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeBin(dir, { mode: 'write-then-sleep' });
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], {
+    dir,
+    env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone, GROK_TIMEOUT_S: '1' },
+  });
+  // Evidence outranks the timeout: the file was written, and it does not stop
+  // being written because the run was cut off afterwards.
+  const m = /sandbox\s+BREACHED — (\S+) was created \(\d+ s\)/.exec(r.out);
+  assert.ok(m, r.out + r.err);
+  assert.equal(r.code, 1, r.out);
+  assert.equal(existsSync(dirname(m[1])), false);
+});
+
+test('doctor --probe-sandbox: disabled, unregistered and binary-less units are skipped with the reason', () => {
+  const dir = home();
+  const fake = probeBin(dir, { mode: 'write' });
+  // gemini: registered AND its binary works — but switched off in the config.
+  // grok:   binary works, never registered.
+  // codex:  registered and enabled, binary gone.
+  registerOurs(dir, ['gemini', 'codex']);
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { enabled: false } } }));
+  const r = cli(['doctor', '--probe-sandbox'], {
+    dir,
+    env: { AGY_BIN: fake.path, GROK_BIN: fake.path, CODEX_BIN: join(dir, 'no-such-codex') },
+  });
+  assert.match(r.out, /── gemini[\s\S]*?sandbox\s+skipped \(disabled\)/);
+  assert.match(r.out, /── grok[\s\S]*?sandbox\s+skipped \(not registered\)/);
+  assert.match(r.out, /── codex[\s\S]*?sandbox\s+skipped \(binary not found\)/);
+  // Not one of the three was asked anything: no run, no marker.
+  assert.equal(existsSync(fake.marker), false);
+  // Exit 1 here is the OLD fault (codex is enabled, registered and has no
+  // binary) — the probe contributes nothing to it.
+  assert.equal(r.code, 1, r.out);
+  assert.doesNotMatch(r.out, /BREACHED/);
+});
+
+test('doctor without --probe-sandbox prints no sandbox line and spawns no unit', () => {
+  const dir = home();
+  const fake = probeBin(dir, { mode: 'write' });
+  registerOurs(dir, ['gemini', 'grok', 'codex']);
+  const r = cli(['doctor'], { dir, env: { AGY_BIN: fake.path, GROK_BIN: fake.path, CODEX_BIN: fake.path } });
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.doesNotMatch(r.out, /^\s+sandbox\s/m);
+  // --version, models and login status only: the marker file was never touched.
+  assert.equal(existsSync(fake.marker), false);
+});
+
+test('doctor --probe-sandbox names the write gate an operator left open, on any verdict', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeBin(dir, { mode: 'refuse' });
+  registerOurs(dir, ['grok']);
+  const open = cli(['doctor', '--probe-sandbox'], {
+    dir,
+    env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone, OMELETTE_ALLOW_WRITE: 'grok' },
+  });
+  assert.match(open.out, /sandbox\s+held \(\d+ s, replied "refused"\) \(write gate open: OMELETTE_ALLOW_WRITE\)/);
+  // The legacy alias opens gemini alone, and is named as itself. gemini has no
+  // binary here, so this also pins that the suffix rides a `skipped` line too.
+  const legacy = cli(['doctor', '--probe-sandbox'], {
+    dir,
+    env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone, ORION_ALLOW_GEMINI_MUTATE: '1' },
+  });
+  assert.match(legacy.out, /── gemini[\s\S]*?sandbox\s+skipped \(not registered\) \(write gate open: ORION_ALLOW_GEMINI_MUTATE\)/);
+  // A closed gate says nothing at all.
+  assert.doesNotMatch(legacy.out, /── grok[\s\S]*?write gate open/);
+});
+
 test('call drives a real server over stdio and maps the answer to an exit code', () => {
   const dir = home();
   const ok = cli(['call', 'codex', 'codex_models', '{}'], { dir });
