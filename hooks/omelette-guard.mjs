@@ -1230,7 +1230,10 @@ function postToolUse(event) {
   })}\n`);
 }
 
-const blockText = (m, names) => `omelette-fleet: context at ${m.percent}% of ${m.window} tokens and no \`## Handoff\` `
+// The SOURCE is named here for the same reason the nudge names it: a percentage
+// is only actionable next to the window it is a percentage of, and the two
+// messages measure one thing and must explain it the same way.
+const blockText = (m, names) => `omelette-fleet: context at ${m.percent}% of ${m.window} tokens (${m.source}) and no \`## Handoff\` `
   + `block has been appended to ${ledgerTarget(names)} since the threshold was crossed. `
   + 'Append it now (state, open findings, agents in flight, next action), then stop.';
 

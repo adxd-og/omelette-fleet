@@ -24,8 +24,9 @@
  * "signed out" — a wrong diagnosis costs more than no diagnosis, and a
  * non-zero exit with nothing to read is exactly that. Only the combination
  * enabled-in-config AND registered AND broken (no binary, signed out, or a
- * registration pointing at a file that is gone) sets exit 1: a unit you
- * deliberately never wired up is not a fault.
+ * registration pointing at a file that is gone) sets exit 1 — that, and a
+ * BREACHED sandbox probe under `--probe-sandbox`: a unit you deliberately
+ * never wired up is not a fault.
  *
  * READ-ONLY ABOUT THE MACHINE: Claude Code's config — $CLAUDE_CONFIG_DIR/
  * .claude.json if that is set, else ~/.claude.json — is parsed, never written,
@@ -43,7 +44,7 @@
  * honoured NOWHERE else: server paths, the shipped example config and doctor
  * all still come from the real ROOT below.
  */
-import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { accessSync, chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -163,14 +164,19 @@ const COMMANDS = {
       'Then per unit: the vendor binary, its --version, the login state, the',
       'resolved fleet config with sources, the MCP registration and',
       'whether the status feed is writable. Exits 1 when a unit that is',
-      'enabled AND registered has a missing binary, is signed out, or is',
-      'registered against a server file that no longer exists.',
+      'enabled AND registered has a missing binary, is signed out, is',
+      'registered against a server file that no longer exists, or came',
+      'back BREACHED from --probe-sandbox.',
       '--probe-models spends real Codex calls to test every catalog id.',
       '--probe-sandbox spends ONE real call per unit that is enabled,',
-      'registered and has a binary: each is asked to write a file into a',
-      'throwaway 0700 directory under the OS temp dir, and the verdict is',
-      'read off the filesystem — BREACHED (exit 1), held, or skipped when',
-      'the unit could not be asked. The directory is always removed.',
+      'registered as OURS and has a binary: each is asked to write a file',
+      'into a throwaway 0700 directory under the OS temp dir, and the',
+      'verdict is read off the filesystem — BREACHED (exit 1) for any entry',
+      'in it, or for a directory that is gone; held for an answered call',
+      'that left it empty; skipped, with the reason, for everything else,',
+      "including a run still going at the probe's own deadline (the unit's",
+      'timeoutS, capped at 120 s for the whole probe). The directory is',
+      'always removed.',
     ],
   },
   show: {
@@ -650,6 +656,48 @@ function mergeUnreadable(...lists) {
   return [...seen];
 }
 
+/** What the guard reads of a settings file, and doctor reads no more. */
+const SETTINGS_READ_MAX = 1024 * 1024;
+/** Not a file's contents: the one answer that means "it is there and it is lost". */
+const UNREADABLE = 'unreadable';
+
+/**
+ * ONE bounded read for every settings file this CLI opens — the `env` block,
+ * the top-level keys and the hook wiring all come through here, so no reader
+ * can be the one that hangs.
+ *
+ * O_NONBLOCK and an fstat, exactly like the guard's own reader: a FIFO under
+ * the name of a settings file opens instantly and is then refused as not a
+ * regular file, rather than blocking doctor until somebody writes to it. The
+ * symlink is FOLLOWED on purpose — a dotfile setup legitimately keeps these
+ * files behind one, the read takes at most 1 MiB, and nothing is ever written
+ * back through it. A file bigger than that cap comes back TRUNCATED, which is
+ * what the guard sees too: half an object parses as nothing, and the caller
+ * names the file instead of acting on a fragment of it.
+ *
+ * @returns {string|null} the bytes as UTF-8, null when the file is simply not
+ *   there — the normal case — or `UNREADABLE` when it is there and this
+ *   process may not have it.
+ */
+function readSettingsFile(path) {
+  let fd = null;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK || 0));
+    const st = fstatSync(fd);
+    if (!st.isFile()) return UNREADABLE;
+    const length = Math.max(0, Math.min(SETTINGS_READ_MAX, st.size));
+    if (!length) return '';
+    const buf = Buffer.alloc(length);
+    return buf.subarray(0, readSync(fd, buf, 0, length, 0)).toString('utf8');
+  } catch (e) {
+    // ENOENT is the normal case — most machines have at most two of these four
+    // files. Anything else means the contents are there and lost.
+    return e && e.code === 'ENOENT' ? null : UNREADABLE;
+  } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
+  }
+}
+
 /**
  * One variable out of CLAUDE CODE's environment, as the client itself would
  * resolve it: the process environment first, then the `env` block of each
@@ -685,10 +733,9 @@ function readClientEnv(name, { cwd = process.cwd(), env = process.env } = {}) {
   ];
   const unreadable = [];
   for (const { path } of files) {
-    let text;
-    // ENOENT is the normal case. Anything else — a directory at that name, a
-    // file this user cannot open — means the contents are there and lost.
-    try { text = readFileSync(path, 'utf8'); } catch (e) { if (!e || e.code !== 'ENOENT') unreadable.push(path); continue; }
+    const text = readSettingsFile(path);
+    if (text === null) continue;
+    if (text === UNREADABLE) { unreadable.push(path); continue; }
     let parsed = null;
     try { parsed = JSON.parse(text); } catch { parsed = null; }
     if (!isObj(parsed)) { unreadable.push(path); continue; }
@@ -733,10 +780,9 @@ function readClientEnv(name, { cwd = process.cwd(), env = process.env } = {}) {
 function readClientSetting(name, { global = true, cwd = process.cwd(), env = process.env, accept = (v) => v } = {}) {
   const unreadable = [];
   for (const { path } of settingsTargets({ global, cwd, env }).slice().reverse()) {
-    let text;
-    // ENOENT is the normal case. Anything else — a directory at that name, a
-    // file this user cannot open — means the contents are there and lost.
-    try { text = readFileSync(path, 'utf8'); } catch (e) { if (!e || e.code !== 'ENOENT') unreadable.push(path); continue; }
+    const text = readSettingsFile(path);
+    if (text === null) continue;
+    if (text === UNREADABLE) { unreadable.push(path); continue; }
     let parsed = null;
     try { parsed = JSON.parse(text); } catch { parsed = null; }
     if (!isObj(parsed)) { unreadable.push(path); continue; }
@@ -1796,8 +1842,9 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
   const wired = new Set();
   let matcherProblem = null;
   for (const { name, path } of settingsTargets({ global, cwd, env })) {
-    let raw;
-    try { raw = readFileSync(path, 'utf8'); } catch { continue; } // absent is the normal case
+    const raw = readSettingsFile(path);
+    if (raw === null) continue; // absent is the normal case
+    if (raw === UNREADABLE) { unreadable.push(name); unreadablePaths.push(path); continue; }
     let config = null;
     try { config = JSON.parse(raw); } catch { config = null; }
     if (!isObj(config)) { unreadable.push(name); unreadablePaths.push(path); continue; }
@@ -2045,14 +2092,59 @@ const writeGateVar = (name, env = process.env) => (
 /** One probe result as the line doctor prints. */
 function sandboxLabel({ verdict, reason, seconds, reply, path }) {
   if (verdict === 'skipped') return `skipped (${reason})`;
-  if (verdict === 'BREACHED') return `BREACHED — ${path} was created (${seconds} s)`;
+  // A breach is either a file that appeared or the directory itself going
+  // away, and the reason says which — the path is the evidence either way.
+  if (verdict === 'BREACHED') return `BREACHED — ${path} ${reason || 'was created'} (${seconds} s)`;
   return `held (${seconds} s${reply ? `, replied ${JSON.stringify(reply)}` : ''})`;
+}
+
+/** The race's other runner: a value `callTool` can never return. */
+const PROBE_DEADLINE = Symbol('probe deadline');
+
+/**
+ * A run that produced no answer at all. The runtime never hands back a blank
+ * string — an adapter that returns nothing is reported as its own placeholder
+ * (core/unit.mjs) — so BOTH forms are the same event here: nothing was said.
+ */
+const emptyReply = (unit, text) => {
+  const t = String(text || '').trim();
+  return !t || t === `(empty response from ${unit.label})`;
+};
+
+/**
+ * The environment the probe hands `createUnitRuntime`, built BEFORE the probe
+ * stands in its own directory — because a relative path in it is relative to
+ * the directory the operator ran `doctor` in, and nothing else.
+ *
+ * `OMELETTE_HOME=.omelette-home` resolved late would put the fleet home, and
+ * with it the result spool, INSIDE the probe directory: the unit would then
+ * breach a sandbox it never touched, by our own writing. A relative
+ * `<UNIT>_BIN` would simply fail to spawn there. A bare name is not a path and
+ * is left alone: that one is for PATH to resolve.
+ */
+function probeRuntimeEnv(unit, env, { capS, from }) {
+  const built = { ...env };
+  // The probe's ceiling reaches the adapter the only way a per-call bound can:
+  // the unit's own timeout env var, which unitConfig resolves above the file.
+  // NOTHING else is overridden — the model, the effort and the mode stay
+  // exactly as this install has them, because the question is what this
+  // install does.
+  const timeoutEnv = unit.envMap && unit.envMap.timeoutS;
+  if (timeoutEnv) built[timeoutEnv] = String(capS);
+  const home = String(env.OMELETTE_HOME || '').trim();
+  if (home) built.OMELETTE_HOME = resolvePath(from, home);
+  const binEnv = unit.bin && unit.bin.env;
+  const bin = binEnv ? String(env[binEnv] || '').trim() : '';
+  if (bin && (bin.includes('/') || bin.includes('\\'))) built[binEnv] = resolvePath(from, bin);
+  return built;
 }
 
 /**
  * Probe ONE unit. The caller has already decided the unit is enabled,
- * registered and has a binary — this function's only `skipped` is a run that
- * hit its own wall.
+ * registered as OURS and has a binary — the `skipped` reasons left to this
+ * function are the ones only the run itself can produce: no temp directory, a
+ * call that failed or said nothing, a call still going at the deadline, and a
+ * directory it could not look into.
  *
  * @param {object} unit the adapter (UNITS[name]).
  * @param {{cfg:object, env?:object, log?:Function}} o `cfg` is doctor's own
@@ -2061,23 +2153,27 @@ function sandboxLabel({ verdict, reason, seconds, reply, path }) {
  *   seconds:number, reply:string, path:string}>}
  */
 async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
+  const capS = Math.min(cfg.values.timeoutS, PROBE_TIMEOUT_CAP_S);
+  // The directory IS the instrument: one this process cannot create is a probe
+  // that never happened, and nothing else runs for this unit.
+  let dir;
+  try {
+    dir = mkdtempSync(join(tmpdir(), `omelette-probe-${unit.name}-`));
+  } catch (e) {
+    return { verdict: 'skipped', reason: `temp dir: ${(e && e.message) || e}`, seconds: 0, reply: '', path: null };
+  }
   // mkdtemp(3) already creates the directory 0700; the chmod says so out loud
   // and covers a platform that ever decides otherwise.
-  const dir = mkdtempSync(join(tmpdir(), `omelette-probe-${unit.name}-`));
   try { chmodSync(dir, 0o700); } catch { /* it is ours either way */ }
   const started = Date.now();
-  const capS = Math.min(cfg.values.timeoutS, PROBE_TIMEOUT_CAP_S);
   try {
     let text = '';
+    let failed = false;
+    let timedOut = false;
+    let timer = null;
     const prev = process.cwd();
     try {
-      // The probe's ceiling reaches the adapter the only way a per-call bound
-      // can: the unit's own timeout env var, which unitConfig resolves above
-      // the file. NOTHING else is overridden — the model, the effort and the
-      // mode stay exactly as this install has them, because the question is
-      // what this install does.
-      const timeoutEnv = unit.envMap && unit.envMap.timeoutS;
-      const rt = createUnitRuntime(unit, { env: timeoutEnv ? { ...env, [timeoutEnv]: String(capS) } : env });
+      const rt = createUnitRuntime(unit, { env: probeRuntimeEnv(unit, env, { capS, from: prev }) });
       // NONE of the three research tools declares a `cwd`, so the directory
       // the vendor process runs in is THIS process's. Standing in the probe
       // directory for the length of the call is what keeps a cwd-relative
@@ -2085,29 +2181,63 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
       // so the spooled record names the directory and a tool that grows a
       // `cwd` later is already covered.
       process.chdir(dir);
-      const r = await rt.callTool(PROBE_TOOL[unit.name], { prompt: probePrompt(dir), cwd: dir });
-      text = (r && r.text) || '';
+      const call = rt.callTool(PROBE_TOOL[unit.name], { prompt: probePrompt(dir), cwd: dir });
+      // ONE DEADLINE FOR THE WHOLE PROBE. The unit's own timeout bounds the
+      // CHILD; it does not bound the call around it — a retry delay, a vendor
+      // whose kill margin sits above its timeout, a pipe an orphan is still
+      // holding open. This waits `capS` and then goes to look, whatever the
+      // call is doing: doctor is a diagnosis, and it never hangs on one.
+      const deadline = new Promise((settle) => { timer = setTimeout(() => settle(PROBE_DEADLINE), capS * 1000); });
+      const r = await Promise.race([call, deadline]);
+      if (r === PROBE_DEADLINE) {
+        timedOut = true;
+        // Abandoned, not orphaned: the run ends on the unit's own timeout, and
+        // its answer must not reach this process as an unhandled rejection.
+        Promise.resolve(call).catch(() => {});
+      } else {
+        text = (r && r.text) || '';
+        // A refusal, an auth failure or a crashed CLI all arrive here as an
+        // answer. None of them measured a sandbox.
+        failed = !!(r && r.isError) || emptyReply(unit, text);
+      }
     } catch (e) {
       // callTool answers refusals rather than throwing; this is the runtime
       // itself failing, and it is still just text on the line.
       text = `${(e && e.message) || e}`;
+      failed = true;
     } finally {
+      if (timer) clearTimeout(timer);
       try { process.chdir(prev); } catch { /* the directory we started in is gone */ }
     }
-    const elapsedMs = Date.now() - started;
-    const seconds = Math.round(elapsedMs / 1000);
+    const seconds = Math.round((Date.now() - started) / 1000);
     const reply = firstLine(text).slice(0, 80);
-    // THE VERDICT IS THE FILESYSTEM. Any entry counts: the prompt asks for
-    // probe.txt, and a unit that wrote something else still wrote.
-    let entries = [];
-    try { entries = readdirSync(dir); } catch { entries = []; }
+    // THE VERDICT IS THE FILESYSTEM — and the directory itself is part of it.
+    // One that is GONE, or is not a directory any more, was written to as
+    // surely as one holding a file; reading either as `held` would be the one
+    // mistake this probe exists to avoid. Any other failure to look is no
+    // measurement at all, and says so.
+    let entries;
+    try {
+      const st = lstatSync(dir);
+      if (!st.isDirectory() || st.isSymbolicLink()) {
+        return { verdict: 'BREACHED', reason: 'directory was removed or replaced', seconds, reply, path: dir };
+      }
+      // Any entry counts: the prompt asks for probe.txt, and a unit that wrote
+      // something else still wrote.
+      entries = readdirSync(dir);
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return { verdict: 'BREACHED', reason: 'directory was removed or replaced', seconds, reply, path: dir };
+      return { verdict: 'skipped', reason: `could not inspect: ${(e && e.code) || (e && e.message) || e}`, seconds, reply, path: dir };
+    }
     const written = entries.includes(PROBE_FILE) ? PROBE_FILE : (entries[0] || null);
+    // EVIDENCE OUTRANKS EVERYTHING BELOW: a file on disk does not stop being a
+    // file because the run then timed out or failed.
     if (written) return { verdict: 'BREACHED', reason: null, seconds, reply, path: join(dir, written) };
-    // A run that reached its own wall proves nothing either way — the answer
-    // it would have given never came, so `held` would be a claim nothing
-    // supports. Evidence outranks it (above): a file on disk does not stop
-    // being a file because the run was cut off afterwards.
-    if (elapsedMs >= capS * 1000) return { verdict: 'skipped', reason: `timed out after ${capS} s`, seconds, reply, path: dir };
+    // A run that never answered proves nothing either way, and neither does
+    // one that answered with its own failure: `held` is a claim about a
+    // sandbox, and it needs a call that actually ran to the end.
+    if (timedOut) return { verdict: 'skipped', reason: `timed out after ${seconds} s`, seconds, reply, path: dir };
+    if (failed) return { verdict: 'skipped', reason: `call failed: ${reply || '(no reply)'}`, seconds, reply, path: dir };
     return { verdict: 'held', reason: null, seconds, reply, path: dir };
   } finally {
     // EVERY path — verdict, timeout or throw: the directory does not outlive
@@ -2281,9 +2411,13 @@ async function cmdDoctor(argv) {
     // block above has already reported — said again here, because a `sandbox`
     // line missing from one unit's block would read as a probe that hung.
     if (flags.probeSandbox) {
+      // OURS, not merely present: a server registered under our name but
+      // pointing at another clone runs that clone, and a call spent on it
+      // would measure an install this doctor is not reporting on.
       const why = !cfg.values.enabled ? 'disabled'
         : !reg ? 'not registered'
-          : !binPath ? 'binary not found' : null;
+          : !reg.ours ? 'registered elsewhere'
+            : !binPath ? 'binary not found' : null;
       const probe = why
         ? { verdict: 'skipped', reason: why, seconds: 0, reply: '', path: null }
         : await probeUnit(unit, { cfg, env: process.env, log: (m) => out(`              ${m}`) });

@@ -493,9 +493,9 @@ const stopEvent = (p, over = {}) => ({
   stop_hook_active: false, last_assistant_message: 'done', ...over,
 });
 
-const BLOCK = (pct, window, target = '.omelette/ledger-0.3.4.md') => 'omelette-fleet: context at '
-  + `${pct}% of ${window} tokens and no \`## Handoff\` block has been appended to ${target} since the `
-  + 'threshold was crossed. Append it now (state, open findings, agents in flight, next action), then stop.';
+const BLOCK = (pct, window, source, target = '.omelette/ledger-0.3.4.md') => 'omelette-fleet: context at '
+  + `${pct}% of ${window} tokens (${source}) and no \`## Handoff\` block has been appended to ${target} since `
+  + 'the threshold was crossed. Append it now (state, open findings, agents in flight, next action), then stop.';
 
 /** The one JSON object a blocking run prints, parsed. */
 function blocked(r) {
@@ -519,11 +519,22 @@ test('Stop: the gate holds the turn ONCE per crossing, with the reason the spec 
   const g = guard();
   const p = project(g, 'gate');
   cross(g, p);
-  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000, 'default'));
   assert.equal(p.state()['s-1'].blocked, true);
   // It reminds, it does not imprison: a session that stops again stops.
   silent(fire(g, stopEvent(p)), 'the second Stop of the same crossing');
   silent(fire(g, stopEvent(p)), 'and the third');
+});
+
+test('Stop: the gate names the window\'s source, exactly as the nudge does', () => {
+  const g = guard();
+  const p = project(g, 'gate-source', { fill: 910000 });
+  const env = { ANTHROPIC_MODEL: 'claude-opus-5[1m]' };
+  // The two messages measure one thing and must explain it the same way: a
+  // gate that said "91% of 200000" while the nudge said 1 000 000 would send
+  // the operator looking for a second guard.
+  assert.equal(nudged(fire(g, post(p), { env })), NUDGE(91, 1000000, 'model[1m]'));
+  assert.equal(blocked(fire(g, stopEvent(p), { env })), BLOCK(91, 1000000, 'model[1m]'));
 });
 
 test('Stop: `stop_hook_active` is a skip — the guard never fights Claude Code\'s own continuation', () => {
@@ -533,7 +544,7 @@ test('Stop: `stop_hook_active` is a skip — the guard never fights Claude Code\
   silent(fire(g, stopEvent(p, { stop_hook_active: true })), 'Claude Code is already continuing because of a stop hook');
   assert.equal(p.state()['s-1'].blocked, false, 'and nothing is marked as gated');
   // …and with the flag back to false the gate is still available.
-  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000, 'default'));
 });
 
 test('Stop: a sub-agent\'s turn is never gated', () => {
@@ -553,7 +564,7 @@ test('Stop: a `## Handoff` appended AFTER the crossing lets the turn end; one wr
   // that describes this one.
   const stale = project(g, 'stale', { ledgers: { 'ledger-0.3.4.md': '# ledger\n\n## Handoff 2026-09-08T10:00Z\nstale\n' } });
   cross(g, stale);
-  assert.equal(blocked(fire(g, stopEvent(stale))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(stale))), BLOCK(91, 200000, 'default'));
 
   // …and the same ledger with a block appended since.
   const fresh = project(g, 'fresh-stop');
@@ -575,7 +586,7 @@ test('Stop: a Ruling: line and a ## Compaction stamp are not a handoff — the g
     '##Handoff',
     '',
   ].join('\n'));
-  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000, 'default'));
 });
 
 test('Stop: a ledger created after the crossing counts from its first byte', () => {
@@ -591,7 +602,7 @@ test('Stop: a ledger created after the crossing counts from its first byte', () 
   const q = project(g, 'new-ledger-empty');
   cross(g, q);
   writeFileSync(join(q.dir, '.omelette', 'ledger-0.3.5.md'), '# ledger 0.3.5\nRuling: nothing yet\n');
-  assert.equal(blocked(fire(g, stopEvent(q))), BLOCK(91, 200000, 'one of the ledgers in .omelette/'));
+  assert.equal(blocked(fire(g, stopEvent(q))), BLOCK(91, 200000, 'default', 'one of the ledgers in .omelette/'));
 });
 
 test('Stop: no crossing, no gate — a session that never passed the threshold stops normally', () => {
@@ -626,7 +637,7 @@ test('PreCompact clears the crossing, and the next window crosses on its own ter
   const g = guard();
   const p = project(g, 'precompact');
   cross(g, p);
-  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000, 'default'));
 
   const pre = fire(g, { hook_event_name: 'PreCompact', session_id: 's-1', trigger: 'auto', cwd: p.dir });
   assert.equal(pre.code, 0, pre.err);
@@ -643,7 +654,7 @@ test('PreCompact clears the crossing, and the next window crosses on its own ter
   // …and the same session crosses again afterwards, from the sizes the ledger
   // has NOW — the `## Compaction` stamp is not a handoff.
   assert.equal(nudged(fire(g, post(p))), NUDGE(91, 200000, 'default'));
-  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000, 'default'));
 });
 
 /** A named pipe, or null where `mkfifo` is not to be had — the one file that makes a read HANG. */
@@ -718,19 +729,19 @@ test('Stop: a handoff heading counts only on a LINE OF ITS OWN — not glued to 
   const glued = project(g, 'glued', { ledgers: { 'ledger-0.3.4.md': '# ledger\nRuling: the last line has no newline' } });
   cross(g, glued);
   appendFileSync(glued.ledger(), '## Handoff 2026-09-09T09:00Z\nnot a heading — it is the tail of the line above\n');
-  assert.equal(blocked(fire(g, stopEvent(glued))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(glued))), BLOCK(91, 200000, 'default'));
 
   // `##` and `Handoff` on two lines is two things, neither of them a handoff.
   const split = project(g, 'split-heading');
   cross(g, split);
   appendFileSync(split.ledger(), '\n##\nHandoff 2026-09-09T09:00Z\nstate: nowhere\n');
-  assert.equal(blocked(fire(g, stopEvent(split))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(split))), BLOCK(91, 200000, 'default'));
 
   // `## Handoffs` is a heading about handoffs, not a handoff block.
   const plural = project(g, 'plural-heading');
   cross(g, plural);
   appendFileSync(plural.ledger(), '\n## Handoffs, and why we write them\nnot a handoff either\n');
-  assert.equal(blocked(fire(g, stopEvent(plural))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(plural))), BLOCK(91, 200000, 'default'));
 
   // …while the same block on a line of its own, after a terminated one, counts.
   const clean = project(g, 'clean-heading');
@@ -886,7 +897,7 @@ test('the two events together: nudge, gate, handoff, silence', () => {
   writeTranscript(p.transcript, 182000);
   assert.equal(nudged(fire(g, post(p))), NUDGE(91, 200000, 'default'));
   silent(fire(g, post(p)), 'the reminder is said once');
-  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000));
+  assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000, 'default'));
 
   // The session writes the block it was asked for.
   appendFileSync(p.ledger(), '\n## Handoff 2026-09-08T19:00Z\nWhere it stands: T4 done, docs next.\n');

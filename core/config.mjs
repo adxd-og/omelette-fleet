@@ -215,8 +215,10 @@ export const AGENT_SETTINGS_SCHEMA = {
  * `threshold` is a percentage of the context window and is bounded 50–99: below
  * 50 the reminder arrives while there is nothing to hand off, and at 100 it
  * never arrives at all. `contextWindow` is the window to measure against, where
- * **0 means "resolve it at run time"** — the environment, then Claude Code's own
- * `autoCompactWindow`, then its documented 200 000 — so it is `nonneg` rather
+ * **0 means "resolve it at run time"**, through the five sources the guard and
+ * `doctor` both walk in this order: `handoff.contextWindow` →
+ * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` → `autoCompactWindow` → `model[1m]` →
+ * `default`, Claude Code's documented 200 000 — so it is `nonneg` rather
  * than `posint`: the zero is the default and not a refusal. Its ceiling is the
  * safe integer range, because that is the arithmetic the guard does with it:
  * the script's own parser refuses a window it cannot hold exactly, and a config

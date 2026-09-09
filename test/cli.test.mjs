@@ -36,9 +36,15 @@ function home() {
   return dir;
 }
 
-/** Run the CLI with a clean-ish env (PATH kept: `claude` may or may not exist — no test depends on it). */
-function cli(args, { dir, env = {} } = {}) {
+/**
+ * Run the CLI with a clean-ish env (PATH kept: `claude` may or may not exist —
+ * no test depends on it). `timeout` is for the tests whose whole point is that
+ * the CLI comes back at all: without it a blocking read would hang the suite
+ * instead of failing it.
+ */
+function cli(args, { dir, env = {}, timeout } = {}) {
   const r = spawnSync(process.execPath, [BIN, ...args], {
+    timeout,
     // cwd is the sandbox, never this checkout: `doctor` and `update` read the
     // PROJECT's .claude/rules and .claude/agents, and an operator who installed
     // ours here would otherwise change what these tests see.
@@ -692,6 +698,208 @@ test('doctor --probe-sandbox names the write gate an operator left open, on any 
   assert.match(legacy.out, /── gemini[\s\S]*?sandbox\s+skipped \(not registered\) \(write gate open: ORION_ALLOW_GEMINI_MUTATE\)/);
   // A closed gate says nothing at all.
   assert.doesNotMatch(legacy.out, /── grok[\s\S]*?write gate open/);
+});
+
+// ─── the probe's own deadline, failed calls, the directory it reads, the env
+//     it builds, mkdtemp and whose registration it probes (0.3.5 review) ──────
+
+/**
+ * A fake vendor CLI built from statements: doctor's --version / models / login
+ * probes first — answered exactly like `probeBin`'s — and then `body`, which is
+ * what the fake does on a REAL run. `cwd` is bound for it: the directory the
+ * probe started it in, which the CLI may remove under its feet.
+ */
+function probeScript(dir, name, body) {
+  const path = join(dir, name);
+  writeFileSync(path, [
+    `#!${process.execPath}`,
+    "const fs = require('fs');",
+    "const p = require('path');",
+    'const a = process.argv.slice(2);',
+    "if (a[0] === '--version') { console.log('fake-cli 9.9.9'); process.exit(0); }",
+    "if (a[0] === 'models') { console.log('model-a'); console.log('model-b'); process.exit(0); }",
+    "if (a[0] === 'login' && a[1] === 'status') { process.stderr.write('Logged in using ChatGPT\\n'); process.exit(0); }",
+    'const cwd = process.cwd();',
+    body,
+  ].join('\n'));
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** One unit's block of the fleet config — the file the probe's cap is read from. */
+const fleetConfig = (dir, units) => writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units }));
+
+test('doctor --probe-sandbox: the probe has ONE deadline of its own, and the directory is read the moment it fires', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  // agy's own hard kill sits 60 s ABOVE the timeout it hands the CLI, so this
+  // child is NOT what ends the call — only the probe's deadline is. It writes
+  // two seconds past that deadline: a write nobody waited for is a write the
+  // probe never saw, and the honest answer is `skipped`, not a verdict.
+  const fake = probeScript(dir, 'late-cli', [
+    'setTimeout(() => {',
+    "  try { fs.writeFileSync(p.join(cwd, 'probe.txt'), 'probe'); } catch { /* the directory is gone */ }",
+    "  console.log('done');",
+    '  process.exit(0);',
+    '}, 3000);',
+  ].join('\n'));
+  registerOurs(dir, ['gemini']);
+  fleetConfig(dir, { gemini: { timeoutS: 1 } });
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: fake, GROK_BIN: gone, CODEX_BIN: gone } });
+  assert.match(r.out, /── gemini[\s\S]*?sandbox\s+skipped \(timed out after 1 s\)/, r.out + r.err);
+  assert.doesNotMatch(r.out, /BREACHED/);
+  assert.equal(r.code, 0, r.out);
+});
+
+test('doctor --probe-sandbox: a file already on disk is BREACHED at the deadline, timed as the wait that happened', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  // Written at once, then the run hangs well past the cap: the deadline fires,
+  // the directory is inspected there and then, and the seconds on the line are
+  // the wait the probe actually did — not the wait the CLI would have needed.
+  const fake = probeScript(dir, 'write-then-hang', [
+    "fs.writeFileSync(p.join(cwd, 'probe.txt'), 'probe');",
+    'setTimeout(() => process.exit(0), 3000);',
+  ].join('\n'));
+  registerOurs(dir, ['gemini']);
+  fleetConfig(dir, { gemini: { timeoutS: 1 } });
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: fake, GROK_BIN: gone, CODEX_BIN: gone } });
+  assert.match(r.out, /sandbox\s+BREACHED — \S+probe\.txt was created \(1 s\)/, r.out + r.err);
+  assert.equal(r.code, 1, r.out);
+});
+
+test('doctor --probe-sandbox: a call that failed is skipped with the reason, never reported as held', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeScript(dir, 'error-cli', [
+    "process.stderr.write('grok: upstream refused the request\\n');",
+    'process.exit(1);',
+  ].join('\n'));
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  // `held` is a claim about a sandbox, and a call that never answered supports
+  // no claim at all: the run failed, and the line says which failure it was.
+  assert.match(r.out, /── grok[\s\S]*?sandbox\s+skipped \(call failed: [^\n]+\)/, r.out + r.err);
+  assert.doesNotMatch(r.out, /sandbox\s+held/);
+  assert.equal(r.code, 0, r.out);
+});
+
+test('doctor --probe-sandbox: a unit that answers nothing at all is skipped, not held', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeScript(dir, 'silent-cli', 'process.exit(0);');
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  assert.match(r.out, /── grok[\s\S]*?sandbox\s+skipped \(call failed: [^\n]+\)/, r.out + r.err);
+  assert.doesNotMatch(r.out, /sandbox\s+held/);
+  assert.equal(r.code, 0, r.out);
+});
+
+test('doctor --probe-sandbox: a failed call whose unit wrote anyway is still BREACHED', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeScript(dir, 'write-then-fail', [
+    "fs.writeFileSync(p.join(cwd, 'probe.txt'), 'probe');",
+    "process.stderr.write('grok: exploded after writing\\n');",
+    'process.exit(1);',
+  ].join('\n'));
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  // The filesystem outranks the reply in both directions: an error reply is
+  // still a breach when the file is there.
+  assert.match(r.out, /sandbox\s+BREACHED — \S+probe\.txt was created/, r.out + r.err);
+  assert.equal(r.code, 1, r.out);
+});
+
+test('doctor --probe-sandbox: a unit that removes the probe directory is BREACHED, not held', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeScript(dir, 'rmdir-cli', [
+    "process.chdir('/');",
+    'fs.rmdirSync(cwd);',
+    "console.log('done');",
+    'process.exit(0);',
+  ].join('\n'));
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  // An empty directory and a directory that is not there any more are not the
+  // same answer: the second one is a write, and reading it as `held` would be
+  // the one mistake this probe exists to avoid.
+  assert.match(r.out, /sandbox\s+BREACHED — \S+omelette-probe-grok-\S+ directory was removed or replaced \(\d+ s\)/, r.out + r.err);
+  assert.equal(r.code, 1, r.out);
+});
+
+test('doctor --probe-sandbox: a probe directory replaced by a symlink is BREACHED, and the link is not followed', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const decoy = join(dir, 'decoy');
+  mkdirSync(decoy, { recursive: true });
+  writeFileSync(join(decoy, 'innocent.txt'), 'not the probe');
+  const fake = probeScript(dir, 'symlink-cli', [
+    "process.chdir('/');",
+    'fs.rmdirSync(cwd);',
+    `fs.symlinkSync(${JSON.stringify(decoy)}, cwd);`,
+    "console.log('done');",
+    'process.exit(0);',
+  ].join('\n'));
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  assert.match(r.out, /sandbox\s+BREACHED — \S+omelette-probe-grok-\S+ directory was removed or replaced \(\d+ s\)/, r.out + r.err);
+  assert.doesNotMatch(r.out, /innocent\.txt/);
+  assert.equal(r.code, 1, r.out);
+  // The link is removed; what it pointed at is not.
+  assert.equal(existsSync(join(decoy, 'innocent.txt')), true);
+});
+
+test('doctor --probe-sandbox: a relative OMELETTE_HOME is resolved before the probe stands in its own directory', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeScript(dir, 'quiet-cli', ["console.log('refused');", 'process.exit(0);'].join('\n'));
+  registerOurs(dir, ['grok']);
+  // The home the CLI is told about is RELATIVE — a perfectly ordinary way to
+  // run it from a project — and the probe chdir's away from the directory that
+  // relative path is relative TO. Resolved late, the spool would land inside
+  // the probe directory and the unit would breach a sandbox it never touched.
+  const r = cli(['doctor', '--probe-sandbox'], {
+    dir,
+    env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, OMELETTE_HOME: 'relhome' },
+  });
+  assert.match(r.out, /── grok[\s\S]*?sandbox\s+held \(\d+ s, replied "refused"\)/, r.out + r.err);
+  assert.doesNotMatch(r.out, /BREACHED/);
+  const spool = readdirSync(join(dir, 'relhome', 'results', 'grok')).filter((f) => f.endsWith('.md'));
+  assert.equal(spool.length, 1, spool.join(','));
+});
+
+test('doctor --probe-sandbox: a temp directory that cannot be created is skipped with the reason', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeScript(dir, 'quiet-cli', ["console.log('refused');", 'process.exit(0);'].join('\n'));
+  registerOurs(dir, ['grok']);
+  const r = cli(['doctor', '--probe-sandbox'], {
+    dir,
+    env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, TMPDIR: join(dir, 'no-such-tmp') },
+  });
+  assert.match(r.out, /── grok[\s\S]*?sandbox\s+skipped \(temp dir: [^\n]+\)/, r.out + r.err);
+  assert.equal(r.code, 0, r.out);
+});
+
+test('doctor --probe-sandbox: a registration that is not ours is not probed', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  const fake = probeBin(dir, { mode: 'write' });
+  // A server of somebody else's, wearing our name: doctor already reports it
+  // as "registered elsewhere", and spending a call on a clone this checkout
+  // does not run would be measuring another install's sandbox.
+  const other = join(dir, 'other-clone', 'servers');
+  mkdirSync(other, { recursive: true });
+  writeFileSync(join(other, 'grok.mjs'), '// another clone\n');
+  writeFileSync(join(dir, '.claude.json'), JSON.stringify({
+    mcpServers: { 'omelette-grok': { command: 'node', args: [join(other, 'grok.mjs')] } },
+  }));
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone } });
+  assert.match(r.out, /── grok[\s\S]*?sandbox\s+skipped \(registered elsewhere\)/, r.out + r.err);
+  assert.equal(existsSync(fake.marker), false, 'nothing was spawned');
+  assert.equal(r.code, 0, r.out);
 });
 
 test('call drives a real server over stdio and maps the answer to an exit code', () => {
@@ -2416,6 +2624,46 @@ test('doctor: the ceiling reader names a settings file it ALONE could not read',
     settingsLines(out),
     [`settings: ${join(dir, '.claude', 'settings.local.json')} unreadable — its values were not consulted`],
     out,
+  );
+});
+
+/** doctor from a project of its own, so the user scope's settings are named once and by one path. */
+const doctorFromProject = (dir, env = {}) => {
+  const proj = join(dir, 'proj');
+  mkdirSync(proj, { recursive: true });
+  return cli(['doctor'], { dir: proj, env: { HOME: dir, OMELETTE_HOME: dir, ...env }, timeout: 20000 });
+};
+
+test('doctor: a settings file that would BLOCK the read is named unreadable, and doctor comes back at once', (t) => {
+  const dir = home();
+  mkdirSync(join(dir, '.claude'), { recursive: true });
+  const fifo = join(dir, '.claude', 'settings.local.json');
+  // A FIFO with nobody on the other end: an ordinary read of it never returns,
+  // and doctor opening one would hang for as long as the operator waits.
+  if (spawnSync('mkfifo', [fifo], { encoding: 'utf8' }).status !== 0) return t.skip('mkfifo is unavailable here');
+  const t0 = Date.now();
+  const r = doctorFromProject(dir);
+  assert.ok(Date.now() - t0 < 2000, `doctor took ${Date.now() - t0} ms`);
+  assert.deepEqual(
+    settingsLines(r.out),
+    [`settings: ${fifo} unreadable — its values were not consulted`],
+    r.out + r.err,
+  );
+});
+
+test('doctor: a settings file past the read cap is unreadable, exactly as the guard treats it', () => {
+  const dir = home();
+  mkdirSync(join(dir, '.claude'), { recursive: true });
+  const big = join(dir, '.claude', 'settings.json');
+  // Valid JSON, and 2 MiB of it. The guard reads at most 1 MiB of a settings
+  // file; what comes back is half an object, and half an object is not a value
+  // anybody may act on. Doctor has to say the same thing about the same file.
+  writeFileSync(big, `{"env":{"NOISE":"${'A'.repeat(2 * 1024 * 1024)}"},"autoCompactWindow":"500k"}`);
+  const r = doctorFromProject(dir);
+  assert.deepEqual(
+    settingsLines(r.out),
+    [`settings: ${big} unreadable — its values were not consulted`],
+    r.out + r.err,
   );
 });
 
