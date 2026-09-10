@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { artifactMiss, extractImagePath } from '../core/artifact.mjs';
+import { artifactMiss, extractImagePath, newestImage } from '../core/artifact.mjs';
 
 test('extractImagePath: last existing file wins, source path is excluded, prose yields nothing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-artifact-'));
@@ -56,6 +56,59 @@ test('extractImagePath: only an IMAGE file counts, and only one the run itself w
     writeFileSync(p, 'IMG');
     assert.equal(extractImagePath(`Saved it to ${p}`, '', since), p);
   }
+});
+
+test('newestImage: the scan is RECURSIVE — a file saved in a subdirectory of the run dir is the artifact', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-newest-nested-'));
+  // agy names the file itself and may put it under a directory of its own
+  // choosing: `generated/image.png` in the run's cwd is the shape seen live.
+  mkdirSync(join(dir, 'generated'));
+  const nested = join(dir, 'generated', 'image.png');
+  writeFileSync(nested, 'PNG');
+  assert.equal(newestImage(dir), nested);
+
+  // Newest by mtime ACROSS the tree, not per directory: a top-level file the
+  // run wrote first does not outrank the nested one it wrote after.
+  const shallow = join(dir, 'first.png');
+  writeFileSync(shallow, 'PNG');
+  utimesSync(shallow, new Date(Date.now() - 60000), new Date(Date.now() - 60000));
+  assert.equal(newestImage(dir), nested);
+
+  // …and `since` still keeps a file that predates the run out of it, wherever
+  // in the tree it sits.
+  utimesSync(nested, new Date(Date.now() - 60000), new Date(Date.now() - 60000));
+  assert.equal(newestImage(dir, Date.now()), '');
+});
+
+test('newestImage: the walk stops at 3 directory levels below the run dir', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-newest-depth-'));
+  // Deeper than the cap: a CLI that buried a file four levels down is not what
+  // this scan is for, and an unbounded walk of somebody's cwd is not either.
+  mkdirSync(join(dir, 'a', 'b', 'c', 'd'), { recursive: true });
+  const tooDeep = join(dir, 'a', 'b', 'c', 'd', 'deep.png');
+  writeFileSync(tooDeep, 'PNG');
+  assert.equal(newestImage(dir), '');
+  // At the cap it is found.
+  const atLimit = join(dir, 'a', 'b', 'c', 'edge.png');
+  writeFileSync(atLimit, 'PNG');
+  assert.equal(newestImage(dir), atLimit);
+});
+
+test('newestImage: a symlinked directory is not followed, and a symlinked file is not an artifact', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-newest-link-'));
+  const outside = mkdtempSync(join(tmpdir(), 'omelette-newest-outside-'));
+  const elsewhere = join(outside, 'outside.png');
+  writeFileSync(elsewhere, 'PNG');
+  // A link OUT of the run directory: whatever it points at was not written by
+  // this run, and the walk must not leave the tree it was given.
+  symlinkSync(outside, join(dir, 'linked'), 'dir');
+  assert.equal(newestImage(dir), '');
+  symlinkSync(elsewhere, join(dir, 'link.png'));
+  assert.equal(newestImage(dir), '');
+  // A real file beside them is still the artifact.
+  const real = join(dir, 'real.png');
+  writeFileSync(real, 'PNG');
+  assert.equal(newestImage(dir), real);
 });
 
 test('artifactMiss: the run explains the missing file, or says nothing at all', () => {

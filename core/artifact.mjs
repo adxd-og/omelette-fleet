@@ -12,7 +12,7 @@
  * Lifted out of units/grok/adapter.mjs (2026-09-03) when the codex unit grew
  * its own image tool and needed the identical scan.
  */
-import { readdirSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -23,27 +23,46 @@ import { join } from 'node:path';
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|webp|gif)$/i;
 
 /**
+ * How far below the run's own directory the scan goes. A vendor CLI names the
+ * file AND the directory — agy saves `generated/image.png` under the cwd it was
+ * given — so a scan of the top level alone misses the artifact it was written
+ * to find. Bounded because this walks a directory a model chose the contents
+ * of: three levels covers every layout seen, and no run can turn the scan into
+ * a tree walk of everything it dropped there.
+ */
+const MAX_SCAN_DEPTH = 3;
+
+/**
  * The newest image file a run left in ITS OWN directory (the throwaway cwd an
  * image tool creates before it spawns), or '' when there is none. This is what
  * a run that ended badly still leaves behind: a CLI that saved the file and was
  * then killed, capped or simply said nothing has produced the artifact the tool
  * promised, and the filesystem is the only place left to read it from. `since`
  * — the run's own start — keeps a file that predates the run out of it.
+ *
+ * The scan is recursive to `MAX_SCAN_DEPTH` and NEVER follows a symlink: every
+ * entry is `lstat`ed, so a symlinked directory is not descended into and a
+ * symlinked file is not an artifact. A link is the one entry in the tree that
+ * can name a file this run did not write — the walk stays inside the directory
+ * it was handed.
  */
 export function newestImage(dir, since = 0) {
-  let names;
-  try { names = readdirSync(dir); } catch { return ''; }
   let newest = '';
   let newestMs = -1;
-  for (const name of names) {
-    if (!IMAGE_EXT_RE.test(name)) continue;
-    const p = join(dir, name);
-    try {
-      const st = statSync(p);
-      if (!st.isFile() || st.mtimeMs < since) continue;
+  const walk = (d, depth) => {
+    let names;
+    try { names = readdirSync(d); } catch { return; }
+    for (const name of names) {
+      const p = join(d, name);
+      let st;
+      try { st = lstatSync(p); } catch { continue; /* gone between the listing and the stat */ }
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) { if (depth < MAX_SCAN_DEPTH) walk(p, depth + 1); continue; }
+      if (!st.isFile() || !IMAGE_EXT_RE.test(name) || st.mtimeMs < since) continue;
       if (st.mtimeMs > newestMs) { newestMs = st.mtimeMs; newest = p; }
-    } catch { /* gone between the listing and the stat */ }
-  }
+    }
+  };
+  walk(dir, 0);
   return newest;
 }
 

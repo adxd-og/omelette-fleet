@@ -795,6 +795,26 @@ test('gemini_image: a run that saved the file and then said NOTHING answers with
   assert.equal(snap.lastEvent.partial, true);
 });
 
+test('gemini_image: a file saved in a SUBDIRECTORY of the run cwd is still the artifact', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-img-nested-'));
+  // agy chooses the name AND the directory: live it saves `generated/image.png`
+  // under the run's cwd. Hard-killed with empty stdout, so the only place the
+  // artifact can come from is the scan of the run's own directory.
+  const rt = imageRuntime(dir, [
+    'import { mkdirSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    'mkdirSync(join(process.cwd(), "generated"), { recursive: true });',
+    'writeFileSync(join(process.cwd(), "generated", "image.png"), "PNG");',
+    'setTimeout(() => {}, 30000);',
+  ].join('\n'));
+  const r = await rt.callTool('gemini_image', { prompt: 'a cat' });
+  assert.equal(r.isError, undefined, r.text);
+  assert.match(r.text, /omelette-gemini-image-\S+[/\\]generated[/\\]image\.png$/, r.text);
+  assert.equal(existsSync(r.text), true, r.text);
+  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  assert.equal(snap.lastEvent.partial, true);
+});
+
 test('gemini_image: a capped run whose envelope was cut open answers with the file it saved', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-img-cut-'));
   // The cap keeps the TAIL, so the envelope no longer parses and interpretAgy
