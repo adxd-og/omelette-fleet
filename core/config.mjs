@@ -7,7 +7,7 @@
  *     "updateCheck": true,
  *     "contract": "auto",
  *     "agents": { "coder": { model, effort }, "tester": { model, effort, maxTurns } },
- *     "handoff": { enabled, threshold, contextWindow },
+ *     "handoff": { enabled, threshold, contextWindow, compactSummary },
  *     "defaults": { ...keys applied to every unit... },
  *     "units": { "<unit>": { enabled, mode, model, effort, timeoutS, maxTurns,
  *                            outputCap, webSearch, status, cancel, ... } } }
@@ -217,7 +217,7 @@ export const AGENT_SETTINGS_SCHEMA = {
 /**
  * THE AUTO-HANDOFF, as config: a third top-level block, beside `agents` and for
  * the same reason — it configures a managed FILE rather than a unit. Nothing
- * reads it at call time. `omelette-fleet rules --hooks` renders these three
+ * reads it at call time. `omelette-fleet rules --hooks` renders these four
  * values into the guard script as a JSON literal (core/rules.mjs,
  * `renderHookFile`), because that script imports nothing from this package, and
  * until it is re-rendered the config and the installed hook disagree — which is
@@ -234,11 +234,22 @@ export const AGENT_SETTINGS_SCHEMA = {
  * safe integer range, because that is the arithmetic the guard does with it:
  * the script's own parser refuses a window it cannot hold exactly, and a config
  * value it would refuse has no business rendering into it.
+ *
+ * `compactSummary` is the one key that is not about the threshold at all: with
+ * it true, the guard's `PostCompact` handler appends Claude Code's own summary
+ * of a compaction to every ledger in the project, as a RECORD of what the
+ * context dropped. It is independent of `enabled` on purpose — `enabled`
+ * governs the nudge and the gate, and an operator who switched the reminder off
+ * still wants to know what a compaction took with it. It is last in the schema
+ * because it arrived last, and the rendered literal is written in schema order:
+ * a guard re-rendered at 0.3.7 differs from its 0.3.6 self by one key at the
+ * end, which is what a diff of two installed scripts should show.
  */
 export const HANDOFF_SCHEMA = {
   enabled: { type: 'boolean', default: true },
   threshold: { type: 'posint', min: 50, max: 99, default: 90 },
   contextWindow: { type: 'nonneg', max: Number.MAX_SAFE_INTEGER, default: 0 },
+  compactSummary: { type: 'boolean', default: true },
 };
 
 /**

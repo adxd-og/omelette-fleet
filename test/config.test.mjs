@@ -344,8 +344,8 @@ test('coerce: a bounded posint refuses what is outside its range, and `nonneg` i
   }
 });
 
-test('HANDOFF_SCHEMA: three keys, the bounds the spec fixes, and the defaults the guard renders', () => {
-  assert.deepEqual(Object.keys(HANDOFF_SCHEMA), ['enabled', 'threshold', 'contextWindow']);
+test('HANDOFF_SCHEMA: four keys, the bounds the spec fixes, and the defaults the guard renders', () => {
+  assert.deepEqual(Object.keys(HANDOFF_SCHEMA), ['enabled', 'threshold', 'contextWindow', 'compactSummary']);
   assert.equal(HANDOFF_SCHEMA.enabled.default, true);
   assert.equal(HANDOFF_SCHEMA.threshold.default, 90);
   assert.equal(HANDOFF_SCHEMA.threshold.min, 50);
@@ -358,6 +358,15 @@ test('HANDOFF_SCHEMA: three keys, the bounds the spec fixes, and the defaults th
   assert.equal(HANDOFF_SCHEMA.contextWindow.max, Number.MAX_SAFE_INTEGER);
   assert.deepEqual(coerce(HANDOFF_SCHEMA.contextWindow, Number.MAX_SAFE_INTEGER), { ok: true, value: Number.MAX_SAFE_INTEGER });
   assert.deepEqual(coerce(HANDOFF_SCHEMA.contextWindow, 9007199254740992), { ok: false });
+  // The compaction summary is ON by default and is an ordinary boolean: the
+  // words `coerce` takes everywhere else work here too.
+  assert.equal(HANDOFF_SCHEMA.compactSummary.type, 'boolean');
+  assert.equal(HANDOFF_SCHEMA.compactSummary.default, true);
+  assert.deepEqual(coerce(HANDOFF_SCHEMA.compactSummary, 'off'), { ok: true, value: false });
+  assert.deepEqual(coerce(HANDOFF_SCHEMA.compactSummary, 'maybe'), { ok: false });
+  // It is the LAST key: the rendered literal a 0.3.6 guard carries keeps its
+  // key order, so a diff of two rendered scripts shows one addition.
+  assert.equal(Object.keys(HANDOFF_SCHEMA).pop(), 'compactSummary');
 });
 
 test('handoffSettings: file values with their sources, invalid ones warned and defaulted, never fatal', () => {
@@ -367,14 +376,19 @@ test('handoffSettings: file values with their sources, invalid ones warned and d
   assert.equal(bare.threshold, 90);
   assert.equal(bare.contextWindow, 0);
   assert.deepEqual(bare.warnings, []);
-  assert.deepEqual(bare.sources, { enabled: 'default', threshold: 'default', contextWindow: 'default' });
+  assert.equal(bare.compactSummary, true);
+  assert.deepEqual(bare.sources, {
+    enabled: 'default', threshold: 'default', contextWindow: 'default', compactSummary: 'default',
+  });
   assert.match(bare.configPath, /fleet\.config\.json$/);
 
   const set = handoffSettings({ OMELETTE_HOME: home({ version: 1, handoff: { threshold: 85, contextWindow: 500000, enabled: 'off' } }) });
   assert.equal(set.threshold, 85);
   assert.equal(set.contextWindow, 500000);
   assert.equal(set.enabled, false, 'the boolean words coerce accepts work here like everywhere else');
-  assert.deepEqual(set.sources, { enabled: 'file', threshold: 'file', contextWindow: 'file' });
+  assert.deepEqual(set.sources, {
+    enabled: 'file', threshold: 'file', contextWindow: 'file', compactSummary: 'default',
+  });
 
   // An out-of-range value, an unknown key and a block that is not an object are
   // warnings and the default — `rules --hooks` must never refuse to render.
@@ -392,4 +406,22 @@ test('handoffSettings: file values with their sources, invalid ones warned and d
   const broken = handoffSettings({ OMELETTE_HOME: home('{ not json') });
   assert.equal(broken.threshold, 90);
   assert.ok(broken.warnings.some((w) => /fleet config:/.test(w)));
+});
+
+test('handoffSettings: compactSummary is a file value like any other, and an invalid one warns and defaults', () => {
+  const off = handoffSettings({ OMELETTE_HOME: home({ version: 1, handoff: { compactSummary: false } }) });
+  assert.equal(off.compactSummary, false);
+  assert.equal(off.sources.compactSummary, 'file');
+  assert.deepEqual(off.warnings, []);
+  // The rest of the block is untouched by it: one key is one key.
+  assert.equal(off.enabled, true);
+  assert.equal(off.threshold, 90);
+
+  const word = handoffSettings({ OMELETTE_HOME: home({ handoff: { compactSummary: 'off' } }) });
+  assert.equal(word.compactSummary, false, 'the boolean words coerce accepts work here like everywhere else');
+
+  const bad = handoffSettings({ OMELETTE_HOME: home({ handoff: { compactSummary: 'sometimes' } }) });
+  assert.equal(bad.compactSummary, true, 'an invalid value is the default, never a throw');
+  assert.equal(bad.sources.compactSummary, 'default');
+  assert.ok(bad.warnings.some((w) => /handoff\.compactSummary = "sometimes" is invalid — ignored/.test(w)), bad.warnings.join(' | '));
 });
