@@ -79,6 +79,10 @@ The same split applies one level down, and it is the operating model this packag
 
 Two practical rules that follow: give each delegate one job and the context to do it (they start fresh and see none of your session), and do not delegate the decision about whether the work is correct — that is the part you kept the expensive session for.
 
+**When a delegate is justified — all four, or the session does it itself.** The subtask is independent (its own files or its own question); it resolves a **named uncertainty** ("does the migration run on 0.3.2 data?", not "look at the architecture"); a wrong answer would cost something material; the expected output fits one sentence. Short of all four, the session does the work itself rather than paying a delegate's overhead for a routine call it could make in a handful of tool calls.
+
+**The small-change exception.** The session edits directly when the change is at most **20 lines**, changes no behaviour beyond the fix, carries its test in the same commit (or touches only docs and comments), and gets a ledger line. The tester still runs on every coder result; a docs-only edit needs none.
+
 ## Ledger and handoff
 
 A long plan outlives the context it was made in. Compaction is the obvious way that happens, but it is not the only one: an interrupted evening, a session that had to be restarted, a hand-off to a colleague. Everything the orchestrator knows and never wrote down is lost at that moment — and what is lost first is exactly what is most expensive to recover, the *reasons*. The code is still in git. Why option B was rejected is not.
@@ -88,6 +92,7 @@ So: **keep a ledger file for every plan, from the first step.**
 - One line per event, appended as it happens — not reconstructed afterwards from memory that has already been compacted.
 - **Every decision as `Ruling: <what> — <why> — <cost if wrong>`.** The third field is the one that pays for itself: it is what tells a later reader whether to revisit the call or leave it alone.
 - Tasks marked complete **with their commits**, so the ledger and the branch name the same checkpoints.
+- **Close a plan with its review yield.** One line, `review yield: <findings> found / <accepted> accepted / <rejected> rejected — <the two or three that mattered>`. It is the cheap measure of what the reviews were worth; keep it honest.
 - Before a compaction — announced or merely suspected — and at every natural pause, append a **handoff block**: where the work stands, open findings, agents in flight, next action. Write it as if the reader has none of your context, because they do not.
 - After a compaction, **re-read the ledger before doing anything else.** Acting first and reading second is how a plan silently forks.
 - **Provenance apart from trust, and demote-not-delete.** Every line carries what it is — a unit's claim, a coder's report, a tester's run, the orchestrator's own check — and a claim is `candidate` until the orchestrator verified it, then `verified` or `rejected`. Two independent seats reporting the same thing is still two candidates. A ruling that turned out wrong is not edited: it stays, and a `Superseded by: <new ruling>` line follows it, so the next reader sees the decision, the reversal and its cost instead of a clean page that hides a lesson. (The vocabulary is borrowed from NexusMem's provenance/trust-state split and its hash-only tombstones — https://github.com/yaminbkk/NexusMem — which is the one idea from that project this model adopts.)
@@ -124,6 +129,12 @@ The skill (`.claude/skills/omelette-test/SKILL.md`) declares `context: fork` and
 The one exception, and it runs the other way: **the tester may fix or drop its OWN tests** when the spec never made the assumption they encode — it wrote them, they are not evidence about the code, and leaving them failing would bury the real findings. Every such change is reported, so the orchestrator sees what was withdrawn and why. Nothing the tester does reaches the implementation.
 
 **Two or three rounds, then a human.** The ruling and the findings go back to the coder — continue the same sub-agent where the harness supports resuming one, so its context survives — and if the same defect is still there after the third round the problem is no longer a coding problem. Escalate it.
+
+## Reviews
+
+**A finding has four parts, or it is a question.** Every review brief asks for, and every finding is recorded as, `location · scenario · consequence · how to confirm`. The orchestrator rules on each: `verified`, `rejected (reason)` or `needs-check (what)`, in the ledger.
+
+**First review clean, re-review continued.** The first review of a change runs with a clean context — no coder summary, no earlier findings. A re-review after a fix round is briefed with the previous findings and the rulings on them, so it verifies the fixes instead of rediscovering the file.
 
 ## Spawning sub-agents: model and effort
 
