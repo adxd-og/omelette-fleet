@@ -33,3 +33,31 @@ export function extractImagePath(text, excludePath = '') {
   }
   return '';
 }
+
+/**
+ * Why an image run has no artifact to hand back, when the run's OWN bounds
+ * explain it — and '' when they do not.
+ *
+ * An image tool answers with a bare path or an error, so a run that was cut
+ * short and saved nothing cannot say so in the text the way a research answer
+ * does: it has to say it in the error, and it has to name the key that fixes
+ * it. Callers compose it into their own wording; the clause is the shared
+ * part, so four tools cannot drift into four explanations of one event.
+ *
+ * @param {string} unit the unit name, for the config keys the clause names
+ * @param {{capped?:boolean, killed?:boolean, cancelled?:boolean}} res the run's own flags
+ * @param {{outputCap?:number, timeoutS?:number}} bounds what it ran under
+ * @returns {string} one clause, or ''
+ */
+export function artifactMiss(unit, res = {}, { outputCap, timeoutS } = {}) {
+  // The kill is answered FIRST, as it is everywhere else in the fleet — and a
+  // cancel is a kill the client asked for, where neither bound was reached, so
+  // neither is named.
+  if (res && res.cancelled) return 'the run was cancelled by the client before it saved one';
+  if (res && res.killed) return `the run was hard-killed after ${timeoutS}s — raise ${unit}.timeoutS in the fleet config`;
+  // A tail cap drops the BEGINNING of the output and the saved path usually
+  // rides at the end — but a run whose output was cut has an explanation its
+  // prose does not, and raising the cap is something an operator can do.
+  if (res && res.capped) return `the run's output exceeded the ${outputCap} char cap — raise ${unit}.outputCap or narrow the task`;
+  return '';
+}
