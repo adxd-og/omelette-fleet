@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { artifactMiss, extractImagePath, newestImage } from '../core/artifact.mjs';
+import { MTIME_SKEW_MS, artifactMiss, extractImagePath, newestImage } from '../core/artifact.mjs';
 
 test('extractImagePath: last existing file wins, source path is excluded, prose yields nothing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-artifact-'));
@@ -138,4 +138,19 @@ test('artifactMiss: the run explains the missing file, or says nothing at all', 
     artifactMiss('grok', { killed: true, capped: true }, bounds),
     'the run was hard-killed after 300s — raise grok.timeoutS in the fleet config',
   );
+});
+
+test('extractImagePath / newestImage: an mtime a coarse clock tick BEFORE the run start is still this run (Linux CI), a minute before is not', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-artifact-skew-'));
+  const since = Date.now();
+  const tick = join(dir, 'tick.png');
+  writeFileSync(tick, 'PNG');
+  utimesSync(tick, new Date(since - 2000), new Date(since - 2000)); // 2 s early: within the skew window
+  assert.equal(extractImagePath(`Saved it to ${tick}`, '', since), tick);
+  assert.equal(newestImage(dir, since), tick);
+  const stale = join(dir, 'stale.png');
+  writeFileSync(stale, 'PNG');
+  utimesSync(stale, new Date(since - MTIME_SKEW_MS - 60000), new Date(since - MTIME_SKEW_MS - 60000));
+  assert.equal(extractImagePath(`Saved it to ${stale}`, '', since), '');
+  assert.equal(newestImage(dir, since), tick);
 });

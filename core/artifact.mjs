@@ -46,6 +46,16 @@ const MAX_SCAN_DEPTH = 3;
  * can name a file this run did not write — the walk stays inside the directory
  * it was handed.
  */
+/**
+ * How far BEFORE the run's start a file's mtime may sit and still be this
+ * run's. Filesystem timestamps come from the kernel's coarse clock (Linux:
+ * a tick behind the fine clock `Date.now()` reads), so a file written in
+ * the first milliseconds after `since` was taken can carry an mtime a few
+ * ms EARLIER than `since`. Five seconds keeps that case and still rejects a
+ * leftover from an earlier run or the source image of an edit.
+ */
+export const MTIME_SKEW_MS = 5000;
+
 export function newestImage(dir, since = 0) {
   let newest = '';
   let newestMs = -1;
@@ -58,7 +68,7 @@ export function newestImage(dir, since = 0) {
       try { st = lstatSync(p); } catch { continue; /* gone between the listing and the stat */ }
       if (st.isSymbolicLink()) continue;
       if (st.isDirectory()) { if (depth < MAX_SCAN_DEPTH) walk(p, depth + 1); continue; }
-      if (!st.isFile() || !IMAGE_EXT_RE.test(name) || st.mtimeMs < since) continue;
+      if (!st.isFile() || !IMAGE_EXT_RE.test(name) || st.mtimeMs < since - MTIME_SKEW_MS) continue;
       if (st.mtimeMs > newestMs) { newestMs = st.mtimeMs; newest = p; }
     }
   };
@@ -92,7 +102,7 @@ export function extractImagePath(text, excludePath = '', since = 0) {
     if (!p || p === excludePath || !IMAGE_EXT_RE.test(p)) continue;
     try {
       const st = statSync(p);
-      if (st.isFile() && st.mtimeMs >= since) return p;
+      if (st.isFile() && st.mtimeMs >= since - MTIME_SKEW_MS) return p;
     } catch { /* not on disk */ }
   }
   return '';
