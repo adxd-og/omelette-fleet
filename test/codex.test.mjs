@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import unit, { buildArgs, extractResult, catalog } from '../units/codex/adapter.mjs';
+import unit, { buildArgs, extractResult, catalog, CODEX_OUTPUT_CAP } from '../units/codex/adapter.mjs';
 import { ALLOWLIST, CODEX_MODELS, DEFAULT_MODEL } from '../units/codex/models.js';
 import { createUnitRuntime } from '../core/unit.mjs';
 import { parseResult } from '../core/results.mjs';
@@ -108,10 +108,10 @@ test('extractResult: a front-truncated stream is a marked partial answer, or a l
     /^Error: codex output exceeded the 2000 char cap and the final message was lost — raise codex\.outputCap or narrow the task$/,
   );
   // `capped` is read off the run when the option is omitted, and `outputCap`
-  // then falls back to the fleet cap rather than printing "undefined".
+  // then falls back to THIS UNIT's built-in rather than printing "undefined".
   assert.throws(
     () => extractResult({ stdout: '', stderr: '', code: 0, killed: false, capped: true }, { timeoutS: 300 }),
-    /^Error: codex output exceeded the 400000 char cap and the final message was lost — raise codex\.outputCap or narrow the task$/,
+    new RegExp(`^Error: codex output exceeded the ${CODEX_OUTPUT_CAP} char cap and the final message was lost — raise codex\\.outputCap or narrow the task$`),
   );
   // An explicit `capped: false` wins over the run's own flag.
   assert.throws(
@@ -177,6 +177,13 @@ test('unit contract: four tools, catalog non-empty, efforts fixed, tools/list is
   assert.ok(!catalog.isAllowedEffort('minimal'));
   assert.deepEqual(unit.billingRiskEnv, ['OPENAI_API_KEY', 'CODEX_API_KEY']);
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': true });
+  // Codex's JSONL prints a line per item — every reasoning step, every
+  // sandboxed command, every file read — and the answer is the LAST
+  // agent_message, so a long agentic review outgrows the fleet default long
+  // before its answer does. THE number lives in one place; this is the pin on
+  // it, and every other test derives its expectation from the constant.
+  assert.equal(CODEX_OUTPUT_CAP, 4000000);
+  assert.equal(unit.builtin.outputCap, CODEX_OUTPUT_CAP);
 });
 
 test('runtime with a fake codex: research goes read-only even when the ceiling is open', async () => {
@@ -464,4 +471,124 @@ test('a spooled codex result names the model the CLI was told — the pinned cat
     .callTool('codex_research', { prompt: 'configured' });
   assert.equal(r3.text, `model=${catalog.ids[1]}`);
   assert.equal(onlySpooledHeader(cfg).model, catalog.ids[1]);
+});
+
+test('codex_research: an absolute `cwd` is passed as -C and is where the run happens, and the sandbox stays read-only', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-cwd-'));
+  const where = mkdtempSync(join(tmpdir(), 'omelette-codex-where-'));
+  const fake = join(dir, 'fake-codex-cwd.mjs');
+  writeFileSync(fake, [
+    'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
+    '  const a=process.argv.slice(2);',
+    '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
+    '  const seen="CWD "+process.cwd()+" C="+(a.includes("-C")?a[a.indexOf("-C")+1]:"none")+" SANDBOX="+a[a.indexOf("-s")+1];',
+    '  line({type:"item.completed",item:{type:"agent_message",text:seen}});',
+    '  line({type:"turn.completed",usage:{input_tokens:1,output_tokens:1}});',
+    '});',
+  ].join('\n'));
+  // The ceiling is OPEN and the unit asks for workspace-write: research stays
+  // read-only anyway. A directory to point at is not a reason to let a
+  // research run write into it.
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { mode: 'workspace-write', timeoutS: 30 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, OMELETTE_ALLOW_WRITE: 'codex', CODEX_BIN: process.execPath };
+  const rt = wrapCodex(env, fake);
+  assert.equal((await rt.callTool('codex_research', { prompt: 'q', cwd: where })).text, `CWD ${realpathSync(where)} C=${where} SANDBOX=read-only`);
+  assert.equal((await rt.callTool('codex_research', { prompt: 'q' })).text, `CWD ${realpathSync(process.cwd())} C=none SANDBOX=read-only`);
+  const rel = await rt.callTool('codex_research', { prompt: 'q', cwd: 'relative/path' });
+  assert.equal(rel.isError, true);
+  assert.match(rel.text, /"cwd" must be an absolute path \(got "relative\/path"\)/);
+  const missing = await rt.callTool('codex_research', { prompt: 'q', cwd: join(dir, 'no-such-dir') });
+  assert.equal(missing.isError, true);
+  assert.match(missing.text, /"cwd" is not an existing directory/);
+  const spool = join(dir, 'results', 'codex');
+  const bodies = readdirSync(spool).filter((f) => f.endsWith('.md')).map((f) => readFileSync(join(spool, f), 'utf8'));
+  assert.ok(bodies.some((b) => b.includes(`\ncwd: ${where}\n`)), bodies.join('\n---\n'));
+});
+
+/**
+ * A fake `codex` for the image contract: logs its argv, optionally writes
+ * `image.png` into the -C directory, prints `narration` characters of
+ * reasoning ahead of its answer (so a small `outputCap` bites), answers with
+ * `answer` (`<CWD>` substituted), and optionally hangs afterwards so the
+ * unit's own timeout hard-kills it. `silent` prints nothing at all — the run
+ * that saved a file and was killed before it said anything.
+ */
+function fakeImageRun({ dir, name, argvLog, writeImage, answer = '', narration = 0, hangMs = 0, silent = false }) {
+  const fake = join(dir, name);
+  writeFileSync(fake, [
+    'import { writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
+    '  const args=process.argv.slice(2);',
+    `  writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args));`,
+    '  const cwd=args[args.indexOf("-C")+1];',
+    `  if (${writeImage ? 'true' : 'false'}) writeFileSync(join(cwd, "image.png"), "PNG");`,
+    '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
+    `  if (!${silent ? 'true' : 'false'}) {`,
+    `    if (${narration}) line({type:"item.completed",item:{type:"reasoning",text:"n".repeat(${narration})}});`,
+    `    line({type:"item.completed",item:{type:"agent_message",text:${JSON.stringify(answer)}.replace("<CWD>", cwd)}});`,
+    '    line({type:"turn.completed",usage:{input_tokens:7,output_tokens:2}});',
+    '  }',
+    `  if (${hangMs}) setTimeout(() => {}, ${hangMs});`,
+    '});',
+  ].join('\n'));
+  return fake;
+}
+
+test('codex_image: a capped run whose image.png is on disk answers with the BARE path and flags partial', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img-cap-'));
+  const argvLog = join(dir, 'argv.json');
+  const fake = fakeImageRun({ dir, name: 'fake-img-cap.mjs', argvLog, writeImage: true, answer: 'Saved it to <CWD>/image.png', narration: 2000 });
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { outputCap: 300, timeoutS: 30 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath };
+  const r = await wrapCodex(env, fake).callTool('codex_image', { prompt: 'a red circle' });
+  assert.equal(r.isError, undefined, r.text);
+  const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
+  assert.equal(r.text, join(argv[argv.indexOf('-C') + 1], 'image.png'));   // bare, no cap marker
+  const snap = JSON.parse(readFileSync(join(dir, 'status-codex.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'ok');
+  assert.equal(snap.lastEvent.partial, true);
+});
+
+test('codex_image: a capped run with no file on disk is an error naming codex.outputCap', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img-nofile-'));
+  const argvLog = join(dir, 'argv.json');
+  const fake = fakeImageRun({ dir, name: 'fake-img-nofile.mjs', argvLog, writeImage: false, answer: 'I could not save it anywhere.', narration: 2000 });
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { outputCap: 300, timeoutS: 30 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath };
+  const r = await wrapCodex(env, fake).callTool('codex_image', { prompt: 'a red circle' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /codex_image finished without a saved image on disk \(temp dir \S+; the run's output exceeded the 300 char cap — raise codex\.outputCap or narrow the task\)/);
+  assert.match(r.text, /Raw output: /);
+});
+
+test('codex_image: a hard-killed run answers with the file it had already saved — with a final message and without one', async () => {
+  // (1) The run printed its answer and then hung: extractResult salvages the
+  //     message, and the artifact is read off disk exactly as always.
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img-kill-'));
+  const argvLog = join(dir, 'argv.json');
+  const fake = fakeImageRun({ dir, name: 'fake-img-kill.mjs', argvLog, writeImage: true, answer: 'Saved it to <CWD>/image.png', hangMs: 30000 });
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 1 } } }));
+  const r = await wrapCodex({ ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake)
+    .callTool('codex_image', { prompt: 'a red circle' });
+  assert.equal(r.isError, undefined, r.text);
+  const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
+  assert.equal(r.text, join(argv[argv.indexOf('-C') + 1], 'image.png'));
+  assert.equal(JSON.parse(readFileSync(join(dir, 'status-codex.json'), 'utf8')).lastEvent.partial, true);
+
+  // (2) The run saved the file and was killed before it said ANYTHING:
+  //     extractResult refuses it ("hard-killed after 1s"), and the file on
+  //     disk outranks that refusal — the artifact is what this tool promises.
+  const mute = mkdtempSync(join(tmpdir(), 'omelette-codex-img-mute-'));
+  const muteLog = join(mute, 'argv.json');
+  const silent = fakeImageRun({ dir: mute, name: 'fake-img-mute.mjs', argvLog: muteLog, writeImage: true, silent: true, hangMs: 30000 });
+  writeFileSync(join(mute, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 1 } } }));
+  const r2 = await wrapCodex({ ...process.env, OMELETTE_HOME: mute, CODEX_BIN: process.execPath }, silent)
+    .callTool('codex_image', { prompt: 'a red circle' });
+  assert.equal(r2.isError, undefined, r2.text);
+  const argv2 = JSON.parse(readFileSync(muteLog, 'utf8'));
+  assert.equal(r2.text, join(argv2[argv2.indexOf('-C') + 1], 'image.png'));
+  const snap2 = JSON.parse(readFileSync(join(mute, 'status-codex.json'), 'utf8'));
+  assert.equal(snap2.lastEvent.status, 'ok');
+  assert.equal(snap2.lastEvent.partial, true);
 });

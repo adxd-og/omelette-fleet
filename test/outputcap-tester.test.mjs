@@ -11,9 +11,10 @@
  *     caller omits it entirely, rather than always passing one explicitly,
  *   - the exact TAIL kept by runProcess's cap (not just length + a shared
  *     suffix literal),
- *   - the real codex/gemini unit objects resolving to the fleet default
- *     (400 000) through their OWN builtin/envMap/extraSchema, not a synthetic
- *     stand-in — the concrete case the spec's "an unrelated unit" line names.
+ *   - the real codex/gemini unit objects resolving their cap through their
+ *     OWN builtin/envMap/extraSchema rather than a synthetic stand-in: gemini
+ *     at the fleet default (400 000), codex at its own built-in since 0.3.6
+ *     (CODEX_OUTPUT_CAP), and both still narrowable by `defaults`.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { unitConfig } from '../core/config.mjs';
 import grokUnit, { interpretGrok, GROK_OUTPUT_CAP } from '../units/grok/adapter.mjs';
-import codexUnit from '../units/codex/adapter.mjs';
+import codexUnit, { CODEX_OUTPUT_CAP } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
 
 const node = process.execPath;
@@ -84,7 +85,7 @@ function tmpHome(config) {
   return dir;
 }
 
-test('unitConfig resolves outputCap through the REAL adapter objects: grok raised, codex/gemini at the fleet default', () => {
+test('unitConfig resolves outputCap through the REAL adapter objects: grok and codex raised, gemini at the fleet default', () => {
   const env = { OMELETTE_HOME: tmpHome() };
   const grokCfg = unitConfig({
     unit: grokUnit.name, envMap: grokUnit.envMap, builtin: grokUnit.builtin, extraSchema: grokUnit.extraSchema,
@@ -97,15 +98,17 @@ test('unitConfig resolves outputCap through the REAL adapter objects: grok raise
     unit: codexUnit.name, envMap: codexUnit.envMap, builtin: codexUnit.builtin, extraSchema: codexUnit.extraSchema,
     supportedModes: codexUnit.supportedModes, env,
   });
-  assert.equal(codexCfg.values.outputCap, 400000, 'codex declares no outputCap builtin — the unrelated unit stays at the fleet default');
+  // A unit built-in is folded into the `default` source: `show` and `doctor`
+  // report the raised number without pretending someone configured it.
+  assert.equal(codexCfg.values.outputCap, CODEX_OUTPUT_CAP, 'codex raised its own built-in in 0.3.6');
   assert.equal(codexCfg.sources.outputCap, 'default');
-  assert.equal('outputCap' in codexUnit.builtin, false, 'codex adapter never opts into the raised cap');
+  assert.equal(codexUnit.builtin.outputCap, CODEX_OUTPUT_CAP);
 
   const geminiCfg = unitConfig({
     unit: geminiUnit.name, envMap: geminiUnit.envMap, builtin: geminiUnit.builtin, extraSchema: geminiUnit.extraSchema,
     supportedModes: geminiUnit.supportedModes, env,
   });
-  assert.equal(geminiCfg.values.outputCap, 400000);
+  assert.equal(geminiCfg.values.outputCap, 400000, 'gemini declares no outputCap builtin — it stays at the fleet default');
   assert.equal('outputCap' in geminiUnit.builtin, false);
 });
 
@@ -147,13 +150,13 @@ function cli(args, { dir, env = {} } = {}) {
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
 
-test('CLI show: grok reports its raised built-in; gemini/codex report the fleet default (400 000)', () => {
+test('CLI show: grok and codex report their raised built-ins; gemini reports the fleet default (400 000)', () => {
   const dir = home();
   const grok = cli(['show', 'grok'], { dir });
   assert.equal(grok.code, 0);
   assert.match(grok.out, new RegExp(`^\\s+outputCap\\s+${GROK_OUTPUT_CAP}\\s+default$`, 'm'));
   const codex = cli(['show', 'codex'], { dir });
-  assert.match(codex.out, /^\s+outputCap\s+400000\s+default$/m);
+  assert.match(codex.out, new RegExp(`^\\s+outputCap\\s+${CODEX_OUTPUT_CAP}\\s+default$`, 'm'));
   const gemini = cli(['show', 'gemini'], { dir });
   assert.match(gemini.out, /^\s+outputCap\s+400000\s+default$/m);
 });

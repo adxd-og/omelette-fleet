@@ -28,8 +28,9 @@
  * dropping it wastes the run, returning it clean would be a lie.
  *
  * OUTPUT CAP — core/spawn.mjs keeps only the LAST `outputCap` characters of
- * stdout (config `outputCap`, fleet default 400 000; this unit does not raise
- * it — its JSONL carries one line per item, not one envelope per text delta).
+ * stdout, and this unit's built-in raises it to 4 000 000 (config `outputCap`,
+ * fleet default 400 000) — see CODEX_OUTPUT_CAP below for why a JSONL of one
+ * line per ITEM still outgrows the default on an agentic review.
  * A cap that bites drops the FRONT of the stream and the answer is the LAST
  * `agent_message`, so the two cases differ: whole lines still parse and the
  * answer is real with its narration gone (the capped marker, partial: true), or
@@ -102,6 +103,12 @@
  *   disk (`<tmpdir>/image.png`) and only then from the final message, via
  *   core/artifact.mjs's shared `extractImagePath`: a path the model asserts but
  *   never wrote is not an artifact.
+ *   THE ANSWER IS THE BARE PATH: a run that was capped, hard-killed or
+ *   cancelled with `image.png` already saved returns the path ALONE, marked
+ *   `partial: true` for the status feed and the spool — including the run that
+ *   saved it and was killed before it said anything, where extractResult
+ *   refuses the run and the FILE outranks the refusal. No file and the tool
+ *   fails, naming the bound that explains it (core/artifact.mjs).
  *
  * AUTH — `codex login status` prints "Logged in using ChatGPT" when fine; a
  * signed-out run fails with a login hint on stderr and nothing on stdout,
@@ -110,10 +117,9 @@
 import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { OUTPUT_CAP } from '../../core/spawn.mjs';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
-import { extractImagePath } from '../../core/artifact.mjs';
+import { artifactMiss, extractImagePath } from '../../core/artifact.mjs';
 import { CODEX_MODELS, EFFORTS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -123,6 +129,23 @@ export const catalog = makeCatalog({
   title: 'CODEX MODEL CATALOG',
   vendorDefaultNote: 'omit `model` for the fleet default, else the first id below — this unit ignores ~/.codex/config.toml',
 });
+
+/**
+ * Codex's built-in `outputCap` — ten times the fleet default (400 000) and a
+ * quarter of grok's 10 000 000.
+ * The JSONL is one line per ITEM rather than one envelope per text delta, so
+ * the stream is much closer to the answer's size than Grok's is — but an
+ * agentic review is not one answer: `codex exec` prints a line for every
+ * reasoning item, every read-only command it ran in the sandbox and every
+ * file it read, and the answer is the LAST `agent_message`. A tail cap that
+ * bites therefore takes the front, which costs narration; a cap small enough
+ * to cut into that final line loses the answer outright and the whole paid
+ * run with it (see extractResult). 400 000 was never a measurement of this
+ * unit — it is the number every unit starts from — and the cost of a bigger
+ * one is memory bounded by the cap itself, for a unit that runs one process
+ * at a time.
+ */
+export const CODEX_OUTPUT_CAP = 4000000;
 
 const READONLY_PREFIX =
   'You are a read-only research and code-analysis assistant running inside a ' +
@@ -204,7 +227,7 @@ function errorText(raw) {
  *   capped defaults to the run's own flag; outputCap is the tail cap the run was
  *   spawned under and is quoted in the messages, because raising it is the fix.
  */
-export function extractResult(res, { timeoutS, capped = res.capped, outputCap = OUTPUT_CAP } = {}) {
+export function extractResult(res, { timeoutS, capped = res.capped, outputCap = CODEX_OUTPUT_CAP } = {}) {
   const ev = parseJsonl(res.stdout);
   const messages = ev
     .filter((e) => e.type === 'item.completed' && e.item && e.item.type === 'agent_message' && typeof e.item.text === 'string')
@@ -293,10 +316,15 @@ function checkCwd(raw) {
 const isDeterministic = (e) => /not authenticated|turn failed|hard-killed|not found in PATH|output exceeded|cancelled by the client/i.test((e && e.message) || '');
 
 /**
- * One `codex exec` run. `webSearch` / `effort` default to the resolved config
- * and may be overridden per tool (image runs pass web=false and no effort).
+ * One `codex exec` run, with the PROCESS RESULT kept beside the interpreted
+ * answer: `codex_image` answers with a bare path, so when there is no artifact
+ * it has to explain the RUN — and `killed` / `capped` / `cancelled` live on
+ * the spawn result, never on the text. `webSearch` / `effort` default to the
+ * resolved config and may be overridden per tool (image runs pass web=false
+ * and no effort).
+ * @returns {Promise<{out:object, res:object}>}
  */
-async function runOnce(ctx, { prompt, cwd, mode, webSearch, effort }) {
+async function runOnceRaw(ctx, { prompt, cwd, mode, webSearch, effort }) {
   // --ignore-user-config removed the operator's configured default, so an
   // unpinned run would take whatever the CLI hard-codes. Pin the catalog head.
   const model = ctx.model || catalog.ids[0];
@@ -313,8 +341,11 @@ async function runOnce(ctx, { prompt, cwd, mode, webSearch, effort }) {
   const res = await ctx.spawn({ args, cwd: cwd || undefined, stdinText: prompt });
   const out = extractResult(res, { timeoutS: ctx.cfg.timeoutS, outputCap: ctx.cfg.outputCap });
   if (out.usage) ctx.log(`codex done · tokens in=${out.usage.input} (cached ${out.usage.cachedInput}) out=${out.usage.output} reasoning=${out.usage.reasoning} · web_search=${out.searches}`);
-  return out;
+  return { out, res };
 }
+
+/** The answer alone — what research and review runs need. */
+const runOnce = async (ctx, o) => (await runOnceRaw(ctx, o)).out;
 
 const MODEL_PROP = {
   type: 'string',
@@ -344,7 +375,7 @@ export default defineUnit({
   // CLI's other knobs; CODEX_API_KEY matches the pattern and the scrub deletes it after.
   envPassthrough: ['CODEX_*'],
   envMap: { model: 'CODEX_DEFAULT_MODEL', effort: 'CODEX_EFFORT', timeoutS: 'CODEX_TIMEOUT_S', webSearch: 'CODEX_WEB_SEARCH' },
-  builtin: { timeoutS: 600, effort: 'high', webSearch: true },
+  builtin: { timeoutS: 600, effort: 'high', webSearch: true, outputCap: CODEX_OUTPUT_CAP },
   supportedModes: { 'read-only': true, 'workspace-write': true },
   auth: { detect: (stderr) => AUTH_RE.test(stderr), help: AUTH_HELP },
   catalog,
@@ -357,12 +388,21 @@ export default defineUnit({
         'Delegate a research / Q&A / summarization task to OpenAI Codex (local ' +
         'codex CLI, ChatGPT subscription) WITH live web search. READ-ONLY at the ' +
         'OS-sandbox level — Codex can read and search but physically cannot write, ' +
-        'regardless of fleet config. Returns the final answer as plain text and ' +
+        'regardless of fleet config or of `cwd`. The run happens where `cwd` ' +
+        'points when you give one, else in the MCP server\'s own process cwd. ' +
+        'Returns the final answer as plain text and ' +
         'reports real token usage to the fleet status feed. ' + GUIDE,
       inputSchema: {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'The research question or task for Codex.' },
+          cwd: {
+            type: 'string',
+            description:
+              'Optional ABSOLUTE path to the directory the run happens in (must exist; ' +
+              'passed as -C and used as the spawn cwd). The sandbox stays read-only ' +
+              'either way. Defaults to the MCP server\'s process cwd.',
+          },
           effort: EFFORT_PROP,
           model: MODEL_PROP,
         },
@@ -371,8 +411,12 @@ export default defineUnit({
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
-        // Research is read-only no matter what the config says (no directory to scope a write to).
-        return ctx.retry(() => runOnce(ctx, { prompt: READONLY_PREFIX + prompt, mode: 'read-only' }), { skipIf: isDeterministic });
+        const c = checkCwd(args.cwd);
+        if (c.error) return { text: c.error, isError: true };
+        // Research is read-only no matter what the config says, and a directory to
+        // point at is not a reason to widen it: `-C` says WHERE the run happens,
+        // `-s read-only` says what it may do there.
+        return ctx.retry(() => runOnce(ctx, { prompt: READONLY_PREFIX + prompt, cwd: c.cwd, mode: 'read-only' }), { skipIf: isDeterministic });
       },
     },
     {
@@ -424,8 +468,11 @@ export default defineUnit({
         'PATH of the saved PNG as plain text. The file lands under the OS temp ' +
         'directory, OUTSIDE every project — copy it where you need it, and do ' +
         'not treat it as durable storage (temp dirs may be cleaned by the OS). ' +
-        'One image per call. Each call spends image quota and is NOT retried. ' +
-        'To edit/restyle an EXISTING image use grok_image_edit instead.',
+        'The answer is the bare path and nothing else: a run that was capped, ' +
+        'killed or cancelled with the file already saved returns that path and is ' +
+        'flagged partial in the status feed, and a run with no file on disk is an ' +
+        'error. One image per call. Each call spends image quota and is NOT ' +
+        'retried. To edit/restyle an EXISTING image use grok_image_edit instead.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -442,29 +489,47 @@ export default defineUnit({
         // deliberately not routed through the fleet write ceiling.
         const cwd = mkdtempSync(join(tmpdir(), 'omelette-codex-image-'));
         ctx.log(`codex_image · temp cwd=${cwd}`);
-        // No retry: a re-issued generation bills image quota twice.
-        const out = await runOnce(ctx, {
-          prompt: IMAGE_PREFIX + prompt,
-          cwd,
-          mode: 'workspace-write',
-          webSearch: false,
-          effort: '',
-        });
-        // Disk first: the fixed name the prompt asked for is the only claim
-        // that needs no parsing. Then the model's own answer, still stat-ed.
+        // Disk first, by the fixed name the prompt asked for: the only claim
+        // that needs no parsing, and the only one that survives a run ending
+        // badly after it had already saved the file.
         const wanted = join(cwd, 'image.png');
-        let artifact = '';
-        try { if (statSync(wanted).isFile()) artifact = wanted; } catch { /* the model saved elsewhere */ }
-        if (!artifact) artifact = extractImagePath(out.text);
+        const onDisk = () => { try { return statSync(wanted).isFile() ? wanted : ''; } catch { return ''; } };
+        let out;
+        let res;
+        try {
+          // No retry: a re-issued generation bills image quota twice.
+          ({ out, res } = await runOnceRaw(ctx, {
+            prompt: IMAGE_PREFIX + prompt,
+            cwd,
+            mode: 'workspace-write',
+            webSearch: false,
+            effort: '',
+          }));
+        } catch (e) {
+          // extractResult refused the run — a kill with nothing salvaged, a
+          // final message the cap ate, a failed turn. THE FILE OUTRANKS THE
+          // REFUSAL: an artifact already on disk is what this tool promises,
+          // and it does not stop being one because the run that made it ended
+          // badly. Partial, because the run did not finish.
+          const saved = onDisk();
+          if (!saved) throw e;
+          ctx.log(`codex_image · artifact=${saved} (the run itself failed: ${(e && e.message) || e})`);
+          return { text: saved, partial: true };
+        }
+        // Then the model's own answer, still stat-ed.
+        const artifact = onDisk() || extractImagePath(out.text);
         if (!artifact) {
+          const miss = artifactMiss('codex', res, { outputCap: ctx.cfg.outputCap, timeoutS: ctx.cfg.timeoutS });
           return {
-            text: 'Error: codex_image finished without a saved image on disk (temp dir ' + cwd + '). Raw output: '
+            text: `Error: codex_image finished without a saved image on disk (temp dir ${cwd}${miss ? `; ${miss}` : ''}). Raw output: `
               + ((out.text || '(empty)').slice(-1000)),
             isError: true,
           };
         }
         ctx.log(`codex_image · artifact=${artifact}`);
-        return { text: artifact, usage: out.usage };
+        // THE BARE PATH IS THE CONTRACT: the cap/kill marker extractResult put
+        // on the text stops here; `partial` carries the same fact to the feed.
+        return { text: artifact, usage: out.usage, ...(out.partial ? { partial: true } : {}) };
       },
     },
     {
