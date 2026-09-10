@@ -50,10 +50,10 @@ import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
-import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, coerce, configPath, fleetHome, handoffSettings, unitConfig, writeFleetConfig } from '../core/config.mjs';
+import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, writeFleetConfig } from '../core/config.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
+import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
 import { createUnitRuntime, resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -158,7 +158,12 @@ const COMMANDS = {
       'them a `handoff` line says what the INSTALLED guard will do about',
       'the auto-handoff — the threshold, the context window and where that',
       'window came from, whether the Stop gate is on, and how many ledgers',
-      'there are to guard — read back out of the script itself. While',
+      'there are to guard — read back out of the script itself. A',
+      '`contract` line under it says how much of the fleet contract a unit',
+      'server started HERE would send at initialize: short when this',
+      'project (or the global scope) already carries the rendered rules',
+      'file, full when neither does, and whatever the `contract` config',
+      'key says when that is not `auto`. While',
       'something is missing it adds ONE `next` line naming the command that',
       'fixes it; none of that ever changes the exit code.',
       'Then per unit: the vendor binary, its --version, the login state, the',
@@ -180,22 +185,25 @@ const COMMANDS = {
     ],
   },
   show: {
-    args: '[<unit> | agents | handoff]',
+    args: '[<unit> | fleet | agents | handoff]',
     body: [
       'Every config key for one unit or all of them: value, where it came',
       'from (default / file:defaults / file / env:NAME), and the ceiling.',
-      '`agents` is the sub-agent block `rules --agents` renders from, and',
-      '`handoff` the auto-handoff block `rules --hooks` renders into the guard.',
+      '`fleet` is the top-level block (`contract`, `updateCheck`), `agents`',
+      'the sub-agent block `rules --agents` renders from, and `handoff`',
+      'the auto-handoff block `rules --hooks` renders into the guard.',
     ],
   },
   set: {
-    args: '<unit>.<key>=<value> | agents.<agent>.<key>=<value> | handoff.<key>=<value> [...]',
+    args: '<key>=<value> | <unit>.<key>=<value> | agents.<agent>.<key>=<value> | handoff.<key>=<value> [...]',
     body: [
       'Change keys in <home>/fleet.config.json. Unknown units, agents,',
       'unknown keys and invalid values are refused; the rest of the file',
-      'is kept. An agent setting reaches a session on the next',
-      '`omelette-fleet rules --agents`, and a handoff setting on the next',
-      '`omelette-fleet rules --hooks`, which re-render those files.',
+      'is kept. A bare `<key>=<value>` sets a fleet-wide key — `contract`,',
+      '`updateCheck` — which a unit server reads when it STARTS. An agent',
+      'setting reaches a session on the next `omelette-fleet rules',
+      '--agents`, and a handoff setting on the next `omelette-fleet rules',
+      '--hooks`, which re-render those files.',
     ],
   },
   call: {
@@ -1001,6 +1009,23 @@ function agentRows(settings, indent = '  ') {
  */
 function handoffRows(settings, indent = '  ') {
   const rows = Object.keys(HANDOFF_SCHEMA).map((key) => [key, fmtValue(settings[key]), settings.sources[key]]);
+  const w = Math.max(...rows.map((r) => r[0].length), 5);
+  const vw = Math.max(...rows.map((r) => r[1].length), 5);
+  return [
+    `${indent}${pad('KEY', w)}  ${pad('VALUE', vw)}  SOURCE`,
+    ...rows.map(([key, value, source]) => `${indent}${pad(key, w)}  ${pad(value, vw)}  ${source}`),
+  ];
+}
+
+/**
+ * The fleet-wide top-level keys for `show`, in the same `key value source`
+ * shape as the tables above. Three near-identical builders is the deliberate
+ * shape here: each block has its own schema and its own notes, and the four
+ * shared lines are cheaper than a generalisation two other packages would
+ * have to edit around.
+ */
+function fleetRows(settings, indent = '  ') {
+  const rows = Object.keys(SETTINGS_SCHEMA).map((key) => [key, fmtValue(settings[key]), settings.sources[key]]);
   const w = Math.max(...rows.map((r) => r[0].length), 5);
   const vw = Math.max(...rows.map((r) => r[1].length), 5);
   return [
@@ -2374,6 +2399,13 @@ async function cmdDoctor(argv) {
   // the value that is actually in force.
   const handoff = handoffReport();
   if (handoff) out(`handoff       ${handoff.line}`);
+  // WHICH CONTRACT a unit server started in this directory would send at
+  // `initialize` — resolved exactly the way the server resolves it, from this
+  // process's cwd and environment. It is not a fault in any direction: a
+  // project without the rules file gets the full text, which is correct for
+  // it, and this line is how an operator sees which one they are paying for.
+  const contract = contractFor({ cwd: process.cwd(), env: process.env });
+  out(`contract      ${contract.short ? 'short' : 'full'} (${contract.reason})`);
   // The client's own two walls, against what the enabled units can take.
   // Informational, exactly like the lines above it: an operator whose client
   // gives up at 900 s on a 1800 s unit has a working machine and a wall.
@@ -2505,15 +2537,32 @@ function cmdShow(argv) {
   const { positional, errors } = parseArgv(argv, {});
   if (positional.length > 1) errors.push(`unexpected argument: ${positional[1]}`);
   const only = positional[0];
-  const BLOCKS = ['agents', 'handoff'];
+  const BLOCKS = ['fleet', 'agents', 'handoff'];
   if (only && !BLOCKS.includes(only) && !UNITS[only]) {
-    errors.push(`unknown unit "${only}" — known units: ${UNIT_ORDER.join(', ')} (or "agents" / "handoff" for the top-level blocks)`);
+    errors.push(`unknown unit "${only}" — known units: ${UNIT_ORDER.join(', ')} (or "fleet" / "agents" / "handoff" for the top-level blocks)`);
   }
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet show: ${e}`)); return 1; }
 
   const path = configPath();
   out(`fleet config  ${path}${existsSync(path) ? '' : ' (absent — built-in defaults in force)'}`);
   out();
+  // The fleet-wide keys first: they describe the fleet itself rather than any
+  // one unit, and one of them decides what every unit server says at connect
+  // time — which is not something to find at the bottom of three tables.
+  if (!only || only === 'fleet') {
+    const settings = fleetSettings();
+    out('fleet');
+    for (const line of fleetRows(settings, '  ')) out(line);
+    for (const w of settings.warnings) out(`  warning  ${w}`);
+    // The env switch can only turn the update check OFF, and it wins: a table
+    // saying `true` while the machine says otherwise is the one thing this
+    // block must not do.
+    if (settings.updateCheck && !updateCheckEnabled({})) {
+      out('  note     OMELETTE_UPDATE_CHECK is off in this environment and wins over the file.');
+    }
+    out('  note     `contract` is read when a unit server STARTS: restart Claude Code for a change to reach `initialize`.');
+    out();
+  }
   if (!only || UNITS[only]) {
     for (const name of only ? [only] : UNIT_ORDER) {
       const cfg = cfgFor(name);
@@ -2549,7 +2598,7 @@ function cmdShow(argv) {
 }
 
 /** Both dotted forms `set` accepts, in one place: the usage line and every refusal quote it. */
-const SET_SHAPE = '<unit>.<key>=<value>, agents.<agent>.<key>=<value> or handoff.<key>=<value>';
+const SET_SHAPE = '<key>=<value>, <unit>.<key>=<value>, agents.<agent>.<key>=<value> or handoff.<key>=<value>';
 
 const describeSpec = (spec) => {
   const range = spec.min !== undefined && spec.max !== undefined ? ` from ${spec.min} to ${spec.max}` : '';
@@ -2596,6 +2645,7 @@ function cmdSet(argv) {
   const assignments = [];      // units.<unit>.<key>
   const agentAssignments = []; // agents.<role>.<key>
   const handoffAssignments = []; // handoff.<key>
+  const fleetAssignments = []; // <key>, at the top level
   for (const a of positional) {
     const eq = a.indexOf('=');
     if (eq < 0) { errors.push(`"${a}" is not ${SET_SHAPE}`); continue; }
@@ -2623,6 +2673,16 @@ function cmdSet(argv) {
       const c = coerce(HANDOFF_SCHEMA[key], raw);
       if (!c.ok) { errors.push(`invalid value for handoff.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(HANDOFF_SCHEMA[key])}`); continue; }
       handoffAssignments.push({ key, value: c.value });
+      continue;
+    }
+    // A bare `<key>=<value>` is one of the fleet-wide keys — the ones that
+    // describe the fleet itself and sit at the top level beside `units`.
+    // Anything else with no dot is a shape mistake and says so.
+    if (parts.length === 1 && parts[0] in SETTINGS_SCHEMA) {
+      const key = parts[0];
+      const c = coerce(SETTINGS_SCHEMA[key], raw);
+      if (!c.ok) { errors.push(`invalid value for ${key}: ${JSON.stringify(raw)} — expected ${describeSpec(SETTINGS_SCHEMA[key])}`); continue; }
+      fleetAssignments.push({ key, value: c.value });
       continue;
     }
     if (parts.length !== 2 || parts.some((p) => !p)) { errors.push(`"${a}" is not ${SET_SHAPE}`); continue; }
@@ -2678,6 +2738,7 @@ function cmdSet(argv) {
   const before = assignments.length ? new Map(UNIT_ORDER.map((n) => [n, cfgFor(n)])) : null;
   const beforeAgents = agentAssignments.length ? agentSettings() : null;
   const beforeHandoff = handoffAssignments.length ? handoffSettings() : null;
+  const beforeFleet = fleetAssignments.length ? fleetSettings() : null;
   const next = JSON.parse(JSON.stringify(file.config));
   if (assignments.length) {
     next.units = isObj(next.units) ? next.units : {};
@@ -2697,6 +2758,9 @@ function cmdSet(argv) {
     next.handoff = isObj(next.handoff) ? next.handoff : {};
     for (const a of handoffAssignments) next.handoff[a.key] = a.value;
   }
+  // A scalar at the top level: there is no block to merge into and so no
+  // shape to refuse — the key is either replaced or added.
+  for (const a of fleetAssignments) next[a.key] = a.value;
   const written = writeFleetConfig(next);
 
   for (const a of assignments) {
@@ -2726,6 +2790,14 @@ function cmdSet(argv) {
   // the config and the hook that is actually running disagree — and `doctor`
   // reports the hook's value, not this one.
   if (handoffAssignments.length) out('  note: `omelette-fleet rules --hooks` re-renders the guard with the new value.');
+  for (const a of fleetAssignments) {
+    out(`${a.key}  ${fmtValue(beforeFleet[a.key])} [${beforeFleet.sources[a.key]}] → ${fmtValue(a.value)} [file]`);
+  }
+  // The same shape of trap as the two blocks above, one step earlier: the
+  // servers that are running read `contract` when they STARTED.
+  if (fleetAssignments.some((a) => a.key === 'contract')) {
+    out('  note: a unit server reads `contract` when it STARTS — restart Claude Code (or just the MCP servers) for it to reach `initialize`.');
+  }
   out();
   out(`wrote ${written}`);
   return 0;
