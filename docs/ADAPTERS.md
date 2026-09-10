@@ -9,7 +9,7 @@ A unit is one vendor CLI exposed as one MCP server. Adding one is three files an
 | Config resolution and the write ceiling | Which config keys mean anything for this CLI (`builtin`, `extraSchema`, `envMap`) |
 | Model / effort validation against the catalog | The catalog itself, and the routing advice in it |
 | The git/deploy intent gate (per tool, via `mutateGate`) | Which tools deserve that gate |
-| Status feed start/end, including `usage` you return | Returning `usage` when the CLI reports it |
+| Status feed start/end, and the spooled record's `usage:` line, from the `usage` you return | Returning `usage` when the CLI reports it |
 | Bounded spawn: process group, hard kill, output caps, the env allowlist + billing scrub, ENOENT help | The argv, the sandbox/permission flags, the prompt wrapping, and which env names the CLI needs (`envPassthrough`, `billingRiskEnv`) |
 | The auth check on empty-stdout runs | The `auth.detect` regex and the `help` text |
 | JSON-RPC, `tools/list`, stderr logging | Nothing — never touch stdin/stdout |
@@ -193,7 +193,7 @@ What that costs you is a line parser instead of one `JSON.parse`, and it comes w
 - **Skip the deltas that are not the answer.** Reasoning/thinking deltas and tool-argument fragments arrive on the same stream and must never end up in the text.
 - **Tolerate a truncated last line.** A SIGKILL lands mid-write, so the final line is routinely half a JSON object. Skip unparseable lines rather than failing the salvage.
 
-Take usage counts off the stream while you are there, merging across the lines that carry them: a final event reporting only output tokens must not erase the input count an earlier one gave. That is how Grok started reporting `usage` at all.
+Take usage counts off the stream while you are there, merging across the lines that carry them: a final event reporting only output tokens must not erase the input count an earlier one gave. That is how Grok started reporting `usage` at all. Return them as `{ input, output }` — plus `cachedInput` and `reasoning` if your CLI reports them, as Codex does — and the runtime does the rest: the object goes to the status feed and to the spooled record's `usage: input=<n> output=<n> [cachedInput=<n>] [reasoning=<n>]` line, which `omelette-fleet results --stats` totals. Only a complete input/output pair is written, and a run you report nothing for is counted as unreported rather than as zero, so guessing a count is worse than omitting it.
 
 ## 3. `servers/<unit>.mjs`
 
