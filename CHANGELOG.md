@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.6 — unreleased
+## 0.3.6 — 2026-09-10
 
 - **The research tools take a `cwd`, and the sandbox probe stops moving the process.** `gemini_research`, `grok_research` and `codex_research` gain an optional absolute `cwd` — validated exactly like the review tools' (`must be an absolute path`, `is not an existing directory`), refused before any spawn, passed as `--cwd` to grok and `-C` to codex, and used as the spawn directory for all three; omit it and nothing changes. `codex_research` stays `-s read-only` with one. The spooled record's `cwd:` header names it. That is what `doctor --probe-sandbox` needed: it asks the unit to run in its throwaway directory instead of standing in it, so `process.chdir` is gone from the CLI, and a relative `OMELETTE_HOME` behaves under the flag exactly as it does without it.
 - **The probe's deadline ends the run.** The probe now passes an `AbortController` into its call and aborts it when the deadline fires, with the runtime built `cancel: kill` for that call alone (`createUnitRuntime(unit, { cancel })`, internal to doctor and documented as such — your configured policy is untouched for every real call). Before, doctor printed `skipped (timed out after N s)` and then sat there until the vendor's own bounds expired — up to `timeoutS + 60 s` for gemini — because an abandoned child's open pipes keep the process alive. Now the process group is SIGKILLed at once and `doctor` returns within the cap. The verdict rules are unchanged: the directory is read first, and a file already written is still `BREACHED`.

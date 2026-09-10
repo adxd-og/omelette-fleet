@@ -19,16 +19,16 @@ Three peers inside Claude Code, each on a subscription you already pay for, none
 
 ```console
 $ omelette-fleet doctor      # example output — all three units; config tables trimmed
-FLEET DOCTOR · omelette-fleet 0.3.5 · node v20.19.5 · darwin
-version       0.3.5 · latest 0.3.5
+FLEET DOCTOR · omelette-fleet 0.3.6 · node v20.19.5 · darwin
+version       0.3.6 · latest 0.3.6
 fleet home    ~/.omelette
 fleet config  ~/.omelette/fleet.config.json
 claude CLI    ~/.local/bin/claude
 claude config ~/.claude.json
-rules         project: v0.3.5 · global: absent
-agents        project: v0.3.5 (2) · global: absent
-skills        project: v0.3.5 (1) · global: absent
-hooks         project: v0.3.5 (wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop) · global: absent
+rules         project: v0.3.6 · global: absent
+agents        project: v0.3.6 (2) · global: absent
+skills        project: v0.3.6 (1) · global: absent
+hooks         project: v0.3.6 (wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop) · global: absent
 handoff       nudge at 90% of 200000 (default) · Stop gate on · ledgers: 1
 mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1800000 needed · ok
               deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · within the wall-clock limit
