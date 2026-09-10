@@ -1866,7 +1866,8 @@ const SNIPPET = (script) => [
   `  "PreCompact": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
   `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
   `  "PostToolUse": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
-  `  "Stop": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
+  `  "Stop": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
+  `  "PostCompact": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
 ].join('\n');
 
 /** The pasteable snippet out of a `rules --hooks` run's stdout: the opener line plus one per event. */
@@ -1942,7 +1943,7 @@ test('the snippet is absolute and shell-quoted: a path with spaces, and a RELATI
   const snippet = JSON.parse(snippetFrom(spaced.stdout));
   writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify(snippet, null, 2));
   const doc = spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
-  assert.match(doc, /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)/m, doc);
+  assert.match(doc, /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, doc);
 
   // A relative CLAUDE_CONFIG_DIR still has to yield an absolute hook command: a
   // hook runs from wherever the session is, not from where this command ran.
@@ -1966,11 +1967,11 @@ test('doctor sees the guard wired in settings.local.json too, and names a settin
   // project that gitignores it keeps this wiring. It counts.
   const local = join(proj, '.claude', 'settings.local.json');
   writeFileSync(local, JSON.stringify(snippet, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\) · global: absent$/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) · global: absent$/m);
 
   // A broken settings.json beside a working local one does not un-wire it.
   writeFileSync(join(proj, '.claude', 'settings.json'), '{ not json');
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m);
 
   // With nothing wired anywhere, both unreadable files are named — "not wired"
   // about a file nobody could parse would send the operator to re-paste it.
@@ -2032,7 +2033,7 @@ test('doctor reports the guard hook and whether settings.json wires it — readi
   // and doctor names WHICH event nobody calls, since that is what the operator
   // has to paste.
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: snippet.hooks.PreToolUse } }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PreCompact, SessionStart, PostToolUse, Stop\) — paste the snippet from rules --hooks\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) — paste the snippet from rules --hooks\)/m, doctor());
   writeFileSync(settings, JSON.stringify({ hooks: { ...snippet.hooks, PreCompact: [{ hooks: [{ type: 'command', command: 'node /elsewhere/other-hook.mjs' }] }] } }, null, 2));
   assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PreCompact\) — paste the snippet from rules --hooks\)/m, doctor());
 
@@ -2046,20 +2047,20 @@ test('doctor reports the guard hook and whether settings.json wires it — readi
   assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(PreToolUse matcher is not Bash\) — paste the snippet from rules --hooks\)/m, doctor());
   // `*` and an absent matcher cover Bash as surely as "Bash" does.
   writeFileSync(settings, withMatcher('*'));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m);
   writeFileSync(settings, JSON.stringify({
     hooks: { ...snippet.hooks, PreToolUse: [{ hooks: snippet.hooks.PreToolUse[0].hooks }] },
   }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m);
 
   const pasted = JSON.stringify(snippet, null, 2);
   writeFileSync(settings, pasted);
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\) · global: absent$/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) · global: absent$/m);
   assert.equal(readFileSync(settings, 'utf8'), pasted, 'settings.json is READ, never written');
 
   // A stale guard beside a working wiring still asks to be refreshed…
   writeFileSync(guard, MARKED_HOOK('0.0.1'));
-  assert.match(doctor(), /^hooks {9}project: v0\.0\.1 \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\) \[run: omelette-fleet rules --hooks\]/m);
+  assert.match(doctor(), /^hooks {9}project: v0\.0\.1 \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) \[run: omelette-fleet rules --hooks\]/m);
   // …and a script that is not ours is reported, never claimed.
   writeFileSync(guard, '// my own hook\n');
   assert.match(doctor(), /^hooks {9}project: foreign \(no marker\) · global: absent$/m);
@@ -2089,7 +2090,7 @@ test('doctor: a PreToolUse matcher is a REGEX — "Bash|Edit" and ".*" wire the 
   // is what makes "Ba.", "^Ba" and "ash$" cover a Bash call.
   for (const matcher of ['Bash|Edit', 'Edit|Bash', 'Bash, Write', '.*', 'Bash.*', '(Bash|Task)', 'Ba(sh)', 'Ba.', '^Ba', 'ash$']) {
     writeFileSync(settings, withMatcher(matcher));
-    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)/m, `matcher ${matcher} covers Bash`);
+    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, `matcher ${matcher} covers Bash`);
   }
   // …and one that cannot match "Bash" is still named rather than counted. In an
   // exact list a name is a whole name: "Bas" and "ash" are items of their own,
@@ -2138,11 +2139,11 @@ test('doctor: a guard wired at 0.3.2 — PreToolUse and PreCompact only — is N
 
   const { PreToolUse, PreCompact } = snippet.hooks;
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse, PreCompact } }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing SessionStart, PostToolUse, Stop\) — paste the snippet from rules --hooks\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing SessionStart, PostToolUse, Stop, PostCompact\) — paste the snippet from rules --hooks\)/m, doctor());
 
   // The third group is what finishes it — and the label lists all three.
   writeFileSync(settings, JSON.stringify(snippet, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\) · global: absent$/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) · global: absent$/m, doctor());
 });
 
 test('doctor: a SessionStart matcher is read like any other — `compact` wires the handoff print, `startup` does not', () => {
@@ -2162,14 +2163,14 @@ test('doctor: a SessionStart matcher is read like any other — `compact` wires 
   // an unanchored regex, and `""` / `"*"` everything.
   for (const matcher of ['compact', 'startup|compact', 'compact, resume', '*', '', '.*', 'com.', '^comp', 'act$']) {
     writeFileSync(settings, withMatcher(matcher));
-    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)/m, `matcher ${JSON.stringify(matcher)} covers compact`);
+    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, `matcher ${JSON.stringify(matcher)} covers compact`);
   }
   // An ABSENT matcher fires on every source, which is wired: the guard's own
   // `source === 'compact'` check is what keeps a startup silent.
   writeFileSync(settings, JSON.stringify({
     hooks: { ...snippet.hooks, SessionStart: [{ hooks: snippet.hooks.SessionStart[0].hooks }] },
   }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, doctor());
 
   for (const matcher of ['startup', 'resume|clear', 'compac', 'compaction']) {
     writeFileSync(settings, withMatcher(matcher));
@@ -2179,6 +2180,31 @@ test('doctor: a SessionStart matcher is read like any other — `compact` wires 
   assert.ok(doctor().includes('(NOT wired (SessionStart matcher "(" is not a valid regex) — paste the snippet from rules --hooks)'), doctor());
   writeFileSync(settings, withMatcher(null));
   assert.ok(doctor().includes('(NOT wired (SessionStart matcher is not a string) — paste the snippet from rules --hooks)'), doctor());
+});
+
+test('doctor: a 0.3.6 settings.json (the five events that existed then) reports "missing PostCompact"', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const doctor = () => spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
+  const written = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(written.status, 0, written.stderr);
+  const snippet = JSON.parse(snippetFrom(written.stdout));
+
+  // An operator who pasted the snippet at 0.3.6 and has not re-pasted it since
+  // has exactly this: five groups, and the sixth event nobody calls. The event
+  // that is missing is NAMED, because that is what has to be pasted.
+  const { PostCompact, ...before } = snippet.hooks;
+  assert.ok(PostCompact, 'sanity: the 0.3.7 snippet carries the group this test removes');
+  writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ hooks: before }, null, 2));
+  assert.match(
+    doctor(),
+    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PostCompact\) — paste the snippet from rules --hooks\)/m,
+    doctor(),
+  );
+
+  // Pasting the whole snippet closes it.
+  writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify(snippet, null, 2));
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, doctor());
 });
 
 test('doctor reports the skill on its own line: absent, ours with a count, foreign', () => {
@@ -2733,6 +2759,7 @@ test('set handoff.<key> edits the top-level block, show prints it, and the bound
   assert.match(shown.out, /^\s+threshold\s+85\s+file$/m);
   assert.match(shown.out, /^\s+enabled\s+false\s+file$/m);
   assert.match(shown.out, /^\s+contextWindow\s+0\s+file$/m);
+  assert.match(shown.out, /^\s+compactSummary\s+true\s+default$/m);
   assert.doesNotMatch(shown.out, /^codex$/m, 'show handoff shows the block and nothing else');
   assert.match(cli(['show'], { dir }).out, /^handoff$/m, 'a bare show lists it after the agents');
   assert.doesNotMatch(cli(['show', 'codex'], { dir }).out, /^handoff$/m);
@@ -2746,7 +2773,7 @@ test('set handoff.<key> edits the top-level block, show prints it, and the bound
     ['handoff.contextWindow=-1', /invalid value for handoff\.contextWindow: "-1" — expected a whole number 0 or above/],
     ['handoff.contextWindow=9007199254740992', /invalid value for handoff\.contextWindow: "9007199254740992"/],
     ['handoff.enabled=maybe', /invalid value for handoff\.enabled: "maybe" — expected true \| false/],
-    ['handoff.nudgeAt=80', /unknown key "nudgeAt" for the handoff block — known keys: enabled, threshold, contextWindow/],
+    ['handoff.nudgeAt=80', /unknown key "nudgeAt" for the handoff block — known keys: enabled, threshold, contextWindow, compactSummary/],
     ['handoff=90', /"handoff=90" is not handoff\.<key>=<value>/],
     ['handoff.a.b=1', /"handoff\.a\.b=1" is not handoff\.<key>=<value>/],
   ]) {
@@ -2757,6 +2784,32 @@ test('set handoff.<key> edits the top-level block, show prints it, and the bound
   assert.equal(readFileSync(join(dir, 'fleet.config.json'), 'utf8'), before, 'a refusal writes nothing');
   const bad = cli(['show', 'nope'], { dir });
   assert.match(bad.err, /unknown unit "nope"/);
+});
+
+test('set handoff.compactSummary=false round-trips through the config file and the rendered guard', () => {
+  const dir = home();
+  const s = cli(['set', 'handoff.compactSummary=false'], { dir });
+  assert.equal(s.code, 0, s.err);
+  assert.match(s.out, /handoff\.compactSummary\s+true \[default\] → false \[file\]/);
+  assert.match(s.out, /rules --hooks/, 'a changed setting is only in the guard after a re-render');
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).handoff, { compactSummary: false });
+
+  const shown = cli(['show', 'handoff'], { dir });
+  assert.equal(shown.code, 0, shown.err);
+  assert.match(shown.out, /^\s+compactSummary\s+false\s+file$/m);
+
+  // …and it reaches the guard the only way anything reaches it: the rendered
+  // literal, which is what `doctor` reads back.
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  const guard = readFileSync(join(proj, '.claude', 'hooks', 'omelette-guard.mjs'), 'utf8');
+  assert.match(guard, /^const HANDOFF_CONFIG = \{.*"compactSummary":false\};$/m);
+
+  // The value is a boolean, and `set` refuses anything that is not one.
+  const bad = cli(['set', 'handoff.compactSummary=sometimes'], { dir });
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /invalid value for handoff\.compactSummary: "sometimes" — expected true \| false/);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).handoff, { compactSummary: false });
 });
 
 test('set contract=short round-trips, show lists the fleet block, and a bad value is refused', () => {
@@ -2814,12 +2867,12 @@ test('doctor prints the handoff line from the RENDERED guard, and names where th
   assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
   // No ledger yet: the hook is installed and deliberately silent.
   assert.match(doctorIn2(proj, dir),
-    /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m,
+    /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m,
     doctorIn2(proj, dir));
   // One ledger, and it is counted.
   mkdirSync(join(proj, '.omelette'));
   writeFileSync(join(proj, '.omelette', 'ledger-0.3.4.md'), '# ledger\n');
-  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: 1$/m);
+  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: 1$/m);
 
   // The line reads the RENDERED value: a `set` that was never re-rendered is
   // visible as the old number, which is the whole point of reading it back.
@@ -2851,10 +2904,35 @@ test('doctor: handoff.enabled=false says the gate is off, and the line sits abov
   assert.equal(cli(['set', 'handoff.enabled=false'], { dir }).code, 0);
   assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
   const out = doctorIn2(proj, dir);
-  assert.match(out, /^handoff {7}nudge off \(handoff\.enabled=false\) · Stop gate off · ledgers: 2$/m, out);
+  assert.match(out, /^handoff {7}nudge off \(handoff\.enabled=false\) · Stop gate off · summary on · ledgers: 2$/m, out);
   const lines = out.split('\n');
   assert.ok(lines.findIndex((l) => l.startsWith('handoff ')) > lines.findIndex((l) => l.startsWith('hooks ')), out);
   assert.ok(lines.findIndex((l) => l.startsWith('handoff ')) < lines.findIndex((l) => l.startsWith('mcp timeout')), out);
+});
+
+test('doctor: the handoff line reports the summary switch out of the RENDERED guard, independently of the nudge', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  mkdirSync(join(proj, '.omelette'));
+  writeFileSync(join(proj, '.omelette', 'ledger-a.md'), '# a\n');
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: 1$/m);
+
+  // Like every other value on this line, it is read back out of the script: a
+  // `set` that was never re-rendered is visible as the value in force.
+  assert.equal(cli(['set', 'handoff.compactSummary=false'], { dir }).code, 0);
+  assert.match(doctorIn2(proj, dir), /· summary on · ledgers: 1$/m, 'still the rendered value');
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary off · ledgers: 1$/m, doctorIn2(proj, dir));
+
+  // The two switches are independent: `enabled` is the nudge and the gate,
+  // `compactSummary` is the record a compaction leaves behind.
+  assert.equal(cli(['set', 'handoff.enabled=false'], { dir }).code, 0);
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge off \(handoff\.enabled=false\) · Stop gate off · summary off · ledgers: 1$/m, doctorIn2(proj, dir));
+  assert.equal(cli(['set', 'handoff.compactSummary=true'], { dir }).code, 0);
+  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
+  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge off \(handoff\.enabled=false\) · Stop gate off · summary on · ledgers: 1$/m, doctorIn2(proj, dir));
 });
 
 test('doctor prints no handoff line when no guard of ours carries the block', () => {
@@ -2887,7 +2965,7 @@ test('doctor says so when the handoff line came from the GLOBAL guard rather tha
   assert.equal(rulesIn(proj, dir, ['--global', '--hooks']).status, 0);
   assert.match(
     doctorIn2(proj, dir),
-    /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\) · the project guard carries no handoff block — showing the global guard's values$/m,
+    /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\) · the project guard carries no handoff block — showing the global guard's values$/m,
     doctorIn2(proj, dir),
   );
 
@@ -2895,7 +2973,7 @@ test('doctor says so when the handoff line came from the GLOBAL guard rather tha
   // project's and the suffix goes away.
   assert.equal(rulesIn(proj, dir, ['--hooks', '--force']).status, 0);
   const own = doctorIn2(proj, dir);
-  assert.match(own, /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m, own);
+  assert.match(own, /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m, own);
   assert.doesNotMatch(own, /showing the global guard/, own);
 });
 

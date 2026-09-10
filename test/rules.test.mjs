@@ -529,6 +529,7 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
   assert.ok(posix[3].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
   assert.ok(posix[4].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
   assert.ok(posix[5].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
+  assert.ok(posix[6].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
   assert.equal(hookSettingsSnippet(spaced, 'linux').join('\n'), posix.join('\n'));
 
   // cmd.exe knows nothing about POSIX single quotes, and the JSON layer is what
@@ -549,9 +550,9 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
   assert.deepEqual(hookSettingsSnippet(spaced), hookSettingsSnippet(spaced, process.platform));
 });
 
-test('the snippet wires all five events: SessionStart on `compact`, and the two handoff events on nothing', () => {
+test('the snippet wires all six events: SessionStart on `compact`, and the four unmatched ones on nothing', () => {
   const script = '/Users/me/app/.claude/hooks/omelette-guard.mjs';
-  assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart', 'PostToolUse', 'Stop']);
+  assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart', 'PostToolUse', 'Stop', 'PostCompact']);
   for (const platform of ['darwin', 'win32']) {
     const snippet = hookSettingsSnippet(script, platform);
     assert.equal(snippet.length, HOOK_EVENTS.length + 1, 'the opener line plus one line per event');
@@ -597,7 +598,7 @@ test('settingsTargets names BOTH files Claude Code reads at a scope, in that ord
 
 test('renderHookFile substitutes the handoff block as a JSON literal, and fills a partial one from the schema', () => {
   const text = renderHookFile(HOOK_FILES[0], '1.2.3', { enabled: true, threshold: 85, contextWindow: 500000 });
-  assert.match(text, /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":85,"contextWindow":500000\};$/m);
+  assert.match(text, /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":85,"contextWindow":500000,"compactSummary":true\};$/m);
   assert.ok(!text.includes('{{'), 'no placeholder survives rendering');
   // The template is not runnable until it is rendered, and what renders into it
   // is a JSON literal — so the rendered script has to parse as a program. It is
@@ -611,31 +612,35 @@ test('renderHookFile substitutes the handoff block as a JSON literal, and fills 
   // A partial object, a broken value and a missing argument all render the
   // schema's defaults: `rules --hooks` never writes a guard that cannot run.
   assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', { threshold: 200 }),
-    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0\};$/m);
+    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0,"compactSummary":true\};$/m);
   assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', {}),
-    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0\};$/m);
+    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0,"compactSummary":true\};$/m);
   assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', null),
-    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0\};$/m);
+    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0,"compactSummary":true\};$/m);
   assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', { enabled: false, threshold: 50, contextWindow: 1 }),
-    /^const HANDOFF_CONFIG = \{"enabled":false,"threshold":50,"contextWindow":1\};$/m);
+    /^const HANDOFF_CONFIG = \{"enabled":false,"threshold":50,"contextWindow":1,"compactSummary":true\};$/m);
+  assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', { compactSummary: false }),
+    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0,"compactSummary":false\};$/m);
 });
 
 test('parseHookHandoff reads back exactly what renderHookFile wrote, and refuses anything that is not it', () => {
-  const settings = { enabled: false, threshold: 77, contextWindow: 300000 };
+  const settings = { enabled: false, threshold: 77, contextWindow: 300000, compactSummary: false };
   assert.deepEqual(parseHookHandoff(renderHookFile(HOOK_FILES[0], '1.2.3', settings)), settings);
   // No settings argument reads the live fleet config — which this file points at
   // an empty throwaway home on line 20, so it is the built-in defaults.
   assert.deepEqual(parseHookHandoff(renderHookFile(HOOK_FILES[0], '1.2.3')),
-    { enabled: true, threshold: 90, contextWindow: 0 });
+    { enabled: true, threshold: 90, contextWindow: 0, compactSummary: true });
   // A 0.3.3 guard, a file that is not a guard, and a hand-edited literal.
   assert.equal(parseHookHandoff(''), null);
   assert.equal(parseHookHandoff('// omelette-fleet hook v0.3.3 …\nconst HANDOFF = "x";\n'), null);
   assert.equal(parseHookHandoff('const HANDOFF_CONFIG = not json;\n'), null);
   assert.equal(parseHookHandoff('const HANDOFF_CONFIG = [1,2];\n'), null);
   // …and a value out of range in a literal somebody edited by hand reads as the
-  // default, exactly as the guard itself treats it.
+  // default, exactly as the guard itself treats it. A key a 0.3.6 literal never
+  // carried reads as its default too — which is what the guard's own
+  // `HANDOFF_CONFIG.compactSummary !== false` computes from the same literal.
   assert.deepEqual(parseHookHandoff('const HANDOFF_CONFIG = {"enabled":"yes","threshold":900,"contextWindow":-5};\n'),
-    { enabled: true, threshold: 90, contextWindow: 0 });
+    { enabled: true, threshold: 90, contextWindow: 0, compactSummary: true });
 });
 
 test('parseContextWindow: 200000, 500k, 1M — and nothing else is a window', () => {

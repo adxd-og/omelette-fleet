@@ -194,10 +194,11 @@ test('rules --global --hooks writes under CLAUDE_CONFIG_DIR, prints an absolute 
       SessionStart: [{ matcher: 'compact', hooks: [{ type: 'command', command: `node ${guard}` }] }],
       PostToolUse: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
       Stop: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
+      PostCompact: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
     },
   }, null, 2));
   const after = doctorIn(proj, dir, env);
-  assert.match(after, /^hooks {9}project: absent · global: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop\)$/m, after);
+  assert.match(after, /^hooks {9}project: absent · global: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)$/m, after);
 });
 
 test('rules --global --agents writes the skill (and both agent definitions) under CLAUDE_CONFIG_DIR, and doctor counts them at global scope', () => {

@@ -375,7 +375,7 @@ export function parseSkillMarker(text) {
 export const skillsTarget = scopeDir('skills');
 
 /**
- * THE GUARD. One script serves all five hook events (`rules --hooks` writes it, and
+ * THE GUARD. One script serves all six hook events (`rules --hooks` writes it, and
  * PRINTS the settings.json snippet that calls it — Claude Code's settings.json
  * is read by this package and written only by the operator). Its marker is a
  * `//` comment on LINE 1: the file is JavaScript, so there is no frontmatter to
@@ -434,7 +434,7 @@ export function parseHookMarker(text) {
  * guard both answer null; a value that is out of range answers with the
  * schema's default, which is exactly what the script itself would do with it.
  *
- * @returns {{enabled:boolean, threshold:number, contextWindow:number}|null}
+ * @returns {{enabled:boolean, threshold:number, contextWindow:number, compactSummary:boolean}|null}
  */
 const HANDOFF_LITERAL = /^const HANDOFF_CONFIG = (\{[^\n]*\});$/m;
 
@@ -509,12 +509,18 @@ export function parseModelWindow(raw) {
 export const hooksTarget = scopeDir('hooks');
 
 /**
- * The five events the guard serves, in the order doctor reports them wired.
- * The last two are the auto-handoff: `PostToolUse` is where the reminder can
- * reach the model's context, and `Stop` is the only place a turn can be held
- * until the handoff is written.
+ * The six events the guard serves, in the order doctor reports them wired.
+ * `PostToolUse` and `Stop` are the auto-handoff: the first is where the
+ * reminder can reach the model's context, the second the only place a turn can
+ * be held until the handoff is written. `PostCompact` is the record that
+ * follows a compaction — the summary, into the ledger.
+ *
+ * ORDER IS APPEND-ONLY. An event added by a release goes at the END, because
+ * this list is the order `doctor` prints `wired:` and `missing …` in: an
+ * operator upgrading reads the new name at the end of a list they recognise,
+ * rather than hunting for it in the middle of one they already pasted.
  */
-export const HOOK_EVENTS = ['PreToolUse', 'PreCompact', 'SessionStart', 'PostToolUse', 'Stop'];
+export const HOOK_EVENTS = ['PreToolUse', 'PreCompact', 'SessionStart', 'PostToolUse', 'Stop', 'PostCompact'];
 
 /**
  * QUOTING THE SCRIPT PATH FOR A SHELL, per platform. A hook `command` is a
@@ -545,10 +551,10 @@ const shellQuote = (s, platform) => (platform === 'win32'
  * THE MATCHERS ARE NOT INTERCHANGEABLE. `PreToolUse` is matched against a TOOL
  * name and `SessionStart` against the session's SOURCE — `startup`, `resume`,
  * `clear`, `compact`, `fork` — and only `compact` is a context somebody just
- * lost, which is the one the guard has anything to print into. The other three
- * are matched on nothing: every compaction is one, every Stop is one, and a
- * `PostToolUse` matcher could only skip tools that grow the context exactly the
- * way the ones it kept do.
+ * lost, which is the one the guard has anything to print into. The other four
+ * are matched on nothing: every compaction is one, before it and after it,
+ * every Stop is one, and a `PostToolUse` matcher could only skip tools that
+ * grow the context exactly the way the ones it kept do.
  *
  * @returns {string[]} the snippet's lines, together a parseable JSON object.
  */
@@ -560,7 +566,8 @@ export function hookSettingsSnippet(scriptPath, platform = process.platform) {
     `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
     `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
     `  "PostToolUse": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
-    `  "Stop": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
+    `  "Stop": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
+    `  "PostCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
   ];
 }
 

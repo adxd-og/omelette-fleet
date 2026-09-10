@@ -65,15 +65,15 @@ function snippetFrom(stdout) {
   const lines = stdout.split('\n');
   const at = lines.indexOf('{ "hooks": {');
   assert.ok(at >= 0, `no snippet in:\n${stdout}`);
-  // The opener line, 5 event lines, and the closer is on the same line as the
-  // last event — 6 lines total, exactly as SNIPPET() in test/cli.test.mjs
+  // The opener line, 6 event lines, and the closer is on the same line as the
+  // last event — 7 lines total, exactly as SNIPPET() in test/cli.test.mjs
   // builds it.
-  return JSON.parse(lines.slice(at, at + 6).join('\n'));
+  return JSON.parse(lines.slice(at, at + 7).join('\n'));
 }
 
 // ─── §1e: the exact upgrade scenario the spec names ───────────────────────────
 
-test('doctor: an operator\'s 0.3.3 settings.json (PreToolUse + PreCompact + SessionStart only) reports "missing PostToolUse, Stop" — the exact wording the spec fixes', () => {
+test('doctor: an operator\'s 0.3.3 settings.json (PreToolUse + PreCompact + SessionStart only) reports "missing PostToolUse, Stop, PostCompact" — the exact wording the spec fixes', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);
   const written = rulesIn(proj, dir, ['--hooks']);
@@ -95,7 +95,7 @@ test('doctor: an operator\'s 0.3.3 settings.json (PreToolUse + PreCompact + Sess
   const out = doctorIn(proj, dir).stdout;
   assert.match(
     out,
-    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PostToolUse, Stop\) — paste the snippet from rules --hooks\)/m,
+    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PostToolUse, Stop, PostCompact\) — paste the snippet from rules --hooks\)/m,
     out,
   );
 });

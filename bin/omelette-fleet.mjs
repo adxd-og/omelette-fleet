@@ -1810,10 +1810,11 @@ const matcherProblemFor = (m, event, name) => {
 };
 
 /**
- * What each MATCHED event's entry has to cover — two of the five. `PreCompact`,
- * `PostToolUse` and `Stop` are deliberately absent: none of them is matched on
- * anything, because every compaction, every tool call and every Stop is one the
- * guard has something to say about, so any entry that calls it counts.
+ * What each MATCHED event's entry has to cover — two of the six. `PreCompact`,
+ * `PostToolUse`, `Stop` and `PostCompact` are deliberately absent: none of them
+ * is matched on anything, because every compaction is one the guard has
+ * something to say about — before it and after it — and so is every tool call
+ * and every Stop, so any entry that calls it counts.
  * `SessionStart` is matched on the session's SOURCE (`startup`, `resume`,
  * `clear`, `compact`, `fork`), and `compact` is the only one the guard has
  * anything to print into.
@@ -1841,7 +1842,7 @@ function hookWiring(config) {
     const calling = (Array.isArray(hooks[event]) ? hooks[event] : [])
       .filter((group) => isObj(group) && Array.isArray(group.hooks) && group.hooks.some(calls));
     if (!calling.length) continue;
-    // Two of the five events are matched against something; the other three are
+    // Two of the six events are matched against something; the other four are
     // matched on nothing at all. ONE entry covering the matcher is enough; when
     // none does, the first entry's reason is the one worth printing.
     const target = MATCHED_ON[event];
@@ -1962,6 +1963,14 @@ function resolveContextWindow(contextWindow, { cwd = process.cwd(), env = proces
  * `hooks` line already asks for a refresh, and printing a value the script does
  * not contain is exactly what reading it back exists to prevent.
  *
+ * The `summary` clause is the same kind of statement about the same script:
+ * `handoff.compactSummary`, as the guard's own `AUTO_HANDOFF` reads it, which
+ * is why a literal that predates the key reads as `on` — that is what a guard
+ * running that literal would compute. It sits beside the gate rather than at
+ * the end, because the clauses that say what the hook DOES belong together and
+ * `ledgers:` is a fact about the project. It is independent of `enabled`: an
+ * operator who switched the nudge off still gets the record of a compaction.
+ *
  * @returns {{line: string, unreadable: string[]}|null} the line's text and every
  *   settings file the ceiling lookup could not read, or null when there is
  *   nothing to say at all — which is also nothing read.
@@ -1992,10 +2001,11 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
     if (st.isDirectory() && !st.isSymbolicLink()) ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).length;
   } catch { /* absent is the normal case */ }
   const found = ledgers ? `ledgers: ${ledgers}` : 'ledgers: none (hook silent — start .omelette/ledger-<plan>.md)';
-  if (!rendered.enabled) return { line: `nudge off (handoff.enabled=false) · Stop gate off · ${found}${scope}`, unreadable: [] };
+  const summary = `summary ${rendered.compactSummary ? 'on' : 'off'}`;
+  if (!rendered.enabled) return { line: `nudge off (handoff.enabled=false) · Stop gate off · ${summary} · ${found}${scope}`, unreadable: [] };
   const ceiling = resolveContextWindow(rendered.contextWindow, { cwd, env });
   return {
-    line: `nudge at ${rendered.threshold}% of ${ceiling.window} (${ceiling.source}) · Stop gate on · ${found}${scope}`,
+    line: `nudge at ${rendered.threshold}% of ${ceiling.window} (${ceiling.source}) · Stop gate on · ${summary} · ${found}${scope}`,
     unreadable: ceiling.unreadable,
   };
 }

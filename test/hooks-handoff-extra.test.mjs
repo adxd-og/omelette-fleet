@@ -213,7 +213,7 @@ test('doctor: the handoff line refuses a symlinked `.omelette` — it does not c
     }).stdout;
     assert.match(
       doctor,
-      /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m,
+      /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m,
       doctor,
     );
   });
