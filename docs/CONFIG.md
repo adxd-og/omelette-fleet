@@ -17,6 +17,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 {
   "version": 1,
   "updateCheck": true,
+  "contract": "auto",
   "defaults": { "status": true },
   "agents": {
     "coder":  { "model": "opus", "effort": "xhigh" },
@@ -40,8 +41,26 @@ Some keys describe the fleet rather than any one unit, so they sit at the top le
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `updateCheck` | boolean | `true` | Whether a unit server may check for a newer release at startup, and whether `doctor` / `update` report the latest version. See [Update check](#update-check) |
+| `contract` | `auto` \| `full` \| `short` | `"auto"` | How much of the fleet contract a unit server returns from `initialize`. `auto` sends one line where the rendered rules file is already installed, and the full contract where it is not; `full` and `short` decide it outright |
 
-An invalid value is a warning and the built-in default stays in force, exactly as for a unit's keys.
+An invalid value is a warning and the built-in default stays in force, exactly as for a unit's keys. Both keys are edited with a bare assignment — `omelette-fleet set contract=short` — and read back with `omelette-fleet show fleet`.
+
+**The contract, and why `auto` is the default.** Every unit server returns `instructions` at `initialize` — text the client puts in the model's context at connect time — and until 0.3.7 that was always the full fleet contract: about 300 tokens, three servers, every session. Including the sessions whose project already carries `.claude/rules/omelette-fleet.md`, which states everything the contract states and a great deal more. Where that file is loaded, `auto` sends this instead, plus the unit's own line:
+
+```
+omelette-fleet: read-only unit; the operating model is in .claude/rules/omelette-fleet.md — the units propose, you apply.
+```
+
+The test is the marker on line 1 of `<cwd>/.claude/rules/omelette-fleet.md` — the directory Claude Code started the server in, which is the project — and then of the global file (`$CLAUDE_CONFIG_DIR` or `~/.claude`). A file at that path **without** our marker is somebody else's file and counts as absent, exactly as it does for `rules` and `doctor`. It is resolved **when the server starts**, so it moves on the same restart the rules file itself needs, and `doctor` prints what this project gets:
+
+```
+contract      short (rules installed here)
+contract      short (rules installed globally)
+contract      full (no rules file in /path/to/some/project)
+contract      full (contract=full)
+```
+
+Set `contract=full` if you would rather every session carry the whole text — a session that starts somewhere without the rules file gets it anyway — or `contract=short` to send one line whatever is on disk, which is for an operator who knows their sessions load the operating model by another road.
 
 ### Agent settings
 
@@ -198,7 +217,7 @@ An invalid value does not poison the key — it warns and falls through to the n
 
 ### Editing with `set`
 
-`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command. A two-part path with `handoff` in front — `omelette-fleet set handoff.threshold=85` — edits the [handoff block](#handoff-settings); `agents` and `handoff` are the only words accepted in the first position that are not unit names. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` / `handoff` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
+`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command. A two-part path with `handoff` in front — `omelette-fleet set handoff.threshold=85` — edits the [handoff block](#handoff-settings), and a bare `key=value` with no dot at all — `omelette-fleet set contract=short` — edits a [fleet-wide key](#top-level-settings); `agents` and `handoff` are the only words accepted in the first position that are not unit names, and the only bare keys accepted are `contract` and `updateCheck`. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` / `handoff` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
 
 ```
 codex.timeoutS  600 [default] → 900 [file]

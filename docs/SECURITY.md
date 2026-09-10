@@ -110,6 +110,12 @@ Be deliberate about the second one. A review answer quotes the source it reviewe
 
 Reading it back is deliberately narrow. A result id must match `^\d{8}T\d{6}Z-\d+-\d+$` before any path is built, so no argument from a model or a shell can traverse out of the directory; the file is `lstat`ed and read only when it is a regular file, so a symlink planted in the spool is refused rather than followed; and writes are `O_EXCL` temp + `rename`, so a planted temp file fails the write instead of being written through. A failure to spool is one line on stderr and the call still answers — the spool is insurance, never a gate.
 
+## What a unit server reads when it starts
+
+One file, and only to decide how much text to send back. At startup each unit server tests `<cwd>/.claude/rules/omelette-fleet.md` — the directory Claude Code started it in, which is the session's project — and then the global `~/.claude/rules/omelette-fleet.md` (or `$CLAUDE_CONFIG_DIR`), for the omelette-fleet version marker on line 1. At most the first 8 KiB of each is read, only that first line is looked at, and the answer decides exactly one thing: whether `initialize` returns the full fleet contract or the one line that points at the file.
+
+**Nothing from the file is copied anywhere.** Not into `instructions`, not into the status feed, not into the result spool, and never into a vendor CLI's environment or prompt — so a rules file cannot be used to smuggle text into a session's context through this path, and a project you did not write cannot change what a unit says by putting something at that path. A file without the marker, an unreadable path, a directory, a file that is 200 MB: all of them read as "no rules file here", and the full contract is sent. The read happens once, at server start, and `contract: full | short` in the fleet config skips it entirely.
+
 ## Per-unit enforcement matrix
 
 These are not equivalent mechanisms. Be honest with yourself about which unit you are trusting with what.

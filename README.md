@@ -141,6 +141,8 @@ Then: **restart Claude Code**, **merge the printed snippet** into that same proj
 
 Rules load on the next session start; agent definitions and skills are picked up by Claude Code's watcher — usually within seconds, sometimes minutes (restart if `.claude/agents` or `.claude/skills` did not exist before).
 
+Installing the rules also makes the units cheaper to have around: a unit server started in a project that carries `.claude/rules/omelette-fleet.md` sends **one line** at `initialize` — `omelette-fleet: read-only unit; the operating model is in .claude/rules/omelette-fleet.md — the units propose, you apply.` — instead of the ~300-token fleet contract, three times over, in a session that already has the longer text loaded. `omelette-fleet doctor` prints which one this project gets (`contract      short (rules installed here)`), the global rules file counts too, and `omelette-fleet set contract=full` turns the detection off if you would rather always carry the whole thing. It is read when a server starts, so it moves on the same restart as the rules themselves.
+
 Optionally, install the guard hook — the coder's and the tester's "never commits" rule, enforced rather than requested, plus a ledger marker on every compaction, the last handoff block printed back into the session that follows one, and — past 90 % of the context window — a reminder to write that block and one held `Stop` until it exists:
 
 ```bash
