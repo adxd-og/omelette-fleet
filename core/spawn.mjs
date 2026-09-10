@@ -128,16 +128,32 @@ export function runProcess({
       return;
     }
 
-    let out = '';
+    // THE TAIL, AS A QUEUE. Chunks go into an array with a running total, and
+    // the HEAD is dropped while what remains still covers the cap — so what is
+    // held is the shortest run of chunks containing the last `outputCap`
+    // characters: the cap plus at most one chunk. Concatenating onto a string
+    // instead cost a flatten and a full copy of the tail PER CHUNK; 50 MB of
+    // 64 KiB chunks under a 4 MB cap moved about 3 GB of string through the
+    // heap to keep 4 MB of it. One chunk above the cap is still held — a chunk
+    // has to be held to be measured — and that transient is all that is left.
+    const chunks = [];
+    let total = 0;
+    let dropped = false;
+    // `slice(-0)` keeps the WHOLE string, so a cap of 0 has always meant "no
+    // tail kept back, but say it was capped". Dropping under it would silently
+    // change that for a caller nobody has audited, so the queue only drops
+    // while there is a cap to drop against.
+    const capping = outputCap > 0;
     let errBuf = '';
     let capped = false;
     child.stdout.setEncoding('utf8');
-    // `capped` counts characters DROPPED, not slices attempted: output that
-    // lands exactly on the cap keeps every character and is not capped.
     child.stdout.on('data', (c) => {
-      const next = out + c;
-      if (next.length > outputCap) capped = true;
-      out = next.slice(-outputCap);
+      chunks.push(c);
+      total += c.length;
+      while (capping && chunks.length > 1 && total - chunks[0].length >= outputCap) {
+        total -= chunks.shift().length;
+        dropped = true;
+      }
     });
     child.stdout.on('error', () => {});
     child.stderr.setEncoding('utf8');
@@ -192,6 +208,14 @@ export function runProcess({
       detachAbort();
       if (settled) return;
       settled = true;
+      // `capped` counts characters DROPPED, not slices attempted: output that
+      // lands exactly on the cap keeps every character and is not capped.
+      capped = dropped || total > outputCap;
+      // Joined ONCE, here. The leading excess sits entirely inside the head
+      // chunk — the queue kept nothing more than that — so it comes off there
+      // and the join produces exactly the tail, with no second copy of it.
+      if (capping && total > outputCap) chunks[0] = chunks[0].slice(total - outputCap);
+      const out = chunks.join('');
       log(`exit ${bin} · code=${code} · signal=${sig || '-'}${killed ? ' · HARD-KILLED' : ''}${cancelled ? ' · CANCELLED' : ''}${capped ? ` · OUTPUT-CAPPED at ${outputCap}` : ''}`);
       resolve({ stdout: out, stderr: errBuf, code, signal: sig, killed, capped, cancelled });
     });

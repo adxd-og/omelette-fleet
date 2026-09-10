@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { runProcess, buildChildEnv, ALLOWED_ENV } from '../core/spawn.mjs';
 
@@ -116,6 +116,90 @@ test('`capped` is false when nothing was sliced — under the cap and exactly at
   });
   assert.equal(chunked.stdout.length, 100);
   assert.equal(chunked.capped, false);
+});
+
+test('50 MB of 64 KiB chunks through a 4 MB cap: the last 4 MB exactly, without moving 3 GB to get there', {
+  // The bound is about heap pressure, so a runner with little of it to spare
+  // measures something else. The spec's own condition.
+  skip: totalmem() < 2 * 1024 * 1024 * 1024 && 'needs at least 2 GiB of RAM to measure heap pressure',
+}, async () => {
+  const CAP = 4000000;
+  const CHUNK = 64 * 1024;
+  const CHUNKS = 800;               // 52.4 MB through a 4 MB cap
+  const KEPT = Math.ceil(CAP / CHUNK) + 1;
+  // Each chunk is one repeated digit, so the boundary between two of them is
+  // visible in the answer and an off-by-one in the head slice cannot hide.
+  const source = [
+    `const chunk = (i) => String(i % 10).repeat(${CHUNK});`,
+    'let i = 0;',
+    'function pump() {',
+    `  while (i < ${CHUNKS}) {`,
+    '    const more = process.stdout.write(chunk(i));',
+    '    i += 1;',
+    '    if (!more) { process.stdout.once("drain", pump); return; }',
+    '  }',
+    '}',
+    'pump();',
+  ].join('\n');
+
+  const before = process.memoryUsage().heapUsed;
+  let peak = before;
+  const sampler = setInterval(() => { peak = Math.max(peak, process.memoryUsage().heapUsed); }, 5);
+  const r = await runProcess({ bin: node, args: ['-e', source], outputCap: CAP });
+  peak = Math.max(peak, process.memoryUsage().heapUsed);
+  clearInterval(sampler);
+
+  assert.equal(r.capped, true);
+  assert.equal(r.stdout.length, CAP);
+  // Built AFTER the sampler stops: this expectation is 4 MB of its own.
+  const tail = Array.from({ length: KEPT }, (_, k) => String((CHUNKS - KEPT + k) % 10).repeat(CHUNK)).join('').slice(-CAP);
+  assert.equal(r.stdout, tail);
+
+  // WHAT THIS MEASURES: `heapUsed` includes young garbage that has not been
+  // scavenged yet, which is exactly the pressure this change is about. The
+  // queue holds the cap plus at most one chunk and joins once — measured 21
+  // to 23 MiB here. The string it replaced flattened and re-copied the whole
+  // 4 MB tail on every one of the 800 chunks, and each of those copies is a
+  // large object that only a major GC reclaims — measured 67 to 72 MiB, and
+  // 2.8 s against 0.1 s. The bound sits between the two with room on both
+  // sides rather than at the theoretical minimum: this is a fence against the
+  // pattern coming back, not a benchmark.
+  const bound = CAP + 40 * 1024 * 1024;
+  assert.ok(peak - before <= bound, `peak heap delta ${peak - before} > ${bound} — is the tail being copied per chunk again?`);
+});
+
+test('the queue keeps every promise the string it replaced made', async () => {
+  // A CHARACTERIZATION GUARD: every assertion here passes before the change
+  // as well as after. It is here because "behaviour is unchanged for every
+  // caller" is the whole risk of the change, and the boundaries are where it
+  // would break.
+  // Two chunks landing exactly on the cap: nothing dropped, nothing sliced.
+  const exact = await runProcess({
+    bin: node,
+    args: ['-e', 'process.stdout.write("a".repeat(50)); process.stdout.write("b".repeat(50))'],
+    outputCap: 100,
+  });
+  assert.equal(exact.stdout, `${'a'.repeat(50)}${'b'.repeat(50)}`);
+  assert.equal(exact.capped, false);
+  // A tail that starts inside a chunk: the head is sliced, not dropped whole.
+  const inside = await runProcess({
+    bin: node,
+    args: ['-e', 'process.stdout.write("0123456789"); process.stdout.write("ABCDEFGHIJ")'],
+    outputCap: 12,
+  });
+  assert.equal(inside.stdout, '89ABCDEFGHIJ');
+  assert.equal(inside.capped, true);
+  // No output at all still resolves with an empty string, not undefined.
+  const silent = await runProcess({ bin: node, args: ['-e', ''], outputCap: 100 });
+  assert.equal(silent.stdout, '');
+  assert.equal(silent.capped, false);
+  // `outputCap: 0` has always meant "keep everything, and say it was capped"
+  // — `slice(-0)` is the whole string. No caller passes it (core/unit.mjs
+  // clamps to 1) and nothing documents it as unsupported either, so the queue
+  // must not quietly turn it into something else.
+  const zero = await runProcess({ bin: node, args: ['-e', 'process.stdout.write("abc")'], outputCap: 0 });
+  assert.equal(zero.stdout, 'abc');
+  assert.equal(zero.capped, true);
 });
 
 test('feeds stdinText and closes stdin', async () => {
