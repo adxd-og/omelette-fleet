@@ -25,7 +25,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { callUnitServer, MAX_TIMEOUT_S } from '../core/client.mjs';
 import { renderResult } from '../core/results.mjs';
-import { AGENT_MARKER, HOOK_EVENTS, HOOK_MARKER, RULES_MARKER, SKILL_MARKER } from '../core/rules.mjs';
+import { AGENT_MARKER, FLEET_CONTRACT, HOOK_EVENTS, HOOK_MARKER, RULES_MARKER, SHORT_CONTRACT, SKILL_MARKER } from '../core/rules.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -1052,9 +1052,13 @@ test('every unit advertises <unit>_result, and it answers over real stdio with n
  * initialize frame can arrive across several `data` events, and parsing a
  * fragment would fail a perfectly healthy server.
  */
-function initializeServer(serverPath, env, { timeoutMs = 10_000 } = {}) {
+function initializeServer(serverPath, env, { timeoutMs = 10_000, cwd = env.dir } = {}) {
   return new Promise((resolve, reject) => {
-    const p = spawn(process.execPath, [serverPath], { env: { PATH: process.env.PATH, HOME: env.dir, OMELETTE_HOME: env.dir, OMELETTE_UPDATE_CHECK: '0', OMELETTE_STATUS: '0' } });
+    // `cwd` is not decoration: since 0.3.7 the directory a server is started in
+    // decides how much contract it sends back, and the default here would be
+    // this checkout — which renders its own .claude/rules on a developer
+    // machine and not on CI.
+    const p = spawn(process.execPath, [serverPath], { cwd, env: { PATH: process.env.PATH, HOME: env.dir, OMELETTE_HOME: env.dir, OMELETTE_UPDATE_CHECK: '0', OMELETTE_STATUS: '0' } });
     let buf = '';
     let err = '';
     let done = false;
@@ -1093,12 +1097,99 @@ function initializeServer(serverPath, env, { timeoutMs = 10_000 } = {}) {
 
 test('every unit server returns the fleet contract plus its own line from initialize', async () => {
   const dir = home();
+  // A project with no rules file of ours in either scope (HOME is `dir` too):
+  // the full contract, which is what a fleet without the rules delivered gets.
+  const proj = join(dir, 'proj'); mkdirSync(proj);
   for (const unit of ['gemini', 'grok', 'codex']) {
-    const res = await initializeServer(join(ROOT, 'servers', `${unit}.mjs`), { dir });
+    const res = await initializeServer(join(ROOT, 'servers', `${unit}.mjs`), { dir }, { cwd: proj });
     assert.ok(res.instructions.startsWith('omelette-fleet: this server is one read-only unit'), `${unit}: contract first`);
     assert.match(res.instructions, /run `omelette-fleet rules`/);
     assert.match(res.instructions, /\n\nThis unit: /, `${unit}: has its own line`);
+    assert.ok(res.instructions.startsWith(FLEET_CONTRACT), `${unit}: the contract verbatim`);
   }
+});
+
+test('a server started where the rules are installed sends ONE line instead of the contract', async () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const server = join(ROOT, 'servers', 'codex.mjs');
+  const ownLine = /\n\nThis unit: Codex/;
+
+  // A file at the path that is not ours changes nothing: the marker is the
+  // only proof of ownership, here as everywhere else.
+  mkdirSync(join(proj, '.claude', 'rules'), { recursive: true });
+  writeFileSync(join(proj, '.claude', 'rules', 'omelette-fleet.md'), '# my own rules\n');
+  const foreign = await initializeServer(server, { dir }, { cwd: proj });
+  assert.ok(foreign.instructions.startsWith(FLEET_CONTRACT), foreign.instructions.slice(0, 200));
+
+  // The real file, written by the real command: one line, then the unit's own.
+  assert.equal(rulesIn(proj, dir, ['--force']).status, 0);
+  const short = await initializeServer(server, { dir }, { cwd: proj });
+  assert.ok(short.instructions.startsWith(`${SHORT_CONTRACT}\n\nThis unit: Codex`), short.instructions.slice(0, 200));
+  assert.match(short.instructions, ownLine);
+  assert.ok(short.instructions.length < FLEET_CONTRACT.length, 'shorter than what it replaced');
+
+  // A project with none of its own reads the GLOBAL one (HOME is `dir`).
+  const other = join(dir, 'other'); mkdirSync(other);
+  const before = await initializeServer(server, { dir }, { cwd: other });
+  assert.ok(before.instructions.startsWith(FLEET_CONTRACT), 'no rules yet in either scope');
+  assert.equal(rulesIn(other, dir, ['--global']).status, 0);
+  const global = await initializeServer(server, { dir }, { cwd: other });
+  assert.ok(global.instructions.startsWith(SHORT_CONTRACT), global.instructions.slice(0, 200));
+  assert.match(global.instructions, ownLine);
+
+  // And the config key wins over both directions of the lookup.
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, contract: 'full' }));
+  const forced = await initializeServer(server, { dir }, { cwd: proj });
+  assert.ok(forced.instructions.startsWith(FLEET_CONTRACT), 'contract=full, with the rules installed right there');
+  // The other direction, with the global file taken away again so that only
+  // the config can be deciding: a directory with no rules file in reach.
+  assert.equal(rulesIn(other, dir, ['--remove', '--global']).status, 0);
+  const bare = join(dir, 'bare'); mkdirSync(bare);
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, contract: 'short' }));
+  const forcedShort = await initializeServer(server, { dir }, { cwd: bare });
+  assert.ok(forcedShort.instructions.startsWith(SHORT_CONTRACT), 'contract=short, with no rules file anywhere');
+});
+
+/** The `up ·` line a unit server prints on stderr the moment it starts, in `cwd`. */
+function startupLine(serverPath, env, cwd, { timeoutMs = 10_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(process.execPath, [serverPath], { cwd, env: { PATH: process.env.PATH, HOME: env.dir, OMELETTE_HOME: env.dir, OMELETTE_UPDATE_CHECK: '0', OMELETTE_STATUS: '0' } });
+    let err = '';
+    let done = false;
+    const settle = (fn, v) => { if (done) return; done = true; clearTimeout(timer); p.kill(); fn(v); };
+    const timer = setTimeout(() => settle(reject, new Error(`${serverPath}: no "up ·" line in ${timeoutMs}ms · stderr: ${err.trim() || '(none)'}`)), timeoutMs);
+    p.stderr.setEncoding('utf8');
+    p.stderr.on('data', (c) => {
+      err += c;
+      const line = err.split('\n').find((l) => l.includes('up · '));
+      if (line !== undefined && err.indexOf('\n', err.indexOf(line)) >= 0) settle(resolve, line);
+    });
+    p.on('error', (e) => settle(reject, e));
+    p.stdin.on('error', () => {});
+    p.on('close', (code, signal) => settle(reject, new Error(`${serverPath}: exited (code ${code}, signal ${signal}) before saying anything · stderr: ${err.trim() || '(none)'}`)));
+  });
+}
+
+test('the startup line says which contract this server resolved, and why', async () => {
+  // The one thing an operator can read without a client: `doctor` answers for
+  // ITS cwd, and this line answers for the directory Claude Code actually
+  // started the server in.
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const server = join(ROOT, 'servers', 'codex.mjs');
+
+  // The child reports its OWN `process.cwd()`, which is the resolved path —
+  // `/var/folders/…` is a symlink to `/private/var/folders/…` on macOS.
+  const full = await startupLine(server, { dir }, proj);
+  assert.match(full, new RegExp(`contract=full \\(no rules file in ${realpathSync(proj).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`), full);
+
+  assert.equal(rulesIn(proj, dir).status, 0);
+  const short = await startupLine(server, { dir }, proj);
+  assert.match(short, /contract=short \(rules installed here\)/, short);
+  // Beside the fields that were always there, not instead of them.
+  assert.match(short, /up · bin=/);
+  assert.match(short, /· config=/);
 });
 
 test('per-command help: `<cmd> --help`, `-h` and `help <cmd>` all print that command\'s page', () => {
@@ -2555,6 +2646,55 @@ test('set handoff.<key> edits the top-level block, show prints it, and the bound
   assert.match(bad.err, /unknown unit "nope"/);
 });
 
+test('set contract=short round-trips, show lists the fleet block, and a bad value is refused', () => {
+  const dir = home();
+  const s = cli(['set', 'contract=short'], { dir });
+  assert.equal(s.code, 0, s.err);
+  assert.match(s.out, /^contract {2}auto \[default\] → short \[file\]$/m, s.out);
+  assert.match(s.out, /restart Claude Code/, 'a server reads it when it STARTS');
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')), { version: 1, contract: 'short' });
+
+  const shown = cli(['show', 'fleet'], { dir });
+  assert.equal(shown.code, 0, shown.err);
+  assert.match(shown.out, /^fleet$/m);
+  assert.match(shown.out, /^\s+contract\s+short\s+file$/m);
+  assert.match(shown.out, /^\s+updateCheck\s+true\s+default$/m);
+  assert.doesNotMatch(shown.out, /^codex$/m, 'show fleet shows the block and nothing else');
+  assert.match(cli(['show'], { dir }).out, /^fleet$/m, 'a bare show lists it too');
+  assert.doesNotMatch(cli(['show', 'codex'], { dir }).out, /^fleet$/m);
+
+  // The other top-level key comes with the same door, and a unit key still
+  // goes where it always went — one command may carry both.
+  const both = cli(['set', 'updateCheck=false', 'codex.timeoutS=42'], { dir });
+  assert.equal(both.code, 0, both.err);
+  assert.match(both.out, /^updateCheck {2}true \[default\] → false \[file\]$/m);
+  assert.match(both.out, /^codex\.timeoutS {2}600 \[default\] → 42 \[file\]$/m);
+  const written = JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8'));
+  assert.equal(written.contract, 'short', 'the earlier key survived the merge');
+  assert.equal(written.updateCheck, false);
+  assert.equal(written.units.codex.timeoutS, 42);
+
+  // Refusals: the enum, a dotted form that is a unit path, and a bare key
+  // that is not a fleet key at all. Nothing is written by any of them.
+  const before = readFileSync(join(dir, 'fleet.config.json'), 'utf8');
+  for (const [assignment, message] of [
+    ['contract=loud', /invalid value for contract: "loud" — expected auto \| full \| short/],
+    ['contract=', /invalid value for contract: "" — expected auto \| full \| short/],
+    ['contract.mode=short', /unknown unit "contract"/],
+    ['nosuchkey=1', /"nosuchkey=1" is not <key>=<value>/],
+  ]) {
+    const r = cli(['set', assignment], { dir });
+    assert.equal(r.code, 1, assignment);
+    assert.match(r.err, message, assignment);
+  }
+  assert.equal(readFileSync(join(dir, 'fleet.config.json'), 'utf8'), before, 'a refusal writes nothing');
+
+  // The block name is in the two help pages that list what they accept.
+  assert.match(cli(['show', '--help'], { dir }).out, /fleet/);
+  assert.match(cli(['set', '--help'], { dir }).out, /contract/);
+  assert.match(cli(['show', 'nope'], { dir }).err, /unknown unit "nope"/);
+});
+
 test('doctor prints the handoff line from the RENDERED guard, and names where the ceiling came from', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);
@@ -2644,6 +2784,46 @@ test('doctor says so when the handoff line came from the GLOBAL guard rather tha
   const own = doctorIn2(proj, dir);
   assert.match(own, /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m, own);
   assert.doesNotMatch(own, /showing the global guard/, own);
+});
+
+test('doctor says which contract a unit server started here would send', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  // `doctor` reports its own `process.cwd()`, which is the RESOLVED path:
+  // `/var/folders/…` is a symlink to `/private/var/folders/…` on macOS.
+  const quoted = realpathSync(proj).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Nothing installed in either scope: the full contract, and the line names
+  // the directory that was looked in — the one thing to check when it is not
+  // the answer you expected.
+  assert.match(doctorIn2(proj, dir), new RegExp(`^contract {6}full \\(no rules file in ${quoted}\\)$`, 'm'), doctorIn2(proj, dir));
+
+  // The project's own rendered file.
+  assert.equal(rulesIn(proj, dir).status, 0);
+  assert.match(doctorIn2(proj, dir), /^contract {6}short \(rules installed here\)$/m);
+
+  // A project with none of its own reads the global scope.
+  const other = join(dir, 'other'); mkdirSync(other);
+  assert.match(doctorIn2(other, dir), /^contract {6}full \(no rules file in /m);
+  assert.equal(rulesIn(other, dir, ['--global']).status, 0);
+  assert.match(doctorIn2(other, dir), /^contract {6}short \(rules installed globally\)$/m);
+
+  // The config key overrides the lookup, and the reason says so rather than
+  // leaving an operator to wonder why the file they installed did nothing.
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, contract: 'full' }));
+  assert.match(doctorIn2(proj, dir), /^contract {6}full \(contract=full\)$/m);
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, contract: 'short' }));
+  assert.match(doctorIn2(other, dir), /^contract {6}short \(contract=short\)$/m);
+
+  // Where it sits: under the managed-file lines, above the client's walls.
+  const lines = doctorIn2(proj, dir).split('\n');
+  assert.ok(lines.findIndex((l) => l.startsWith('contract ')) > lines.findIndex((l) => l.startsWith('hooks ')), lines.join('\n'));
+  assert.ok(lines.findIndex((l) => l.startsWith('contract ')) < lines.findIndex((l) => l.startsWith('mcp timeout')), lines.join('\n'));
+
+  // It is a line an operator has to be able to look up.
+  const help = cli(['doctor', '--help'], { dir });
+  assert.equal(help.code, 0, help.err);
+  assert.match(help.out, /`contract` line/);
 });
 
 test('doctor: an autoCompactWindow that is not a window is skipped and the next file is read — the hook reads them the same way', () => {

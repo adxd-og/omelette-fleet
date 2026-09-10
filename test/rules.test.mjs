@@ -9,9 +9,9 @@ import {
   AGENT_FILES, AGENT_MARKER, AGENT_ROLES, CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, FLEET_CONTRACT,
   HOOK_EVENTS, HOOK_FILES, HOOK_MARKER, HOOK_TEMPLATE_DIR, KINDS,
   MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE,
-  RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH, SETTINGS_FILES, SKILL_FILES, SKILL_MARKER,
+  RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH, SETTINGS_FILES, SHORT_CONTRACT, SKILL_FILES, SKILL_MARKER,
   SKILL_TEMPLATE_DIR,
-  agentSettings, agentsTarget, hookSettingsSnippet, hooksTarget, parseAgentMarker, parseContextWindow, parseHookHandoff, parseHookMarker, parseModelWindow, parseRulesMarker, parseSkillMarker,
+  agentSettings, agentsTarget, contractFor, hookSettingsSnippet, hooksTarget, parseAgentMarker, parseContextWindow, parseHookHandoff, parseHookMarker, parseModelWindow, parseRulesMarker, parseSkillMarker,
   renderAgentFile, renderHookFile, renderRulesFile, renderSkillFile, rulesTarget, settingsTarget, settingsTargets,
   skillsTarget, unitInstructions,
 } from '../core/rules.mjs';
@@ -29,6 +29,27 @@ function home(config) {
   return dir;
 }
 
+/**
+ * A cwd and an env in which NO rules file of ours can be found, in either
+ * scope — the state every contract assertion in this file needs to be exact
+ * about. It cannot be the process cwd: this repository renders its own
+ * managed files into <repo root>/.claude (gitignored), so a developer machine
+ * has a rules file there and CI does not.
+ */
+function nowhere() {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-contract-'));
+  mkdirSync(join(dir, 'global'), { recursive: true });
+  return { cwd: dir, env: { OMELETTE_HOME: dir, CLAUDE_CONFIG_DIR: join(dir, 'global') } };
+}
+
+/** Put a file at one scope's rules path of a `nowhere()`, ours or not. */
+function installRules(o, scope, text) {
+  const { path } = rulesTarget({ global: scope === 'global', cwd: o.cwd, env: o.env });
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+  return path;
+}
+
 test('FLEET_CONTRACT is short plain text that names the two rules that matter', () => {
   assert.ok(FLEET_CONTRACT.length < 1800, `contract is ${FLEET_CONTRACT.length} chars — keep it under one screen`);
   assert.ok(!/^#/m.test(FLEET_CONTRACT), 'no markdown headers in an instructions block');
@@ -38,9 +59,82 @@ test('FLEET_CONTRACT is short plain text that names the two rules that matter', 
 });
 
 test('unitInstructions appends the unit line after a blank line, and copes with none', () => {
-  assert.equal(unitInstructions({ name: 'x' }), FLEET_CONTRACT);
-  assert.equal(unitInstructions({ name: 'x', instructions: '' }), FLEET_CONTRACT);
-  assert.equal(unitInstructions({ name: 'x', instructions: 'This unit: X.' }), `${FLEET_CONTRACT}\n\nThis unit: X.`);
+  // Explicit about WHERE, or the answer would depend on whether the machine
+  // running the suite has this repository's own .claude/rules in place.
+  const o = nowhere();
+  assert.equal(unitInstructions({ name: 'x' }, o), FLEET_CONTRACT);
+  assert.equal(unitInstructions({ name: 'x', instructions: '' }, o), FLEET_CONTRACT);
+  assert.equal(unitInstructions({ name: 'x', instructions: 'This unit: X.' }, o), `${FLEET_CONTRACT}\n\nThis unit: X.`);
+});
+
+test('contractFor: the rules file in the server cwd decides, then the global one, and only OURS counts', () => {
+  const o = nowhere();
+  // Nothing installed anywhere: the full contract, and the reason names the
+  // directory that was looked in — the one thing an operator needs to check.
+  assert.deepEqual(contractFor(o), { text: FLEET_CONTRACT, short: false, reason: `no rules file in ${o.cwd}` });
+
+  // A file at the path that carries no marker of ours is somebody else's file.
+  installRules(o, 'project', '# my own rules about the fleet\n');
+  assert.deepEqual(contractFor(o), { text: FLEET_CONTRACT, short: false, reason: `no rules file in ${o.cwd}` });
+
+  // Ours, at ANY version: one line instead of the contract.
+  installRules(o, 'project', renderRulesFile('0.0.1'));
+  assert.deepEqual(contractFor(o), { text: SHORT_CONTRACT, short: true, reason: 'rules installed here' });
+
+  // The project's file is checked first…
+  installRules(o, 'global', renderRulesFile('9.9.9'));
+  assert.equal(contractFor(o).reason, 'rules installed here');
+
+  // …and the global one answers for a project that has none of its own.
+  installRules(o, 'project', '# my own rules about the fleet\n');
+  assert.deepEqual(contractFor(o), { text: SHORT_CONTRACT, short: true, reason: 'rules installed globally' });
+
+  // A directory at the path, and a path that does not exist, both read as absent.
+  const dirAt = nowhere();
+  mkdirSync(rulesTarget({ cwd: dirAt.cwd, env: dirAt.env }).path, { recursive: true });
+  assert.equal(contractFor(dirAt).short, false);
+});
+
+test('contractFor: `contract` overrides the lookup in both directions, from the caller or from the config', () => {
+  const installed = nowhere();
+  installRules(installed, 'project', renderRulesFile('0.0.1'));
+  // `full` wins over the file that is right there…
+  assert.deepEqual(contractFor({ ...installed, mode: 'full' }), { text: FLEET_CONTRACT, short: false, reason: 'contract=full' });
+
+  // …and `short` wins with no file anywhere.
+  const bare = nowhere();
+  assert.deepEqual(contractFor({ ...bare, mode: 'short' }), { text: SHORT_CONTRACT, short: true, reason: 'contract=short' });
+
+  // The config says it when the caller says nothing — this is how a server
+  // gets it, since nothing passes `mode` down from a settings file by hand.
+  const configured = nowhere();
+  writeFileSync(join(configured.env.OMELETTE_HOME, 'fleet.config.json'), JSON.stringify({ version: 1, contract: 'short' }));
+  assert.deepEqual(contractFor(configured), { text: SHORT_CONTRACT, short: true, reason: 'contract=short' });
+
+  // Anything that is not one of the two is not an override: auto decides.
+  assert.equal(contractFor({ ...bare, mode: 'auto' }).reason, `no rules file in ${bare.cwd}`);
+  assert.equal(contractFor({ ...bare, mode: 'loud' }).reason, `no rules file in ${bare.cwd}`);
+  assert.equal(contractFor({ ...bare, mode: null }).reason, `no rules file in ${bare.cwd}`);
+});
+
+test('the short contract is ONE line naming the rules file, and the unit keeps its own line either way', () => {
+  assert.equal(
+    SHORT_CONTRACT,
+    'omelette-fleet: read-only unit; the operating model is in .claude/rules/omelette-fleet.md — the units propose, you apply.',
+  );
+  assert.equal(SHORT_CONTRACT.includes('\n'), false, 'one line');
+  assert.ok(SHORT_CONTRACT.length * 4 < FLEET_CONTRACT.length, 'the whole point of it is that it is short');
+  // It has to say where the operating model IS, or a session that gets it has
+  // no way back to the thing it replaced.
+  assert.match(SHORT_CONTRACT, /\.claude\/rules\/omelette-fleet\.md/);
+  assert.match(SHORT_CONTRACT, /propose/);
+
+  const o = nowhere();
+  assert.equal(unitInstructions({ name: 'x', instructions: 'This unit: X.' }, o), `${FLEET_CONTRACT}\n\nThis unit: X.`);
+  installRules(o, 'project', renderRulesFile('0.0.1'));
+  assert.equal(unitInstructions({ name: 'x', instructions: 'This unit: X.' }, o), `${SHORT_CONTRACT}\n\nThis unit: X.`);
+  assert.equal(unitInstructions({ name: 'x', instructions: '   ' }, o), SHORT_CONTRACT);
+  assert.equal(unitInstructions({ name: 'x' }, o), SHORT_CONTRACT);
 });
 
 test('the template ships, renders its version everywhere, and round-trips through the marker parser', () => {

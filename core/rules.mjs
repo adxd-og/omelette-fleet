@@ -49,11 +49,11 @@
  * change. The marker stays the proof of ownership; a changed value simply makes
  * the content differ, and the file is rewritten at the same version.
  */
-import { readFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, coerce, handoffSettings, loadFleetConfig } from './config.mjs';
+import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, coerce, fleetSettings, handoffSettings, loadFleetConfig } from './config.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -103,10 +103,89 @@ export const FLEET_CONTRACT = [
   '- Full operating model (session-side orchestration, tester flow, routing table): ask your operator to run `omelette-fleet rules` (it writes into this project\'s .claude/rules), or read docs/ORCHESTRATION.md in the package.',
 ].join('\n');
 
-/** The contract plus the unit's own line, for `initialize.instructions`. */
-export function unitInstructions(unit) {
+/**
+ * THE SHORT CONTRACT. One line, and it exists because the full one above is
+ * ~300 tokens that three unit servers put into every session — including the
+ * sessions whose project already carries the rendered rules file, which says
+ * everything the contract says and a great deal more. Where that file is
+ * loaded, the contract's job is reduced to naming it.
+ *
+ * It still has to carry the two things a model must not have to look up: that
+ * this server is READ-ONLY, and that the units propose while the session
+ * applies. Everything else is one `.claude/rules/omelette-fleet.md` away.
+ */
+export const SHORT_CONTRACT =
+  'omelette-fleet: read-only unit; the operating model is in .claude/rules/omelette-fleet.md — the units propose, you apply.';
+
+/**
+ * How much of a candidate rules file the marker test reads. The marker is
+ * LINE 1 and MARKER_RE is anchored at the start of the string, so a prefix is
+ * all the test can use — and a bounded read is what keeps a server's startup
+ * from depending on the size of a file some project put at that path. 8 KiB
+ * is two orders of magnitude more than the marker line needs.
+ */
+const CONTRACT_READ_BYTES = 8192;
+
+/** Is there a rules file of OURS at this path? Never throws; absent is the normal answer. */
+function marked(path) {
+  let fd = null;
+  try {
+    fd = openSync(path, 'r');
+    const buf = Buffer.alloc(CONTRACT_READ_BYTES);
+    const n = readSync(fd, buf, 0, CONTRACT_READ_BYTES, 0);
+    return parseRulesMarker(buf.toString('utf8', 0, n)) !== null;
+  } catch {
+    // Absent, a directory, unreadable, a device that will not answer a read:
+    // all of them mean "this session has no rules file of ours", which is the
+    // state the full contract exists for.
+    return false;
+  } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
+  }
+}
+
+/**
+ * WHICH CONTRACT THIS SERVER SHOULD SEND, and why — the reason is half the
+ * answer, because `doctor` prints it and an operator who sees one line where
+ * they expected three hundred tokens is owed an explanation.
+ *
+ * `cwd` is the directory the server was STARTED in: Claude Code starts an MCP
+ * server in the session's project directory, so the project's own
+ * `.claude/rules/omelette-fleet.md` — the file `omelette-fleet rules` writes,
+ * and the one that will be in that session's context — is right there. The
+ * global scope is checked second, with the same marker test, because
+ * `rules --global` is a supported install. A file WITHOUT our marker is
+ * somebody else's file and counts as nothing: the marker is the only proof of
+ * ownership anywhere in this package, and it does not become a weaker one
+ * here.
+ *
+ * `mode` is the `contract` config key for the operator who would rather
+ * decide than be detected. Anything other than `full` or `short` — `auto`,
+ * undefined, a typo — means "look", which is also what an invalid config
+ * value already resolves to.
+ *
+ * @param {{cwd?:string, env?:object, mode?:string}} o
+ * @returns {{text:string, short:boolean, reason:string}}
+ */
+export function contractFor({ cwd = process.cwd(), env = process.env, mode } = {}) {
+  const asked = mode === undefined || mode === null ? fleetSettings(env).contract : mode;
+  if (asked === 'full') return { text: FLEET_CONTRACT, short: false, reason: 'contract=full' };
+  if (asked === 'short') return { text: SHORT_CONTRACT, short: true, reason: 'contract=short' };
+  if (marked(rulesTarget({ cwd, env }).path)) return { text: SHORT_CONTRACT, short: true, reason: 'rules installed here' };
+  if (marked(rulesTarget({ global: true, cwd, env }).path)) return { text: SHORT_CONTRACT, short: true, reason: 'rules installed globally' };
+  return { text: FLEET_CONTRACT, short: false, reason: `no rules file in ${cwd}` };
+}
+
+/**
+ * The contract plus the unit's own line, for `initialize.instructions`. The
+ * options are `contractFor`'s, forwarded whole: which contract is sent is
+ * decided in exactly one place, and a caller that passes nothing gets the
+ * answer for this process's own directory and environment.
+ */
+export function unitInstructions(unit, o = {}) {
   const own = unit && typeof unit.instructions === 'string' ? unit.instructions.trim() : '';
-  return own ? `${FLEET_CONTRACT}\n\n${own}` : FLEET_CONTRACT;
+  const { text } = contractFor(o);
+  return own ? `${text}\n\n${own}` : text;
 }
 
 /** The managed file's full text for this package version. */

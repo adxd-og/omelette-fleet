@@ -55,7 +55,10 @@ test('initialize still reports serverInfo, capabilities and protocolVersion alon
     serverInfo: { name: 'omelette-fake', version: '1.2.3' },
     tools: [{ name: 't', description: 'd', inputSchema: { type: 'object', properties: {} } }],
     callTool: async () => ({ text: '' }),
-    instructions: unitInstructions({ name: 'fake', instructions: 'This unit: Fake.' }),
+    // `mode: 'full'` pins WHICH contract, so this test stays about serverInfo,
+    // capabilities and protocolVersion surviving beside `instructions` —
+    // rather than about whether the machine running it has a rules file.
+    instructions: unitInstructions({ name: 'fake', instructions: 'This unit: Fake.' }, { mode: 'full' }),
   });
   const r = await handler({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-01-01' } });
   assert.equal(r.result.protocolVersion, '2025-01-01');

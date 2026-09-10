@@ -74,7 +74,7 @@
  */
 import { resolve as resolvePath } from 'node:path';
 import { serve } from './jsonrpc.mjs';
-import { unitInstructions } from './rules.mjs';
+import { contractFor, unitInstructions } from './rules.mjs';
 import { runProcess } from './spawn.mjs';
 import { createStatus, previewText } from './status.mjs';
 import { unitConfig } from './config.mjs';
@@ -523,10 +523,20 @@ export function startUnit(unit, opts = {}) {
   const rt = createUnitRuntime(unit, opts);
   const cfg = rt.cfgFor();
   for (const w of cfg.warnings) rt.log('config: ' + w);
+  // WHERE THIS SERVER STANDS decides how much contract it sends: Claude Code
+  // starts an MCP server in the session's project directory, so a project
+  // that carries the rendered rules file already has everything the full
+  // contract says — and more — in the same context. Resolved ONCE, here, like
+  // `bin`: a rules file written later reaches the next session, which is when
+  // the rules file itself starts applying too. The same options object goes
+  // to the log line and to the instructions, so the two cannot disagree.
+  const where = { cwd: process.cwd(), env: opts.env || process.env };
+  const contract = contractFor(where);
   rt.log(
     `up · bin=${rt.bin} · mode=${cfg.values.mode}` +
     `${cfg.values.requestedMode !== cfg.values.mode ? ` (requested ${cfg.values.requestedMode}, ceiling closed)` : ''}` +
     ` · hard-kill=${cfg.values.timeoutS}s · default-model=${cfg.values.model || VENDOR_DEFAULT_MODEL}` +
+    ` · contract=${contract.short ? 'short' : 'full'} (${contract.reason})` +
     ` · status=${cfg.values.status ? cfg.home : 'off'} · config=${cfg.configPath}`,
   );
   // "There is a newer fleet" is worth one stderr line and nothing more: the
@@ -542,7 +552,7 @@ export function startUnit(unit, opts = {}) {
   }).then(() => {});
   serve({
     serverInfo: { name: unit.serverName, version: unit.version },
-    instructions: unitInstructions(unit),
+    instructions: unitInstructions(unit, where),
     tools: rt.tools,
     callTool: rt.callTool,
     log: rt.log,
