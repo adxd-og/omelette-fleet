@@ -464,7 +464,7 @@ test('finish hands P2 the whole result record — once per finished spawn call, 
   const rec = records[0];
   assert.deepEqual(Object.keys(rec).sort(), [
     'cwd', 'detached', 'durationMs', 'effort', 'endedAt', 'model', 'partial',
-    'promptPreview', 'resultId', 'startedAt', 'status', 'text', 'tool',
+    'promptPreview', 'resultId', 'startedAt', 'status', 'text', 'tool', 'usage',
   ]);
   assert.equal(rec.tool, 'fake_research');
   assert.equal(rec.status, 'ok');
@@ -472,6 +472,7 @@ test('finish hands P2 the whole result record — once per finished spawn call, 
   assert.equal(rec.detached, false);
   assert.equal(rec.cwd, '/tmp/project');
   assert.equal(rec.promptPreview, 'what is up');
+  assert.deepEqual(rec.usage, { out: 1 }, "the adapter's object, verbatim — the header decides what is writable");
   assert.match(rec.resultId, /^\d{8}T\d{6}Z-\d+-\d+$/);
   assert.match(rec.startedAt, /^\d{4}-\d\d-\d\dT/);
   assert.match(rec.endedAt, /^\d{4}-\d\d-\d\dT/);
@@ -487,6 +488,7 @@ test('finish hands P2 the whole result record — once per finished spawn call, 
   assert.equal(records[1].status, 'error');
   assert.match(records[1].text, /unknown model "m-nope"/);
   assert.equal(records[1].cwd, '');
+  assert.equal(records[1].usage, null, 'a refusal reported no tokens, and null is how it says so');
   // A partial answer says so, and the feed being OFF changes nothing here.
   const off = createUnitRuntime(fakeUnit(), { env: { ...e, OMELETTE_STATUS: '0' }, onResult: (rec2) => records.push(rec2) });
   await off.callTool('fake_partial', {});
@@ -790,4 +792,38 @@ test('`<unit>_result` hands back exactly the string the spool file carries', asy
   // same file (bin/omelette-fleet.mjs, cmdResults).
   assert.ok(back.text.startsWith(body), 'the tool answers with the file, verbatim, then the listing');
   assert.match(back.text, /\nmodel: \(vendor default\)\n/);
+});
+
+/** The fake unit plus one tool that reports the usage a vendor would. */
+const countingUnit = (usage) => fakeUnit({
+  tools: [
+    ...fakeUnit().tools,
+    {
+      name: 'fake_tokens', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+      run: () => ({ text: 'counted', usage }),
+    },
+  ],
+});
+
+test('the tokens an adapter reports reach the spooled record, the feed, and nothing else', async () => {
+  // Codex's shape: all four counts.
+  const codexLike = env(null);
+  await createUnitRuntime(countingUnit({ input: 60835, cachedInput: 45312, output: 236, reasoning: 103 }), { env: codexLike.env })
+    .callTool('fake_tokens', {});
+  const one = readSpooled(codexLike.dir, spooled(codexLike.dir)[0]);
+  assert.deepEqual(one.header.usage, { input: 60835, output: 236, cachedInput: 45312, reasoning: 103 });
+  assert.equal(one.text, 'counted');
+
+  // A run whose CLI reported nothing: no line, and no zero standing in for one.
+  const silent = env(null);
+  await createUnitRuntime(countingUnit(null), { env: silent.env }).callTool('fake_tokens', {});
+  const name = spooled(silent.dir)[0];
+  assert.equal(readSpooled(silent.dir, name).header.usage, undefined);
+  assert.ok(!readFileSync(join(spoolDir(silent.dir), name), 'utf8').includes('usage:'));
+
+  // And the status feed still gets the object it always got.
+  const feed = env(null);
+  const rt = createUnitRuntime(countingUnit({ input: 1, output: 2 }), { env: feed.env });
+  await rt.callTool('fake_tokens', {});
+  assert.deepEqual(rt.status.lastEvent.usage, { input: 1, output: 2 });
 });

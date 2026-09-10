@@ -50,7 +50,10 @@
  * fragment and must say so rather than pass it off as a whole answer.
  * `partial: true` marks an answer whose run did not finish (a hard kill whose
  * captured text was kept): still a success, still `isError: false`, and the
- * flag travels to the status feed's `end()` extra next to `usage`.
+ * flag travels to the status feed's `end()` extra next to `usage`. Both reach
+ * the spooled record as well: `usage` is filed on it verbatim, and
+ * core/results.mjs writes its `usage:` header line only for a reported
+ * input/output pair — a vendor that said nothing leaves no line, not a zero.
  * `ctx.signal` is an AbortSignal when the unit's `cancel` is `kill` and the
  * request was cancelled-capable, and `undefined` otherwise: a pipeline checks
  * it between stages so a cancelled request stops spending spawns. Under
@@ -448,6 +451,12 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
           // the adapter says it pinned, else the vendor's own choice, named.
           model: model || reportedModel || VENDOR_DEFAULT_MODEL,
           effort,
+          // The tokens the adapter reported — the SAME object the status feed's
+          // `end` event carries — or null when the vendor said nothing about
+          // them (every image run, a stream that carried no counts). The header
+          // writes a line only for a reported pair, so "nothing" is never filed
+          // as a zero, and a reader can tell the two apart afterwards.
+          usage: (extra && extra.usage) || null,
           startedAt,
           endedAt: new Date().toISOString(),
           durationMs: Date.now() - t0,
