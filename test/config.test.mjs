@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   unitConfig, effectiveMode, allowWriteUnits, loadFleetConfig, writeFleetConfig, fleetHome, fleetSettings,
   coerce, AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, SETTINGS_SCHEMA, handoffSettings, CONFIG_VERSION, KEY_SCHEMA,
+  WORKFLOW_SCHEMA, workflowSettings,
 } from '../core/config.mjs';
 
 function home(config) {
@@ -424,4 +425,51 @@ test('handoffSettings: compactSummary is a file value like any other, and an inv
   assert.equal(bad.compactSummary, true, 'an invalid value is the default, never a throw');
   assert.equal(bad.sources.compactSummary, 'default');
   assert.ok(bad.warnings.some((w) => /handoff\.compactSummary = "sometimes" is invalid — ignored/.test(w)), bad.warnings.join(' | '));
+});
+
+test('WORKFLOW_SCHEMA: one key, two values, and `session` is the default', () => {
+  assert.deepEqual(Object.keys(WORKFLOW_SCHEMA), ['merge']);
+  assert.deepEqual(WORKFLOW_SCHEMA.merge.values, ['session', 'pr']);
+  assert.equal(WORKFLOW_SCHEMA.merge.default, 'session');
+  assert.equal(WORKFLOW_SCHEMA.merge.type, 'enum');
+  // An ordinary `coerce` spec, and the enum is exact — no case folding, no third value.
+  assert.deepEqual(coerce(WORKFLOW_SCHEMA.merge, 'pr'), { ok: true, value: 'pr' });
+  assert.deepEqual(coerce(WORKFLOW_SCHEMA.merge, 'session'), { ok: true, value: 'session' });
+  assert.deepEqual(coerce(WORKFLOW_SCHEMA.merge, 'PR'), { ok: false });
+  assert.deepEqual(coerce(WORKFLOW_SCHEMA.merge, 'squash'), { ok: false });
+  assert.deepEqual(coerce(WORKFLOW_SCHEMA.merge, true), { ok: false });
+});
+
+test('workflowSettings: the file value with its source, an invalid one warned and defaulted, never fatal', () => {
+  // No file at all: the built-in default, no warnings.
+  const bare = workflowSettings({ OMELETTE_HOME: home() });
+  assert.equal(bare.merge, 'session');
+  assert.deepEqual(bare.warnings, []);
+  assert.deepEqual(bare.sources, { merge: 'default' });
+  assert.match(bare.configPath, /fleet\.config\.json$/);
+
+  const set = workflowSettings({ OMELETTE_HOME: home({ version: 1, workflow: { merge: 'pr' } }) });
+  assert.equal(set.merge, 'pr');
+  assert.deepEqual(set.sources, { merge: 'file' });
+  assert.deepEqual(set.warnings, []);
+
+  // An invalid value and an unknown key are warnings and the default — the
+  // alternative is `rules` refusing to write the file a session needs.
+  const bad = workflowSettings({ OMELETTE_HOME: home({ workflow: { merge: 'squash', gate: 'ci' } }) });
+  assert.equal(bad.merge, 'session');
+  assert.equal(bad.sources.merge, 'default');
+  assert.ok(bad.warnings.some((w) => /workflow\.merge = "squash" is invalid — ignored/.test(w)), bad.warnings.join(' | '));
+  assert.ok(bad.warnings.some((w) => /workflow\.gate is not a known key — ignored/.test(w)), bad.warnings.join(' | '));
+
+  // A block of the wrong shape, and a malformed file: the same rule.
+  const shape = workflowSettings({ OMELETTE_HOME: home({ workflow: 'pr' }) });
+  assert.equal(shape.merge, 'session');
+  assert.ok(shape.warnings.some((w) => /workflow is not an object — ignored/.test(w)), shape.warnings.join(' | '));
+  const broken = workflowSettings({ OMELETTE_HOME: home('{ not json') });
+  assert.equal(broken.merge, 'session');
+  assert.ok(broken.warnings.some((w) => /fleet config:/.test(w)));
+
+  // The unit layer is untouched by any of it.
+  const dir = home({ workflow: { merge: 'pr' }, units: { codex: { timeoutS: 7 } } });
+  assert.equal(unitConfig({ unit: 'codex', supportedModes: MODES_CODEX, env: { OMELETTE_HOME: dir } }).values.timeoutS, 7);
 });

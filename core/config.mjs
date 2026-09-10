@@ -8,6 +8,7 @@
  *     "contract": "auto",
  *     "agents": { "coder": { model, effort }, "tester": { model, effort, maxTurns } },
  *     "handoff": { enabled, threshold, contextWindow, compactSummary },
+ *     "workflow": { merge },
  *     "defaults": { ...keys applied to every unit... },
  *     "units": { "<unit>": { enabled, mode, model, effort, timeoutS, maxTurns,
  *                            outputCap, webSearch, status, cancel, ... } } }
@@ -309,6 +310,56 @@ export function handoffSettings(env = process.env) {
   }
   for (const key of Object.keys(block)) {
     if (!(key in HANDOFF_SCHEMA)) warnings.push(`fleet config: handoff.${key} is not a known key — ignored`);
+  }
+  return { ...values, sources, warnings, configPath: path };
+}
+
+/**
+ * THE MERGE POLICY, as config: a fourth top-level block, beside `agents` and
+ * `handoff` and for the same reason — it configures a managed FILE rather than
+ * a unit, and nothing reads it at call time. `omelette-fleet rules` renders
+ * `merge` into the one sentence of the rules file that says how a finished
+ * feature branch reaches main (core/rules.mjs, `MERGE_SENTENCES`), so a team
+ * whose main is gated by pull requests ships rules that say so instead of rules
+ * telling the session to merge.
+ *
+ * One key, two values, and no third: `session` is this package's own flow and
+ * `pr` is the other one. This block decides what the rules SAY; it opens no
+ * pull request and merges nothing, and nothing in the fleet acts on it.
+ */
+export const WORKFLOW_SCHEMA = {
+  merge: { type: 'enum', values: ['session', 'pr'], default: 'session' },
+};
+
+/**
+ * The `workflow` block, validated, with where every value came from — the same
+ * contract `handoffSettings` has and never fatal for the same reason: an invalid
+ * value is a WARNING and the built-in default, because the alternative is
+ * `omelette-fleet rules` refusing to write the rules file a session needs.
+ *
+ * @returns {{merge:string, sources:object, warnings:string[], configPath:string}}
+ */
+export function workflowSettings(env = process.env) {
+  const { config, error, path } = loadFleetConfig(env);
+  const warnings = [];
+  if (error) warnings.push(`fleet config: ${error}`);
+
+  const raw = isObj(config) ? config.workflow : undefined;
+  if (raw !== undefined && !isObj(raw)) warnings.push('fleet config: workflow is not an object — ignored');
+  const block = isObj(raw) ? raw : {};
+
+  const values = {};
+  const sources = {};
+  for (const [key, spec] of Object.entries(WORKFLOW_SCHEMA)) {
+    values[key] = spec.default;
+    sources[key] = 'default';
+    if (block[key] === undefined) continue;
+    const c = coerce(spec, block[key]);
+    if (c.ok) { values[key] = c.value; sources[key] = 'file'; }
+    else warnings.push(`fleet config: workflow.${key} = ${JSON.stringify(block[key])} is invalid — ignored`);
+  }
+  for (const key of Object.keys(block)) {
+    if (!(key in WORKFLOW_SCHEMA)) warnings.push(`fleet config: workflow.${key} is not a known key — ignored`);
   }
   return { ...values, sources, warnings, configPath: path };
 }
