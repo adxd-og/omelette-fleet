@@ -744,16 +744,43 @@ function processGone(pid, ms = 3000) {
   }
 }
 
-test('doctor --probe-sandbox: the probe has ONE deadline of its own, it ENDS the run, and the directory is read the moment it fires', () => {
+test('doctor --probe-sandbox: the directory is read after the aborted call has SETTLED, so a write still in flight is not missed', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  // The fake hands its stdout to a DETACHED grandchild and hangs. The abort
+  // SIGKILLs the fake's process group, which the grandchild is no longer in:
+  // it writes into the probe directory 1.5 s later — past the 1 s deadline —
+  // and only then does the call settle, because the pipe it holds is what
+  // core/spawn.mjs waits on. Reading the directory the instant the deadline
+  // fires would call this `skipped`; it is a write, and it is a BREACH.
+  const fake = probeScript(dir, 'leaky-cli', [
+    "const { spawn } = require('child_process');",
+    'const g = spawn(process.execPath, ["-e",',
+    '  "setTimeout(() => { require(\'fs\').writeFileSync(process.argv[1], \'probe\'); process.exit(0); }, 1500);",',
+    "  p.join(cwd, 'probe.txt')],",
+    "  { detached: true, stdio: ['ignore', 1, 'ignore'] });",
+    'g.unref();',
+    'setTimeout(() => process.exit(0), 60000);',
+  ].join('\n'));
+  registerOurs(dir, ['gemini']);
+  fleetConfig(dir, { gemini: { timeoutS: 1 } });
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: fake, GROK_BIN: gone, CODEX_BIN: gone }, timeout: 30000 });
+  assert.match(r.out, /── gemini[\s\S]*?sandbox\s+BREACHED — \S+probe\.txt was created \(\d+ s\)/, r.out + r.err);
+  assert.equal(r.code, 1, r.out);
+});
+
+test('doctor --probe-sandbox: the probe has ONE deadline of its own, it ENDS the run, and the directory is read once the run is over', () => {
   const dir = home();
   const gone = join(dir, 'no-such');
   const pidFile = join(dir, 'late-cli.pid');
   // agy's own hard kill sits 60 s ABOVE the timeout it hands the CLI, so this
-  // child is NOT what ends the call — only the probe's deadline is. It writes
-  // two seconds past that deadline (a write nobody waited for is one the probe
-  // never saw: `skipped`, not a verdict) and would then sit there for a
-  // minute. Nothing but the abort the deadline raises can end it, and until
-  // it ends, doctor's own event loop cannot drain.
+  // child is NOT what ends the call — only the probe's deadline is. It sleeps
+  // first and would write two seconds past that deadline, but the abort kills
+  // it before it gets there: this is the deterministic other end of the race
+  // the settled-read test pins — a write that never happened, because the pid
+  // was gone before it could, is `skipped` and not a verdict. It would then
+  // have sat there for a minute, and until it ends doctor's own event loop
+  // cannot drain.
   const fake = probeScript(dir, 'late-cli', [
     `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
     'setTimeout(() => {',
@@ -780,12 +807,13 @@ test('doctor --probe-sandbox: the probe has ONE deadline of its own, it ENDS the
   assert.equal(processGone(pid), true, `pid ${pid} outlived doctor`);
 });
 
-test('doctor --probe-sandbox: a file already on disk is BREACHED at the deadline, timed as the wait that happened', () => {
+test('doctor --probe-sandbox: a file the run wrote before the deadline is BREACHED, timed as the wait that happened', () => {
   const dir = home();
   const gone = join(dir, 'no-such');
-  // Written at once, then the run hangs well past the cap: the deadline fires,
-  // the directory is inspected there and then, and the seconds on the line are
-  // the wait the probe actually did — not the wait the CLI would have needed.
+  // Written at once, then the run hangs well past the cap: the write BEAT the
+  // kill, so the verdict is a breach, and the seconds on the line are the wait
+  // the probe did for an answer — not the wait the CLI would have needed, and
+  // not the moment the abandoned call finally settled.
   const fake = probeScript(dir, 'write-then-hang', [
     "fs.writeFileSync(p.join(cwd, 'probe.txt'), 'probe');",
     'setTimeout(() => process.exit(0), 3000);',

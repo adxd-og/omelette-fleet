@@ -2102,6 +2102,26 @@ function sandboxLabel({ verdict, reason, seconds, reply, path }) {
 const PROBE_DEADLINE = Symbol('probe deadline');
 
 /**
+ * How long the probe waits for the ABORTED call to settle before it reads the
+ * directory. The abort SIGKILLs the process group, so the settle is usually
+ * immediate — but "usually" is not a verdict: a write already in flight, or a
+ * child of the vendor process still holding the pipe open, lands in the
+ * directory AFTER the deadline fired, and reading it a moment too early would
+ * report a breach as `skipped`. Bounded because doctor is a diagnosis and never
+ * hangs on one: past this the directory is read regardless.
+ */
+const PROBE_SETTLE_MS = 5000;
+
+/** Wait for `p` to settle, or `ms`, whichever comes first. Never rejects. */
+function settleWithin(p, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (timer.unref) timer.unref();
+    Promise.resolve(p).then(() => { clearTimeout(timer); resolve(); }, () => { clearTimeout(timer); resolve(); });
+  });
+}
+
+/**
  * A run that produced no answer at all. The runtime never hands back a blank
  * string — an adapter that returns nothing is reported as its own placeholder
  * (core/unit.mjs) — so BOTH forms are the same event here: nothing was said.
@@ -2113,21 +2133,16 @@ const emptyReply = (unit, text) => {
 
 /**
  * The environment the probe hands `createUnitRuntime`: doctor's own, with one
- * value changed — the probe's ceiling on this unit's timeout — and one path
- * resolved.
+ * value changed — the probe's ceiling on this unit's timeout.
  *
  * `OMELETTE_HOME` is read by THIS process, which since 0.3.6 never leaves the
  * directory the operator ran `doctor` in, so a relative one means exactly what
  * it means for `doctor` with no flag at all: it is left exactly as it was
- * given. A relative `<UNIT>_BIN` is a different path in a different process —
- * the RUN happens in the probe's throwaway directory, because the research
- * tool was asked to run there (`cwd`), and a command WITH a path separator is
- * resolved by the OS against the child's own cwd. It is absolutised here,
- * against the directory the operator is standing in, or it would not exist
- * where the child looks for it. A bare name is not a path and is left alone:
- * that one is for PATH to resolve.
+ * given. A relative `<UNIT>_BIN` needs nothing here either — `createUnitRuntime`
+ * resolves the binary once against the cwd of the process that starts the unit,
+ * which for the probe is doctor's own (core/unit.mjs, resolveBin).
  */
-function probeRuntimeEnv(unit, env, { capS, from }) {
+function probeRuntimeEnv(unit, env, { capS }) {
   const built = { ...env };
   // The probe's ceiling reaches the adapter the only way a per-call bound can:
   // the unit's own timeout env var, which unitConfig resolves above the file.
@@ -2136,9 +2151,6 @@ function probeRuntimeEnv(unit, env, { capS, from }) {
   // install does.
   const timeoutEnv = unit.envMap && unit.envMap.timeoutS;
   if (timeoutEnv) built[timeoutEnv] = String(capS);
-  const binEnv = unit.bin && unit.bin.env;
-  const bin = binEnv ? String(env[binEnv] || '').trim() : '';
-  if (bin && (bin.includes('/') || bin.includes('\\'))) built[binEnv] = resolvePath(from, bin);
   return built;
 }
 
@@ -2174,12 +2186,16 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
     let failed = false;
     let timedOut = false;
     let timer = null;
+    // When the probe stopped waiting for an ANSWER. It is the number on the
+    // line, and the wait for the aborted call to settle is deliberately not
+    // part of it: `timed out after N s` names the deadline the operator set.
+    let decidedAt = 0;
     try {
       // `cancel: 'kill'` for THIS runtime only (core/unit.mjs), whatever the
       // operator configured: it is what makes the signal below reach the
       // spawn. Under `finish` the runtime passes nothing down, and the
       // deadline would end the WAIT without ending the RUN.
-      const rt = createUnitRuntime(unit, { env: probeRuntimeEnv(unit, env, { capS, from: process.cwd() }), cancel: 'kill' });
+      const rt = createUnitRuntime(unit, { env: probeRuntimeEnv(unit, env, { capS }), cancel: 'kill' });
       // The three research tools take a `cwd` (0.3.6), so the vendor process
       // runs in the probe directory because it was ASKED to — not because
       // doctor stood there. A cwd-relative write still lands in the directory
@@ -2195,18 +2211,23 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
       // call is doing: doctor is a diagnosis, and it never hangs on one.
       const deadline = new Promise((settle) => { timer = setTimeout(() => settle(PROBE_DEADLINE), capS * 1000); });
       const r = await Promise.race([call, deadline]);
+      decidedAt = Date.now();
       if (r === PROBE_DEADLINE) {
         timedOut = true;
         // ENDED, not merely abandoned. The abort reaches every spawn the call
         // owns and SIGKILLs the process group at once; without it doctor sat
         // on the child's own bounds after it had already printed its line —
         // `timeoutS + 60 s` for gemini — because an open stdout pipe keeps
-        // this process's event loop alive. The verdict logic below is
-        // unchanged: the directory is read here and now.
+        // this process's event loop alive.
         controller.abort();
-        // The abandoned call still settles, as `cancelled`, and its answer
-        // must not reach this process as an unhandled rejection.
-        Promise.resolve(call).catch(() => {});
+        // THEN wait for the call to settle, briefly, before the directory is
+        // read: the kill is asynchronous, and a write the vendor process (or
+        // something it left behind) had already started lands after the
+        // deadline fired. Reading a directory while the run is still alive is
+        // a race whose losing side reports a BREACH as `skipped`. The wait
+        // also disposes of the abandoned call's answer, which must not reach
+        // this process as an unhandled rejection.
+        await settleWithin(call, PROBE_SETTLE_MS);
       } else {
         text = (r && r.text) || '';
         // A refusal, an auth failure or a crashed CLI all arrive here as an
@@ -2221,7 +2242,7 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
     } finally {
       if (timer) clearTimeout(timer);
     }
-    const seconds = Math.round((Date.now() - started) / 1000);
+    const seconds = Math.round(((decidedAt || Date.now()) - started) / 1000);
     const reply = firstLine(text).slice(0, 80);
     // THE VERDICT IS THE FILESYSTEM — and the directory itself is part of it.
     // One that is GONE, or is not a directory any more, was written to as
