@@ -2483,7 +2483,20 @@ async function cmdDoctor(argv) {
   // a directory it was only asked about. `held` and `skipped` change nothing,
   // and neither does a probe nobody asked for.
   if (breaches) out(`${breaches} unit(s) BREACHED the sandbox probe — see the sandbox lines above.`);
-  return faults || breaches ? 1 : 0;
+  const code = faults || breaches ? 1 : 0;
+  // DOCTOR ENDS ITSELF. A probe's vendor process can leave a detached
+  // grandchild holding the stdout pipe it inherited, and that pipe is a handle
+  // this process cannot close: the call it belongs to never settles, the probe
+  // reads the directory on the settle wait's own bound and reports — and then
+  // an event loop with a live read stream on it keeps a finished one-shot CLI
+  // alive for as long as the orphan lives. Exiting on the flush callback ends
+  // it with the whole report written; the probe directory is already gone
+  // (probeUnit's finally), so there is nothing left to clean up. ONLY doctor
+  // does this — every other command returns its code and lets the loop drain.
+  // The returned code is not dead weight either: it sets process.exitCode, so
+  // a run whose stdout never reports a flush still exits correctly on its own.
+  process.stdout.write('', () => process.exit(code));
+  return code;
 }
 
 // ─── show / set ──────────────────────────────────────────────────────────────

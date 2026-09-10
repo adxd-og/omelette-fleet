@@ -769,6 +769,45 @@ test('doctor --probe-sandbox: the directory is read after the aborted call has S
   assert.equal(r.code, 1, r.out);
 });
 
+test('doctor --probe-sandbox: a grandchild still holding stdout past the settle wait does not keep doctor alive', () => {
+  const dir = home();
+  const gone = join(dir, 'no-such');
+  // The same leak, taken to its worst case: the detached grandchild writes at
+  // once and then sits on the inherited stdout pipe for 30 s. The call NEVER
+  // settles inside PROBE_SETTLE_MS, so the probe reads the directory on the
+  // wait's own bound — and the pipe is a handle this process cannot close, so
+  // a doctor that merely set an exit code would stay alive for the orphan's
+  // whole life. It ends itself instead, once the report is out.
+  const fake = probeScript(dir, 'leaky-hold-cli', [
+    "const { spawn } = require('child_process');",
+    'const g = spawn(process.execPath, ["-e",',
+    '  "require(\'fs\').writeFileSync(process.argv[1], \'probe\'); setTimeout(() => process.exit(0), 30000);",',
+    "  p.join(cwd, 'probe.txt')],",
+    "  { detached: true, stdio: ['ignore', 1, 'ignore'] });",
+    'g.unref();',
+    'setTimeout(() => process.exit(0), 60000);',
+  ].join('\n'));
+  registerOurs(dir, ['gemini']);
+  fleetConfig(dir, { gemini: { timeoutS: 1 } });
+  const t0 = Date.now();
+  // The net: 40 s is longer than the orphan lives, so a doctor that waited for
+  // it fails on the elapsed time below rather than hanging the suite.
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: fake, GROK_BIN: gone, CODEX_BIN: gone }, timeout: 40000 });
+  const elapsed = Date.now() - t0;
+  const m = /── gemini[\s\S]*?sandbox\s+BREACHED — (\S+probe\.txt) was created \(\d+ s\)/.exec(r.out);
+  assert.ok(m, r.out + r.err);
+  assert.equal(r.code, 1, r.out);
+  // capS (1 s) + the settle wait (5 s) + 5 s of slack: the orphan's 30 s is
+  // not part of it.
+  assert.ok(elapsed < 11000, `doctor took ${elapsed} ms — the leaked pipe kept it alive`);
+  // The probe directory still went, and the whole report reached stdout: the
+  // explicit exit waits for the flush, so nothing after the sandbox line is
+  // cut off.
+  assert.equal(existsSync(dirname(m[1])), false);
+  assert.match(r.out, /1 unit\(s\) BREACHED the sandbox probe — see the sandbox lines above\./);
+  assert.match(r.out, /── codex[\s\S]*?sandbox\s+skipped \(not registered\)/);
+});
+
 test('doctor --probe-sandbox: the probe has ONE deadline of its own, it ENDS the run, and the directory is read once the run is over', () => {
   const dir = home();
   const gone = join(dir, 'no-such');
