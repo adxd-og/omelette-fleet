@@ -404,6 +404,41 @@ test('ctx.signal reaches an adapter only under `cancel: kill`', async () => {
   assert.equal((await killing.callTool('fake_signal', {})).text, 'signal=no');
 });
 
+test('createUnitRuntime({ cancel }) overrides the configured policy for that runtime alone', async () => {
+  // doctor's probe owns a deadline of its own, and a deadline that does not
+  // reach the child is one the child outlives. It builds its runtime with
+  // `kill` whatever the operator configured — and changes nothing for the
+  // unit servers, which pass no `cancel` at all.
+  const { dir, env: e } = env({ units: { fake: { cancel: 'finish' } } });
+  const killing = createUnitRuntime(fakeUnit(), { env: e, cancel: 'kill' });
+  const c = new AbortController();
+  const abort = setTimeout(() => c.abort(), 120);
+  if (abort.unref) abort.unref();
+  const t0 = Date.now();
+  const r = await killing.callTool('fake_cancel', {}, { id: 1, signal: c.signal });
+  assert.equal(r.text, 'killed=true;cancelled=true', 'the config said finish; this runtime kills');
+  assert.ok(Date.now() - t0 < 700, 'the child died with the cancel instead of running its course');
+  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'cancelled');
+  // The adapter sees the signal it only ever gets under `kill`.
+  assert.equal((await killing.callTool('fake_signal', {}, { signal: new AbortController().signal })).text, 'signal=yes');
+
+  // …and the override goes both ways: a unit configured `kill` can be built to finish.
+  const { env: e2 } = env({ units: { fake: { cancel: 'kill' } } });
+  const finishing = createUnitRuntime(fakeUnit(), { env: e2, cancel: 'finish' });
+  const c2 = new AbortController();
+  const abort2 = setTimeout(() => c2.abort(), 120);
+  if (abort2.unref) abort2.unref();
+  assert.equal((await finishing.callTool('fake_cancel', {}, { id: 2, signal: c2.signal })).text, 'killed=false;cancelled=false');
+
+  // Anything that is not one of the two values is not an override at all.
+  const configured = createUnitRuntime(fakeUnit(), { env: e2, cancel: 'nonsense' });
+  const c3 = new AbortController();
+  const abort3 = setTimeout(() => c3.abort(), 120);
+  if (abort3.unref) abort3.unref();
+  assert.equal((await configured.callTool('fake_cancel', {}, { id: 3, signal: c3.signal })).text, 'killed=true;cancelled=true');
+});
+
 test('boundedRetry: an abort during the delay ends it and stops the retry instead of paying for a second run', async () => {
   const c = new AbortController();
   let n = 0;

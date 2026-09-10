@@ -211,8 +211,17 @@ function answerResult(store, args, unitName) {
  * progress ticker on a fast clock, the second REPLACES the result spool — the
  * default hook writes the record to core/results.mjs, and a caller that passes
  * its own is the only way to see the record a finished call produces.
+ * `cancel` is the third and the narrowest: `'kill'` or `'finish'` overrides
+ * `cfg.values.cancel` for THIS runtime instance only, and changes nothing for
+ * anyone else — the operator's config is not read differently, not rewritten
+ * and not reloaded. INTERNAL to `doctor --probe-sandbox`, which owns a
+ * deadline of its own and needs the abort it raises to reach the vendor
+ * process group: under `finish` the runtime passes no signal down, and the
+ * probe would walk away from a child that keeps running on the operator's
+ * subscription. Anything else — undefined included — means "whatever the
+ * config says", which is what every unit server gets.
  */
-export function createUnitRuntime(unit, { env = process.env, progressEveryMs = PROGRESS_EVERY_MS, onResult = null } = {}) {
+export function createUnitRuntime(unit, { env = process.env, progressEveryMs = PROGRESS_EVERY_MS, onResult = null, cancel = null } = {}) {
   const log = makeLog(unit.name);
   const warnOnce = makeOnceLog(log);
   let resultSeq = 0;
@@ -391,7 +400,10 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
     //            marked `detached` (no response is sent: the handler drops it);
     //   kill   — the signal goes down to every spawn and pending retry delay,
     //            and the call ends with the outcome `cancelled`.
-    const cancelMode = cfg.values.cancel;
+    // A runtime built with an explicit `cancel` (doctor's probe, and nothing
+    // else) overrides the config for that instance alone; a value that is
+    // neither of the two is not an override.
+    const cancelMode = cancel === 'kill' || cancel === 'finish' ? cancel : cfg.values.cancel;
     const killSignal = cancelMode === 'kill' && call.signal ? call.signal : undefined;
 
     // The result spool. `finish()` calls this synchronously, before it returns,
