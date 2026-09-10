@@ -49,7 +49,8 @@ export const KEY_SCHEMA = {
   maxTurns: { type: 'posint', default: 30 },
   // The tail cap core/spawn.mjs keeps on one run's stdout. A unit whose answer
   // shares that stream with everything else the CLI prints raises its own
-  // built-in (grok: 10 000 000 — thinking deltas ride along with the answer).
+  // built-in (grok: 10 000 000 — thinking deltas ride along with the answer;
+  // codex: 4 000 000 — one JSONL line per item of an agentic review).
   outputCap: { type: 'posint', default: 400000 },
   webSearch: { type: 'boolean', default: true },
   status: { type: 'boolean', default: true },
