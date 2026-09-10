@@ -24,6 +24,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
     "tester": { "model": "sonnet", "effort": "xhigh", "maxTurns": 80 }
   },
   "handoff": { "enabled": true, "threshold": 90, "contextWindow": 0, "compactSummary": true },
+  "workflow": { "merge": "session" },
   "units": {
     "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
     "grok":   { "enabled": true, "mode": "read-only", "timeoutS": 1800, "maxTurns": 30 },
@@ -32,7 +33,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 }
 ```
 
-`defaults` applies to every unit; `units.<unit>` overrides it for one unit. Both accept the same keys. `agents` is a separate top-level block that has nothing to do with the units — it configures the Claude Code sub-agent definitions this package ships, and is described [below](#agent-settings). `handoff` is the third top-level block and configures the guard hook's auto-handoff, described [below](#handoff-settings). A `version` higher than 1 is accepted with a warning — known keys still apply, unknown ones are ignored.
+`defaults` applies to every unit; `units.<unit>` overrides it for one unit. Both accept the same keys. `agents` is a separate top-level block that has nothing to do with the units — it configures the Claude Code sub-agent definitions this package ships, and is described [below](#agent-settings). `handoff` is the third top-level block and configures the guard hook's auto-handoff, described [below](#handoff-settings). `workflow` is the fourth, and it decides one sentence of the rules file — how a finished feature branch reaches main — described [below](#workflow-settings). A `version` higher than 1 is accepted with a warning — known keys still apply, unknown ones are ignored.
 
 ### Top-level settings
 
@@ -117,6 +118,29 @@ omelette-fleet doctor | grep '^handoff'     # what the INSTALLED guard will do
 **The `[1m]` step.** Claude Code writes the model it is running into your settings, suffix and all, and that suffix is the window: a value ending in `[1m]` — `claude-opus-5[1m]`, case aside and whitespace trimmed — is 1 000 000 tokens. It is read from `ANTHROPIC_MODEL` first and then from the `model` key of the same two user-scope files, and only once `autoCompactWindow` has said nothing: a window you capped on purpose is a window you meant. Nothing else about the id is read and no list of model names is kept, so a model this package has never heard of still says what its suffix says, and the id itself is never printed. The step exists because the alternative was worse than useless: a 1M session measured against 200 000 reads as 144 % full, and the reminder fires on the first tool call of the day. **A `[1m]` passed only on the command line — `claude --model …[1m]` — is invisible to a hook**, which sees the environment and your settings files and never the client's argv; that session wants `handoff.contextWindow` or the setting.
 
 Two things the block cannot switch on: the hook is silent unless the project keeps a `.omelette/ledger-*.md` (that file is the opt-in, and `doctor` says `ledgers: none (hook silent — start .omelette/ledger-<plan>.md)` when there is none), and it is silent inside a sub-agent, which has no ledger of its own. Validation is the same as everywhere else: an invalid value is a warning and the default, and `set` refuses it outright.
+
+### Workflow settings
+
+The `workflow` block configures the third managed file that is rendered rather than read at call time: the rules file itself, `.claude/rules/omelette-fleet.md`. One key, and it decides one sentence of it — how a finished feature branch reaches main.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `workflow.merge` | `session` \| `pr` | `"session"` | `session` renders *"The session merges the branch into main itself once every review is clean and it is confident the work is ready; pushing and tagging wait for the operator's explicit approval."* `pr` renders *"The session opens a pull request from the feature branch and never merges into main itself; merging is the operator's or the repository's gate."* |
+
+The template carries `{{merge}}` where the sentence goes, so — exactly like the agent definitions and the guard — a change reaches a session on the next render and not before:
+
+```bash
+omelette-fleet show workflow                  # the value and where it came from
+omelette-fleet set workflow.merge=pr
+omelette-fleet rules                          # re-render the rules file
+omelette-fleet doctor | grep '^merge policy'  # what the file it wrote actually says
+```
+
+The file is rewritten at the same package version — the marker is the proof of ownership and a changed value simply makes the content differ — so the run reports `written … (v0.3.7, was 0.3.7)` rather than pretending nothing happened.
+
+**The policy is printed where you would look for it.** `doctor` puts `merge policy  session` in its per-project block, and `install --rules` prints `merge policy: session` after the files it wrote. While the policy is `session` **and** the repository looks like one whose changes go through pull requests, the line ends with one hint: `— this repository looks PR-gated: consider set workflow.merge=pr`. Three signals, and any one of them is enough: a `.github/PULL_REQUEST_TEMPLATE.md`, a `CODEOWNERS` file at the root or under `.github/`, and — **only** when neither file said so, only when `gh` is on your PATH, and bounded at five seconds — `gh api repos/{owner}/{repo}/branches/main/protection` exiting 0 for the repository you are standing in. No `gh`, no network call at all; a `gh` that fails for any reason whatsoever says nothing. It is a hint and never a fault: no exit code moves, the fleet opens and merges nothing, and a `pr` policy is never questioned — a repository with no template can still be gated by a rule nobody wrote down.
+
+Validation is the same as everywhere else: an invalid value is a warning (`omelette-fleet rules` prints it on stderr and renders the default sentence), and `set` refuses it outright. There are no environment overrides for this block.
 
 ## Keys
 
