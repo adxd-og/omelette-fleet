@@ -257,7 +257,7 @@ test('runtime: the child env is an allowlist — a secret in the parent env neve
  * optionally writes `image.png` into the -C directory, and answers with
  * `answer` (which may name a path). Same JSONL shape as the real CLI.
  */
-function fakeImageCodex({ dir, name, argvLog, writeImage, answer }) {
+function fakeImageCodex({ dir, name, argvLog, writeImage, answer, alsoWrite = '' }) {
   const fake = join(dir, name);
   writeFileSync(fake, [
     'import { writeFileSync } from "node:fs";',
@@ -268,6 +268,9 @@ function fakeImageCodex({ dir, name, argvLog, writeImage, answer }) {
     '  const cwd=args[args.indexOf("-C")+1];',
     `  const answer=${JSON.stringify(answer)}.replace("<CWD>", cwd).replace("<STDIN>", s.trim().slice(-24));`,
     `  if (${writeImage ? 'true' : 'false'}) writeFileSync(join(cwd, "image.png"), "\x89PNG fake");`,
+    // A file the RUN saves somewhere of its own choosing — dated by the run,
+    // the way an artifact this tool may return has to be.
+    ...(alsoWrite ? [`  writeFileSync(${JSON.stringify(alsoWrite)}, "\x89PNG fake");`] : []),
     '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
     '  line({type:"item.completed",item:{type:"agent_message",text:answer}});',
     '  line({type:"turn.completed",usage:{input_tokens:7,output_tokens:2}});',
@@ -316,9 +319,9 @@ test('codex_image: workspace-write kernel-scoped to a fresh temp dir, web search
 test('codex_image: falls back to the last existing path in the final message when image.png is absent', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img2-'));
   const elsewhere = join(dir, 'generated.png');
-  writeFileSync(elsewhere, 'x');
   const fake = fakeImageCodex({
     dir, name: 'fake-img2.mjs', argvLog: join(dir, 'argv.json'), writeImage: false,
+    alsoWrite: elsewhere,
     answer: `The tool saved it here instead: ${elsewhere}`,
   });
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 30 } } }));
@@ -337,6 +340,36 @@ test('codex_image: every call gets its OWN temp dir — a second run can never r
   const b = await rt.callTool('codex_image', { prompt: 'two' });
   assert.ok(!a.isError && !b.isError);
   assert.notEqual(a.text, b.text);
+});
+
+test('codex_image: an artifact from a run that exited non-zero is flagged partial', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img-exit-'));
+  const argvLog = join(dir, 'argv.json');
+  const fake = join(dir, 'fake-img-exit.mjs');
+  // The image is saved, the answer names it, and the CLI then exits 1: no
+  // bound of ours was reached, so only the exit code says the run did not
+  // finish — and an artifact from an unfinished run is a partial answer.
+  writeFileSync(fake, [
+    'import { writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
+    '  const args=process.argv.slice(2);',
+    `  writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args));`,
+    '  const cwd=args[args.indexOf("-C")+1];',
+    '  writeFileSync(join(cwd, "image.png"), "\x89PNG fake");',
+    '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
+    '  line({type:"item.completed",item:{type:"agent_message",text:join(cwd,"image.png")}});',
+    '  line({type:"turn.completed",usage:{input_tokens:7,output_tokens:2}});',
+    '  process.exit(1);',
+    '});',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 30 } } }));
+  const r = await wrapCodex({ ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake).callTool('codex_image', { prompt: 'x' });
+  assert.equal(r.isError, undefined, r.text);
+  const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
+  assert.equal(r.text, join(argv[argv.indexOf('-C') + 1], 'image.png'));   // bare path, no exit marker
+  const snap = JSON.parse(readFileSync(join(dir, 'status-codex.json'), 'utf8'));
+  assert.equal(snap.lastEvent.partial, true);
 });
 
 test('codex_image: prose with no file on disk is an error, not a success', async () => {

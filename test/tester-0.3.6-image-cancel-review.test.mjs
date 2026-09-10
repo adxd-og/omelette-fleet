@@ -14,15 +14,28 @@
  * interpreter -> artifact lookup -> bare-path contract -> status feed) is
  * exercised exactly as an MCP client cancelling a call would trigger it.
  */
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createUnitRuntime } from '../core/unit.mjs';
 import grokUnit from '../units/grok/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
 import codexUnit from '../units/codex/adapter.mjs';
+
+/** A fresh fleet home per test, all of them removed when the file is done. */
+const HOMES = [];
+function home(tag) {
+  const dir = mkdtempSync(join(tmpdir(), `omelette-${tag}-`));
+  HOMES.push(dir);
+  return dir;
+}
+after(() => {
+  for (const dir of HOMES) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
 
 /** Wrap a unit so its tools spawn `node <fake>` instead of the real CLI. */
 function wrap(unit, env, fake) {
@@ -40,12 +53,15 @@ function abortSoon(ms = 400) {
 }
 
 test('grok_image: a run the client cancels, with the file already on disk, answers with the bare path — no marker, feed says cancelled+partial', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-img-cancel-'));
+  const dir = home('grok-img-cancel');
   const saved = join(dir, 'generated.jpg');
-  writeFileSync(saved, 'JPEG');
   const fake = join(dir, 'fake-grok-img-cancel.mjs');
-  // Prints the path, then hangs: the client's cancel is what ends it.
+  // Saves the file, prints the path, then hangs: the client's cancel is what
+  // ends it. The RUN writes the file — an image older than the run is not its
+  // artifact (core/artifact.mjs).
   writeFileSync(fake, [
+    'import { writeFileSync } from "node:fs";',
+    `writeFileSync(${JSON.stringify(saved)}, "JPEG");`,
     `process.stdout.write("Saved to " + ${JSON.stringify(saved)});`,
     'setTimeout(() => {}, 30000);',
   ].join('\n'));
@@ -66,7 +82,7 @@ test('grok_image: a run the client cancels, with the file already on disk, answe
 });
 
 test('grok_image: a run the client cancels with NO file on disk is an error naming the cancellation, not a bound to raise', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-img-cancel-nofile-'));
+  const dir = home('grok-img-cancel-nofile');
   const fake = join(dir, 'fake-grok-img-cancel-nofile.mjs');
   // Text with no path in it at all: the answer is salvaged (not thrown by
   // the interpreter itself, which only throws on cancel with NO text), so
@@ -85,7 +101,7 @@ test('grok_image: a run the client cancels with NO file on disk is an error nami
 });
 
 test('gemini_image: a run the client cancels, with the file already on disk, answers with the bare path', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-img-cancel-'));
+  const dir = home('gemini-img-cancel');
   const fake = join(dir, 'fake-agy-img-cancel.mjs');
   writeFileSync(fake, [
     'import { writeFileSync } from "node:fs";',
@@ -108,7 +124,7 @@ test('gemini_image: a run the client cancels, with the file already on disk, ans
 });
 
 test('codex_image: a run the client cancels, with image.png already saved, answers with the bare path', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img-cancel-'));
+  const dir = home('codex-img-cancel');
   const argvLog = join(dir, 'argv.json');
   const fake = join(dir, 'fake-codex-img-cancel.mjs');
   writeFileSync(fake, [

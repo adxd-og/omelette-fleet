@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { artifactMiss, extractImagePath } from '../core/artifact.mjs';
@@ -25,6 +25,37 @@ test('extractImagePath: a path the model asserts but never wrote is not an artif
   assert.equal(extractImagePath(`output dir: ${dir}`), '');
   // Markdown and trailing punctuation around a real path are stripped.
   assert.equal(extractImagePath(`Done: [image](${real}).`), real);
+});
+
+test('extractImagePath: only an IMAGE file counts, and only one the run itself wrote', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-artifact-'));
+  // Prose naming a real file that is not an image: a run that read /etc/hosts
+  // and said so has produced no artifact, however absolute the path is.
+  assert.equal(extractImagePath('I looked at /etc/hosts first'), '');
+  const notes = join(dir, 'notes.txt');
+  writeFileSync(notes, 'x');
+  assert.equal(extractImagePath(`saved the log to ${notes}`), '');
+
+  // An image that predates the run is somebody else's file: the source image
+  // of an edit, a leftover in a directory the CLI happened to name.
+  const old = join(dir, 'old.png');
+  writeFileSync(old, 'PNG');
+  utimesSync(old, new Date(Date.now() - 60000), new Date(Date.now() - 60000));
+  const since = Date.now();
+  assert.equal(extractImagePath(`Saved it to ${old}`, '', since), '');
+  // …and without a `since` it is an artifact like it always was.
+  assert.equal(extractImagePath(`Saved it to ${old}`), old);
+
+  // The file this run wrote: right extension, written after it started.
+  const fresh = join(dir, 'fresh.PNG');
+  writeFileSync(fresh, 'PNG');
+  assert.equal(extractImagePath(`Saved it to ${fresh}`, '', since), fresh);
+  // Every extension the fleet's image tools produce, case-insensitively.
+  for (const ext of ['png', 'jpg', 'jpeg', 'webp', 'gif', 'JPG']) {
+    const p = join(dir, `art.${ext}`);
+    writeFileSync(p, 'IMG');
+    assert.equal(extractImagePath(`Saved it to ${p}`, '', since), p);
+  }
 });
 
 test('artifactMiss: the run explains the missing file, or says nothing at all', () => {

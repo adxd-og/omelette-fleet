@@ -178,7 +178,8 @@ import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
-import { artifactMiss, extractImagePath } from '../../core/artifact.mjs';
+import { artifactMiss, extractImagePath, unfinishedRun } from '../../core/artifact.mjs';
+import { checkCwd } from '../../core/cwd.mjs';
 import { GROK_MODELS, EFFORTS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -556,7 +557,9 @@ const runText = (r) => (typeof r === 'string' ? r : (r && r.text) || '');
  * is not an artifact, which is what extractImagePath's stat is for.
  */
 function imageAnswer(ctx, out, res, artifact) {
-  const partial = !!(out && typeof out === 'object' && out.partial);
+  // A non-zero exit is the third way a run does not finish, and interpretGrok
+  // carries that one in the TEXT alone — which the bare-path contract drops.
+  const partial = !!(out && typeof out === 'object' && out.partial) || unfinishedRun(res);
   if (artifact) return { text: artifact, ...(partial ? { partial: true } : {}) };
   const miss = artifactMiss('grok', res, { outputCap: ctx.cfg.outputCap, timeoutS: ctx.cfg.timeoutS });
   throw new Error(
@@ -570,16 +573,6 @@ function imageAnswer(ctx, out, res, artifact) {
 // a run the client cancelled — nobody is waiting for the second one.
 const isDeterministic = (e) => /not authenticated|hard-killed|CLI error|not found in PATH|output exceeded|cancelled by the client/i.test((e && e.message) || '');
 const researchTools = (ctx) => (ctx.cfg.webSearch ? READONLY_TOOLS : READONLY_TOOLS_NOWEB);
-
-function checkCwd(raw) {
-  if (raw === undefined) return { cwd: '' };
-  const cwd = typeof raw === 'string' ? raw.trim() : '';
-  if (!cwd || !isAbsolute(cwd)) return { error: `Error: "cwd" must be an absolute path (got ${JSON.stringify(raw)}).` };
-  let st;
-  try { st = statSync(cwd); } catch { st = null; }
-  if (!st || !st.isDirectory()) return { error: `Error: "cwd" is not an existing directory: ${cwd}` };
-  return { cwd };
-}
 
 const MODEL_PROP = {
   type: 'string',
@@ -713,8 +706,11 @@ export default defineUnit({
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
+        // The run's own start: an image file older than it is one the CLI
+        // merely named, never one it saved (core/artifact.mjs).
+        const since = Date.now();
         const { out, res } = await runGrokRaw(ctx, { prompt: IMAGE_GEN_PREFIX + prompt, tools: IMAGE_GEN_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
-        return imageAnswer(ctx, out, res, extractImagePath(runText(out)));
+        return imageAnswer(ctx, out, res, extractImagePath(runText(out), '', since));
       },
     },
     {
@@ -749,9 +745,11 @@ export default defineUnit({
         let st;
         try { st = statSync(imagePath); } catch { st = null; }
         if (!st || !st.isFile()) return { text: `Error: "imagePath" is not an existing file: ${imagePath}`, isError: true };
+        const since = Date.now();
         const { out, res } = await runGrokRaw(ctx, { prompt: imageEditPrompt(imagePath, prompt), tools: IMAGE_EDIT_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
-        // The SOURCE path is never the answer: the edit's artifact is a new file.
-        return imageAnswer(ctx, out, res, extractImagePath(runText(out), imagePath));
+        // The SOURCE path is never the answer: the edit's artifact is a NEW
+        // file, and one written since the run started.
+        return imageAnswer(ctx, out, res, extractImagePath(runText(out), imagePath, since));
       },
     },
     {

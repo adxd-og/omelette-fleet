@@ -116,10 +116,11 @@
  */
 import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
-import { artifactMiss, extractImagePath } from '../../core/artifact.mjs';
+import { artifactMiss, extractImagePath, unfinishedRun } from '../../core/artifact.mjs';
+import { checkCwd } from '../../core/cwd.mjs';
 import { CODEX_MODELS, EFFORTS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -131,8 +132,8 @@ export const catalog = makeCatalog({
 });
 
 /**
- * Codex's built-in `outputCap` — ten times the fleet default (400 000) and a
- * quarter of grok's 10 000 000.
+ * Codex's built-in `outputCap` — ten times the fleet default (400 000) and two
+ * fifths of grok's 10 000 000.
  * The JSONL is one line per ITEM rather than one envelope per text delta, so
  * the stream is much closer to the answer's size than Grok's is — but an
  * agentic review is not one answer: `codex exec` prints a line for every
@@ -297,17 +298,6 @@ export function extractResult(res, { timeoutS, capped = res.capped, outputCap = 
   // the text is usually the useful part) but never let it read as a clean one.
   if (res.code !== 0) text += `\n\n[codex: CLI exited ${res.code} — treat the answer as partial]`;
   return { text: capMark(text), usage, searches, ...capExtra };
-}
-
-/** Pre-spawn validation of an optional review directory. */
-function checkCwd(raw) {
-  if (raw === undefined) return { cwd: '' };
-  const cwd = typeof raw === 'string' ? raw.trim() : '';
-  if (!cwd || !isAbsolute(cwd)) return { error: `Error: "cwd" must be an absolute path (got ${JSON.stringify(raw)}).` };
-  let st;
-  try { st = statSync(cwd); } catch { st = null; }
-  if (!st || !st.isDirectory()) return { error: `Error: "cwd" is not an existing directory: ${cwd}` };
-  return { cwd };
 }
 
 // `output exceeded`: an answer that outgrew the cap once will outgrow it again,
@@ -488,6 +478,9 @@ export default defineUnit({
         // and outside every project — see IMAGE in the header for why this is
         // deliberately not routed through the fleet write ceiling.
         const cwd = mkdtempSync(join(tmpdir(), 'omelette-codex-image-'));
+        // The run's own start: an image file older than it is one the CLI
+        // merely named, never one it saved (core/artifact.mjs).
+        const since = Date.now();
         ctx.log(`codex_image · temp cwd=${cwd}`);
         // Disk first, by the fixed name the prompt asked for: the only claim
         // that needs no parsing, and the only one that survives a run ending
@@ -517,7 +510,7 @@ export default defineUnit({
           return { text: saved, partial: true };
         }
         // Then the model's own answer, still stat-ed.
-        const artifact = onDisk() || extractImagePath(out.text);
+        const artifact = onDisk() || extractImagePath(out.text, '', since);
         if (!artifact) {
           const miss = artifactMiss('codex', res, { outputCap: ctx.cfg.outputCap, timeoutS: ctx.cfg.timeoutS });
           return {
@@ -528,8 +521,10 @@ export default defineUnit({
         }
         ctx.log(`codex_image · artifact=${artifact}`);
         // THE BARE PATH IS THE CONTRACT: the cap/kill marker extractResult put
-        // on the text stops here; `partial` carries the same fact to the feed.
-        return { text: artifact, usage: out.usage, ...(out.partial ? { partial: true } : {}) };
+        // on the text stops here; `partial` carries the same fact to the feed —
+        // for a non-zero exit too, whose marker the contract drops as well.
+        const partial = !!out.partial || unfinishedRun(res);
+        return { text: artifact, usage: out.usage, ...(partial ? { partial: true } : {}) };
       },
     },
     {

@@ -71,6 +71,10 @@
  *   returns the path ALONE and carries its incompleteness as `partial: true`
  *   into the status feed and the spooled record, and a run with no file on
  *   disk is an error naming the bound that explains it (core/artifact.mjs).
+ *   THE FILE OUTRANKS THE REFUSAL, as it does for codex_image: agy names the
+ *   file itself, so a run that saved one and then said nothing usable — an
+ *   interpreter throw, an empty or cut-open answer — is answered by the newest
+ *   image in the run's OWN temp directory (newestImage), partial.
  *
  * QUOTA — Antigravity exhaustion is detected ONLY on failed turns (non-zero
  * exit / empty output / hard-kill): a successful answer can legitimately
@@ -106,13 +110,16 @@
  * and gemini_image report NOTHING on purpose — agy picks their model and never
  * says which — so those stay filed under `(vendor default)`.
  */
-import { mkdtempSync, statSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { OUTPUT_CAP } from '../../core/spawn.mjs';
+// agy has no cwd flag of its own, so a caller's `cwd` reaches the run as the
+// SPAWN cwd alone — validated the way every other tool in the fleet does it.
+import { checkCwd } from '../../core/cwd.mjs';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
-import { artifactMiss, extractImagePath } from '../../core/artifact.mjs';
+import { artifactMiss, extractImagePath, newestImage, unfinishedRun } from '../../core/artifact.mjs';
 import { GEMINI_MODELS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -499,21 +506,6 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
 
 // --- tool table ---------------------------------------------------------------
 
-/**
- * Pre-spawn validation of an optional run directory — the same three checks,
- * and the same wording, the grok and codex review tools use. agy has no cwd
- * flag of its own, so this value reaches the run as the SPAWN cwd alone.
- */
-function checkCwd(raw) {
-  if (raw === undefined) return { cwd: '' };
-  const cwd = typeof raw === 'string' ? raw.trim() : '';
-  if (!cwd || !isAbsolute(cwd)) return { error: `Error: "cwd" must be an absolute path (got ${JSON.stringify(raw)}).` };
-  let st;
-  try { st = statSync(cwd); } catch { st = null; }
-  if (!st || !st.isDirectory()) return { error: `Error: "cwd" is not an existing directory: ${cwd}` };
-  return { cwd };
-}
-
 const MODEL_PROP = {
   type: 'string',
   enum: catalog.modelEnum(),
@@ -605,19 +597,46 @@ export default defineUnit({
         // save lands inside whatever project the server was started from. Give
         // the run its own temp directory instead, created before the spawn.
         const cwd = mkdtempSync(join(tmpdir(), 'omelette-gemini-image-'));
+        const since = Date.now();
         ctx.log(`gemini_image · temp cwd=${cwd}`);
-        const { out, res } = await runAgyRaw(ctx, {
-          prompt: IMAGE_PREFIX + prompt,
-          model: ctx.model,
-          acceptEdits: true,
-          cwd,
-        });
+        // The run's OWN directory, read after the fact: whatever agy said (or
+        // did not get to say), a file it saved there is the artifact this tool
+        // promised — the same "the file outranks the refusal" rule codex_image
+        // has, with a scan instead of a fixed name, because agy chooses it.
+        const saved = () => newestImage(cwd, since);
+        let out;
+        let res;
+        try {
+          ({ out, res } = await runAgyRaw(ctx, {
+            prompt: IMAGE_PREFIX + prompt,
+            model: ctx.model,
+            acceptEdits: true,
+            cwd,
+          }));
+        } catch (e) {
+          // interpretAgy refused the run — a kill with nothing salvaged, an
+          // envelope the cap cut open, a cancel. Partial, because the run did
+          // not finish; and with no file, the refusal is the answer, naming
+          // the bound it already names.
+          const file = saved();
+          if (!file) throw e;
+          ctx.log(`gemini_image · artifact=${file} (the run itself failed: ${(e && e.message) || e})`);
+          return { text: file, partial: true };
+        }
         // THE BARE PATH IS THE CONTRACT: the caller stats what comes back, so
         // agy's prose — and any marker interpretAgy appended to it — stops
         // here, and a path the model asserts but never wrote is not an
         // artifact, which is what extractImagePath's stat is for.
-        const artifact = extractImagePath(out.text);
+        const artifact = extractImagePath(out.text, '', since);
         if (!artifact) {
+          // An answer with no artifact in it is not the end of the story
+          // either: an empty or unsalvageable one is exactly the run that
+          // saved the file and never got to name it.
+          const file = saved();
+          if (file) {
+            ctx.log(`gemini_image · artifact=${file} (the run named none)`);
+            return { text: file, usage: out.usage, partial: true };
+          }
           const miss = artifactMiss('gemini', res, {
             outputCap: ctx.cfg.outputCap,
             // agy's process-group kill sits 60 s above the timeout it is
@@ -632,7 +651,11 @@ export default defineUnit({
           };
         }
         ctx.log(`gemini_image · artifact=${artifact}`);
-        return { text: artifact, usage: out.usage, ...(out.partial ? { partial: true } : {}) };
+        // A run agy itself called unfinished — a non-SUCCESS status, a non-zero
+        // exit — carries that in `partial`, because the marker interpretAgy put
+        // on the text is exactly what the bare-path contract drops.
+        const partial = !!out.partial || unfinishedRun(res) || (!!out.status && out.status !== 'SUCCESS');
+        return { text: artifact, usage: out.usage, ...(partial ? { partial: true } : {}) };
       },
     },
     {

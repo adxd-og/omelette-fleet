@@ -648,11 +648,15 @@ function wrapGrok(dir, fake, units = {}) {
 test('grok_image: a capped run whose artifact is on disk answers with the BARE path, and the feed says partial', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-img-cap-'));
   const saved = join(dir, 'generated.jpg');
-  writeFileSync(saved, 'JPEG');
   const fake = join(dir, 'fake-grok-img.mjs');
   // Image runs are plain stdout by design: narration far past the cap, then
-  // the path. A tail cap keeps the end, which is where the path is.
-  writeFileSync(fake, `process.stdout.write("n".repeat(2000) + "\\nSaved to " + ${JSON.stringify(saved)});`);
+  // the path. A tail cap keeps the end, which is where the path is. The RUN
+  // writes the file — an image older than the run is not this run's artifact.
+  writeFileSync(fake, [
+    'import { writeFileSync } from "node:fs";',
+    `writeFileSync(${JSON.stringify(saved)}, "JPEG");`,
+    `process.stdout.write("n".repeat(2000) + "\\nSaved to " + ${JSON.stringify(saved)});`,
+  ].join('\n'));
   const rt = wrapGrok(dir, fake, { outputCap: 300, timeoutS: 30 });
   const r = await rt.callTool('grok_image', { prompt: 'a cat' });
   assert.equal(r.isError, undefined, r.text);
@@ -666,6 +670,27 @@ test('grok_image: a capped run whose artifact is on disk answers with the BARE p
   const body = readFileSync(join(spool, readdirSync(spool).find((f) => f.endsWith('.md'))), 'utf8');
   assert.match(body, /\npartial: true\n/);
   assert.ok(body.trim().endsWith(saved), body);   // the spooled answer is the path too
+});
+
+test('grok_image: an artifact from a run that exited non-zero is flagged partial', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-img-exit-'));
+  const saved = join(dir, 'generated.jpg');
+  const fake = join(dir, 'fake-grok-img-exit.mjs');
+  // Saved, named, and the CLI then exits 1: neither the cap nor the kill fired,
+  // so only the exit code says the run did not finish — and an artifact from an
+  // unfinished run is a partial answer.
+  writeFileSync(fake, [
+    'import { writeFileSync } from "node:fs";',
+    `writeFileSync(${JSON.stringify(saved)}, "JPEG");`,
+    `process.stdout.write("Saved to " + ${JSON.stringify(saved)});`,
+    'process.exit(1);',
+  ].join('\n'));
+  const rt = wrapGrok(dir, fake, { timeoutS: 30 });
+  const r = await rt.callTool('grok_image', { prompt: 'a cat' });
+  assert.equal(r.isError, undefined, r.text);
+  assert.equal(r.text, saved);   // the bare path, with no "CLI exited 1" marker
+  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  assert.equal(snap.lastEvent.partial, true);
 });
 
 test('grok_image: a capped run with no file on disk is an error naming grok.outputCap', async () => {
@@ -687,11 +712,12 @@ test('grok_image_edit: a hard-killed run whose new file is already on disk answe
   const source = join(dir, 'source.jpg');
   const saved = join(dir, 'edited.jpg');
   writeFileSync(source, 'JPEG');
-  writeFileSync(saved, 'JPEG');
   const fake = join(dir, 'fake-grok-edit.mjs');
-  // The CLI prints the new path and then hangs: the hard kill at timeoutS is
-  // what ends it, and the salvage keeps the text the path is in.
+  // The CLI saves the NEW file, prints its path and then hangs: the hard kill
+  // at timeoutS is what ends it, and the salvage keeps the text the path is in.
   writeFileSync(fake, [
+    'import { writeFileSync } from "node:fs";',
+    `writeFileSync(${JSON.stringify(saved)}, "JPEG");`,
     `process.stdout.write("Saved to " + ${JSON.stringify(saved)});`,
     'setTimeout(() => {}, 30000);',
   ].join('\n'));

@@ -12,26 +12,86 @@
  * Lifted out of units/grok/adapter.mjs (2026-09-03) when the codex unit grew
  * its own image tool and needed the identical scan.
  */
-import { statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+
+/**
+ * What an image artifact's name may end in. A run's answer names paths of every
+ * kind — a source image, a config file, a directory it worked in — and only
+ * one of them is the thing this tool promised to produce.
+ */
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|webp|gif)$/i;
+
+/**
+ * The newest image file a run left in ITS OWN directory (the throwaway cwd an
+ * image tool creates before it spawns), or '' when there is none. This is what
+ * a run that ended badly still leaves behind: a CLI that saved the file and was
+ * then killed, capped or simply said nothing has produced the artifact the tool
+ * promised, and the filesystem is the only place left to read it from. `since`
+ * — the run's own start — keeps a file that predates the run out of it.
+ */
+export function newestImage(dir, since = 0) {
+  let names;
+  try { names = readdirSync(dir); } catch { return ''; }
+  let newest = '';
+  let newestMs = -1;
+  for (const name of names) {
+    if (!IMAGE_EXT_RE.test(name)) continue;
+    const p = join(dir, name);
+    try {
+      const st = statSync(p);
+      if (!st.isFile() || st.mtimeMs < since) continue;
+      if (st.mtimeMs > newestMs) { newestMs = st.mtimeMs; newest = p; }
+    } catch { /* gone between the listing and the stat */ }
+  }
+  return newest;
+}
 
 /**
  * Pull the saved-artifact path out of an image run's output: scan for
- * absolute-path tokens, keep the LAST one that exists as a regular file (the
- * final answer wins over narration), never return `excludePath` (an edit's
+ * absolute-path tokens, keep the LAST one that is an IMAGE FILE THIS RUN WROTE
+ * (the final answer wins over narration), never return `excludePath` (an edit's
  * source image). Returns '' when nothing on disk matches — which is the signal
  * that the run produced no artifact, however confident its prose was.
+ *
+ * Two things a stat alone cannot tell apart, and both of them are files a run
+ * merely MENTIONED: a path with no image extension (a model that narrates
+ * reading `/etc/hosts` has not produced an artifact) and an image that already
+ * existed when the run started (the source image of an edit, a leftover in a
+ * directory the CLI named). `since` — the run's own start, which every caller
+ * takes before it spawns — excludes the second; 0 keeps every existing file
+ * eligible, for a caller that has no run to date from.
  * @param {string} text raw stdout / final message from the run
  * @param {string} [excludePath] a path that must never be returned
- * @returns {string} an absolute path to an existing file, or ''
+ * @param {number} [since] epoch ms: a file older than this is not this run's
+ * @returns {string} an absolute path to an existing image file, or ''
  */
-export function extractImagePath(text, excludePath = '') {
+export function extractImagePath(text, excludePath = '', since = 0) {
   const tokens = (text || '').match(/\/[^\s"'`)\]]+/g) || [];
   for (let i = tokens.length - 1; i >= 0; i--) {
     const p = tokens[i].replace(/[.,;:]+$/, '');
-    if (!p || p === excludePath) continue;
-    try { if (statSync(p).isFile()) return p; } catch { /* not on disk */ }
+    if (!p || p === excludePath || !IMAGE_EXT_RE.test(p)) continue;
+    try {
+      const st = statSync(p);
+      if (st.isFile() && st.mtimeMs >= since) return p;
+    } catch { /* not on disk */ }
   }
   return '';
+}
+
+/**
+ * Did this run finish cleanly? An image tool answers with a bare path, so the
+ * ONE thing a caller has left to read the run's health from is `partial` —
+ * and a cap, a kill, a cancel or a non-zero exit all mean the same thing about
+ * the file that came back: it is what a run that did not finish left behind.
+ * The interpreters already flag the cap and the kill; this is what catches the
+ * exit code an image tool would otherwise return as a clean answer, because the
+ * marker their text carries is exactly what the bare-path contract drops.
+ * @param {{code?:number|null, killed?:boolean, capped?:boolean, cancelled?:boolean}} res
+ */
+export function unfinishedRun(res) {
+  if (!res || typeof res !== 'object') return false;
+  return !!(res.killed || res.cancelled || res.capped || (res.code !== undefined && res.code !== 0));
 }
 
 /**
