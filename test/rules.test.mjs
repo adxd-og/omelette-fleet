@@ -9,7 +9,7 @@ import {
   AGENT_FILES, AGENT_MARKER, AGENT_ROLES, CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, FLEET_CONTRACT,
   HOOK_EVENTS, HOOK_FILES, HOOK_MARKER, HOOK_TEMPLATE_DIR, KINDS,
   MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE,
-  RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH, SETTINGS_FILES, SHORT_CONTRACT, SKILL_FILES, SKILL_MARKER,
+  MERGE_SENTENCES, RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH, SETTINGS_FILES, SHORT_CONTRACT, SKILL_FILES, SKILL_MARKER,
   SKILL_TEMPLATE_DIR,
   agentSettings, agentsTarget, contractFor, hookSettingsSnippet, hooksTarget, parseAgentMarker, parseContextWindow, parseHookHandoff, parseHookMarker, parseModelWindow, parseRulesMarker, parseSkillMarker,
   renderAgentFile, renderHookFile, renderRulesFile, renderSkillFile, rulesTarget, settingsTarget, settingsTargets,
@@ -756,4 +756,53 @@ test('the tester definition says the guard contains it too — the role is enfor
   assert.match(text, /guard hook/, 'the tester is told the guard exists');
   assert.match(text, /Never stash or move the tree/, 'and why moving the tree is the one thing it must not do');
   assert.ok(!text.includes('{{'), 'no placeholder survives rendering');
+});
+
+test('renderRulesFile fills {{merge}}: the session sentence by default, the pull-request one on `pr`', () => {
+  const session = renderRulesFile('1.2.3');
+  assert.ok(!session.includes('{{'), 'no placeholder survives rendering');
+  assert.match(session, /The session merges the branch into main itself once every review is clean and it is confident the work is ready; pushing and tagging wait for the operator's explicit approval\./);
+  assert.doesNotMatch(session, /pull request/);
+  assert.equal(renderRulesFile('1.2.3', { merge: 'session' }), session, 'the default IS the session policy');
+
+  const pr = renderRulesFile('1.2.3', { merge: 'pr' });
+  assert.ok(!pr.includes('{{'));
+  assert.match(pr, /The session opens a pull request from the feature branch and never merges into main itself; merging is the operator's or the repository's gate\./);
+  assert.doesNotMatch(pr, /merges the branch into main itself/);
+  // Both variants are the same managed file otherwise — same marker, one sentence apart.
+  assert.equal(parseRulesMarker(pr), '1.2.3');
+  assert.equal(pr.replace(MERGE_SENTENCES.pr, MERGE_SENTENCES.session), session);
+  assert.deepEqual(Object.keys(MERGE_SENTENCES), ['session', 'pr']);
+  for (const [key, text] of Object.entries(MERGE_SENTENCES)) {
+    assert.ok(!text.includes('\n'), `${key} must be one sentence on one line`);
+  }
+
+  // Anything that is not one of the two renders the DEFAULT sentence: the file
+  // is written from config that was already validated, and a render that
+  // refused would leave a project with no rules at all. `constructor` is in
+  // that list on purpose — a plain object's inherited keys are not policies.
+  for (const merge of ['squash', 'constructor', 'toString', '', null, undefined, 0, false, {}, ['pr']]) {
+    assert.equal(renderRulesFile('1.2.3', { merge }), session, JSON.stringify(merge));
+  }
+  for (const workflow of [null, undefined, 'pr', 42, []]) {
+    assert.equal(renderRulesFile('1.2.3', workflow), session, `workflow: ${JSON.stringify(workflow)}`);
+  }
+});
+
+test('the rendered rules carry the small-change lane and what stays out of it', () => {
+  const text = renderRulesFile('1.2.3');
+  assert.match(text, /The small-change lane/);
+  assert.match(text, /goes to main on its own short branch \(`fix\/<name>`\)/);
+  assert.match(text, /No spec, no plan, no reviews, no tag\./);
+  assert.match(text, /What stays out of the lane/);
+  assert.match(text, /touches the guard's refusal logic, the env allowlist, the billing scrub, the write gates or a tool's schema/);
+  // It sits with the exception it extends, in the operating-model list.
+  assert.ok(text.indexOf('The small-change exception') < text.indexOf('The small-change lane'), 'the lane follows the exception');
+  assert.ok(text.indexOf('The small-change lane') < text.indexOf('## Ledger and handoff'), 'both stay in the operating model');
+  assert.ok(!text.includes('{{'), 'no placeholder survives rendering');
+  // The lane is text, not behaviour: it renders identically under either policy.
+  assert.equal(
+    renderRulesFile('1.2.3', { merge: 'pr' }).includes('The small-change lane'),
+    true,
+  );
 });

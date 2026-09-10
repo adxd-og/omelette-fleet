@@ -53,7 +53,7 @@ import { closeSync, openSync, readFileSync, readSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, coerce, fleetSettings, handoffSettings, loadFleetConfig } from './config.mjs';
+import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, WORKFLOW_SCHEMA, coerce, fleetSettings, handoffSettings, loadFleetConfig, workflowSettings } from './config.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -188,11 +188,38 @@ export function unitInstructions(unit, o = {}) {
   return own ? `${text}\n\n${own}` : text;
 }
 
-/** The managed file's full text for this package version. */
-export function renderRulesFile(version) {
+/**
+ * THE ONE SENTENCE THE OPERATOR CHOOSES: how a finished feature branch reaches
+ * main. `session` is this package's own flow — the session merges once every
+ * review is clean — and `pr` is the flow of a repository whose main is gated by
+ * pull requests. `workflow.merge` in the fleet config picks one and
+ * `KINDS.rules` passes it in; nothing else in the file varies, which is why
+ * this is a substitution rather than two templates.
+ */
+export const MERGE_SENTENCES = {
+  session: 'The session merges the branch into main itself once every review is clean and it is confident the work is ready; pushing and tagging wait for the operator\'s explicit approval.',
+  pr: 'The session opens a pull request from the feature branch and never merges into main itself; merging is the operator\'s or the repository\'s gate.',
+};
+
+/**
+ * The managed file's full text for this package version and the operator's
+ * merge policy. Anything that is not one of the two policies renders the
+ * schema's default sentence — `Object.hasOwn`, so an inherited key like
+ * `constructor` is not a policy either — because this file is rendered from
+ * config that was already validated, and a render that refused would leave a
+ * project with no rules at all.
+ */
+export function renderRulesFile(version, workflow = {}) {
+  const merge = isObj(workflow) ? workflow.merge : undefined;
+  // `typeof merge === 'string'` before the lookup, because a property key is
+  // stringified: `['pr']` is not a policy, and without this it would render one.
+  const sentence = typeof merge === 'string' && Object.hasOwn(MERGE_SENTENCES, merge)
+    ? MERGE_SENTENCES[merge]
+    : MERGE_SENTENCES[WORKFLOW_SCHEMA.merge.default];
   const body = readFileSync(RULES_TEMPLATE_PATH, 'utf8')
     .replaceAll('{{marker}}', RULES_MARKER(String(version)))
-    .replaceAll('{{version}}', String(version));
+    .replaceAll('{{version}}', String(version))
+    .replaceAll('{{merge}}', sentence);
   return body.endsWith('\n') ? body : body + '\n';
 }
 
@@ -593,7 +620,10 @@ export const KINDS = {
     hint: 'no marker on line 1',
     dir: scopeDir('rules'),
     files: [RULES_FILE_NAME],
-    render: (name, version) => renderRulesFile(version),
+    // The one configurable sentence comes from the CURRENT config, like every
+    // other rendered value: `set workflow.merge=pr` reaches a session on the
+    // next `omelette-fleet rules` and not before.
+    render: (name, version) => renderRulesFile(version, { merge: workflowSettings().merge }),
   },
   agents: {
     flag: 'agents',
