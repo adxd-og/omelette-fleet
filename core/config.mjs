@@ -5,6 +5,7 @@
  * FILE: <home>/fleet.config.json, home = $OMELETTE_HOME or ~/.omelette.
  *   { "version": 1,
  *     "updateCheck": true,
+ *     "contract": "auto",
  *     "agents": { "coder": { model, effort }, "tester": { model, effort, maxTurns } },
  *     "handoff": { enabled, threshold, contextWindow },
  *     "defaults": { ...keys applied to every unit... },
@@ -174,6 +175,15 @@ export function loadFleetConfig(env = process.env) {
  */
 export const SETTINGS_SCHEMA = {
   updateCheck: { type: 'boolean', default: true },
+  // How much of the fleet contract a unit server returns from `initialize`
+  // (core/rules.mjs, `contractFor`). `auto` is the whole point of the key: a
+  // project that already carries the rendered rules file has every word of
+  // the contract in its context by another road, and three servers repeating
+  // ~300 tokens of it at every session start is a charge for nothing. `full`
+  // and `short` are for an operator who would rather decide than be detected.
+  // Read when a unit server STARTS, not per call — like the rules file it
+  // detects, it moves on the next session.
+  contract: { type: 'enum', values: ['auto', 'full', 'short'], default: 'auto' },
 };
 
 /** Claude Code's own effort ladder — what a sub-agent definition's `effort:` accepts. */
@@ -232,10 +242,13 @@ export const HANDOFF_SCHEMA = {
 };
 
 /**
- * The config file's top-level settings, validated. Never throws: a malformed
- * file or an invalid value is a warning and the built-in default stays in
- * force, exactly as it does for a unit's keys.
- * @returns {{updateCheck:boolean, warnings:string[], configPath:string}}
+ * The config file's top-level settings, validated, with where every value came
+ * from — the same contract `agentSettings` and `handoffSettings` have, because
+ * `show` prints all three tables in one shape. Never throws: a malformed file
+ * or an invalid value is a warning and the built-in default stays in force,
+ * exactly as it does for a unit's keys.
+ * @returns {{updateCheck:boolean, contract:string, sources:object,
+ *            warnings:string[], configPath:string}}
  */
 export function fleetSettings(env = process.env) {
   const { config, error, path } = loadFleetConfig(env);
@@ -243,14 +256,16 @@ export function fleetSettings(env = process.env) {
   if (error) warnings.push(`fleet config: ${error}`);
   const src = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
   const values = {};
+  const sources = {};
   for (const [key, spec] of Object.entries(SETTINGS_SCHEMA)) {
     values[key] = spec.default;
+    sources[key] = 'default';
     if (src[key] === undefined) continue;
     const c = coerce(spec, src[key]);
-    if (c.ok) values[key] = c.value;
+    if (c.ok) { values[key] = c.value; sources[key] = 'file'; }
     else warnings.push(`fleet config: ${key} = ${JSON.stringify(src[key])} is invalid — ignored`);
   }
-  return { ...values, warnings, configPath: path };
+  return { ...values, sources, warnings, configPath: path };
 }
 
 /**

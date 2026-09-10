@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   unitConfig, effectiveMode, allowWriteUnits, loadFleetConfig, writeFleetConfig, fleetHome, fleetSettings,
-  coerce, AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, handoffSettings, CONFIG_VERSION, KEY_SCHEMA,
+  coerce, AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, SETTINGS_SCHEMA, handoffSettings, CONFIG_VERSION, KEY_SCHEMA,
 } from '../core/config.mjs';
 
 function home(config) {
@@ -228,6 +228,36 @@ test('fleetSettings: top-level keys, validated, defaulted, and never fatal', () 
   assert.match(broken.configPath, /fleet\.config\.json$/);
   const dir = home({ updateCheck: false, units: { codex: { timeoutS: 7 } } });
   assert.equal(unitConfig({ unit: 'codex', supportedModes: MODES_CODEX, env: { OMELETTE_HOME: dir } }).values.timeoutS, 7);
+});
+
+test('SETTINGS_SCHEMA: `contract` is a top-level key like updateCheck, resolved with its source', () => {
+  // The schema is the contract other packages plan against: the three values
+  // and the default are pinned here, not derived from a reader.
+  assert.deepEqual(Object.keys(SETTINGS_SCHEMA), ['updateCheck', 'contract']);
+  assert.deepEqual(SETTINGS_SCHEMA.contract, { type: 'enum', values: ['auto', 'full', 'short'], default: 'auto' });
+
+  const plain = fleetSettings({ OMELETTE_HOME: home() });
+  assert.equal(plain.contract, 'auto');
+  assert.equal(plain.sources.contract, 'default');
+  assert.equal(plain.sources.updateCheck, 'default');
+
+  const chosen = fleetSettings({ OMELETTE_HOME: home({ version: 1, contract: 'short' }) });
+  assert.equal(chosen.contract, 'short');
+  assert.equal(chosen.sources.contract, 'file');
+  assert.equal(chosen.sources.updateCheck, 'default', 'one key from the file does not move the others');
+  assert.deepEqual(chosen.warnings, []);
+
+  // An invalid value is a warning and the default stays in force — the same
+  // forgiveness every other block gets, and never a throw.
+  const bad = fleetSettings({ OMELETTE_HOME: home({ contract: 'loud' }) });
+  assert.equal(bad.contract, 'auto');
+  assert.equal(bad.sources.contract, 'default');
+  assert.ok(bad.warnings.some((w) => /contract = "loud" is invalid/.test(w)), bad.warnings.join(' · '));
+
+  // A malformed file answers with both defaults rather than an exception.
+  const broken = fleetSettings({ OMELETTE_HOME: home('{ not json') });
+  assert.equal(broken.contract, 'auto');
+  assert.equal(broken.updateCheck, true);
 });
 
 test('writeFleetConfig writes atomically with version and 0600', () => {
