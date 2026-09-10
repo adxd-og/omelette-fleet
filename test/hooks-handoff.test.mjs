@@ -1018,3 +1018,310 @@ test('PostToolUse: a model that does not end in `[1m]` is not a window — and t
   writeFileSync(shared, '[1, 2]');
   assert.equal(nudged(fire(g, post(p, { session_id: 'model-unparseable' }))), NUDGE(91, 200000, 'default'));
 });
+
+// ─── PostCompact: the compaction summary on disk ─────────────────────────────
+
+/** The record Claude Code writes where a compaction happened. */
+const boundaryLine = (trigger = 'auto') => JSON.stringify({
+  type: 'system',
+  subtype: 'compact_boundary',
+  compactMetadata: { trigger, preCompactTokenCount: 182000 },
+  timestamp: '2026-09-10T12:00:00.000Z',
+});
+
+/** …and the summary itself: an ordinary user record flagged `isCompactSummary`. */
+const summaryLine = (content) => JSON.stringify({
+  type: 'user',
+  message: { role: 'user', content },
+  isCompactSummary: true,
+  timestamp: '2026-09-10T12:00:01.000Z',
+});
+
+/**
+ * A transcript that ends the way one does just after a compaction: ordinary
+ * traffic, the boundary, the summary. `boundary: false` writes a transcript
+ * whose only summary predates every boundary in the tail (`after: false`), or
+ * one with no boundary at all.
+ */
+function writeCompacted(path, content, { boundary = true, after = true } = {}) {
+  const lines = [plainLine('user', 'earlier work'), assistantLine(120000)];
+  if (boundary && after) { lines.push(boundaryLine()); lines.push(summaryLine(content)); }
+  else if (boundary) { lines.push(summaryLine(content)); lines.push(boundaryLine()); lines.push(plainLine('user', 'carry on')); }
+  else lines.push(summaryLine(content));
+  writeFileSync(path, lines.join('\n') + '\n');
+}
+
+const postCompact = (p, over = {}) => ({
+  hook_event_name: 'PostCompact', session_id: 's-1', transcript_path: p.transcript, cwd: p.dir,
+  trigger: 'auto', ...over,
+});
+
+/** One ledger's text, and the block this handler appended to it. */
+const ledgerText = (p, name = 'ledger-0.3.4.md') => readFileSync(p.ledger(name), 'utf8');
+const SUMMARY_HEADING = /\n## Compaction summary \d{4}-\d{2}-\d{2}T[\d:.]+Z \(trigger: (auto|manual|unknown)\)\n/;
+
+test('PostCompact: the summary after the last boundary is appended to every ledger, and nothing is said', () => {
+  const g = guard();
+  const p = project(g, 'summary', {
+    ledgers: { 'ledger-0.3.4.md': '# ledger 0.3.4\n', 'ledger-plan-b.md': '# ledger b\n' },
+  });
+  // Not a ledger, and a file that only looks like one: neither is touched.
+  writeFileSync(join(p.dir, '.omelette', 'notes.md'), 'untouched\n');
+  writeFileSync(join(p.dir, '.omelette', 'ledger-old.txt'), 'untouched\n');
+  writeCompacted(p.transcript, 'The session built the P3 plan.\n\nOpen: the tester has not run yet.');
+
+  const r = fire(g, postCompact(p));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out, '', 'PostCompact writes a file; it does not talk to the session');
+  assert.equal(r.err, '');
+
+  for (const name of ['ledger-0.3.4.md', 'ledger-plan-b.md']) {
+    const text = ledgerText(p, name);
+    assert.ok(text.startsWith('# ledger'), 'the ledger is appended to, never rewritten');
+    assert.match(text, SUMMARY_HEADING);
+    assert.equal(text.endsWith('\nThe session built the P3 plan.\n\nOpen: the tester has not run yet.\n\n'), true, text);
+  }
+  assert.equal(readFileSync(join(p.dir, '.omelette', 'notes.md'), 'utf8'), 'untouched\n');
+  assert.equal(readFileSync(join(p.dir, '.omelette', 'ledger-old.txt'), 'utf8'), 'untouched\n');
+
+  // The trigger the event carried is the trigger in the heading, and an event
+  // that carries none says so rather than saying `undefined`.
+  assert.match(ledgerText(p), /\(trigger: auto\)/);
+  const manual = project(g, 'summary-manual');
+  writeCompacted(manual.transcript, 'a manual compaction');
+  assert.equal(fire(g, postCompact(manual, { trigger: 'manual' })).code, 0);
+  assert.match(ledgerText(manual), /\(trigger: manual\)/);
+  const none = project(g, 'summary-notrigger');
+  writeCompacted(none.transcript, 'no trigger at all');
+  assert.equal(fire(g, postCompact(none, { trigger: undefined })).code, 0);
+  assert.match(ledgerText(none), /\(trigger: unknown\)/);
+});
+
+test('PostCompact: the body is bounded to 8 KiB at a line boundary, and an open fence is closed', () => {
+  const g = guard();
+  const p = project(g, 'bounded');
+  // 200-byte lines: the byte cap bites long before the transcript's does.
+  const long = Array.from({ length: 200 }, (_, i) => `${'x'.repeat(199)}${i % 10}`).join('\n');
+  writeCompacted(p.transcript, `# summary\n${long}`);
+  assert.equal(fire(g, postCompact(p)).code, 0);
+  const body = ledgerText(p).split(SUMMARY_HEADING).pop();
+  const kept = body.split('\n').filter(Boolean);
+  // `# summary` is a Markdown heading, and every heading in a body the model
+  // wrote is escaped on the way in — see the escaping test below.
+  assert.equal(kept[0], '\\# summary');
+  assert.equal(kept[kept.length - 1], '[… truncated]');
+  assert.ok(Buffer.byteLength(body, 'utf8') < 8 * 1024 + 64, `8 KiB body, got ${Buffer.byteLength(body, 'utf8')}`);
+  assert.ok(kept.every((line) => line === '[… truncated]' || line === '\\# summary' || line.length === 200),
+    'whole lines only — the cut falls at a line boundary');
+
+  // A fenced block the summary left open would swallow every line the ledger
+  // gains after it, so the guard closes it — after the truncation marker, so a
+  // cut inside a fence still ends inside it.
+  const fenced = project(g, 'fenced');
+  writeCompacted(fenced.transcript, ['Ruling: keep the cap.', '', '```js', 'const x = 1;'].join('\n'));
+  assert.equal(fire(g, postCompact(fenced)).code, 0);
+  assert.equal(ledgerText(fenced).split(SUMMARY_HEADING).pop(),
+    'Ruling: keep the cap.\n\n```js\nconst x = 1;\n```\n\n');
+
+  // A fence the summary closed itself is not closed twice.
+  const closed = project(g, 'fence-closed');
+  writeCompacted(closed.transcript, ['~~~', 'text', '~~~', 'after'].join('\n'));
+  assert.equal(fire(g, postCompact(closed)).code, 0);
+  assert.equal(ledgerText(closed).split(SUMMARY_HEADING).pop(), '~~~\ntext\n~~~\nafter\n\n');
+
+  // The cap is HARD: a summary that is one line longer than the cap keeps no
+  // line at all, and the block is the marker — a record saying there was a
+  // summary and it did not fit beats silence.
+  const huge = project(g, 'one-line');
+  writeCompacted(huge.transcript, 'y'.repeat(9000));
+  assert.equal(fire(g, postCompact(huge)).code, 0);
+  assert.equal(ledgerText(huge).split(SUMMARY_HEADING).pop(), '[… truncated]\n\n');
+});
+
+test('PostCompact: a summary that predates the last boundary, no summary, and compactSummary=false are all silence', () => {
+  const g = guard();
+
+  // The newest summary in the tail sits BEFORE the last boundary: it belongs to
+  // an older compaction, and this one wrote none we can see.
+  const stale = project(g, 'stale');
+  writeCompacted(stale.transcript, 'an older compaction summary', { after: false });
+  const r1 = fire(g, postCompact(stale));
+  assert.equal(r1.code, 0, r1.err);
+  assert.equal(r1.out, '');
+  assert.equal(ledgerText(stale), '# ledger 0.3.4\n', 'nothing is written and nothing is rewritten');
+
+  // No summary record at all — a transcript whose format changed.
+  const plain = project(g, 'nosummary');
+  silent(fire(g, postCompact(plain)), 'a transcript with no summary record');
+  assert.equal(ledgerText(plain), '# ledger 0.3.4\n');
+
+  // A summary whose content carries no text is the same case.
+  const empty = project(g, 'empty');
+  writeCompacted(empty.transcript, '');
+  silent(fire(g, postCompact(empty)), 'an empty summary');
+  assert.equal(ledgerText(empty), '# ledger 0.3.4\n');
+  writeCompacted(empty.transcript, 42);
+  silent(fire(g, postCompact(empty)), 'content that is not text at all');
+  assert.equal(ledgerText(empty), '# ledger 0.3.4\n');
+
+  // The switch, rendered off.
+  const off = guard({ compactSummary: false });
+  const p = project(off, 'switched-off');
+  writeCompacted(p.transcript, 'a summary nobody asked to keep');
+  silent(fire(off, postCompact(p)), 'compactSummary=false');
+  assert.equal(readFileSync(p.ledger(), 'utf8'), '# ledger 0.3.4\n');
+
+  // A project with no ledger, a transcript that is not a file, an event with no
+  // cwd, no transcript path or a malformed one: silence and exit 0, every time.
+  const bare = join(g.dir, 'noledger');
+  mkdirSync(join(bare, '.omelette'), { recursive: true });
+  const p2 = project(g, 'malformed');
+  writeCompacted(p2.transcript, 'a summary');
+  for (const event of [
+    { ...postCompact(p2), cwd: bare },
+    { ...postCompact(p2), cwd: join(g.dir, 'nope', 'does', 'not', 'exist') },
+    { ...postCompact(p2), cwd: 42 },
+    { ...postCompact(p2), transcript_path: join(p2.dir, '.omelette') },
+    { ...postCompact(p2), transcript_path: '' },
+    { hook_event_name: 'PostCompact' },
+  ]) {
+    silent(fire(g, event), `PostCompact ${JSON.stringify(event.cwd || event.transcript_path || 'bare')}`);
+  }
+});
+
+test('PostCompact: `message.content` as an array contributes its text parts, joined', () => {
+  const g = guard();
+  const p = project(g, 'parts');
+  writeCompacted(p.transcript, [
+    { type: 'text', text: 'The session built the P3 plan.' },
+    { type: 'tool_use', id: 'x', name: 'Read', input: { file: '/x' } },
+    { type: 'text', text: 'Next action: run the suite.' },
+  ]);
+  assert.equal(fire(g, postCompact(p)).code, 0);
+  assert.equal(ledgerText(p).split(SUMMARY_HEADING).pop(),
+    'The session built the P3 plan.\nNext action: run the suite.\n\n');
+
+  // An array with no text in it is a summary with nothing to write.
+  const none = project(g, 'noparts');
+  writeCompacted(none.transcript, [{ type: 'tool_use', id: 'x', name: 'Read', input: {} }, 7, null]);
+  silent(fire(g, postCompact(none)), 'an array with no text parts');
+  assert.equal(ledgerText(none), '# ledger 0.3.4\n');
+});
+
+test('PostCompact: a ledger that is not a regular file is skipped — a symlink is never followed, a FIFO never blocks', { skip: process.platform === 'win32' && 'POSIX symlinks and FIFOs' }, () => {
+  const g = guard();
+  const p = project(g, 'special-post');
+  // A symlink out of .omelette is how an append becomes a write somewhere else
+  // entirely; a FIFO is how it becomes a hang that never ends.
+  const outside = join(g.dir, 'outside-summary.md');
+  writeFileSync(outside, 'untouched\n');
+  symlinkSync(outside, join(p.dir, '.omelette', 'ledger-link.md'));
+  const fifo = join(p.dir, '.omelette', 'ledger-fifo.md');
+  const madeFifo = spawnSync('mkfifo', [fifo], { encoding: 'utf8' }).status === 0;
+  writeCompacted(p.transcript, 'a summary worth keeping');
+
+  const r = fire(g, postCompact(p));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out, '');
+  assert.match(ledgerText(p), SUMMARY_HEADING);
+  assert.equal(readFileSync(outside, 'utf8'), 'untouched\n', 'a symlinked ledger is skipped, not followed');
+  if (madeFifo) assert.ok(statSync(fifo).isFIFO(), 'the FIFO is still a FIFO and the run did not hang on it');
+
+  // …and a `.omelette` that is itself a symlink is refused whole.
+  const linked = join(g.dir, 'linked-omelette');
+  mkdirSync(linked);
+  const real = join(g.dir, 'real-omelette');
+  mkdirSync(real);
+  writeFileSync(join(real, 'ledger-x.md'), '# x\n');
+  symlinkSync(real, join(linked, '.omelette'));
+  silent(fire(g, postCompact(p, { cwd: linked })), 'a .omelette that is a symlink');
+  assert.equal(readFileSync(join(real, 'ledger-x.md'), 'utf8'), '# x\n');
+});
+
+test('PostCompact: the block is a record, not a handoff — SessionStart ignores it and the Stop gate still fires', () => {
+  const g = guard();
+  const p = project(g, 'not-a-handoff', {
+    ledgers: { 'ledger-0.3.4.md': '# ledger 0.3.4\n\n## Handoff 2026-09-10T09:00Z\nWhere it stands: T1 committed.\n' },
+  });
+
+  // The crossing, then the compaction's summary on top of it.
+  assert.equal(nudged(fire(g, post(p))), NUDGE(91, 200000, 'default'));
+  writeCompacted(p.transcript, '## Compaction summary is not a handoff heading\nthe session was doing T2');
+  assert.equal(fire(g, postCompact(p)).code, 0);
+  assert.match(ledgerText(p), SUMMARY_HEADING);
+
+  // 1. SessionStart(compact) still prints the LAST `## Handoff` block and
+  //    nothing of the summary: the new heading is not a handoff heading.
+  const start = fire(g, { hook_event_name: 'SessionStart', source: 'compact', cwd: p.dir });
+  assert.equal(start.code, 0, start.err);
+  assert.equal(start.out, [
+    '--- ledger-0.3.4.md · last handoff ---',
+    '## Handoff 2026-09-10T09:00Z',
+    'Where it stands: T1 committed.',
+    '',
+  ].join('\n'));
+
+  // 2. …and the Stop gate does not count it as fresh: the turn is still held,
+  //    because the block appended since the crossing is a summary and not the
+  //    handoff the session owes.
+  writeTranscript(p.transcript, 182000);
+  const held = fire(g, { hook_event_name: 'Stop', session_id: 's-1', transcript_path: p.transcript, cwd: p.dir });
+  assert.equal(held.code, 0, held.err);
+  const parsed = JSON.parse(held.out);
+  assert.equal(parsed.decision, 'block');
+  assert.match(parsed.reason, /no `## Handoff` block has been appended/);
+});
+
+test('PostCompact: a Markdown heading inside the summary is escaped, so a quoted `## Handoff` can never pass for one', () => {
+  const g = guard();
+  const p = project(g, 'quoted-handoff', {
+    ledgers: { 'ledger-0.3.4.md': '# ledger 0.3.4\n\n## Handoff 2026-09-10T09:00Z\nWhere it stands: T1 committed.\n' },
+  });
+
+  // The crossing, then a summary that QUOTES a handoff heading — Claude Code's
+  // own prose about the ledger it was just reading.
+  assert.equal(nudged(fire(g, post(p))), NUDGE(91, 200000, 'default'));
+  writeCompacted(p.transcript, [
+    'The session was writing the handoff.',
+    '## Handoff (quoted)',
+    '# one hash is a heading too',
+    '###### and six are the last one',
+    '####### seven are not a heading at all',
+    '#nospace is not one either',
+    'ends here',
+  ].join('\n'));
+  assert.equal(fire(g, postCompact(p)).code, 0);
+
+  // Every level-1..6 heading is written with a single backslash in front of it,
+  // and nothing else in the body is touched.
+  assert.equal(ledgerText(p).split(SUMMARY_HEADING).pop(), [
+    'The session was writing the handoff.',
+    '\\## Handoff (quoted)',
+    '\\# one hash is a heading too',
+    '\\###### and six are the last one',
+    '####### seven are not a heading at all',
+    '#nospace is not one either',
+    'ends here',
+    '',
+    '',
+  ].join('\n'));
+
+  // 1. So SessionStart(compact) still prints the REAL last handoff and nothing
+  //    of the quoted one: the escape is what makes that true.
+  const start = fire(g, { hook_event_name: 'SessionStart', source: 'compact', cwd: p.dir });
+  assert.equal(start.code, 0, start.err);
+  assert.equal(start.out, [
+    '--- ledger-0.3.4.md · last handoff ---',
+    '## Handoff 2026-09-10T09:00Z',
+    'Where it stands: T1 committed.',
+    '',
+  ].join('\n'));
+
+  // 2. …and the Stop gate is not satisfied by it either: the turn is still held.
+  writeTranscript(p.transcript, 182000);
+  const held = fire(g, { hook_event_name: 'Stop', session_id: 's-1', transcript_path: p.transcript, cwd: p.dir });
+  assert.equal(held.code, 0, held.err);
+  const parsed = JSON.parse(held.out);
+  assert.equal(parsed.decision, 'block');
+  assert.match(parsed.reason, /no `## Handoff` block has been appended/);
+});

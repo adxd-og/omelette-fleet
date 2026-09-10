@@ -1,6 +1,6 @@
 {{marker}}
 /**
- * omelette-fleet :: the guard hook, one script for all five events.
+ * omelette-fleet :: the guard hook, one script for all six events.
  *
  * WIRED BY THE OPERATOR, NEVER BY US. `omelette-fleet rules --hooks` writes this
  * file and PRINTS the settings.json snippet that calls it; Claude Code's
@@ -25,6 +25,13 @@
  * the session that opens after a compaction is handed the last handoff block of
  * every ledger in the project, bounded, and nothing at all on a startup, a
  * resume, a `/clear` or a fork — none of those lost a context.
+ *
+ * PostCompact — the record. A compaction replaces the session's context with a
+ * summary, and that summary is the only account of everything before it, held
+ * in a context the NEXT compaction will replace in its turn. So it is written
+ * to every ledger, under a heading that is deliberately NOT `## Handoff`: the
+ * SessionStart print and the Stop gate both ask for that heading, and a summary
+ * the model wrote must never be mistaken for the handoff the session owes.
  *
  * PostToolUse + Stop — the auto-handoff. The handoff block is written by the
  * session, by discipline, and the discipline fails exactly when it matters: a
@@ -509,6 +516,11 @@ const AUTO_HANDOFF = {
   enabled: !isObject(HANDOFF_CONFIG) || HANDOFF_CONFIG.enabled !== false,
   threshold: whole(isObject(HANDOFF_CONFIG) ? HANDOFF_CONFIG.threshold : null, 50, 99, 90),
   contextWindow: whole(isObject(HANDOFF_CONFIG) ? HANDOFF_CONFIG.contextWindow : null, 0, Number.MAX_SAFE_INTEGER, 0),
+  // Independent of `enabled`, which is the nudge and the gate: an operator who
+  // switched the reminder off still wants the record of what a compaction took
+  // with it. A literal rendered before 0.3.7 carries no such key and reads as
+  // true — which is what `doctor` reports for it, from the same rule.
+  compactSummary: !isObject(HANDOFF_CONFIG) || HANDOFF_CONFIG.compactSummary !== false,
 };
 
 /** The whole event, or null: stdin that never arrives, never parses, never ends or never stops is not an error here. */
@@ -577,32 +589,41 @@ function ledgerDir(event) {
   return st.isDirectory() && !st.isSymbolicLink() ? { dir, exists: true } : null;
 }
 
-/** Mark every ledger in this project, then say so on stdout. */
-function preCompact(event) {
-  const found = ledgerDir(event);
-  if (!found) return; // a `.omelette` that is not ours to write: no marker, and nothing to announce
-  const line = `\n## Compaction ${new Date().toISOString()} (trigger: ${str(event.trigger, 'unknown')}) — re-read this ledger before continuing\n`;
-  const ledgers = found.exists ? ledgerNames(found.dir) : [];
-  for (const name of ledgers) {
-    // A ledger we cannot write is not a reason to fail somebody's compaction —
-    // and one that is not a REGULAR file is not a ledger at all: lstat (never
-    // stat) so a symlink is seen as a symlink and skipped instead of followed
-    // out of .omelette, and a FIFO named like a ledger is skipped instead of
-    // blocking the append until somebody opens the other end.
-    //
-    // Then O_NOFOLLOW on the open itself, because the lstat and the append are
-    // two syscalls: a link planted between them is what the flag answers.
+/**
+ * ONE BLOCK, APPENDED TO EVERY LEDGER of a project that is ours to write. The
+ * two compaction handlers take this same path — PreCompact's re-read stamp and
+ * PostCompact's summary — because the rules about what may be written are the
+ * same for both, and a second copy of them is a second idea of what a ledger is.
+ *
+ * A ledger we cannot write is not a reason to fail somebody's compaction — and
+ * one that is not a REGULAR file is not a ledger at all: lstat (never stat) so
+ * a symlink is seen as a symlink and skipped instead of followed out of
+ * .omelette, and a FIFO named like a ledger is skipped instead of blocking the
+ * append until somebody opens the other end.
+ *
+ * Then O_NOFOLLOW on the open itself, because the lstat and the append are two
+ * syscalls: a link planted between them is what the flag answers.
+ */
+function appendToLedgers(found, text) {
+  for (const name of (found.exists ? ledgerNames(found.dir) : [])) {
     const path = join(found.dir, name);
     let fd = null;
     try {
       if (!lstatSync(path).isFile()) continue;
       fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | NOFOLLOW | NONBLOCK);
       if (!fstatSync(fd).isFile()) continue;
-      writeSync(fd, line);
+      writeSync(fd, text);
     } catch { /* ignore */ } finally {
       if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
     }
   }
+}
+
+/** Mark every ledger in this project, then say so on stdout. */
+function preCompact(event) {
+  const found = ledgerDir(event);
+  if (!found) return; // a `.omelette` that is not ours to write: no marker, and nothing to announce
+  appendToLedgers(found, `\n## Compaction ${new Date().toISOString()} (trigger: ${str(event.trigger, 'unknown')}) — re-read this ledger before continuing\n`);
   // The window this session crossed is about to be replaced. Its crossing
   // described a context that will not exist in a moment — and the sizes it
   // recorded describe a ledger this very handler has just stamped — so it goes
@@ -1280,6 +1301,145 @@ function stop(event) {
   say(process.stdout, `${JSON.stringify({ decision: 'block', reason: blockText(m, names) })}\n`);
 }
 
+// ─── PostCompact: what the compaction dropped, on disk ───────────────────────
+
+/**
+ * HOW MUCH OF THE SUMMARY GOES IN. What Claude Code hands back after a
+ * compaction is a whole session in one string, and a ledger is read by people:
+ * 8 KiB is a screenful and a half of it, which is the part anyone reads.
+ */
+const SUMMARY_MAX = 8 * 1024;
+
+/**
+ * A MARKDOWN HEADING, AT THE START OF A LINE OF THE SUMMARY. The body is prose
+ * the model wrote, and a session working on its own handoff writes about it: a
+ * line reading `## Handoff …` inside the summary would be printed by
+ * SessionStart as this ledger's last handoff block, and counted by the Stop
+ * gate as the block the session owes. So every heading level Markdown has —
+ * one to six hashes and a blank — is written with a single backslash in front
+ * of it, which is how Markdown itself escapes one. `[ \t]` and not a bare
+ * space, because that is exactly what HANDOFF_HEADING_SOURCE accepts.
+ */
+const MD_HEADING = /^#{1,6}[ \t]/;
+
+/**
+ * `message.content` as text. Claude Code writes the summary as a plain string;
+ * the array form — the shape every other message in a transcript has — is read
+ * too, and only its TEXT parts, one per line. Anything else in such an array (a
+ * tool-use part, a number, a null) contributes nothing, and content that
+ * contributes nothing at all answers '' and is written nowhere.
+ */
+function summaryText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts = [];
+  for (const part of content) {
+    if (typeof part === 'string' && part) parts.push(part);
+    else if (isObject(part) && typeof part.text === 'string' && part.text) parts.push(part.text);
+  }
+  return parts.join('\n');
+}
+
+/**
+ * …and the same text as a block that is safe to append: every heading ESCAPED,
+ * WHOLE LINES up to SUMMARY_MAX bytes, a `[… truncated]` line when anything was
+ * dropped, and a CLOSING FENCE when the lines that were kept left one open — a
+ * summary quoting a code block is ordinary, and an unclosed fence would swallow
+ * every line the ledger gains after it. Fences are counted exactly as
+ * lastHandoffBlock counts them, and the closer goes AFTER the truncation
+ * marker, so a cut that fell inside a fenced block still ends inside it.
+ *
+ * The cap is HARD, as it is there: a summary whose first line is longer than
+ * SUMMARY_MAX keeps no line at all and the block is that one marker — a record
+ * saying there was a summary and it did not fit beats no record. Trailing blank
+ * lines go, because the block supplies its own blank line.
+ *
+ * @returns {string} the block's body, or '' when there was nothing to write.
+ */
+function boundSummary(text) {
+  const kept = [];
+  let bytes = 0;
+  let fence = '';
+  let dropped = false;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    // Escaped BEFORE it is measured: the backslash is a byte of the block too.
+    const line = MD_HEADING.test(raw) ? `\\${raw}` : raw;
+    const size = Buffer.byteLength(line, 'utf8') + 1;
+    if (bytes + size > SUMMARY_MAX) { dropped = true; break; }
+    kept.push(line);
+    bytes += size;
+    const f = FENCE.exec(line);
+    if (!f) continue;
+    if (!fence) fence = f[1];
+    else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = '';
+  }
+  while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
+  if (dropped) kept.push(TRUNCATED);
+  if (fence) kept.push(fence);
+  return kept.join('\n');
+}
+
+/**
+ * THE SUMMARY OF THE COMPACTION THAT JUST HAPPENED, or ''. Claude Code writes
+ * one JSON object per line: a compaction leaves a record carrying
+ * `compact_boundary`, and then the summary itself — a record carrying
+ * `isCompactSummary: true` whose `message.content` is the text.
+ *
+ * READ BACKWARDS, and whichever of the two turns up first decides. A summary
+ * first is this compaction's summary: it is the last one in the tail, and it
+ * sits after every boundary there, because a boundary further back is further
+ * back. A boundary first means the newest summary in the tail belongs to an
+ * OLDER compaction and this one wrote none that can be seen — which is silence,
+ * not yesterday's summary appended to today's ledger. Neither is silence too.
+ *
+ * The LAST summary decides on its own account: if its content carries no text,
+ * the answer is '' rather than the record before it, which describes a
+ * different compaction.
+ *
+ * Only the last 256 KiB are read — the same tail the fill measurement takes —
+ * so the first line of that read is usually half a record. It simply fails to
+ * parse, like any other line that is not one.
+ *
+ * @returns {string} the bounded, fence-closed body, or '' when there is nothing
+ *   here this compaction wrote.
+ */
+function compactSummary(path) {
+  const text = path ? readBounded(path, TRANSCRIPT_TAIL_MAX, { tail: true }) : null;
+  if (text === null) return '';
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith('{')) continue;
+    let rec = null;
+    try { rec = JSON.parse(line); } catch { continue; }
+    if (!isObject(rec)) continue;
+    if (rec.subtype === 'compact_boundary') return '';
+    if (rec.isCompactSummary !== true) continue;
+    return boundSummary(summaryText(isObject(rec.message) ? rec.message.content : null));
+  }
+  return '';
+}
+
+/**
+ * THE RECORD. One block per compaction, into every ledger of the project, under
+ * `## Compaction summary <ISO> (trigger: …)` — a heading that is deliberately
+ * not a handoff heading, so the SessionStart print never shows it and the Stop
+ * gate never counts it as the block the session owes.
+ *
+ * Same ledgers and the same rules as PreCompact, because it is the same append
+ * path, and NOTHING ON STDOUT on any path: this handler writes a file, it does
+ * not talk to the session. A summary it could not find, a switch turned off and
+ * a project with no `.omelette` are all the same silence.
+ */
+function postCompact(event) {
+  if (!AUTO_HANDOFF.compactSummary) return;
+  const found = ledgerDir(event);
+  if (!found || !found.exists) return;
+  const body = compactSummary(str(event.transcript_path));
+  if (!body) return;
+  appendToLedgers(found, `\n## Compaction summary ${new Date().toISOString()} (trigger: ${str(event.trigger, 'unknown')})\n${body}\n\n`);
+}
+
 const event = await readEvent();
 // Wrapped whole: nothing this guard reads — a cwd that is not a directory, a
 // ledger that changed under it, a stream that went away — may reach the harness
@@ -1293,6 +1453,7 @@ try {
     else if (name === 'SessionStart') sessionStart(event);
     else if (name === 'PostToolUse') postToolUse(event);
     else if (name === 'Stop') stop(event);
+    else if (name === 'PostCompact') postCompact(event);
     // Anything else: this guard has no opinion about it.
   }
 } catch { /* a guard that crashes is a session that stops working */ }
