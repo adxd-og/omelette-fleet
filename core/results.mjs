@@ -22,6 +22,14 @@
  * bounded by `outputCap` when it was produced — and a `---` inside it is text,
  * because only the FIRST terminator ends the header.
  *
+ * `usage:` is the one OPTIONAL line: `input=<n> output=<n> [cachedInput=<n>]
+ * [reasoning=<n>]`, written only when the adapter reported an input AND output
+ * pair (codex reports all four counts, gemini and grok the pair, an image run
+ * none). A record WITHOUT the line is a call whose vendor said nothing about
+ * tokens — not a call that spent none — which is why `results --stats` refuses
+ * to total a column that has one. A reader from before 0.3.7 skips the line,
+ * because an unknown header key was always skipped.
+ *
  * FAIL-SOFT ABSOLUTELY, exactly like core/status.mjs: synchronous, every fs
  * call wrapped, `write` answers `null` and logs ONE line. A tool call is never
  * delayed, broken or crashed by the spool.
@@ -50,9 +58,12 @@ export const RESULT_ID_RE = /^\d{8}T\d{6}Z-\d+-\d+$/;
 
 /** The header, in order. A reader keys on the names; a writer never reorders them. */
 export const HEADER_KEYS = [
-  'unit', 'tool', 'resultId', 'model', 'effort', 'startedAt', 'endedAt',
+  'unit', 'tool', 'resultId', 'model', 'effort', 'usage', 'startedAt', 'endedAt',
   'durationMs', 'status', 'partial', 'detached', 'cwd', 'promptPreview',
 ];
+
+/** The counts a `usage:` line may carry, in the order it writes them. */
+const USAGE_KEYS = ['input', 'output', 'cachedInput', 'reasoning'];
 
 const MAX_ID_LENGTH = 64;          // the format's own maximum is ~40; the guard is for the pathological argument
 const HEADER_MAX_BYTES = 8192;     // a listing reads the header only, never a 400 KB answer
@@ -69,11 +80,60 @@ const flag = (v) => (v === true || v === 'true' ? 'true' : 'false');
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const posint = (v, fallback) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : fallback; };
 
+/**
+ * One token count as the header writes it: a finite number — or the numeric
+ * string a CLI that counts in strings would send — rounded, never negative.
+ * `null` means "not a count", and the caller decides what that means.
+ */
+const tokens = (v) => {
+  const n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : null;
+};
+
+/**
+ * The optional `usage:` line, or `null` for "this call reported no tokens",
+ * which is NOT the same as zero and is not written as one. Both halves of the
+ * pair are required: a run that reported only its output tokens is a run
+ * nobody can total.
+ */
+function usageLine(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const input = tokens(usage.input);
+  const output = tokens(usage.output);
+  if (input === null || output === null) return null;
+  const parts = [`input=${input}`, `output=${output}`];
+  const cachedInput = tokens(usage.cachedInput);
+  if (cachedInput !== null) parts.push(`cachedInput=${cachedInput}`);
+  const reasoning = tokens(usage.reasoning);
+  if (reasoning !== null) parts.push(`reasoning=${reasoning}`);
+  return `usage: ${parts.join(' ')}`;
+}
+
+/**
+ * The inverse of `usageLine`. A key we do not know is ignored, exactly as an
+ * unknown HEADER key is — a later version may add one — and a line without a
+ * usable pair is `null`: the line was there and said nothing.
+ */
+function parseUsage(value) {
+  const u = {};
+  for (const part of String(value ?? '').trim().split(/\s+/)) {
+    const eq = part.indexOf('=');
+    if (eq <= 0) continue;
+    const key = part.slice(0, eq);
+    if (!USAGE_KEYS.includes(key)) continue;
+    const n = tokens(part.slice(eq + 1));
+    if (n !== null) u[key] = n;
+  }
+  return Number.isFinite(u.input) && Number.isFinite(u.output) ? u : null;
+}
+
 /** The file body: the header block, then the text verbatim. */
 export function renderResult(record = {}) {
   const r = record && typeof record === 'object' ? record : {};
   const head = HEADER_KEYS.map((key) => {
     if (key === 'promptPreview') return `promptPreview: ${JSON.stringify(line1(r.promptPreview, 200))}`;
+    // The only key that may write NO line: `null` drops out below.
+    if (key === 'usage') return usageLine(r.usage);
     if (key === 'durationMs') {
       const n = Number(r.durationMs);
       return `durationMs: ${Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0}`;
@@ -81,7 +141,7 @@ export function renderResult(record = {}) {
     if (key === 'partial' || key === 'detached') return `${key}: ${flag(r[key])}`;
     const v = line1(r[key], key === 'cwd' ? 1024 : 200);
     return v ? `${key}: ${v}` : `${key}:`;
-  });
+  }).filter((l) => l !== null);
   return ['---', ...head, '---'].join('\n') + '\n' + String(r.text ?? '');
 }
 
@@ -111,6 +171,7 @@ export function parseResult(fileText) {
     if (key === 'durationMs') { const n = Number(value); header[key] = Number.isFinite(n) ? n : 0; continue; }
     if (key === 'partial' || key === 'detached') { header[key] = value === 'true'; continue; }
     if (key === 'promptPreview') { try { header[key] = JSON.parse(value); } catch { header[key] = value; } continue; }
+    if (key === 'usage') { header[key] = parseUsage(value); continue; }
     header[key] = value;
   }
   return { header, text: s.slice(i) };
@@ -232,6 +293,7 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
         durationMs: (h && h.durationMs) || 0,
         startedAt: (h && h.startedAt) || '',
         endedAt: (h && h.endedAt) || '',
+        usage: (h && h.usage) || null,
       });
     }
     rows.sort((a, b) => (a.endedAt === b.endedAt ? cmp(b.resultId, a.resultId) : cmp(b.endedAt, a.endedAt)));
@@ -324,5 +386,49 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
     }
   }
 
-  return { write, list, read, prune, dir };
+  /**
+   * What this unit's spool COST — the data behind `omelette-fleet results
+   * --stats`. One pass over the same bounded headers a listing reads: no
+   * answer text is ever pulled into memory.
+   *
+   * `since` is an epoch in milliseconds and filters on `startedAt`; anything
+   * that is not a finite number is no window at all. A record whose
+   * `startedAt` is not a date this can read is outside EVERY window — a call
+   * that cannot be placed in time cannot be counted in one — and a file whose
+   * header we cannot read is counted by nothing, bytes included: it is not a
+   * call we know anything about.
+   *
+   * `reported` is how many of the calls carried a token pair, and `input` /
+   * `output` are the sums over THOSE calls. A caller that prints a total
+   * without checking `reported === calls` is printing a total of an unknown
+   * fraction of the work.
+   */
+  function stats({ since = null } = {}) {
+    const acc = { calls: 0, ok: 0, error: 0, cancelled: 0, partial: 0, durationMs: 0, bytes: 0, reported: 0, input: 0, output: 0 };
+    if (!dirsReady()) return acc;
+    const cutoff = typeof since === 'number' && Number.isFinite(since) ? since : null;
+    for (const r of scan()) {
+      if (!r.readable) continue;
+      if (cutoff !== null) {
+        const t = Date.parse(r.startedAt);
+        if (!Number.isFinite(t) || t < cutoff) continue;
+      }
+      acc.calls += 1;
+      // Exactly the three outcomes finish() produces; anything else is counted
+      // in `calls` and in none of them rather than guessed at.
+      if (r.status === 'ok' || r.status === 'error' || r.status === 'cancelled') acc[r.status] += 1;
+      if (r.partial) acc.partial += 1;
+      acc.durationMs += r.durationMs;
+      acc.bytes += r.size;
+      const u = r.usage;
+      if (u && Number.isFinite(u.input) && Number.isFinite(u.output)) {
+        acc.reported += 1;
+        acc.input += u.input;
+        acc.output += u.output;
+      }
+    }
+    return acc;
+  }
+
+  return { write, list, read, prune, stats, dir };
 }

@@ -306,3 +306,101 @@ test('two servers prune the same directory: they agree, and an unlink that canno
       chmodSync(spool(dir), 0o700);
     }
   });
+
+/** A hand-written record, the way a file on disk is: header lines, then the text. */
+const record = (...headers) => ['---', 'unit: fake', ...headers, '---', 'THE ANSWER'].join('\n');
+
+test('the usage: header is written only for a reported pair, sits under effort, and round-trips', () => {
+  const full = renderResult({ ...REC, unit: 'codex', usage: { input: 60835, cachedInput: 45312, output: 236, reasoning: 103 } });
+  const lines = full.split('\n');
+  assert.equal(lines[5], 'effort: xhigh');
+  assert.equal(lines[6], 'usage: input=60835 output=236 cachedInput=45312 reasoning=103', 'directly after effort, in the fixed order');
+  assert.deepEqual(parseResult(full).header.usage, { input: 60835, output: 236, cachedInput: 45312, reasoning: 103 });
+
+  // Gemini and Grok report the pair and nothing else.
+  const pair = renderResult({ ...REC, unit: 'grok', usage: { input: 7, output: 3 } });
+  assert.ok(pair.includes('\nusage: input=7 output=3\n'));
+  assert.deepEqual(parseResult(pair).header.usage, { input: 7, output: 3 });
+
+  // Nothing reported, or half of it: no line at all — never a zero nobody measured.
+  for (const usage of [undefined, null, {}, { out: 1 }, { input: 5, output: null }, { input: null, output: 5 }, 'nope', 42]) {
+    const body = renderResult({ ...REC, unit: 'fake', usage });
+    assert.ok(!body.includes('\nusage:'), `no line for ${JSON.stringify(usage)}`);
+    assert.equal(parseResult(body).header.usage, undefined, `absent, not null, for ${JSON.stringify(usage)}`);
+  }
+});
+
+test('the usage: line survives a vendor that counts in strings, and a line that says nothing usable reads as no usage', () => {
+  // A count is rounded, never negative — the same treatment durationMs gets.
+  assert.ok(renderResult({ ...REC, usage: { input: '100', output: '2.6' } }).includes('\nusage: input=100 output=3\n'));
+  assert.ok(renderResult({ ...REC, usage: { input: -5, output: 2 } }).includes('\nusage: input=0 output=2\n'));
+
+  // Parsing is the tolerant half: a key we do not know is skipped like any
+  // other unknown header key, and a line without a pair is null.
+  assert.deepEqual(parseResult(record('usage: input=1 output=2 futureKey=9')).header.usage, { input: 1, output: 2 });
+  assert.deepEqual(parseResult(record('usage: input=4 output=5 cachedInput=nope')).header.usage, { input: 4, output: 5 });
+  assert.equal(parseResult(record('usage: input=1')).header.usage, null);
+  assert.equal(parseResult(record('usage: nonsense')).header.usage, null);
+  assert.equal(parseResult(record('usage:')).header.usage, null);
+});
+
+test('a record written before 0.3.7 has no usage line, parses whole, and re-renders unchanged', () => {
+  const old = ['---', 'unit: codex', 'tool: codex_research', 'resultId: 20260908T142501Z-1-1',
+    'model: gpt-6-astra', 'effort: high', 'startedAt: 2026-09-08T14:25:01.000Z',
+    'endedAt: 2026-09-08T14:25:42.000Z', 'durationMs: 41000', 'status: ok', 'partial: false',
+    'detached: false', 'cwd:', 'promptPreview: "x"', '---', 'THE ANSWER'].join('\n');
+  const back = parseResult(old);
+  assert.equal(back.header.usage, undefined, 'absent, which is not the same as zero');
+  assert.equal(back.text, 'THE ANSWER');
+  assert.equal(renderResult({ ...back.header, text: back.text }), old, 'reading and re-writing invents no line');
+});
+
+test('stats: one pass over the spool — calls by status, partials, wall time, bytes, tokens where they were reported', () => {
+  const dir = home();
+  const s = store(dir);
+  const base = { ...REC, text: 'x' };
+  s.write({ ...base, resultId: '20260908T142501Z-1-1', startedAt: '2026-09-08T14:00:00.000Z', endedAt: '2026-09-08T14:01:00.000Z', durationMs: 60000, status: 'ok', usage: { input: 100, output: 10, cachedInput: 40 } });
+  s.write({ ...base, resultId: '20260908T142501Z-1-2', startedAt: '2026-09-08T15:00:00.000Z', endedAt: '2026-09-08T15:00:01.000Z', durationMs: 1000, status: 'error' });
+  s.write({ ...base, resultId: '20260908T142501Z-1-3', startedAt: '2026-09-08T16:00:00.000Z', endedAt: '2026-09-08T16:00:22.000Z', durationMs: 22000, status: 'cancelled', partial: true, usage: { input: 7, output: 3 } });
+
+  const all = s.stats();
+  assert.equal(all.calls, 3);
+  assert.equal(all.ok, 1);
+  assert.equal(all.error, 1);
+  assert.equal(all.cancelled, 1);
+  assert.equal(all.partial, 1);
+  assert.equal(all.durationMs, 83000);
+  assert.equal(all.reported, 2, 'the middle call reported no tokens');
+  assert.equal(all.input, 107);
+  assert.equal(all.output, 13, 'the sum over the calls that reported, and only those');
+  const bytes = readdirSync(spool(dir)).reduce((n, f) => n + statSync(join(spool(dir), f)).size, 0);
+  assert.equal(all.bytes, bytes, 'the bytes those records actually occupy');
+});
+
+test('stats: the window filters on startedAt, and a record it cannot place in time is outside every window', () => {
+  const dir = home();
+  const s = store(dir);
+  const now = Date.now();
+  const at = (hoursAgo) => new Date(now - hoursAgo * 3600 * 1000).toISOString();
+  s.write({ ...REC, resultId: '20260908T142501Z-1-1', startedAt: at(23), endedAt: at(23), durationMs: 1, text: 'x' });
+  s.write({ ...REC, resultId: '20260908T142501Z-1-2', startedAt: at(25), endedAt: at(25), durationMs: 1, text: 'x' });
+  s.write({ ...REC, resultId: '20260908T142501Z-1-3', startedAt: '', endedAt: at(1), durationMs: 1, text: 'x' });
+  writeFileSync(join(spool(dir), '20260908T142501Z-1-4.md'), 'not one of ours');
+
+  assert.equal(s.stats().calls, 3, 'no window: every readable record, the undated one included');
+  assert.equal(s.stats({ since: now - 24 * 3600 * 1000 }).calls, 1, '23h in, 25h out, undated out');
+  assert.equal(s.stats({ since: now + 1000 }).calls, 0);
+  assert.equal(s.stats({ since: 'yesterday' }).calls, 3, 'a since that is not a number is no window at all');
+  const ours = readdirSync(spool(dir))
+    .filter((f) => f !== '20260908T142501Z-1-4.md')
+    .reduce((n, f) => n + statSync(join(spool(dir), f)).size, 0);
+  assert.equal(s.stats().bytes, ours, 'the file that is not one of ours is counted by nothing, bytes included');
+});
+
+test('stats on a spool that is not there, or is not ours, is a row of zeros', () => {
+  const dir = home();
+  const zeros = { calls: 0, ok: 0, error: 0, cancelled: 0, partial: 0, durationMs: 0, bytes: 0, reported: 0, input: 0, output: 0 };
+  assert.deepEqual(store(dir).stats(), zeros);
+  assert.equal(existsSync(join(dir, 'results')), false, 'counting never creates the spool');
+  assert.deepEqual(createResultStore({ home: dir, unit: '../evil' }).stats(), zeros);
+});
