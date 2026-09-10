@@ -23,7 +23,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
     "coder":  { "model": "opus", "effort": "xhigh" },
     "tester": { "model": "sonnet", "effort": "xhigh", "maxTurns": 80 }
   },
-  "handoff": { "enabled": true, "threshold": 90, "contextWindow": 0 },
+  "handoff": { "enabled": true, "threshold": 90, "contextWindow": 0, "compactSummary": true },
   "units": {
     "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
     "grok":   { "enabled": true, "mode": "read-only", "timeoutS": 1800, "maxTurns": 30 },
@@ -101,8 +101,9 @@ The `handoff` block configures the other managed file that is rendered rather th
 | `handoff.enabled` | boolean | `true` | `false` renders a guard whose `PostToolUse` and `Stop` handlers do nothing at all |
 | `handoff.threshold` | integer 50–99 | `90` | Percent of the context window at which the reminder fires. Below 50 it arrives before there is anything to hand off; 100 would never arrive |
 | `handoff.contextWindow` | integer ≥ 0 | `0` | The window to measure against. **`0` means resolve it at run time**: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, then `autoCompactWindow` in your Claude Code user settings (`~/.claude/settings.json` or `$CLAUDE_CONFIG_DIR`, the `.local` file first), then a model id ending in `[1m]` — `ANTHROPIC_MODEL`, then the `model` key of those same two files — which is 1 000 000, then Claude Code's 200 000. The first two accept the `500k` / `1m` forms |
+| `handoff.compactSummary` | boolean | `true` | `false` renders a guard whose `PostCompact` handler does nothing. With it on, the summary Claude Code writes after a compaction is appended to every `.omelette/ledger-*.md` under `## Compaction summary <ISO> (trigger: …)`, bounded to 8 KB. Independent of `handoff.enabled`, which is the nudge and the gate |
 
-The guard imports nothing from this package — it is one file copied into a project — so these three values are **substituted into the script** at `rules --hooks` time, exactly the way the agent definitions get theirs. A change here reaches a session on the next re-render, and not before:
+The guard imports nothing from this package — it is one file copied into a project — so these four values are **substituted into the script** at `rules --hooks` time, exactly the way the agent definitions get theirs. A change here reaches a session on the next re-render, and not before:
 
 ```bash
 omelette-fleet show handoff                 # values and where each came from
@@ -111,7 +112,7 @@ omelette-fleet rules --hooks                # re-render the guard, then paste no
 omelette-fleet doctor | grep '^handoff'     # what the INSTALLED guard will do
 ```
 
-`doctor` reads the numbers back out of the installed script rather than out of this file, because the version marker cannot tell a stale threshold from a current one — a changed value renders at the same version. So `handoff       nudge at 90% of 200000 (default) · Stop gate on · ledgers: 1` is a statement about the hook, and `set` without `rules --hooks` visibly does not move it. The ceiling's source is named in parentheses: `handoff.contextWindow`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `autoCompactWindow`, `model[1m]` or `default`.
+`doctor` reads the numbers back out of the installed script rather than out of this file, because the version marker cannot tell a stale threshold from a current one — a changed value renders at the same version. So `handoff       nudge at 90% of 200000 (default) · Stop gate on · summary on · ledgers: 1` is a statement about the hook, and `set` without `rules --hooks` visibly does not move it. `summary on|off` is `handoff.compactSummary` read out of the same literal; a guard rendered before 0.3.7 carries no such key and reads as `on`, which is what a guard running that literal would compute — the `hooks` line above it is already asking for the re-render. The ceiling's source is named in parentheses: `handoff.contextWindow`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `autoCompactWindow`, `model[1m]` or `default`.
 
 **The `[1m]` step.** Claude Code writes the model it is running into your settings, suffix and all, and that suffix is the window: a value ending in `[1m]` — `claude-opus-5[1m]`, case aside and whitespace trimmed — is 1 000 000 tokens. It is read from `ANTHROPIC_MODEL` first and then from the `model` key of the same two user-scope files, and only once `autoCompactWindow` has said nothing: a window you capped on purpose is a window you meant. Nothing else about the id is read and no list of model names is kept, so a model this package has never heard of still says what its suffix says, and the id itself is never printed. The step exists because the alternative was worse than useless: a 1M session measured against 200 000 reads as 144 % full, and the reminder fires on the first tool call of the day. **A `[1m]` passed only on the command line — `claude --model …[1m]` — is invisible to a hook**, which sees the environment and your settings files and never the client's argv; that session wants `handoff.contextWindow` or the setting.
 
