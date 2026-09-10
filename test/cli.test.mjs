@@ -729,26 +729,55 @@ function probeScript(dir, name, body) {
 /** One unit's block of the fleet config — the file the probe's cap is read from. */
 const fleetConfig = (dir, units) => writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units }));
 
-test('doctor --probe-sandbox: the probe has ONE deadline of its own, and the directory is read the moment it fires', () => {
+/**
+ * Wait briefly for a pid to be gone. A process SIGKILLed a moment ago can
+ * still be a zombie until its parent reaps it, and `kill(pid, 0)` succeeds on
+ * a zombie — so this polls rather than asking once. Synchronous, because
+ * every test around it drives the CLI with spawnSync.
+ */
+function processGone(pid, ms = 3000) {
+  const until = Date.now() + ms;
+  for (;;) {
+    try { process.kill(pid, 0); } catch { return true; }
+    if (Date.now() > until) return false;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+}
+
+test('doctor --probe-sandbox: the probe has ONE deadline of its own, it ENDS the run, and the directory is read the moment it fires', () => {
   const dir = home();
   const gone = join(dir, 'no-such');
+  const pidFile = join(dir, 'late-cli.pid');
   // agy's own hard kill sits 60 s ABOVE the timeout it hands the CLI, so this
   // child is NOT what ends the call — only the probe's deadline is. It writes
-  // two seconds past that deadline: a write nobody waited for is a write the
-  // probe never saw, and the honest answer is `skipped`, not a verdict.
+  // two seconds past that deadline (a write nobody waited for is one the probe
+  // never saw: `skipped`, not a verdict) and would then sit there for a
+  // minute. Nothing but the abort the deadline raises can end it, and until
+  // it ends, doctor's own event loop cannot drain.
   const fake = probeScript(dir, 'late-cli', [
+    `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
     'setTimeout(() => {',
     "  try { fs.writeFileSync(p.join(cwd, 'probe.txt'), 'probe'); } catch { /* the directory is gone */ }",
     "  console.log('done');",
-    '  process.exit(0);',
     '}, 3000);',
+    'setTimeout(() => process.exit(0), 60000);',
   ].join('\n'));
   registerOurs(dir, ['gemini']);
   fleetConfig(dir, { gemini: { timeoutS: 1 } });
-  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: fake, GROK_BIN: gone, CODEX_BIN: gone } });
+  const t0 = Date.now();
+  // The timeout is the test's own net: without the abort this run hangs on the
+  // fake for a minute, and a hung suite reports nothing.
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: fake, GROK_BIN: gone, CODEX_BIN: gone }, timeout: 30000 });
+  const elapsed = Date.now() - t0;
   assert.match(r.out, /── gemini[\s\S]*?sandbox\s+skipped \(timed out after 1 s\)/, r.out + r.err);
   assert.doesNotMatch(r.out, /BREACHED/);
   assert.equal(r.code, 0, r.out);
+  // capS + 5 s: the deadline is 1 s here and the kill is immediate.
+  assert.ok(elapsed < 6000, `doctor took ${elapsed} ms — the abandoned run kept it alive`);
+  // …and the vendor process is not still running behind it.
+  const pid = Number(readFileSync(pidFile, 'utf8').trim());
+  assert.ok(pid > 0, 'the fake recorded no pid');
+  assert.equal(processGone(pid), true, `pid ${pid} outlived doctor`);
 });
 
 test('doctor --probe-sandbox: a file already on disk is BREACHED at the deadline, timed as the wait that happened', () => {
@@ -851,23 +880,34 @@ test('doctor --probe-sandbox: a probe directory replaced by a symlink is BREACHE
   assert.equal(existsSync(join(decoy, 'innocent.txt')), true);
 });
 
-test('doctor --probe-sandbox: a relative OMELETTE_HOME is resolved before the probe stands in its own directory', () => {
+test('doctor --probe-sandbox: a relative OMELETTE_HOME behaves exactly as it does under plain doctor', () => {
   const dir = home();
   const gone = join(dir, 'no-such');
   const fake = probeScript(dir, 'quiet-cli', ["console.log('refused');", 'process.exit(0);'].join('\n'));
   registerOurs(dir, ['grok']);
   // The home the CLI is told about is RELATIVE — a perfectly ordinary way to
-  // run it from a project — and the probe chdir's away from the directory that
-  // relative path is relative TO. Resolved late, the spool would land inside
-  // the probe directory and the unit would breach a sandbox it never touched.
-  const r = cli(['doctor', '--probe-sandbox'], {
-    dir,
-    env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, OMELETTE_HOME: 'relhome' },
-  });
-  assert.match(r.out, /── grok[\s\S]*?sandbox\s+held \(\d+ s, replied "refused"\)/, r.out + r.err);
-  assert.doesNotMatch(r.out, /BREACHED/);
+  // run it from a project. The probe changes no directory any more, so that
+  // path is relative to the same thing under the flag as without it: doctor's
+  // own cwd. Nothing in the probe rewrites it, and nothing has to.
+  const env = { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, OMELETTE_HOME: 'relhome' };
+  const plain = cli(['doctor'], { dir, env });
+  const probed = cli(['doctor', '--probe-sandbox'], { dir, env });
+  // doctor reports the home exactly as it was given, flag or no flag…
+  const feedLine = (r) => (/^\s+status feed\s+(.*)$/m.exec(r.out) || [])[1];
+  assert.equal(feedLine(plain), 'relhome is writable', plain.out + plain.err);
+  assert.equal(feedLine(probed), feedLine(plain), 'the flag changed what doctor reports about the home');
+  // …and it lands in the same place: beside the directory doctor was run in.
+  assert.equal(existsSync(join(dir, 'relhome')), true);
+  // The probe ran, and its answer was spooled into THAT home — not into the
+  // throwaway directory, which would have read as a breach of a sandbox
+  // nothing touched.
+  assert.match(probed.out, /── grok[\s\S]*?sandbox\s+held \(\d+ s, replied "refused"\)/, probed.out + probed.err);
+  assert.doesNotMatch(probed.out, /BREACHED/);
   const spool = readdirSync(join(dir, 'relhome', 'results', 'grok')).filter((f) => f.endsWith('.md'));
   assert.equal(spool.length, 1, spool.join(','));
+  // …and nowhere else: no second fleet home appeared because a relative path
+  // resolved against something other than doctor's own cwd.
+  assert.equal(existsSync(join(dir, 'results')), false);
 });
 
 test('doctor --probe-sandbox: a temp directory that cannot be created is skipped with the reason', () => {

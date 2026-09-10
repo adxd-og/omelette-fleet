@@ -2112,15 +2112,20 @@ const emptyReply = (unit, text) => {
 };
 
 /**
- * The environment the probe hands `createUnitRuntime`, built BEFORE the probe
- * stands in its own directory — because a relative path in it is relative to
- * the directory the operator ran `doctor` in, and nothing else.
+ * The environment the probe hands `createUnitRuntime`: doctor's own, with one
+ * value changed — the probe's ceiling on this unit's timeout — and one path
+ * resolved.
  *
- * `OMELETTE_HOME=.omelette-home` resolved late would put the fleet home, and
- * with it the result spool, INSIDE the probe directory: the unit would then
- * breach a sandbox it never touched, by our own writing. A relative
- * `<UNIT>_BIN` would simply fail to spawn there. A bare name is not a path and
- * is left alone: that one is for PATH to resolve.
+ * `OMELETTE_HOME` is read by THIS process, which since 0.3.6 never leaves the
+ * directory the operator ran `doctor` in, so a relative one means exactly what
+ * it means for `doctor` with no flag at all: it is left exactly as it was
+ * given. A relative `<UNIT>_BIN` is a different path in a different process —
+ * the RUN happens in the probe's throwaway directory, because the research
+ * tool was asked to run there (`cwd`), and a command WITH a path separator is
+ * resolved by the OS against the child's own cwd. It is absolutised here,
+ * against the directory the operator is standing in, or it would not exist
+ * where the child looks for it. A bare name is not a path and is left alone:
+ * that one is for PATH to resolve.
  */
 function probeRuntimeEnv(unit, env, { capS, from }) {
   const built = { ...env };
@@ -2131,8 +2136,6 @@ function probeRuntimeEnv(unit, env, { capS, from }) {
   // install does.
   const timeoutEnv = unit.envMap && unit.envMap.timeoutS;
   if (timeoutEnv) built[timeoutEnv] = String(capS);
-  const home = String(env.OMELETTE_HOME || '').trim();
-  if (home) built.OMELETTE_HOME = resolvePath(from, home);
   const binEnv = unit.bin && unit.bin.env;
   const bin = binEnv ? String(env[binEnv] || '').trim() : '';
   if (bin && (bin.includes('/') || bin.includes('\\'))) built[binEnv] = resolvePath(from, bin);
@@ -2171,17 +2174,20 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
     let failed = false;
     let timedOut = false;
     let timer = null;
-    const prev = process.cwd();
     try {
-      const rt = createUnitRuntime(unit, { env: probeRuntimeEnv(unit, env, { capS, from: prev }) });
-      // NONE of the three research tools declares a `cwd`, so the directory
-      // the vendor process runs in is THIS process's. Standing in the probe
-      // directory for the length of the call is what keeps a cwd-relative
-      // write out of the operator's project; the argument is passed anyway,
-      // so the spooled record names the directory and a tool that grows a
-      // `cwd` later is already covered.
-      process.chdir(dir);
-      const call = rt.callTool(PROBE_TOOL[unit.name], { prompt: probePrompt(dir), cwd: dir });
+      // `cancel: 'kill'` for THIS runtime only (core/unit.mjs), whatever the
+      // operator configured: it is what makes the signal below reach the
+      // spawn. Under `finish` the runtime passes nothing down, and the
+      // deadline would end the WAIT without ending the RUN.
+      const rt = createUnitRuntime(unit, { env: probeRuntimeEnv(unit, env, { capS, from: process.cwd() }), cancel: 'kill' });
+      // The three research tools take a `cwd` (0.3.6), so the vendor process
+      // runs in the probe directory because it was ASKED to — not because
+      // doctor stood there. A cwd-relative write still lands in the directory
+      // under test rather than in the operator's project, the spooled record
+      // names it on the `cwd:` header, and every relative path in doctor's own
+      // environment goes on meaning what it meant on the command line.
+      const controller = new AbortController();
+      const call = rt.callTool(PROBE_TOOL[unit.name], { prompt: probePrompt(dir), cwd: dir }, { signal: controller.signal });
       // ONE DEADLINE FOR THE WHOLE PROBE. The unit's own timeout bounds the
       // CHILD; it does not bound the call around it — a retry delay, a vendor
       // whose kill margin sits above its timeout, a pipe an orphan is still
@@ -2191,8 +2197,15 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
       const r = await Promise.race([call, deadline]);
       if (r === PROBE_DEADLINE) {
         timedOut = true;
-        // Abandoned, not orphaned: the run ends on the unit's own timeout, and
-        // its answer must not reach this process as an unhandled rejection.
+        // ENDED, not merely abandoned. The abort reaches every spawn the call
+        // owns and SIGKILLs the process group at once; without it doctor sat
+        // on the child's own bounds after it had already printed its line —
+        // `timeoutS + 60 s` for gemini — because an open stdout pipe keeps
+        // this process's event loop alive. The verdict logic below is
+        // unchanged: the directory is read here and now.
+        controller.abort();
+        // The abandoned call still settles, as `cancelled`, and its answer
+        // must not reach this process as an unhandled rejection.
         Promise.resolve(call).catch(() => {});
       } else {
         text = (r && r.text) || '';
@@ -2207,7 +2220,6 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
       failed = true;
     } finally {
       if (timer) clearTimeout(timer);
-      try { process.chdir(prev); } catch { /* the directory we started in is gone */ }
     }
     const seconds = Math.round((Date.now() - started) / 1000);
     const reply = firstLine(text).slice(0, 80);

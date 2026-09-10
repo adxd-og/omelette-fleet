@@ -6,18 +6,20 @@
  * `doctor --probe-sandbox`). The diff's own tests (test/cli.test.mjs) already
  * cover the probe's own deadline race, failed/empty replies, the directory
  * itself as evidence (removed / replaced by a symlink), a relative
- * OMELETTE_HOME resolved before the chdir, a temp dir that cannot be
- * created, and a registration that is not ours.
+ * OMELETTE_HOME, a temp dir that cannot be created, and a registration that
+ * is not ours.
  *
  * Two behaviours promised by `probeRuntimeEnv` and the new
  * "could not inspect" skip branch were NOT exercised by that diff:
  *
  * 1. A relative `<UNIT>_BIN` (one WITH a path separator) is resolved to an
- *    absolute path against the operator's own cwd before the probe chdir's
- *    into its own throwaway directory — every existing test only ever hands
+ *    absolute path against the operator's own cwd before the run is spawned
+ *    in the probe's throwaway directory — every existing test only ever hands
  *    the probe an already-absolute bin path, so a regression here (spawning
- *    the relative path unresolved, which fails once cwd has moved) would go
- *    unnoticed.
+ *    the relative path unresolved, which the OS then resolves against the
+ *    spawn's own cwd) would go unnoticed. In 0.3.6 that cwd stopped being one
+ *    doctor chdir'd into and became the one the research tool was ASKED to run
+ *    in; the resolution matters for exactly the same reason.
  * 2. A probe directory the run answered from, but that this process can no
  *    longer read afterwards, is `skipped (could not inspect: …)` — never
  *    `held` (nothing was proven) and never `BREACHED` (no entry was ever
@@ -64,8 +66,8 @@ function registerOurs(dir, units) {
  * A fake vendor CLI answering doctor's own `--version` / `models` / `login
  * status` probes first, then `body` — a real run's own script, written with
  * `fs`, `p` (path) and `cwd` (this child's own process.cwd() at the time it
- * ran, which is the probe directory once doctor has stood in it) already in
- * scope.
+ * ran, which is the probe directory the research tool was asked to run in)
+ * already in scope.
  */
 function probeScript(dir, name, body) {
   const path = join(dir, name);
@@ -84,15 +86,16 @@ function probeScript(dir, name, body) {
   return path;
 }
 
-test('doctor --probe-sandbox: a relative <UNIT>_BIN (with a path separator) still spawns after the probe stands in its own directory', () => {
+test('doctor --probe-sandbox: a relative <UNIT>_BIN (with a path separator) still spawns when the run happens in the probe directory', () => {
   const dir = home();
   const gone = join(dir, 'no-such');
   mkdirSync(join(dir, 'fakebins'), { recursive: true });
   // Written under `dir`, and referenced ONLY as a path relative to `dir` — the
-  // CLI's own cwd (per `cli()` above) — never as an absolute path. If the
-  // probe spawned it after chdir'ing into its throwaway directory without
-  // first resolving this against the ORIGINAL cwd, the vendor process would
-  // not exist at that relative path any more and the call would fail to spawn.
+  // CLI's own cwd (per `cli()` above) — never as an absolute path. The run
+  // happens in the probe's throwaway directory (the research tool's `cwd`), and
+  // a command with a separator in it is resolved by the OS against the spawn's
+  // cwd: unresolved, the vendor process would not exist at that relative path
+  // and the call would fail to spawn.
   const rel = 'fakebins/relgrok';
   probeScript(dir, rel, ["console.log('refused');", 'process.exit(0);'].join('\n'));
   registerOurs(dir, ['grok']);
@@ -112,8 +115,8 @@ test('doctor --probe-sandbox: a relative <UNIT>_BIN without any separator is lef
   const path = probeScript(dir, 'barename-cli', ["console.log('refused');", 'process.exit(0);'].join('\n'));
   registerOurs(dir, ['grok']);
   // A bare command name is not a path `probeRuntimeEnv` touches — it stays
-  // exactly as the operator set it, and PATH (unaffected by the probe's own
-  // chdir) is what has to find it.
+  // exactly as the operator set it, and PATH (which the run's own directory
+  // does not affect) is what has to find it.
   const r = cli(['doctor', '--probe-sandbox'], {
     dir,
     env: { AGY_BIN: gone, GROK_BIN: 'barename-cli', CODEX_BIN: gone, PATH: `${dirname(path)}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}` },
