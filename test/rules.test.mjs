@@ -54,6 +54,13 @@ test('the template ships, renders its version everywhere, and round-trips throug
   assert.ok(text.endsWith('\n'));
 });
 
+test('the rendered rules cover delegate justification, the Reviews section, and the ledger review-yield line', () => {
+  const text = renderRulesFile('1.2.3');
+  assert.match(text, /When a delegate is justified/);
+  assert.match(text, /^## Reviews$/m);
+  assert.match(text, /review yield:/);
+});
+
 test('parseRulesMarker rejects anything that is not ours', () => {
   assert.equal(parseRulesMarker(''), null);
   assert.equal(parseRulesMarker('# My own rules\n'), null);
