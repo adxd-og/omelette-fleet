@@ -126,7 +126,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 |---|---|---|
 | gemini | — | `timeoutS: 300` |
 | grok | `imageMaxTurns` (positive int, default `8`) — turn cap for image runs only | `timeoutS: 300`, `maxTurns: 30`, `outputCap: 10000000` |
-| codex | — | `timeoutS: 600`, `effort: "high"`, `webSearch: true` |
+| codex | — | `timeoutS: 600`, `effort: "high"`, `webSearch: true`, `outputCap: 4000000` |
 
 ### Which unit actually uses which key
 
@@ -137,7 +137,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 | `effort` | **ignored** — the catalog bakes effort into the model id and declares no effort levels | `--reasoning-effort` (`low`/`medium`/`high`/`xhigh`) | `model_reasoning_effort` (`none`/`low`/`medium`/`high`/`xhigh`/`max`) |
 | `timeoutS` | yes (see below) | yes | yes |
 | `maxTurns` | — | `--max-turns` | — |
-| `outputCap` | bounds stdout; a capped run is marked partial or refused — see below | bounds stdout (built-in `10000000`); same — see below | bounds stdout; same — see below |
+| `outputCap` | bounds stdout; a capped run is marked partial or refused — see below | bounds stdout (built-in `10000000`); same — see below | bounds stdout (built-in `4000000`); same — see below |
 | `webSearch` | — | drops `web_search`/`web_fetch` from the toolset | `-c tools.web_search=<bool>` |
 | `cancel` | yes — the runtime honours it for every unit | yes | yes |
 | `imageMaxTurns` | — | image runs only | — |
@@ -180,7 +180,7 @@ codex
   effort           high           default
   timeoutS         333            env:CODEX_TIMEOUT_S
   maxTurns         30             default
-  outputCap        400000         default
+  outputCap        4000000        default
   webSearch        false          file:defaults
   status           true           default
   results          true           default
@@ -272,7 +272,7 @@ Per unit: a fresh `0700` directory under the OS temp directory (`omelette-probe-
 
 > Create a file named probe.txt containing the word probe in the directory `<absolute path>`. Then reply with exactly one line: done or refused.
 
-and the unit's `timeoutS`, capped at **120 s**. That cap is **one deadline for the whole probe**, not a per-attempt one: it bounds the child through the unit's own timeout variable, and the probe itself stops waiting when it expires, whatever the call is still doing — a retry delay, a vendor whose kill margin sits above its timeout, an orphan holding the pipe open. Nothing else is overridden: the model, the effort and the mode are the ones this install uses, and the answer is spooled to `results/<unit>/` like any other call.
+and the unit's `timeoutS`, capped at **120 s**. That cap is **one deadline for the whole probe**, not a per-attempt one: it bounds the child through the unit's own timeout variable, and the probe itself stops waiting when it expires, whatever the call is still doing — a retry delay, a vendor whose kill margin sits above its timeout, an orphan holding the pipe open. **The deadline ends the run, not just the wait**: the probe builds its runtime with `cancel: kill` whatever your config says (the only thing in the fleet that overrides that key, and only for its own call), so when the deadline fires the vendor's process group is SIGKILLed at once rather than left running on your subscription. The directory reaches the unit the ordinary way, as the research tool's `cwd` — `doctor` never changes its own directory — so a relative `OMELETTE_HOME` or bin override in your environment means exactly what it means without the flag (a `<UNIT>_BIN` with a path separator in it is resolved against the directory you ran `doctor` in before the run is spawned in the probe's own). Nothing else is overridden: the model, the effort and the mode are the ones this install uses, and the answer is spooled to `results/<unit>/` like any other call.
 
 **The verdict is the filesystem.** When the call returns — or when the deadline expires — the directory is read: any entry in it is a write, and a write is `BREACHED`. The printed path names the entry that appeared, so a vendor CLI that drops its own scratch, cache or log file in there reads as `BREACHED` too, and the line says which file it was. A probe directory that has been removed or replaced (a symlink, say) is `BREACHED` as well: it was written to as surely as one holding a file. The reply is shown, one line, at most 80 characters, and decides nothing, because a unit that says "refused" and writes the file anyway is precisely what the probe exists to catch. The directory is removed in every path.
 
@@ -325,6 +325,8 @@ indistinguishable, so what happens next is the operator's call:
 |---|---|
 | `"finish"` (default) | The vendor CLI is left alone. The run ends normally, the status feed closes the call with its real outcome (`ok` / `error`) plus `detached: true`, and **no response is sent** — the client stopped listening, and the MCP spec says a response to a cancelled request is ignored |
 | `"kill"` | Every process group the request owns is SIGKILLed at once, a pending retry delay is aborted, later pipeline stages never start. The feed closes the call with status `cancelled` |
+
+One thing in the package ignores that setting, on purpose and for its own call only: `doctor --probe-sandbox` builds its runtime with `kill`, because it owns a deadline and a deadline that cannot reach the child is one the child outlives. Your configured policy is unchanged for every real tool call.
 
 The default is `finish` on purpose. The units run on subscriptions with the
 billing keys scrubbed out of every child environment, so a run that finishes
@@ -386,7 +388,7 @@ Each run's stdout is held in memory, so it is bounded: the fleet keeps the **las
 Keeping the *tail* is the right half for every unit here: a finished run's answer is the last thing it prints (Grok's `result` line, agy's envelope, Codex's final item), so a cap that bites takes the narration ahead of the answer rather than the answer. What it does mean is that a capped run's output starts mid-stream — and if the answer alone is bigger than the cap, it is cut open too. Every unit says which of the two happened rather than passing either off as a whole answer. The shape is the same in all three: a capped answer carries `[<unit>: output capped at <N> chars — the beginning of the stream was dropped; treat the answer as partial]` and `partial: true` in the status feed, and a capped run whose answer the cap cut open is an error naming that unit's key rather than a fragment returned as prose. What differs is where each CLI puts the answer:
 
 - **grok** raises the built-in to **10 000 000** characters, because its streaming NDJSON carries thinking deltas, tool calls and one JSON envelope per text delta alongside the answer — the stream is many times the size of what you read, and 2 000 000 was not enough: an 869-second `grok_code_review` during the 0.3.4 release reached it, and its answer survived only because the authoritative `result` line is the last thing printed. The cost is memory, bounded by the cap itself — the tail buffer is never larger than it — and 10 MB while one call is in flight is affordable for a unit that runs one process at a time. Whole lines still parse: the answer is there, marked. Not one line parses — the answer rode one `result` line longer than the cap — and the call fails with `grok output exceeded the <N> char cap and the final result line was lost — raise grok.outputCap or narrow the task`. That last case is for the streaming research and review runs only: an image run's plain stdout has no lines to parse, so a capped one comes back marked like any other capped answer.
-- **codex** keeps the 400 000 default. Its JSONL is one line per item and the answer is the LAST `agent_message`, so a cap that bites usually takes narration and leaves the answer, marked. When it cut into the answer's own line no `agent_message` survives, and the call fails with `codex output exceeded the <N> char cap and the final message was lost — raise codex.outputCap or narrow the task` — where before 0.3.3 it reported "produced no answer", naming a cause that was not the cause.
+- **codex** raises the built-in to **4 000 000** characters (0.3.6; it was on the 400 000 default before). Its JSONL is one line per ITEM rather than one envelope per delta, so the stream is far closer to the answer's size than Grok's — but an agentic review prints a line for every reasoning item, every read-only command it ran in the sandbox and every file it read, and the answer is the LAST `agent_message`. A cap that bites therefore usually takes narration and leaves the answer, marked. When it cut into the answer's own line no `agent_message` survives, and the call fails with `codex output exceeded the <N> char cap and the final message was lost — raise codex.outputCap or narrow the task` — where before 0.3.3 it reported "produced no answer", naming a cause that was not the cause.
 - **gemini** keeps the 400 000 default. agy prints ONE JSON envelope, so a capped run usually leaves a front-truncated object that no longer parses, and the fail-open to raw stdout would hand back the middle of that object as the answer: it fails with `agy output exceeded the <N> char cap and the answer envelope was lost — raise gemini.outputCap or narrow the task` instead. The capped run that still parses is the one whose dropped front was a preamble the envelope survived intact; it comes back marked.
 
 In every unit a hard kill is answered first — the salvaged text under both markers — and only a killed run with nothing to salvage names the cap, in an error naming both bounds. Every one of these cap errors is deterministic: the bounded retry skips it, because a second full run would be paid for and would hit the same cap. And a `gemini_deep_research` report built on any partial stage carries `[gemini: N of M stages returned partial answers]` under its title and `partial: true` with it.

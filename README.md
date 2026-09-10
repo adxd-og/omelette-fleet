@@ -176,7 +176,7 @@ and nothing at all once they are done. The marker line and the symlink line are 
 
 It exits 1 only for a unit that is **enabled and registered** *and* broken: the vendor binary is missing, the CLI says it is signed out, or the registration points at a server file that no longer exists — and, under `--probe-sandbox`, for a unit whose probe came back `BREACHED`. A unit you deliberately never wired up is not a fault — and neither is a login state of `unknown`. A probe `doctor` cannot interpret (a non-zero `--version`, a `login status` with no explicit signal) is reported as `unknown (exit N)` with the tail of its output, never as a version and never as "signed out".
 
-`--probe-sandbox` is the one flag that spends a vendor call per unit, and it is how you find out whether "read-only" is true on your machine rather than on paper: each unit that is enabled and registered as ours is asked to write a file into a throwaway `0700` directory under the OS temp dir, and the verdict comes off the filesystem rather than off the reply.
+`--probe-sandbox` is the one flag that spends a vendor call per unit, and it is how you find out whether "read-only" is true on your machine rather than on paper: each unit that is enabled and registered as ours is asked — through its research tool's `cwd`, so `doctor` never changes its own directory — to write a file into a throwaway `0700` directory under the OS temp dir, and the verdict comes off the filesystem rather than off the reply.
 
 ```
   sandbox     held (12 s, replied "refused")
