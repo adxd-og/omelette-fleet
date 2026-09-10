@@ -204,20 +204,40 @@ test('runtime with a fake agy: argv per mode — research standard, workspace-wr
   // Every spawn disables slash-command / skill expansion of the prompt text.
   assert.match(ro.text, /--disable-slash-commands/);
 
-  const img = await wrap(base).callTool('gemini_image', { prompt: 'a cat' });
-  assert.match(img.text, /--mode accept-edits/);
-  assert.match(img.text, /--disable-slash-commands/);
+  // The image tool answers with the artifact path and NOTHING else (0.3.6), so
+  // the run's argv and cwd are read off a log the fake writes rather than out
+  // of the answer.
+  const imgLog = join(dir, 'image-run.json');
+  const imgFake = join(dir, 'fake-agy-image.mjs');
+  writeFileSync(imgFake, [
+    'import { writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    `writeFileSync(${JSON.stringify(imgLog)}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }));`,
+    'const saved = join(process.cwd(), "img.png");',
+    'writeFileSync(saved, "PNG");',
+    'process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "Saved it to " + saved }));',
+  ].join('\n'));
+  const wrapImage = (e) => createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [imgFake, ...o.args] }) }) } : t)) },
+    { env: e },
+  );
+  const img = await wrapImage(base).callTool('gemini_image', { prompt: 'a cat' });
+  const imgRun = JSON.parse(readFileSync(imgLog, 'utf8'));
+  const imgArgs = imgRun.args.join(' ');
+  assert.match(imgArgs, /--mode accept-edits/);
+  assert.match(imgArgs, /--disable-slash-commands/);
   // The prompt that actually reaches agy carries the "no shell" hardening: the
   // first live image call was lost to the model reaching for the `command`
   // tool, which headless agy auto-denies (2026-09-03).
-  assert.match(img.text, /Use ONLY your built-in image generation tool and save the image directly with it\./);
-  assert.match(img.text, /Do NOT run terminal commands — they are unavailable\./);
+  assert.match(imgArgs, /Use ONLY your built-in image generation tool and save the image directly with it\./);
+  assert.match(imgArgs, /Do NOT run terminal commands — they are unavailable\./);
   // F8: the image run gets its OWN temp cwd, so even a cwd-relative save by agy
   // lands outside every project — never in whatever repo the server was started in.
-  const imgCwd = /CWD (.+)$/.exec(img.text)[1];
-  assert.ok(imgCwd.startsWith(realpathSync(tmpdir())), `${imgCwd} is not under ${realpathSync(tmpdir())}`);
-  assert.match(imgCwd, /omelette-gemini-image-/);
-  assert.notEqual(imgCwd, process.cwd());
+  assert.ok(imgRun.cwd.startsWith(realpathSync(tmpdir())), `${imgRun.cwd} is not under ${realpathSync(tmpdir())}`);
+  assert.match(imgRun.cwd, /omelette-gemini-image-/);
+  assert.notEqual(imgRun.cwd, process.cwd());
+  // The answer is the artifact on disk, not the prose that named it.
+  assert.equal(img.text, join(imgRun.cwd, 'img.png'));
   // Research keeps the process cwd — only image runs are relocated.
   assert.match(ro.text, new RegExp(`CWD ${realpathSync(process.cwd())}$`));
 
@@ -648,4 +668,93 @@ test('a deep-research run that is cancelled or capped is still filed under the s
   const header = onlySpooledHeader(cut);
   assert.equal(header.status, 'error');
   assert.equal(header.model, COMPOSITE);
+});
+
+test('gemini_research: an absolute `cwd` is where the run happens (agy has no cwd flag); a bad one is refused before any spawn', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-cwd-'));
+  const where = mkdtempSync(join(tmpdir(), 'omelette-gemini-where-'));
+  const fake = join(dir, 'fake-agy-cwd.mjs');
+  writeFileSync(fake, 'process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "CWD " + process.cwd() }))');
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { timeoutS: 30 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath };
+  const rt = createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+    { env },
+  );
+  assert.equal((await rt.callTool('gemini_research', { prompt: 'q', cwd: where })).text, `CWD ${realpathSync(where)}`);
+  assert.equal((await rt.callTool('gemini_research', { prompt: 'q' })).text, `CWD ${realpathSync(process.cwd())}`);
+  const rel = await rt.callTool('gemini_research', { prompt: 'q', cwd: 'relative/path' });
+  assert.equal(rel.isError, true);
+  assert.match(rel.text, /"cwd" must be an absolute path \(got "relative\/path"\)/);
+  const missing = await rt.callTool('gemini_research', { prompt: 'q', cwd: join(dir, 'no-such-dir') });
+  assert.equal(missing.isError, true);
+  assert.match(missing.text, /"cwd" is not an existing directory/);
+  const spool = join(dir, 'results', 'gemini');
+  const bodies = readdirSync(spool).filter((f) => f.endsWith('.md')).map((f) => readFileSync(join(spool, f), 'utf8'));
+  assert.ok(bodies.some((b) => b.includes(`\ncwd: ${where}\n`)), bodies.join('\n---\n'));
+});
+
+test('gemini_image: a capped run whose artifact is on disk answers with the BARE path and flags partial', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-img-cap-'));
+  const saved = join(dir, 'generated.png');
+  writeFileSync(saved, 'PNG');
+  // agy prints ONE envelope. The cap is set to exactly its length, so the
+  // preamble ahead of it is dropped and the envelope itself still parses —
+  // the one capped shape that comes back as an answer rather than an error.
+  const envelopeText = JSON.stringify({ status: 'SUCCESS', response: `Saved it to ${saved}` });
+  const fake = join(dir, 'fake-agy-img-cap.mjs');
+  writeFileSync(fake, `process.stdout.write("n".repeat(500) + ${JSON.stringify(envelopeText)});`);
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { outputCap: envelopeText.length, timeoutS: 30 } } }));
+  const rt = createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+    { env: { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath } },
+  );
+  const r = await rt.callTool('gemini_image', { prompt: 'a cat' });
+  assert.equal(r.isError, undefined, r.text);
+  assert.equal(r.text, saved);   // the path, alone: no cap marker on a string to stat
+  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'ok');
+  assert.equal(snap.lastEvent.partial, true);
+});
+
+test('gemini_image: a capped run with no file on disk is an error naming gemini.outputCap', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-img-nofile-'));
+  const envelopeText = JSON.stringify({ status: 'SUCCESS', response: `Saved it to ${join(dir, 'imagined.png')}` });
+  const fake = join(dir, 'fake-agy-img-nofile.mjs');
+  writeFileSync(fake, `process.stdout.write("n".repeat(500) + ${JSON.stringify(envelopeText)});`);
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { outputCap: envelopeText.length, timeoutS: 30 } } }));
+  const rt = createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+    { env: { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath } },
+  );
+  const r = await rt.callTool('gemini_image', { prompt: 'a cat' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, new RegExp(`gemini_image finished without a saved image on disk \\(temp dir \\S+; the run's output exceeded the ${envelopeText.length} char cap — raise gemini\\.outputCap or narrow the task\\)`));
+  assert.match(r.text, /Raw output: /);
+});
+
+test('gemini_image: a hard-killed run whose file is already on disk answers with the bare path', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-img-kill-'));
+  const saved = join(dir, 'generated.png');
+  writeFileSync(saved, 'PNG');
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { timeoutS: 30 } } }));
+  // A REAL hard kill would cost agy's own grace: the process-group SIGKILL
+  // sits 60 s ABOVE the timeout it is handed (HARD_KILL_GRACE_MS), and no unit
+  // test waits a minute. So the killed run is handed to the adapter directly —
+  // what is under test is the image tool's reading of one, not
+  // core/spawn.mjs's kill, which has its own tests.
+  const killed = {
+    stdout: JSON.stringify({ status: 'SUCCESS', response: `Saved it to ${saved}` }),
+    stderr: '', code: null, signal: 'SIGKILL', killed: true, capped: false, cancelled: false,
+  };
+  const rt = createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: async () => killed }) } : t)) },
+    { env: { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath } },
+  );
+  const r = await rt.callTool('gemini_image', { prompt: 'a cat' });
+  assert.equal(r.isError, undefined, r.text);
+  assert.equal(r.text, saved);   // no kill marker rides a path
+  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'ok');
+  assert.equal(snap.lastEvent.partial, true);
 });

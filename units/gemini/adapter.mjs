@@ -66,6 +66,11 @@
  *   as the research preamble (IMAGE_PREFIX): the first live image call was lost
  *   to the model reaching for the shell `command` tool, which headless agy
  *   auto-denies.
+ *   THE ANSWER IS THE BARE PATH, stat-ed, never agy's prose about it: a run
+ *   that was capped, hard-killed or cancelled with the file already saved
+ *   returns the path ALONE and carries its incompleteness as `partial: true`
+ *   into the status feed and the spooled record, and a run with no file on
+ *   disk is an error naming the bound that explains it (core/artifact.mjs).
  *
  * QUOTA — Antigravity exhaustion is detected ONLY on failed turns (non-zero
  * exit / empty output / hard-kill): a successful answer can legitimately
@@ -101,12 +106,13 @@
  * and gemini_image report NOTHING on purpose — agy picks their model and never
  * says which — so those stay filed under `(vendor default)`.
  */
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { OUTPUT_CAP } from '../../core/spawn.mjs';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
+import { artifactMiss, extractImagePath } from '../../core/artifact.mjs';
 import { GEMINI_MODELS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -276,7 +282,7 @@ const isDeterministic = (e) => /quota exhausted|permission|hard-killed|not found
  * One agy one-shot through the runtime.
  * @param {{prompt:string, model?:string, acceptEdits?:boolean, schema?:object, cwd?:string}} a
  */
-async function runAgy(ctx, { prompt, model, acceptEdits = false, schema, cwd }) {
+async function runAgyRaw(ctx, { prompt, model, acceptEdits = false, schema, cwd }) {
   const timeoutS = ctx.cfg.timeoutS;
   const args = [
     '-p', prompt, '--output-format', 'json', '--print-timeout', `${timeoutS}s`,
@@ -292,8 +298,11 @@ async function runAgy(ctx, { prompt, model, acceptEdits = false, schema, cwd }) 
   const res = await ctx.spawn({ args, cwd, hardKillMs: timeoutS * 1000 + HARD_KILL_GRACE_MS });
   const r = interpretAgy(res, { timeoutS, outputCap: ctx.cfg.outputCap });
   if (r.usage) ctx.log(`agy done · status=${r.status} · tokens in=${r.usage.input ?? '?'} out=${r.usage.output ?? '?'}`);
-  return r;
+  return { out: r, res };
 }
+
+/** The answer alone — what research and every deep-research stage needs. */
+const runAgy = async (ctx, a) => (await runAgyRaw(ctx, a)).out;
 
 const runAgyWithRetry = (ctx, a) => ctx.retry(() => runAgy(ctx, a), { skipIf: isDeterministic });
 
@@ -490,6 +499,21 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
 
 // --- tool table ---------------------------------------------------------------
 
+/**
+ * Pre-spawn validation of an optional run directory — the same three checks,
+ * and the same wording, the grok and codex review tools use. agy has no cwd
+ * flag of its own, so this value reaches the run as the SPAWN cwd alone.
+ */
+function checkCwd(raw) {
+  if (raw === undefined) return { cwd: '' };
+  const cwd = typeof raw === 'string' ? raw.trim() : '';
+  if (!cwd || !isAbsolute(cwd)) return { error: `Error: "cwd" must be an absolute path (got ${JSON.stringify(raw)}).` };
+  let st;
+  try { st = statSync(cwd); } catch { st = null; }
+  if (!st || !st.isDirectory()) return { error: `Error: "cwd" is not an existing directory: ${cwd}` };
+  return { cwd };
+}
+
 const MODEL_PROP = {
   type: 'string',
   enum: catalog.modelEnum(),
@@ -523,6 +547,8 @@ export default defineUnit({
         'READ-ONLY: Gemini must not edit files, run git, or mutate the repo. Returns ' +
         "Gemini's plain-text answer. Use for web-style research, fact synthesis, " +
         'reading & summarizing, or a second-opinion analysis — NOT for code changes. ' +
+        'The run happens where `cwd` points when you give one, else in the MCP ' +
+        "server's own process cwd. " +
         'MULTIMODAL: Gemini can read local files INCLUDING IMAGES and PDFs — give the ' +
         'ABSOLUTE path in the prompt and say "view the file directly, no terminal ' +
         'commands" (verified 2026-08-02: screenshots, UI mocks, docs). ' +
@@ -531,6 +557,13 @@ export default defineUnit({
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'The research question or task for Gemini.' },
+          cwd: {
+            type: 'string',
+            description:
+              'Optional ABSOLUTE path to the directory the run happens in (must ' +
+              'exist; used as the spawn cwd — agy takes no cwd flag). Defaults to ' +
+              'the MCP server\'s process cwd.',
+          },
           model: MODEL_PROP,
         },
         required: ['prompt'],
@@ -538,8 +571,10 @@ export default defineUnit({
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
+        const c = checkCwd(args.cwd);
+        if (c.error) return { text: c.error, isError: true };
         const acceptEdits = ctx.mode === 'workspace-write';
-        const r = await runAgyWithRetry(ctx, { prompt: NO_GIT_PREFIX + prompt, model: ctx.model, acceptEdits });
+        const r = await runAgyWithRetry(ctx, { prompt: NO_GIT_PREFIX + prompt, model: ctx.model, acceptEdits, cwd: c.cwd || undefined });
         return { text: r.text, usage: r.usage, ...(r.partial ? { partial: true } : {}) };
       },
     },
@@ -550,7 +585,10 @@ export default defineUnit({
         'Ask Gemini (via the local agy CLI) to generate an image from a text description. ' +
         'Returns the absolute path to the saved image file — the run happens in a ' +
         'throwaway temp directory, OUTSIDE every project, so copy the file where ' +
-        'you need it. Use ONLY for image generation. Optionally choose a model ' +
+        'you need it. The answer is the bare path and nothing else: a run that was ' +
+        'capped, killed or cancelled with the file already saved returns that path ' +
+        'and is flagged partial in the status feed, and a run with no file on disk ' +
+        'is an error. Use ONLY for image generation. Optionally choose a model ' +
         'with `model` (omit for the default).',
       inputSchema: {
         type: 'object',
@@ -568,13 +606,33 @@ export default defineUnit({
         // the run its own temp directory instead, created before the spawn.
         const cwd = mkdtempSync(join(tmpdir(), 'omelette-gemini-image-'));
         ctx.log(`gemini_image · temp cwd=${cwd}`);
-        const r = await runAgy(ctx, {
+        const { out, res } = await runAgyRaw(ctx, {
           prompt: IMAGE_PREFIX + prompt,
           model: ctx.model,
           acceptEdits: true,
           cwd,
         });
-        return { text: r.text, usage: r.usage, ...(r.partial ? { partial: true } : {}) };
+        // THE BARE PATH IS THE CONTRACT: the caller stats what comes back, so
+        // agy's prose — and any marker interpretAgy appended to it — stops
+        // here, and a path the model asserts but never wrote is not an
+        // artifact, which is what extractImagePath's stat is for.
+        const artifact = extractImagePath(out.text);
+        if (!artifact) {
+          const miss = artifactMiss('gemini', res, {
+            outputCap: ctx.cfg.outputCap,
+            // agy's process-group kill sits 60 s above the timeout it is
+            // handed, and that sum is the number every other gemini message
+            // quotes — an operator raising `timeoutS` moves both.
+            timeoutS: ctx.cfg.timeoutS + HARD_KILL_GRACE_MS / 1000,
+          });
+          return {
+            text: `Error: gemini_image finished without a saved image on disk (temp dir ${cwd}${miss ? `; ${miss}` : ''}). Raw output: `
+              + ((out.text || '(empty)').slice(-1000)),
+            isError: true,
+          };
+        }
+        ctx.log(`gemini_image · artifact=${artifact}`);
+        return { text: artifact, usage: out.usage, ...(out.partial ? { partial: true } : {}) };
       },
     },
     {

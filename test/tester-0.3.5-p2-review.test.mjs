@@ -65,8 +65,16 @@ function onlySpooledHeader(dir, unitName) {
 test('gemini_image: the spooled result is still filed under (vendor default) — the model report is deep-research only', async () => {
   const dir = home('omelette-gemini-image-model-');
   const fake = join(dir, 'fake-agy.mjs');
+  // The run SAVES its artifact: since 0.3.6 gemini_image answers with the path
+  // it stat-ed and a run that wrote nothing is an error, so prose alone would
+  // never reach the spool this test reads. What is under test here is the
+  // spooled header's `model`, not the artifact contract.
   writeFileSync(fake, [
-    'process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "an image was made" }));',
+    'import { writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    'const saved = join(process.cwd(), "img.png");',
+    'writeFileSync(saved, "PNG");',
+    'process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "an image was made: " + saved }));',
   ].join('\n'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { timeoutS: 30 } } }));
   const rt = createUnitRuntime(
