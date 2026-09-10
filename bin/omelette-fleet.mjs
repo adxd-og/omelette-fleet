@@ -50,7 +50,7 @@ import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
-import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, writeFleetConfig } from '../core/config.mjs';
+import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
 import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
@@ -103,7 +103,8 @@ const COMMANDS = {
       'A unit whose vendor CLI is not in PATH is skipped unless --force.',
       '--rules then does `rules --agents --hooks` in the current directory:',
       'the operating rules, both sub-agent definitions, the /omelette-test',
-      'skill and the guard script, followed by the settings.json snippet.',
+      'skill and the guard script, followed by the settings.json snippet',
+      'and the `merge policy` the rules file was written with.',
       '--dry-run prints every command and every write, and runs nothing.',
     ],
   },
@@ -165,7 +166,11 @@ const COMMANDS = {
       'file, full when neither does, and whatever the `contract` config',
       'key says when that is not `auto`. While',
       'something is missing it adds ONE `next` line naming the command that',
-      'fixes it; none of that ever changes the exit code.',
+      'fixes it; none of that ever changes the exit code. A `merge policy`',
+      'line says which sentence the rules file carries — session or pr — and,',
+      'while it is `session` and this repository looks PR-gated (a pull-request',
+      'template, a CODEOWNERS file, or a protected main when `gh` is on PATH),',
+      'it ends with one hint. A hint, never a fault.',
       'Then per unit: the vendor binary, its --version, the login state, the',
       'resolved fleet config with sources, the MCP registration and',
       'whether the status feed is writable. Exits 1 when a unit that is',
@@ -185,25 +190,27 @@ const COMMANDS = {
     ],
   },
   show: {
-    args: '[<unit> | fleet | agents | handoff]',
+    args: '[<unit> | fleet | agents | handoff | workflow]',
     body: [
       'Every config key for one unit or all of them: value, where it came',
       'from (default / file:defaults / file / env:NAME), and the ceiling.',
       '`fleet` is the top-level block (`contract`, `updateCheck`), `agents`',
-      'the sub-agent block `rules --agents` renders from, and `handoff`',
-      'the auto-handoff block `rules --hooks` renders into the guard.',
+      'the sub-agent block `rules --agents` renders from, `handoff` the',
+      'auto-handoff block `rules --hooks` renders into the guard, and',
+      '`workflow` the merge policy `rules` renders into the rules file.',
     ],
   },
   set: {
-    args: '<key>=<value> | <unit>.<key>=<value> | agents.<agent>.<key>=<value> | handoff.<key>=<value> [...]',
+    args: '<key>=<value> | <unit>.<key>=<value> | agents.<agent>.<key>=<value> | handoff.<key>=<value> | workflow.<key>=<value> [...]',
     body: [
       'Change keys in <home>/fleet.config.json. Unknown units, agents,',
       'unknown keys and invalid values are refused; the rest of the file',
       'is kept. A bare `<key>=<value>` sets a fleet-wide key — `contract`,',
       '`updateCheck` — which a unit server reads when it STARTS. An agent',
       'setting reaches a session on the next `omelette-fleet rules',
-      '--agents`, and a handoff setting on the next `omelette-fleet rules',
-      '--hooks`, which re-render those files.',
+      '--agents`, a handoff setting on the next `omelette-fleet rules',
+      '--hooks`, and the merge policy on the next `omelette-fleet rules`,',
+      'which re-render those files.',
     ],
   },
   call: {
@@ -1038,6 +1045,20 @@ function fleetRows(settings, indent = '  ') {
   ];
 }
 
+/**
+ * The `workflow` block for `show`, in the same `key value source` shape as the
+ * rest of this file's tables.
+ */
+function workflowRows(settings, indent = '  ') {
+  const rows = Object.keys(WORKFLOW_SCHEMA).map((key) => [key, fmtValue(settings[key]), settings.sources[key]]);
+  const w = Math.max(...rows.map((r) => r[0].length), 5);
+  const vw = Math.max(...rows.map((r) => r[1].length), 5);
+  return [
+    `${indent}${pad('KEY', w)}  ${pad('VALUE', vw)}  SOURCE`,
+    ...rows.map(([key, value, source]) => `${indent}${pad(key, w)}  ${pad(value, vw)}  ${source}`),
+  ];
+}
+
 function ceilingLine(name, cfg) {
   const supportsWrite = !!(UNITS[name].supportedModes && UNITS[name].supportedModes['workspace-write']);
   const parts = [cfg.ceilingOpen
@@ -1047,6 +1068,69 @@ function ceilingLine(name, cfg) {
   parts.push(`effective mode: ${cfg.values.mode}`);
   if (cfg.values.requestedMode !== cfg.values.mode) parts.push(`requested: ${cfg.values.requestedMode}`);
   return parts.join(' · ');
+}
+
+// ─── the merge policy ────────────────────────────────────────────────────────
+
+/**
+ * WHAT THE RULES FILE TELLS THE SESSION TO DO WITH A FINISHED BRANCH — and,
+ * when it says "merge yourself" in a repository that plainly does not work that
+ * way, one hint.
+ *
+ * The detection is cheap and local first: a pull-request template or a
+ * CODEOWNERS file is a repository whose changes are reviewed on a PR, and both
+ * are files in the directory this command is standing in. Branch protection is
+ * the third signal and the only one that needs the network, so it is asked ONLY
+ * through `gh` — the operator's own authenticated tool, like `claude` and `git`
+ * — only when neither file answered, and bounded at 5 s. `gh` absent, `gh`
+ * failing, no repository, no permission, a 404: all of them say nothing at all.
+ *
+ * A HINT, NEVER A FAULT. It changes no exit code, and a `pr` policy is never
+ * questioned — a repository with no template can still be gated by a rule
+ * nobody wrote down.
+ */
+const PR_GATE_FILES = ['.github/PULL_REQUEST_TEMPLATE.md', 'CODEOWNERS', '.github/CODEOWNERS'];
+const GH_PROTECTION_TIMEOUT_MS = 5000;
+const PR_GATE_HINT = ' — this repository looks PR-gated: consider set workflow.merge=pr';
+
+/** The first PR-gate file present in `cwd`, or null. A directory of that name is not one. */
+function prGateFile(cwd) {
+  for (const rel of PR_GATE_FILES) {
+    try { if (statSync(join(cwd, ...rel.split('/'))).isFile()) return rel; }
+    catch { /* absent is the normal case */ }
+  }
+  return null;
+}
+
+/**
+ * Is `main` protected in the repository `cwd` belongs to? Asked through the
+ * operator's own `gh`, with the parent environment (`inheritEnv`) because that
+ * is where its credentials and its config live — there is no model reading this
+ * environment, exactly as in `claude mcp add` and `git pull`. Any answer that is
+ * not a clean exit 0 within the bound is a `false`, and never a word about it.
+ */
+async function ghBranchProtected({ cwd = process.cwd(), env = process.env } = {}) {
+  const bin = whichBin('gh', env);
+  if (!bin) return false;
+  let r;
+  try {
+    r = await runProcess({
+      bin, args: ['api', 'repos/{owner}/{repo}/branches/main/protection'],
+      cwd, inheritEnv: true, hardKillMs: GH_PROTECTION_TIMEOUT_MS,
+    });
+  } catch { return false; }
+  return !r.killed && r.code === 0;
+}
+
+/**
+ * The merge policy as one value, for `doctor` and for `install --rules`.
+ * @returns {Promise<string>} `session`, `pr`, or `session` with the hint.
+ */
+async function mergePolicy({ cwd = process.cwd(), env = process.env } = {}) {
+  const { merge } = workflowSettings(env);
+  if (merge !== 'session') return merge;
+  const gated = !!prGateFile(cwd) || await ghBranchProtected({ cwd, env });
+  return `session${gated ? PR_GATE_HINT : ''}`;
 }
 
 // ─── install / uninstall ─────────────────────────────────────────────────────
@@ -1114,6 +1198,12 @@ async function cmdInstall(argv) {
     out();
     out(`── project files in ${process.cwd()} (rules --agents --hooks) ${'─'.repeat(8)}`);
     const rulesCode = await cmdRules([...(dry ? ['--dry-run'] : []), '--agents', '--hooks']);
+    // The rules file that was just written carries ONE sentence the operator
+    // chose, and this is where they find out which — and whether the repository
+    // they are standing in looks like it wants the other one. Printed under
+    // --dry-run too: it describes config, not a write.
+    out();
+    out(`merge policy: ${await mergePolicy()}`);
     return code || rulesCode;
   };
   const claudePath = whichBin('claude');
@@ -1606,6 +1696,12 @@ async function cmdRules(argv) {
   // back later as the operator's own number.
   const handoff = flags.hooks ? handoffSettings() : undefined;
   if (handoff && !flags.remove) handoff.warnings.forEach((w) => err(`omelette-fleet rules: ${w}`));
+  // The rules file is written on EVERY run, and its merge sentence renders from
+  // the same config the other two kinds render from — so a value the operator
+  // mistyped is said out loud here instead of being read back later as the
+  // policy they thought they chose. (`KINDS.rules.render` resolves it again;
+  // the config is stat-cached, so the second read re-parses nothing.)
+  if (!flags.remove) workflowSettings().warnings.forEach((w) => err(`omelette-fleet rules: ${w}`));
   const files = managedFiles({ global: !!flags.global, agents: !!flags.agents, hooks: !!flags.hooks, version: PKG.version, settings, handoff });
 
   // --print touches nothing at all. Each rendered file already ends in a
@@ -2420,6 +2516,10 @@ async function cmdDoctor(argv) {
   // it, and this line is how an operator sees which one they are paying for.
   const contract = contractFor({ cwd: process.cwd(), env: process.env });
   out(`contract      ${contract.short ? 'short' : 'full'} (${contract.reason})`);
+  // Which sentence the rules file carries about a finished branch, and one hint
+  // when a `session` policy sits in a repository that looks PR-gated. Read-only
+  // and never a fault, like every other line in this block.
+  out(`merge policy  ${await mergePolicy({ cwd: process.cwd(), env: process.env })}`);
   // The client's own two walls, against what the enabled units can take.
   // Informational, exactly like the lines above it: an operator whose client
   // gives up at 900 s on a 1800 s unit has a working machine and a wall.
@@ -2551,9 +2651,9 @@ function cmdShow(argv) {
   const { positional, errors } = parseArgv(argv, {});
   if (positional.length > 1) errors.push(`unexpected argument: ${positional[1]}`);
   const only = positional[0];
-  const BLOCKS = ['fleet', 'agents', 'handoff'];
+  const BLOCKS = ['fleet', 'agents', 'handoff', 'workflow'];
   if (only && !BLOCKS.includes(only) && !UNITS[only]) {
-    errors.push(`unknown unit "${only}" — known units: ${UNIT_ORDER.join(', ')} (or "fleet" / "agents" / "handoff" for the top-level blocks)`);
+    errors.push(`unknown unit "${only}" — known units: ${UNIT_ORDER.join(', ')} (or "fleet" / "agents" / "handoff" / "workflow" for the top-level blocks)`);
   }
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet show: ${e}`)); return 1; }
 
@@ -2608,11 +2708,21 @@ function cmdShow(argv) {
     out('  note     `omelette-fleet rules --hooks` renders these into .claude/hooks/omelette-guard.mjs.');
     out();
   }
+  // The merge policy is config too, and it reaches a session exactly the way
+  // the other two blocks do: not until the file it renders is written again.
+  if (!only || only === 'workflow') {
+    const settings = workflowSettings();
+    out('workflow');
+    for (const line of workflowRows(settings, '  ')) out(line);
+    for (const w of settings.warnings) out(`  warning  ${w}`);
+    out('  note     `omelette-fleet rules` renders this into .claude/rules/omelette-fleet.md.');
+    out();
+  }
   return 0;
 }
 
 /** Both dotted forms `set` accepts, in one place: the usage line and every refusal quote it. */
-const SET_SHAPE = '<key>=<value>, <unit>.<key>=<value>, agents.<agent>.<key>=<value> or handoff.<key>=<value>';
+const SET_SHAPE = '<key>=<value>, <unit>.<key>=<value>, agents.<agent>.<key>=<value>, handoff.<key>=<value> or workflow.<key>=<value>';
 
 const describeSpec = (spec) => {
   const range = spec.min !== undefined && spec.max !== undefined ? ` from ${spec.min} to ${spec.max}` : '';
@@ -2659,6 +2769,7 @@ function cmdSet(argv) {
   const assignments = [];      // units.<unit>.<key>
   const agentAssignments = []; // agents.<role>.<key>
   const handoffAssignments = []; // handoff.<key>
+  const workflowAssignments = []; // workflow.<key>
   const fleetAssignments = []; // <key>, at the top level
   for (const a of positional) {
     const eq = a.indexOf('=');
@@ -2687,6 +2798,17 @@ function cmdSet(argv) {
       const c = coerce(HANDOFF_SCHEMA[key], raw);
       if (!c.ok) { errors.push(`invalid value for handoff.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(HANDOFF_SCHEMA[key])}`); continue; }
       handoffAssignments.push({ key, value: c.value });
+      continue;
+    }
+    // `workflow` is the third top-level block and is shaped like `handoff`:
+    // one managed file's settings, not a role's.
+    if (parts[0].toLowerCase() === 'workflow') {
+      if (parts.length !== 2 || parts.some((p) => !p)) { errors.push(`"${a}" is not workflow.<key>=<value>`); continue; }
+      const key = parts[1];
+      if (!(key in WORKFLOW_SCHEMA)) { errors.push(`unknown key "${key}" for the workflow block — known keys: ${Object.keys(WORKFLOW_SCHEMA).join(', ')}`); continue; }
+      const c = coerce(WORKFLOW_SCHEMA[key], raw);
+      if (!c.ok) { errors.push(`invalid value for workflow.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(WORKFLOW_SCHEMA[key])}`); continue; }
+      workflowAssignments.push({ key, value: c.value });
       continue;
     }
     // A bare `<key>=<value>` is one of the fleet-wide keys — the ones that
@@ -2742,6 +2864,9 @@ function cmdSet(argv) {
   if (handoffAssignments.length && file.config.handoff !== undefined && !isObj(file.config.handoff)) {
     shape.push(`"handoff" is ${jsonKind(file.config.handoff)}, not an object`);
   }
+  if (workflowAssignments.length && file.config.workflow !== undefined && !isObj(file.config.workflow)) {
+    shape.push(`"workflow" is ${jsonKind(file.config.workflow)}, not an object`);
+  }
   if (shape.length) {
     for (const m of shape) err(`omelette-fleet set: ${file.path}: ${m}`);
     err('omelette-fleet set: fix the file by hand first — refusing to replace it.');
@@ -2752,6 +2877,7 @@ function cmdSet(argv) {
   const before = assignments.length ? new Map(UNIT_ORDER.map((n) => [n, cfgFor(n)])) : null;
   const beforeAgents = agentAssignments.length ? agentSettings() : null;
   const beforeHandoff = handoffAssignments.length ? handoffSettings() : null;
+  const beforeWorkflow = workflowAssignments.length ? workflowSettings() : null;
   const beforeFleet = fleetAssignments.length ? fleetSettings() : null;
   const next = JSON.parse(JSON.stringify(file.config));
   if (assignments.length) {
@@ -2771,6 +2897,10 @@ function cmdSet(argv) {
   if (handoffAssignments.length) {
     next.handoff = isObj(next.handoff) ? next.handoff : {};
     for (const a of handoffAssignments) next.handoff[a.key] = a.value;
+  }
+  if (workflowAssignments.length) {
+    next.workflow = isObj(next.workflow) ? next.workflow : {};
+    for (const a of workflowAssignments) next.workflow[a.key] = a.value;
   }
   // A scalar at the top level: there is no block to merge into and so no
   // shape to refuse — the key is either replaced or added.
@@ -2804,6 +2934,12 @@ function cmdSet(argv) {
   // the config and the hook that is actually running disagree — and `doctor`
   // reports the hook's value, not this one.
   if (handoffAssignments.length) out('  note: `omelette-fleet rules --hooks` re-renders the guard with the new value.');
+  for (const a of workflowAssignments) {
+    out(`workflow.${a.key}  ${fmtValue(beforeWorkflow[a.key])} [${beforeWorkflow.sources[a.key]}] → ${fmtValue(a.value)} [file]`);
+  }
+  // The rules file on disk was rendered from the OLD value: until it is written
+  // again, the sentence the session reads is the other one.
+  if (workflowAssignments.length) out('  note: `omelette-fleet rules` re-renders the rules file with the new value.');
   for (const a of fleetAssignments) {
     out(`${a.key}  ${fmtValue(beforeFleet[a.key])} [${beforeFleet.sources[a.key]}] → ${fmtValue(a.value)} [file]`);
   }

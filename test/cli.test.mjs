@@ -3236,3 +3236,221 @@ test('doctor and the INSTALLED guard resolve the same ceiling from the same mach
   assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
   agree('400000 (handoff.contextWindow)', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '250k', ANTHROPIC_MODEL: 'claude-opus-5[1m]' });
 });
+
+test('set workflow.merge edits the top-level block, show prints it, and a bad value is refused', () => {
+  const dir = home();
+  const s = cli(['set', 'workflow.merge=pr'], { dir });
+  assert.equal(s.code, 0, s.err);
+  assert.match(s.out, /workflow\.merge\s+session \[default\] → pr \[file\]/);
+  assert.match(s.out, /note: `omelette-fleet rules` re-renders the rules file with the new value\./,
+    'a changed policy is only in the rules file after a re-render');
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).workflow, { merge: 'pr' });
+
+  const shown = cli(['show', 'workflow'], { dir });
+  assert.equal(shown.code, 0, shown.err);
+  assert.match(shown.out, /^workflow$/m);
+  assert.match(shown.out, /^\s+merge\s+pr\s+file$/m);
+  assert.match(shown.out, /^\s+note\s+`omelette-fleet rules` renders this into \.claude\/rules\/omelette-fleet\.md\.$/m);
+  assert.doesNotMatch(shown.out, /^codex$/m, 'show workflow shows the block and nothing else');
+  assert.doesNotMatch(shown.out, /^handoff$/m);
+  assert.match(cli(['show'], { dir }).out, /^workflow$/m, 'a bare show lists it with the other blocks');
+  assert.doesNotMatch(cli(['show', 'codex'], { dir }).out, /^workflow$/m);
+
+  // Back again, and the refusals — each one writes nothing.
+  assert.equal(cli(['set', 'workflow.merge=session'], { dir }).code, 0);
+  assert.match(cli(['show', 'workflow'], { dir }).out, /^\s+merge\s+session\s+file$/m);
+  const before = readFileSync(join(dir, 'fleet.config.json'), 'utf8');
+  for (const [assignment, message] of [
+    ['workflow.merge=squash', /invalid value for workflow\.merge: "squash" — expected session \| pr/],
+    ['workflow.merge=PR', /invalid value for workflow\.merge: "PR"/],
+    ['workflow.gate=ci', /unknown key "gate" for the workflow block — known keys: merge/],
+    ['workflow=pr', /"workflow=pr" is not workflow\.<key>=<value>/],
+    ['workflow.a.b=1', /"workflow\.a\.b=1" is not workflow\.<key>=<value>/],
+  ]) {
+    const r = cli(['set', assignment], { dir });
+    assert.equal(r.code, 1, assignment);
+    assert.match(r.err, message, assignment);
+  }
+  assert.equal(readFileSync(join(dir, 'fleet.config.json'), 'utf8'), before, 'a refusal writes nothing');
+  // The usage line and the help page name the third block.
+  assert.match(cli(['show', '--help'], { dir }).out, /workflow/);
+  assert.match(cli(['set', '--help'], { dir }).out, /workflow\.<key>=<value>/);
+});
+
+test('set refuses to replace a "workflow" block that is not an object, and touches nothing else', () => {
+  const dir = home();
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, workflow: 'pr', units: { codex: { timeoutS: 42 } } }));
+  const r = cli(['set', 'workflow.merge=pr'], { dir });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.err, /"workflow" is a string, not an object/);
+  assert.match(r.err, /refusing to replace it/);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')),
+    { version: 1, workflow: 'pr', units: { codex: { timeoutS: 42 } } });
+  // …and a unit key is not blocked by a broken block it never touches.
+  assert.equal(cli(['set', 'codex.timeoutS=43'], { dir }).code, 0);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).workflow, 'pr');
+});
+
+test('rules writes the configured merge sentence, re-renders when it changes, and says so about a bad value', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const target = join(proj, '.claude', 'rules', 'omelette-fleet.md');
+  assert.equal(rulesIn(proj, dir).status, 0);
+  assert.match(readFileSync(target, 'utf8'), /The session merges the branch into main itself once every review is clean/);
+
+  assert.equal(cli(['set', 'workflow.merge=pr'], { dir }).code, 0);
+  const again = rulesIn(proj, dir);
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /^written .*omelette-fleet\.md \(v(\d+\.\d+\.\d+\S*), was \1\)$/m,
+    'a changed value rewrites the file at the same version');
+  const text = readFileSync(target, 'utf8');
+  assert.match(text, /The session opens a pull request from the feature branch and never merges into main itself/);
+  assert.doesNotMatch(text, /merges the branch into main itself once every review is clean/);
+  // --print renders the same text and writes nothing.
+  assert.match(rulesIn(proj, dir, ['--print']).stdout, /never merges into main itself/);
+
+  // A hand-written value that is not one of the two: the default sentence, and
+  // the warning is said out loud instead of read back later as a policy.
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, workflow: { merge: 'squash' } }));
+  const bad = rulesIn(proj, dir);
+  assert.equal(bad.status, 0, bad.stderr);
+  assert.match(bad.stderr, /^omelette-fleet rules: fleet config: workflow\.merge = "squash" is invalid — ignored$/m, bad.stderr);
+  assert.match(readFileSync(target, 'utf8'), /The session merges the branch into main itself once every review is clean/);
+  // …and `--remove` says nothing about config it is not rendering.
+  const removed = rulesIn(proj, dir, ['--remove']);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.doesNotMatch(removed.stderr, /workflow\.merge/);
+});
+
+/**
+ * A fake `gh` on PATH — the real binary is never required, and no test ever
+ * lets doctor reach it: every run below pins PATH to a directory we made.
+ * It records its argv and answers with the exit code we ask for.
+ */
+function fakeGh(dir, { exitCode = 0, name = 'ghdir' } = {}) {
+  const bindir = join(dir, name);
+  mkdirSync(bindir, { recursive: true });
+  const p = join(bindir, 'gh');
+  writeFileSync(p, [
+    `#!${process.execPath}`,
+    `require('fs').appendFileSync(${JSON.stringify(join(dir, 'gh.log'))}, process.argv.slice(2).join(' ') + '\\n');`,
+    `process.exit(${exitCode});`,
+  ].join('\n'));
+  chmodSync(p, 0o755);
+  return bindir;
+}
+
+test('doctor prints the merge policy in the per-project block, and a bare project gets no hint', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  // An empty PATH: no claude, no vendor CLI, and — the point of this test — no
+  // `gh`, so nothing here can reach a network call.
+  const empty = join(dir, 'empty-path'); mkdirSync(empty);
+  const out = doctorIn2(proj, dir, { PATH: empty });
+  assert.match(out, /^merge policy {2}session$/m, out);
+  const lines = out.split('\n');
+  const at = lines.findIndex((l) => l.startsWith('merge policy'));
+  assert.ok(at > lines.findIndex((l) => l.startsWith('hooks ')), out);
+  assert.ok(at < lines.findIndex((l) => l.startsWith('mcp timeout')), out);
+  // …and it is never a fault.
+  const r = cliIn(proj, dir, ['doctor'], { PATH: empty });
+  assert.equal(r.code, 0, r.out + r.err);
+
+  assert.equal(cli(['set', 'workflow.merge=pr'], { dir }).code, 0);
+  assert.match(doctorIn2(proj, dir, { PATH: empty }), /^merge policy {2}pr$/m);
+  // The line an operator has to be able to look up is in the help page.
+  assert.match(cli(['doctor', '--help'], { dir }).out, /merge policy/);
+});
+
+test('doctor hints at `pr` when the repository looks PR-gated — and only while the policy is `session`', () => {
+  const dir = home();
+  const empty = join(dir, 'empty-path'); mkdirSync(empty);
+  const HINT = /^merge policy {2}session — this repository looks PR-gated: consider set workflow\.merge=pr$/m;
+
+  const tpl = join(dir, 'tpl'); mkdirSync(join(tpl, '.github'), { recursive: true });
+  writeFileSync(join(tpl, '.github', 'PULL_REQUEST_TEMPLATE.md'), '## What\n');
+  assert.match(doctorIn2(tpl, dir, { PATH: empty }), HINT, doctorIn2(tpl, dir, { PATH: empty }));
+
+  const root = join(dir, 'co-root'); mkdirSync(root);
+  writeFileSync(join(root, 'CODEOWNERS'), '* @me\n');
+  assert.match(doctorIn2(root, dir, { PATH: empty }), HINT);
+
+  const under = join(dir, 'co-github'); mkdirSync(join(under, '.github'), { recursive: true });
+  writeFileSync(join(under, '.github', 'CODEOWNERS'), '* @me\n');
+  assert.match(doctorIn2(under, dir, { PATH: empty }), HINT);
+
+  // A directory of that name is not a file, and a project with neither says nothing.
+  const dirNamed = join(dir, 'co-dir'); mkdirSync(join(dirNamed, 'CODEOWNERS'), { recursive: true });
+  assert.match(doctorIn2(dirNamed, dir, { PATH: empty }), /^merge policy {2}session$/m);
+
+  // `pr` is never questioned: a repository with no template can still be gated
+  // by a rule nobody wrote down, and the hint is only ever about `session`.
+  assert.equal(cli(['set', 'workflow.merge=pr'], { dir }).code, 0);
+  const out = doctorIn2(tpl, dir, { PATH: empty });
+  assert.match(out, /^merge policy {2}pr$/m, out);
+  assert.doesNotMatch(out, /PR-gated/);
+});
+
+test('doctor asks `gh` about branch protection only when nothing local said so, and its failure is silent', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const empty = join(dir, 'empty-path'); mkdirSync(empty);
+
+  // No gh on PATH: no call at all, and no hint from that source.
+  assert.match(doctorIn2(proj, dir, { PATH: empty }), /^merge policy {2}session$/m);
+  assert.equal(existsSync(join(dir, 'gh.log')), false, 'nothing was spawned');
+
+  // gh present and answering non-zero (no repo, no permission, a 404): still no
+  // hint — a failure says nothing, and it is asked exactly once, with the
+  // documented endpoint.
+  const failing = fakeGh(dir, { exitCode: 1, name: 'gh-404' });
+  assert.match(doctorIn2(proj, dir, { PATH: failing }), /^merge policy {2}session$/m);
+  assert.equal(readFileSync(join(dir, 'gh.log'), 'utf8').trim(), 'api repos/{owner}/{repo}/branches/main/protection');
+
+  // gh answering 0: the hint, from the network signal alone.
+  const ok = fakeGh(dir, { exitCode: 0, name: 'gh-200' });
+  assert.match(doctorIn2(proj, dir, { PATH: ok }),
+    /^merge policy {2}session — this repository looks PR-gated: consider set workflow\.merge=pr$/m);
+
+  // A local signal answers first and gh is never asked.
+  rmSync(join(dir, 'gh.log'));
+  mkdirSync(join(proj, '.github'), { recursive: true });
+  writeFileSync(join(proj, '.github', 'PULL_REQUEST_TEMPLATE.md'), '## What\n');
+  assert.match(doctorIn2(proj, dir, { PATH: ok }), /PR-gated/);
+  assert.equal(existsSync(join(dir, 'gh.log')), false, 'the local signal answered — no spawn');
+
+  // …and under a `pr` policy nothing is asked either.
+  rmSync(join(proj, '.github', 'PULL_REQUEST_TEMPLATE.md'));
+  assert.equal(cli(['set', 'workflow.merge=pr'], { dir }).code, 0);
+  assert.match(doctorIn2(proj, dir, { PATH: ok }), /^merge policy {2}pr$/m);
+  assert.equal(existsSync(join(dir, 'gh.log')), false, 'a `pr` policy asks nothing');
+});
+
+test('install --rules prints the merge policy after the project files, hint and all', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const fake = fakeBin(dir);
+  const env = { PATH: join(dir, 'empty'), CODEX_BIN: fake };
+  const r = cliIn(proj, dir, ['install', '--rules', '--dry-run', '--units', 'codex'], env);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /^merge policy: session$/m, r.out);
+  const lines = r.out.split('\n');
+  assert.ok(
+    lines.findIndex((l) => l.startsWith('merge policy:')) > lines.findIndex((l) => l.includes('omelette-fleet.md')),
+    `the policy belongs after the rules lines:\n${r.out}`,
+  );
+
+  // The hint reaches this half too…
+  mkdirSync(join(proj, '.github'), { recursive: true });
+  writeFileSync(join(proj, '.github', 'PULL_REQUEST_TEMPLATE.md'), '## What\n');
+  assert.match(cliIn(proj, dir, ['install', '--rules', '--dry-run', '--units', 'codex'], env).out,
+    /^merge policy: session — this repository looks PR-gated: consider set workflow\.merge=pr$/m);
+
+  // …and `pr` is printed as it is.
+  assert.equal(cli(['set', 'workflow.merge=pr'], { dir }).code, 0);
+  assert.match(cliIn(proj, dir, ['install', '--rules', '--dry-run', '--units', 'codex'], env).out, /^merge policy: pr$/m);
+
+  // A plain `install` writes no rules file and says nothing about the policy.
+  assert.doesNotMatch(cliIn(proj, dir, ['install', '--dry-run', '--units', 'codex'], env).out, /merge policy/);
+  assert.match(cli(['install', '--help'], { dir }).out, /merge policy/);
+});
