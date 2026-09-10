@@ -2594,6 +2594,119 @@ test('results is in the usage and has its own help page; doctor names the spool 
   assert.match(cli(['doctor'], { dir, env: vendors }).out, /^ {2}results {5}\(disabled in config\)/m);
 });
 
+test('results --stats: one row per unit and a total, tokens only where every call reported them', () => {
+  const dir = home();
+  spoolResult(dir, 'codex', {
+    resultId: '20260908T142501Z-1-1', tool: 'codex_code_review', model: 'gpt-6-astra', effort: 'xhigh',
+    startedAt: '2026-09-08T14:25:01.000Z', endedAt: '2026-09-08T15:26:03.000Z', durationMs: 3662000,
+    status: 'ok', partial: false, detached: false, cwd: '/tmp/p', promptPreview: 'review it',
+    usage: { input: 60835, cachedInput: 45312, output: 236, reasoning: 103 }, text: 'THE REVIEW',
+  });
+  spoolResult(dir, 'codex', {
+    resultId: '20260908T142501Z-1-2', tool: 'codex_research',
+    startedAt: '2026-09-08T15:30:00.000Z', endedAt: '2026-09-08T15:30:01.000Z', durationMs: 1000,
+    status: 'error', partial: false, detached: false, promptPreview: 'x', text: 'Error: nope',
+  });
+  spoolResult(dir, 'grok', {
+    resultId: '20260908T150000Z-1-1', tool: 'grok_research',
+    startedAt: '2026-09-08T15:00:00.000Z', endedAt: '2026-09-08T15:01:22.000Z', durationMs: 82000,
+    status: 'cancelled', partial: true, detached: false, promptPreview: 'x',
+    usage: { input: 7, output: 3 }, text: 'HALF AN ANSWER',
+  });
+
+  const r = cli(['results', '--stats'], { dir });
+  assert.equal(r.code, 0, r.err);
+  const lines = r.out.trim().split('\n');
+  assert.equal(lines.length, 4, 'the header, the two units that have records, and the total — gemini has none');
+  assert.match(lines[0], /^unit +calls +ok\/error\/cancelled +partial +wall +spool +tokens in \/ out$/);
+  assert.match(lines[1], /^grok +1 +0\/0\/1 +1 +1m 22s +\d+ [KM]?B +7 \/ 3$/);
+  assert.match(lines[2], /^codex +2 +1\/1\/0 +0 +1h 1m 3s +\d+ [KM]?B +n\/a \(1 of 2 calls reported\)$/);
+  assert.match(lines[3], /^total +3 +1\/1\/1 +1 +1h 2m 25s +\d+ [KM]?B +n\/a \(2 of 3 calls reported\)$/);
+
+  const one = cli(['results', '--stats', 'codex'], { dir });
+  assert.equal(one.code, 0, one.err);
+  const only = one.out.trim().split('\n');
+  assert.equal(only.length, 3, 'the header, codex, and a total of codex');
+  assert.match(only[1], /^codex +2 /);
+  assert.match(only[2], /^total +2 /);
+
+  // The listing is untouched by the new flag.
+  assert.equal(cli(['results'], { dir }).out.trim().split('\n').length, 3);
+});
+
+test('results --stats: an empty spool prints `no results`; an id and --path are usage errors', () => {
+  const dir = home();
+  const empty = cli(['results', '--stats'], { dir });
+  assert.equal(empty.code, 0);
+  assert.equal(empty.out.trim(), 'no results');
+  assert.equal(existsSync(join(dir, 'results')), false, 'counting never creates the spool');
+
+  spoolResult(dir, 'grok', {
+    resultId: '20260908T150000Z-1-1', tool: 'grok_research',
+    startedAt: '2026-09-08T15:00:00.000Z', endedAt: '2026-09-08T15:00:42.000Z', durationMs: 42000,
+    status: 'ok', partial: false, detached: false, promptPreview: 'x', text: 'x',
+  });
+
+  const withId = cli(['results', '--stats', '20260908T150000Z-1-1'], { dir });
+  assert.equal(withId.code, 1);
+  assert.match(withId.err, /--stats reports on a unit, not on one result/);
+
+  const withPath = cli(['results', '--stats', '--path'], { dir });
+  assert.equal(withPath.code, 1);
+  assert.match(withPath.err, /--path prints the paths of a listing/);
+
+  assert.equal(cli(['results', '--stats', 'nope'], { dir }).code, 1);
+
+  // A unit with no records is not a row; one with records is, and so is a
+  // call that reported no tokens at all.
+  const rows = cli(['results', '--stats'], { dir }).out.trim().split('\n');
+  assert.equal(rows.length, 3);
+  assert.match(rows[1], /^grok +1 +1\/0\/0 +0 +42s +\d+ [KM]?B +n\/a \(0 of 1 calls reported\)$/);
+
+  assert.match(cli(['help', 'results'], { dir }).out, /--stats prints what the spool cost/);
+});
+
+test('results --stats --since: a window of <n>h / <n>d or a date, measured on startedAt', () => {
+  const dir = home();
+  const now = Date.now();
+  const at = (hoursAgo) => new Date(now - hoursAgo * 3600 * 1000).toISOString();
+  const rec = (id, startedAt) => ({
+    resultId: id, tool: 'grok_research', startedAt, endedAt: startedAt, durationMs: 1000,
+    status: 'ok', partial: false, detached: false, promptPreview: 'x', usage: { input: 5, output: 5 }, text: 'x',
+  });
+  spoolResult(dir, 'grok', rec('20260908T150000Z-1-1', at(23)));
+  spoolResult(dir, 'grok', rec('20260908T150000Z-1-2', at(25)));
+
+  const day = cli(['results', '--stats', '--since', '24h'], { dir });
+  assert.equal(day.code, 0, day.err);
+  const lines = day.out.trim().split('\n');
+  assert.match(lines[0], /^since 20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\dZ$/, 'the window it actually used');
+  assert.match(lines[2], /^grok +1 +1\/0\/0 +0 +1s +\d+ [KM]?B +5 \/ 5$/, '23h in, 25h out');
+  assert.match(lines[3], /^total +1 /);
+
+  assert.match(cli(['results', '--stats', '--since=7d'], { dir }).out, /^grok +2 /m);
+  assert.match(cli(['results', '--stats', '--since', '2000-01-01'], { dir }).out, /^grok +2 /m);
+  assert.match(cli(['results', '--stats', '--since', '2026-09-08T00:00:00.000Z'], { dir }).out, /^grok +/m);
+
+  const future = cli(['results', '--stats', '--since', '2999-01-01'], { dir });
+  assert.equal(future.code, 0, 'a window with nothing in it is an answer, not a fault');
+  assert.match(future.out, /^no results$/m);
+
+  for (const bad of ['yesterday', '24', '3w', '2026-13-40', '']) {
+    const r = cli(['results', '--stats', '--since', bad], { dir });
+    assert.equal(r.code, 1, JSON.stringify(bad));
+    assert.equal(r.out, '', 'nothing is printed for a window nobody can read');
+    assert.match(r.err, /^omelette-fleet results: --since /);
+  }
+  assert.equal(cli(['results', '--stats', '--since'], { dir }).code, 1, '--since needs a value');
+
+  const strayed = cli(['results', '--since', '24h'], { dir });
+  assert.equal(strayed.code, 1);
+  assert.match(strayed.err, /--since is only for --stats/);
+
+  assert.match(cli(['help', 'results'], { dir }).out, /--since 24h/);
+});
+
 /** A doctor run inside one project, with the fleet home and HOME under our control. */
 const doctorIn2 = (proj, dir, env = {}) => spawnSync(process.execPath, [BIN, 'doctor'], {
   cwd: proj, encoding: 'utf8',

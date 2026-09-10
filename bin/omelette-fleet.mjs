@@ -215,7 +215,7 @@ const COMMANDS = {
     ],
   },
   results: {
-    args: '[<unit>] [<id>] [--path]',
+    args: '[<unit>] [<id>] [--path] [--stats [--since <when>]]',
     body: [
       'Print what the units spooled. Every tool call writes its answer to',
       '<home>/results/<unit>/<id>.md before the response is sent, so an',
@@ -223,7 +223,11 @@ const COMMANDS = {
       'still on disk. No arguments: the last 10 across the fleet, newest',
       'first. A unit: its last 10. An id (with or without its unit): that',
       'result, header and text. --path prints the file path instead of the',
-      'content. Reads the files directly: no server, no CLI, nothing spent.',
+      'content. --stats prints what the spool cost instead of listing it:',
+      'one row per unit and a total — calls, ok/error/cancelled, partial,',
+      'wall time, bytes, and tokens in / out where every call in the row',
+      'reported them. --since 24h, --since 7d or --since 2026-09-09 narrows',
+      'that on startedAt. Reads the files directly: no server, nothing spent.',
     ],
   },
 };
@@ -2849,8 +2853,79 @@ const storeFor = (name) => {
   });
 };
 
+/** Wall time an operator reads at a glance: `42s`, `18m 1s`, `1h 2m 3s`. */
+const fmtWall = (ms) => {
+  const whole = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const s = whole % 60;
+  return [...(h ? [`${h}h`] : []), ...(h || m ? [`${m}m`] : []), `${s}s`].join(' ');
+};
+
+const STATS_HEAD = ['unit', 'calls', 'ok/error/cancelled', 'partial', 'wall', 'spool', 'tokens in / out'];
+
+/** One row's cells, in STATS_HEAD's order. */
+const statsCells = (row) => [
+  row.unit,
+  String(row.calls),
+  `${row.ok}/${row.error}/${row.cancelled}`,
+  String(row.partial),
+  fmtWall(row.durationMs),
+  fmtBytes(row.bytes),
+  // A total is a total of everything or it is not one. Where some call's vendor
+  // reported nothing, the cell says how much of the row is actually known
+  // rather than adding a zero nobody measured.
+  row.reported === row.calls
+    ? `${row.input} / ${row.output}`
+    : `n/a (${row.reported} of ${row.calls} calls reported)`,
+];
+
+/**
+ * `results --stats` — what the spool cost, per unit and in total. A unit with
+ * no records in the window is not a row; no rows at all is `no results`. Exit
+ * 0 whatever it finds: an empty spool is an answer, not a fault. Retention
+ * bounds what can be counted — this reads what `resultsKeep` and
+ * `resultsMaxBytes` left on disk, not the history of the install.
+ */
+/**
+ * `--since`: a window (`24h`, `7d`) or a date the reader wrote (`2026-09-09`,
+ * or a whole ISO timestamp) → the epoch in milliseconds. `null` for a value
+ * that is neither, which the caller refuses rather than quietly reporting on
+ * everything. A relative window is measured from NOW — `24h` is the last 24
+ * hours, not "since midnight".
+ */
+function parseSince(raw, now = Date.now()) {
+  const s = String(raw).trim();
+  const rel = /^(\d+)([hd])$/i.exec(s);
+  if (rel) return now - Number(rel[1]) * (rel[2].toLowerCase() === 'h' ? 3600000 : 86400000);
+  if (!/^\d{4}-\d\d-\d\d/.test(s)) return null; // a date, or nothing this reads
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
+}
+
+function statsReport(name, sinceMs) {
+  // The numbers below are about a window; say which one, or they read as the
+  // whole spool.
+  if (sinceMs !== null) out(`since ${new Date(sinceMs).toISOString()}`);
+  const rows = [];
+  for (const u of name ? [name] : UNIT_ORDER) {
+    const s = storeFor(u).stats({ since: sinceMs });
+    if (s.calls) rows.push({ unit: u, ...s });
+  }
+  if (!rows.length) { out('no results'); return 0; }
+  const SUMS = ['calls', 'ok', 'error', 'cancelled', 'partial', 'durationMs', 'bytes', 'reported', 'input', 'output'];
+  const total = rows.reduce((a, r) => {
+    for (const k of SUMS) a[k] += r[k];
+    return a;
+  }, { unit: 'total', ...Object.fromEntries(SUMS.map((k) => [k, 0])) });
+  const table = [STATS_HEAD, ...rows.map(statsCells), statsCells(total)];
+  const width = STATS_HEAD.map((_, i) => Math.max(...table.map((r) => r[i].length)));
+  for (const r of table) out(r.map((cell, i) => pad(cell, width[i])).join('  ').trimEnd());
+  return 0;
+}
+
 function cmdResults(argv) {
-  const { flags, positional, errors } = parseArgv(argv, { booleans: ['path'] });
+  const { flags, positional, errors } = parseArgv(argv, { booleans: ['path', 'stats'], options: ['since'] });
   // ONE positional that is a result id is an ID, not a unit: an id is what a
   // listing line, a status feed and a `<unit>_result` answer all hand back, and
   // it names its own file — no unit name can be a result id, so nothing is
@@ -2859,13 +2934,31 @@ function cmdResults(argv) {
   const [name, id] = idOnly ? [undefined, positional[0]] : positional;
   if (positional.length > 2) errors.push(`unexpected argument: ${positional[2]}`);
   if (name !== undefined && !UNITS[name]) {
-    errors.push(`unknown unit "${name}" — known units: ${UNIT_ORDER.join(', ')} (usage: omelette-fleet results [<unit>] [<id>] [--path])`);
+    errors.push(`unknown unit "${name}" — known units: ${UNIT_ORDER.join(', ')} (usage: omelette-fleet results [<unit>] [<id>] [--path] [--stats [--since <when>]])`);
   }
   // The id is validated before any path is built, here as in the tool.
   if (id !== undefined && !isValidResultId(id)) {
     errors.push(`"${id}" is not a result id — they look like 20260908T142501Z-19312-1`);
   }
+  // `--stats` reports on a spool; the other two answer about one file in it.
+  if (flags.stats) {
+    if (id !== undefined) errors.push('--stats reports on a unit, not on one result — drop the id');
+    if (flags.path) errors.push('--path prints the paths of a listing; --stats has no file to name');
+  }
+  // A window over `startedAt`, and only --stats reads one.
+  let sinceMs = null;
+  if (flags.since !== undefined) {
+    if (!flags.stats) errors.push('--since is only for --stats');
+    else {
+      sinceMs = parseSince(flags.since);
+      if (sinceMs === null) {
+        errors.push(`--since "${flags.since}" is neither a window (24h, 7d) nor a date (2026-09-09, or a whole ISO timestamp)`);
+      }
+    }
+  }
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet results: ${e}`)); return 1; }
+
+  if (flags.stats) return statsReport(name, sinceMs);
 
   if (id !== undefined) {
     let found = null;
