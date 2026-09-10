@@ -125,6 +125,12 @@
  * land OUTSIDE any project under ~/.grok/sessions/<url-encoded-cwd>/
  * <session-uuid>/images/N.jpg; the tool returns that absolute path and the
  * operator imports it by hand — this unit never writes into any project.
+ * THE ANSWER IS THE BARE PATH, and that is a contract: a run that was capped,
+ * hard-killed or cancelled with the file already saved returns the path ALONE,
+ * with the incompleteness carried by `partial: true` into the status feed and
+ * the spooled record — never by a marker stapled to a string the caller is
+ * about to stat. A run with no file on disk is an error instead, naming the
+ * bound that explains it (core/artifact.mjs, artifactMiss).
  * NO retry on image runs: a re-issued generation bills image quota twice.
  * MUTATE_RE is NOT applied to image prompts ("commit"/"deploy" could be
  * literal scene text; the image-only toolset makes mutation impossible
@@ -146,7 +152,12 @@
  * CANCELLATION — the same SIGKILL answers a cancelled request (`cancel: kill`),
  * and core/spawn.mjs tells the two apart with `cancelled: true`. The salvage is
  * identical; only the wording changes, because neither bound was reached and
- * "raise grok.timeoutS" would send the operator after a limit that held.
+ * "raise grok.timeoutS" would send the operator after a limit that held. When
+ * the stream had ALREADY carried a Grok-reported error, the cancel names it —
+ * `… — Grok had reported: <error>` on the marker and on the throw alike: a run
+ * that was failing before anyone stopped it looks exactly like one that was
+ * merely slow, and the operator who stopped it is the last person able to tell
+ * the two apart. Which branch wins is unchanged: the outcome stays `cancelled`.
  *
  * OUTPUT CAP: core/spawn.mjs keeps only the LAST `outputCap` characters of
  * stdout, and this unit's built-in raises it to 10 000 000 (config `outputCap`,
@@ -167,7 +178,7 @@ import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
-import { extractImagePath } from '../../core/artifact.mjs';
+import { artifactMiss, extractImagePath } from '../../core/artifact.mjs';
 import { GROK_MODELS, EFFORTS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -397,22 +408,28 @@ export function parseStream(stdout) {
 
 /**
  * The answer inside one finished run's stdout, for both output formats.
- * @returns {{text:string, stop:string, parsed:boolean, error:string|null, usage:object|null}}
+ * `error` is the failure that took the answer WITH it — the only one
+ * interpretGrok throws on directly. `reported` is what the CLI said went
+ * wrong whether or not text survived, and it is null when it said nothing:
+ * a cancelled run needs the reason even when there was an answer to salvage,
+ * and reading it off `error` would have meant reporting it only when there
+ * was not.
+ * @returns {{text:string, stop:string, parsed:boolean, error:string|null, reported:string|null, usage:object|null}}
  */
 function grokAnswer(out, jsonMode) {
   const raw = String(out || '');
-  if (!jsonMode) return { text: raw.trim(), stop: '', parsed: false, error: null, usage: null };
+  if (!jsonMode) return { text: raw.trim(), stop: '', parsed: false, error: null, reported: null, usage: null };
   const s = parseStream(raw);
   const text = (s.finalText || s.text).trim();
   // A reported failure THROWS only when it took the answer with it. A run that
   // failed after producing text (maxTurns capped, a mid-run error) is paid for
   // and its text is usually the useful part: it comes back as an early stop,
   // named by the failure's own subtype, and interpretGrok marks it.
-  if (s.error && !text) return { text: '', stop: '', parsed: true, error: s.error, usage: null };
+  if (s.error && !text) return { text: '', stop: '', parsed: true, error: s.error, reported: s.error, usage: null };
   // Nothing recognized (output-cap truncation / future CLI format change):
   // fail open with the raw stdout rather than dropping a real answer.
-  if (!s.parsed) return { text: raw.trim(), stop: '', parsed: false, error: null, usage: null };
-  return { text, stop: s.error ? s.stopReason || 'error' : s.stopReason, parsed: true, error: null, usage: s.usage };
+  if (!s.parsed) return { text: raw.trim(), stop: '', parsed: false, error: null, reported: null, usage: null };
+  return { text, stop: s.error ? s.stopReason || 'error' : s.stopReason, parsed: true, error: null, reported: s.error || null, usage: s.usage };
 }
 
 /** A bare string when the text is all there is to say; the object shape when usage or `partial` travel with it. */
@@ -450,10 +467,16 @@ export function interpretGrok(res, { jsonMode, timeoutS, outputCap = GROK_OUTPUT
   // a killed run that has text has an answer to read whatever else went wrong.
   // A fragment is not that text, so it is the one thing never salvaged here.
   if (killed) {
+    // WHAT GROK SAID went wrong, when it said anything, and only for a cancel:
+    // the hard-kill branch below has said it in its own wording since 0.3.4.
+    // A run that was already failing is not the same event as one that was
+    // merely still going, and the client that stopped it cannot tell them
+    // apart from the outside.
+    const cancelTail = res.cancelled && a.reported ? ` — Grok had reported: ${a.reported}` : '';
     // The same SIGKILL ends a cancelled request; `cancelled` says which it was,
     // and a client that stopped the run is not a timeoutS to raise.
     const killMark = res.cancelled
-      ? '[grok: cancelled by the client — treat the answer as partial]'
+      ? `[grok: cancelled by the client${cancelTail || ' — treat the answer as partial'}]`
       : `[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`;
     if (a.text && !fragmentOnly) {
       return answer(
@@ -463,8 +486,9 @@ export function interpretGrok(res, { jsonMode, timeoutS, outputCap = GROK_OUTPUT
       );
     }
     // A cancelled run has no answer because the caller asked for none: neither
-    // bound was reached, so neither is named.
-    if (res.cancelled) throw new Error('grok cancelled by the client');
+    // bound was reached, so neither is named — but the failure it had already
+    // reported is named, because nothing else will name it.
+    if (res.cancelled) throw new Error(`grok cancelled by the client${cancelTail}`);
     // The CLI said WHY before the kill landed: an expired login reads nothing
     // like a slow review, and neither bound explains one, so the reported error
     // travels with the cap message as readily as on its own.
@@ -494,7 +518,15 @@ export function interpretGrok(res, { jsonMode, timeoutS, outputCap = GROK_OUTPUT
   );
 }
 
-async function runGrok(ctx, { prompt, cwd, tools, maxTurns }) {
+/**
+ * One `grok -p` run, with the PROCESS RESULT kept beside the interpreted
+ * answer. The image tools need `killed` / `capped` / `cancelled` themselves:
+ * they answer with a bare path by contract, so when there is no artifact they
+ * have to explain the run — and those three facts live on the spawn result,
+ * never on the text, which by then is either marked or gone.
+ * @returns {Promise<{out: string|object, res: object}>}
+ */
+async function runGrokRaw(ctx, { prompt, cwd, tools, maxTurns }) {
   const jsonMode = isResearchToolset(tools);
   const args = buildArgs({ prompt, model: ctx.model, effort: ctx.effort, cwd, tools, maxTurns });
   ctx.log(`grok spawn · tools=${tools} · model=${ctx.model || '(grok default)'} · effort=${ctx.effort || '(default)'} · cwd=${cwd || '(process cwd)'}`);
@@ -504,11 +536,34 @@ async function runGrok(ctx, { prompt, cwd, tools, maxTurns }) {
     const n = (v) => (v === null || v === undefined ? '?' : v); // a count the run never reported
     ctx.log(`grok done · tokens in=${n(out.usage.input)} out=${n(out.usage.output)}`);
   }
-  return out;
+  return { out, res };
 }
+
+/** The answer alone — what research and review runs need, and all they need. */
+const runGrok = async (ctx, o) => (await runGrokRaw(ctx, o)).out;
 
 /** The text of a run, whether it came back plain or as a salvaged-kill result. */
 const runText = (r) => (typeof r === 'string' ? r : (r && r.text) || '');
+
+/**
+ * An image run's answer: THE BARE PATH of the artifact on disk, and nothing
+ * else. A run that was capped, hard-killed or cancelled with the file already
+ * saved still answers with the path alone — the caller stats what comes back,
+ * and interpretGrok's marker on the text would make it something else — while
+ * `partial: true` carries the incompleteness to the status feed and the
+ * spooled record. No artifact at all and the tool fails, naming the bound that
+ * explains it when the run had one; a path the model asserted but never wrote
+ * is not an artifact, which is what extractImagePath's stat is for.
+ */
+function imageAnswer(ctx, out, res, artifact) {
+  const partial = !!(out && typeof out === 'object' && out.partial);
+  if (artifact) return { text: artifact, ...(partial ? { partial: true } : {}) };
+  const miss = artifactMiss('grok', res, { outputCap: ctx.cfg.outputCap, timeoutS: ctx.cfg.timeoutS });
+  throw new Error(
+    `image run finished without a saved image path on disk${miss ? ` (${miss})` : ''}. Raw output: `
+    + ((runText(out) || '(empty)').slice(-1000)),
+  );
+}
 
 // `output exceeded`: an answer that outgrew the cap once will outgrow it again,
 // so the retry is a second full paid run that cannot end differently. Same for
@@ -565,7 +620,9 @@ export default defineUnit({
         'Delegate a research / Q&A / summarization task to Grok (via the local ' +
         'grok CLI) WITH live web search. READ-ONLY: enforced at spawn — Grok gets ' +
         'only read/search/web tools, no shell, no edits, no subagents, no MCP. ' +
-        'Returns Grok\'s plain-text answer. WARNING — AA-Omniscience: 48.2% ' +
+        'Returns Grok\'s plain-text answer. The run happens where `cwd` points ' +
+        'when you give one, else in the MCP server\'s own process cwd. ' +
+        'WARNING — AA-Omniscience: 48.2% ' +
         'accuracy / 34.3% hallucination on 4.6 (4.5 was ~54%) — verify every ' +
         'claim. Overconfident: treat as a cheap fast SECOND OPINION and ' +
         'independently verify anything fact-critical; treat its reading of ' +
@@ -574,6 +631,13 @@ export default defineUnit({
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'The research question or task for Grok.' },
+          cwd: {
+            type: 'string',
+            description:
+              'Optional ABSOLUTE path to the directory the run happens in (must ' +
+              'exist; passed as --cwd and used as the spawn cwd). Defaults to the ' +
+              'MCP server\'s process cwd.',
+          },
           effort: EFFORT_PROP,
           model: MODEL_PROP,
         },
@@ -582,7 +646,11 @@ export default defineUnit({
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
-        return ctx.retry(() => runGrok(ctx, { prompt: NO_MUTATE_PREFIX + prompt, tools: researchTools(ctx), maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
+        // The review tool's validation, unchanged and shared: absolute, present,
+        // a directory — refused here rather than by a spawn that half-happened.
+        const c = checkCwd(args.cwd);
+        if (c.error) return { text: c.error, isError: true };
+        return ctx.retry(() => runGrok(ctx, { prompt: NO_MUTATE_PREFIX + prompt, cwd: c.cwd, tools: researchTools(ctx), maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
       },
     },
     {
@@ -629,8 +697,11 @@ export default defineUnit({
         'saved image file as plain text — files are saved under ~/.grok/sessions/ ' +
         '(OUTSIDE every project); the operator imports them into a repo manually. ' +
         'Image-only toolset enforced at spawn: no read/web/shell tools, no ' +
-        'subagents, no MCP. Each call spends image quota and is NOT retried. To ' +
-        'edit/restyle an EXISTING image use grok_image_edit instead.',
+        'subagents, no MCP. The answer is the bare path and nothing else: a run ' +
+        'that was capped, killed or cancelled with the file already saved returns ' +
+        'that path and is flagged partial in the status feed, and a run with no ' +
+        'file on disk is an error. Each call spends image quota and is NOT ' +
+        'retried. To edit/restyle an EXISTING image use grok_image_edit instead.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -642,10 +713,8 @@ export default defineUnit({
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
-        const text = runText(await runGrok(ctx, { prompt: IMAGE_GEN_PREFIX + prompt, tools: IMAGE_GEN_TOOLS, maxTurns: ctx.cfg.imageMaxTurns }));
-        const artifact = extractImagePath(text);
-        if (!artifact) throw new Error('image run finished without a saved image path on disk. Raw output: ' + ((text || '(empty)').slice(-1000)));
-        return artifact;
+        const { out, res } = await runGrokRaw(ctx, { prompt: IMAGE_GEN_PREFIX + prompt, tools: IMAGE_GEN_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
+        return imageAnswer(ctx, out, res, extractImagePath(runText(out)));
       },
     },
     {
@@ -658,8 +727,11 @@ export default defineUnit({
         'NEW saved image file as plain text (the source file is never modified); ' +
         'files are saved under ~/.grok/sessions/ (OUTSIDE every project) and the ' +
         'operator imports them manually. Image-only toolset enforced at spawn: no ' +
-        'read/web/shell tools, no subagents, no MCP. Each call spends image quota ' +
-        'and is NOT retried.',
+        'read/web/shell tools, no subagents, no MCP. The answer is the bare path ' +
+        'and nothing else: a run that was capped, killed or cancelled with the ' +
+        'file already saved returns that path and is flagged partial in the ' +
+        'status feed, and a run with no file on disk is an error. Each call ' +
+        'spends image quota and is NOT retried.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -677,10 +749,9 @@ export default defineUnit({
         let st;
         try { st = statSync(imagePath); } catch { st = null; }
         if (!st || !st.isFile()) return { text: `Error: "imagePath" is not an existing file: ${imagePath}`, isError: true };
-        const text = runText(await runGrok(ctx, { prompt: imageEditPrompt(imagePath, prompt), tools: IMAGE_EDIT_TOOLS, maxTurns: ctx.cfg.imageMaxTurns }));
-        const artifact = extractImagePath(text, imagePath);
-        if (!artifact) throw new Error('image run finished without a saved image path on disk. Raw output: ' + ((text || '(empty)').slice(-1000)));
-        return artifact;
+        const { out, res } = await runGrokRaw(ctx, { prompt: imageEditPrompt(imagePath, prompt), tools: IMAGE_EDIT_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
+        // The SOURCE path is never the answer: the edit's artifact is a new file.
+        return imageAnswer(ctx, out, res, extractImagePath(runText(out), imagePath));
       },
     },
     {

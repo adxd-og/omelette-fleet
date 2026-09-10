@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit, {
@@ -163,6 +163,39 @@ test('interpretGrok: a run the CLIENT cancelled says so — neither timeoutS nor
   assert.throws(
     () => interpretGrok(ok({ stdout: '', code: null, killed: true, cancelled: true, capped: true }), opts),
     /^Error: grok cancelled by the client$/,
+  );
+  // …but a run the CLI had already reported an error for was not merely
+  // stopped early, and the operator who stopped it is the one person who
+  // cannot tell the two apart from the outside. The cancel still decides the
+  // outcome; it no longer swallows the reason.
+  assert.throws(
+    () => interpretGrok(ok({
+      stdout: stream(sys(), JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['auth expired'] })),
+      code: null,
+      killed: true,
+      cancelled: true,
+    }), opts),
+    /^Error: grok cancelled by the client — Grok had reported: auth expired$/,
+  );
+  // On a salvaged answer the same tail rides the marker rather than an error.
+  const withError = interpretGrok(ok({
+    stdout: stream(sys(), textDelta('what it got to'), JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, result: null })),
+    code: null,
+    killed: true,
+    cancelled: true,
+  }), opts);
+  assert.match(withError.text, /^what it got to/);
+  assert.match(withError.text, /\[grok: cancelled by the client — Grok had reported: error_max_turns\]/);
+  assert.doesNotMatch(withError.text, /treat the answer as partial\]/);
+  assert.equal(withError.partial, true);
+  // A hard kill that is NOT a cancel keeps its own 0.3.4 wording, unchanged.
+  assert.throws(
+    () => interpretGrok(ok({
+      stdout: stream(sys(), JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['auth expired'] })),
+      code: null,
+      killed: true,
+    }), opts),
+    /^Error: grok hard-killed after 300s; the CLI had reported: auth expired$/,
   );
 });
 
@@ -526,4 +559,147 @@ test('parseStream: an error line whose `message` is not a string still yields TE
     assert.equal(typeof e, 'string', JSON.stringify(message));
     assert.ok(e.length > 0 && !e.includes('[object Object]'), e);
   }
+});
+
+test('grok_research: an absolute `cwd` is passed as --cwd and is where the run happens; a bad one is refused before any spawn', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-cwd-'));
+  const where = mkdtempSync(join(tmpdir(), 'omelette-grok-where-'));
+  const fake = join(dir, 'fake-grok-cwd.mjs');
+  // Streaming NDJSON, like every research run: the "answer" is the directory
+  // the CLI ran in, followed by the argv it was handed.
+  writeFileSync(fake, [
+    'const argv = process.argv.slice(2);',
+    'const text = "CWD " + process.cwd() + " ARGS " + argv.join(" ");',
+    'process.stdout.write([',
+    '  JSON.stringify({ type: "system", subtype: "init", session_id: "s" }),',
+    '  JSON.stringify({ type: "result", subtype: "success", is_error: false, result: text, stop_reason: "end_turn" }),',
+    '].join("\\n") + "\\n");',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { grok: { timeoutS: 30 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, GROK_BIN: process.execPath };
+  const rt = createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+    { env },
+  );
+  // macOS resolves /var → /private/var for a child's own cwd, so the run's
+  // report of where it stood is compared against the resolved path.
+  const there = await rt.callTool('grok_research', { prompt: 'q', cwd: where });
+  assert.ok(there.text.startsWith(`CWD ${realpathSync(where)} `), there.text);
+  assert.ok(there.text.includes(`--cwd ${where}`), there.text);
+  // Omitted: exactly today's behaviour — no flag, the server's own cwd.
+  const here = await rt.callTool('grok_research', { prompt: 'q' });
+  assert.ok(here.text.startsWith(`CWD ${realpathSync(process.cwd())} `), here.text);
+  assert.ok(!here.text.includes('--cwd'), here.text);
+  // The review tool's validation, word for word, and before any spawn.
+  const rel = await rt.callTool('grok_research', { prompt: 'q', cwd: 'relative/path' });
+  assert.equal(rel.isError, true);
+  assert.match(rel.text, /"cwd" must be an absolute path \(got "relative\/path"\)/);
+  const missing = await rt.callTool('grok_research', { prompt: 'q', cwd: join(dir, 'no-such-dir') });
+  assert.equal(missing.isError, true);
+  assert.match(missing.text, /"cwd" is not an existing directory/);
+  const notDir = await rt.callTool('grok_research', { prompt: 'q', cwd: fake });
+  assert.equal(notDir.isError, true);
+  assert.match(notDir.text, /"cwd" is not an existing directory/);
+  // …and the spooled record names the directory the run happened in.
+  const spool = join(dir, 'results', 'grok');
+  const bodies = readdirSync(spool).filter((f) => f.endsWith('.md')).map((f) => readFileSync(join(spool, f), 'utf8'));
+  assert.ok(bodies.some((b) => b.includes(`\ncwd: ${where}\n`)), bodies.join('\n---\n'));
+});
+
+test('runtime with a fake grok: a cancel does not swallow the error Grok had already reported', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-cancel-'));
+  const fake = join(dir, 'fake-grok-cancel.mjs');
+  // The CLI reports its own failure and then hangs: the client's cancel is
+  // what ends the run, and the reason it was doomed anyway has to survive it.
+  writeFileSync(fake, [
+    'process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "s" }) + "\\n");',
+    'process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["auth expired"] }) + "\\n");',
+    'setTimeout(() => {}, 30000);',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { grok: { cancel: 'kill', timeoutS: 60 } } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, GROK_BIN: process.execPath };
+  const rt = createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+    { env },
+  );
+  const c = new AbortController();
+  const abort = setTimeout(() => c.abort(), 300);
+  if (abort.unref) abort.unref();
+  const r = await rt.callTool('grok_research', { prompt: 'q' }, { id: 1, signal: c.signal });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /grok cancelled by the client — Grok had reported: auth expired/);
+  // The cancel still decides the outcome: `cancelled`, not `error`.
+  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'cancelled');
+  // And it is still deterministic: an auth failure is not retried.
+  assert.doesNotMatch(r.text, /hard-killed/);
+});
+
+/** A runtime whose "grok" is `node <fake>`, with `dir` as its own fleet home. */
+function wrapGrok(dir, fake, units = {}) {
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { grok: units } }));
+  const env = { ...process.env, OMELETTE_HOME: dir, GROK_BIN: process.execPath };
+  return createUnitRuntime(
+    { ...unit, tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [fake, ...o.args] }) }) } : t)) },
+    { env },
+  );
+}
+
+test('grok_image: a capped run whose artifact is on disk answers with the BARE path, and the feed says partial', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-img-cap-'));
+  const saved = join(dir, 'generated.jpg');
+  writeFileSync(saved, 'JPEG');
+  const fake = join(dir, 'fake-grok-img.mjs');
+  // Image runs are plain stdout by design: narration far past the cap, then
+  // the path. A tail cap keeps the end, which is where the path is.
+  writeFileSync(fake, `process.stdout.write("n".repeat(2000) + "\\nSaved to " + ${JSON.stringify(saved)});`);
+  const rt = wrapGrok(dir, fake, { outputCap: 300, timeoutS: 30 });
+  const r = await rt.callTool('grok_image', { prompt: 'a cat' });
+  assert.equal(r.isError, undefined, r.text);
+  // THE CONTRACT: the path, alone. No cap marker, no prose — the caller stats
+  // what comes back, and a marker would make it something else.
+  assert.equal(r.text, saved);
+  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'ok');   // there IS an artifact
+  assert.equal(snap.lastEvent.partial, true);  // …from a run that did not finish
+  const spool = join(dir, 'results', 'grok');
+  const body = readFileSync(join(spool, readdirSync(spool).find((f) => f.endsWith('.md'))), 'utf8');
+  assert.match(body, /\npartial: true\n/);
+  assert.ok(body.trim().endsWith(saved), body);   // the spooled answer is the path too
+});
+
+test('grok_image: a capped run with no file on disk is an error naming grok.outputCap', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-img-nofile-'));
+  const fake = join(dir, 'fake-grok-img2.mjs');
+  // Confident prose about a file that was never written: not an artifact, and
+  // the cap is what an operator can actually act on.
+  writeFileSync(fake, `process.stdout.write("n".repeat(2000) + "\\nSaved to " + ${JSON.stringify(join(dir, 'imagined.jpg'))});`);
+  const rt = wrapGrok(dir, fake, { outputCap: 300, timeoutS: 30 });
+  const r = await rt.callTool('grok_image', { prompt: 'a cat' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /image run finished without a saved image path on disk \(the run's output exceeded the 300 char cap — raise grok\.outputCap or narrow the task\)/);
+  // The raw tail is still there to read.
+  assert.match(r.text, /Raw output: /);
+});
+
+test('grok_image_edit: a hard-killed run whose new file is already on disk answers with the bare path', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-img-kill-'));
+  const source = join(dir, 'source.jpg');
+  const saved = join(dir, 'edited.jpg');
+  writeFileSync(source, 'JPEG');
+  writeFileSync(saved, 'JPEG');
+  const fake = join(dir, 'fake-grok-edit.mjs');
+  // The CLI prints the new path and then hangs: the hard kill at timeoutS is
+  // what ends it, and the salvage keeps the text the path is in.
+  writeFileSync(fake, [
+    `process.stdout.write("Saved to " + ${JSON.stringify(saved)});`,
+    'setTimeout(() => {}, 30000);',
+  ].join('\n'));
+  const rt = wrapGrok(dir, fake, { timeoutS: 1 });
+  const r = await rt.callTool('grok_image_edit', { prompt: 'make it blue', imagePath: source });
+  assert.equal(r.isError, undefined, r.text);
+  assert.equal(r.text, saved);                 // never the source, never a kill marker
+  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  assert.equal(snap.lastEvent.status, 'ok');
+  assert.equal(snap.lastEvent.partial, true);
 });
