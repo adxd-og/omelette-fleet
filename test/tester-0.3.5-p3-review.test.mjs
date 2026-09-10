@@ -9,17 +9,19 @@
  * OMELETTE_HOME, a temp dir that cannot be created, and a registration that
  * is not ours.
  *
- * Two behaviours promised by `probeRuntimeEnv` and the new
- * "could not inspect" skip branch were NOT exercised by that diff:
+ * Two behaviours — one promised by the runtime's own bin resolution, one by the
+ * new "could not inspect" skip branch — were NOT exercised by that diff:
  *
  * 1. A relative `<UNIT>_BIN` (one WITH a path separator) is resolved to an
- *    absolute path against the operator's own cwd before the run is spawned
- *    in the probe's throwaway directory — every existing test only ever hands
- *    the probe an already-absolute bin path, so a regression here (spawning
- *    the relative path unresolved, which the OS then resolves against the
- *    spawn's own cwd) would go unnoticed. In 0.3.6 that cwd stopped being one
- *    doctor chdir'd into and became the one the research tool was ASKED to run
- *    in; the resolution matters for exactly the same reason.
+ *    absolute path against the cwd of the process that starts the unit — for
+ *    the probe, doctor's own — before the run is spawned in the probe's
+ *    throwaway directory. Every existing test only ever hands the probe an
+ *    already-absolute bin path, so a regression here (spawning the relative
+ *    path unresolved, which the OS then resolves against the spawn's own cwd)
+ *    would go unnoticed. In 0.3.6 that cwd stopped being one doctor chdir'd
+ *    into and became the one the research tool was ASKED to run in, and the
+ *    resolution moved from the probe's own env-building to `resolveBin` in
+ *    core/unit.mjs, where every tool of every unit gets it.
  * 2. A probe directory the run answered from, but that this process can no
  *    longer read afterwards, is `skipped (could not inspect: …)` — never
  *    `held` (nothing was proven) and never `BREACHED` (no entry was ever
@@ -114,7 +116,7 @@ test('doctor --probe-sandbox: a relative <UNIT>_BIN without any separator is lef
   const gone = join(dir, 'no-such');
   const path = probeScript(dir, 'barename-cli', ["console.log('refused');", 'process.exit(0);'].join('\n'));
   registerOurs(dir, ['grok']);
-  // A bare command name is not a path `probeRuntimeEnv` touches — it stays
+  // A bare command name is not a path `resolveBin` touches — it stays
   // exactly as the operator set it, and PATH (which the run's own directory
   // does not affect) is what has to find it.
   const r = cli(['doctor', '--probe-sandbox'], {

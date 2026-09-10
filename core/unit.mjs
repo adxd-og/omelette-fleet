@@ -72,6 +72,7 @@
  * worth filing. A `local` tool gets a no-op of the same name: it produces no
  * record, and an adapter helper shared with a spawn tool must not have to ask.
  */
+import { resolve as resolvePath } from 'node:path';
 import { serve } from './jsonrpc.mjs';
 import { unitInstructions } from './rules.mjs';
 import { runProcess } from './spawn.mjs';
@@ -141,8 +142,19 @@ export function defineUnit(spec) {
   };
 }
 
+/**
+ * The executable this unit spawns. A `<UNIT>_BIN` override that CONTAINS A
+ * PATH SEPARATOR is a path, and a relative one means the directory the SERVER
+ * was started in — so it is made absolute here, and `createUnitRuntime` does it
+ * ONCE at unit start. Every tool then spawns the same executable whatever `cwd`
+ * a caller asks the run to happen in: the OS resolves a relative command
+ * against the CHILD's cwd, so an unresolved override would be a different
+ * binary — or none — per call. A bare name is not a path and is left alone:
+ * that one is for PATH to resolve.
+ */
 export function resolveBin(unit, env = process.env) {
-  return (unit.bin.env && env[unit.bin.env]) || unit.bin.default;
+  const bin = (unit.bin.env && env[unit.bin.env]) || unit.bin.default;
+  return bin && (bin.includes('/') || bin.includes('\\')) ? resolvePath(bin) : bin;
 }
 
 /**
@@ -224,6 +236,9 @@ function answerResult(store, args, unitName) {
 export function createUnitRuntime(unit, { env = process.env, progressEveryMs = PROGRESS_EVERY_MS, onResult = null, cancel = null } = {}) {
   const log = makeLog(unit.name);
   const warnOnce = makeOnceLog(log);
+  // ONCE, at unit start, in the SERVER's own cwd: a relative override is
+  // resolved here or the executable would depend on where each call runs.
+  const bin = resolveBin(unit, env);
   let resultSeq = 0;
   const cfgFor = () => unitConfig({
     unit: unit.name, envMap: unit.envMap, builtin: unit.builtin, extraSchema: unit.extraSchema,
@@ -276,7 +291,6 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
   if (bootCfg.values.results) storeFor(bootCfg).prune();
 
   function spawnFor(cfg, { args, cwd, stdinText, extraEnv, hardKillMs, outputCap }, signal) {
-    const bin = resolveBin(unit, env);
     const timeoutMs = hardKillMs ?? cfg.values.timeoutS * 1000;
     // Both bounds come from the unit's config unless this call knows better.
     // The config value is a validated posint; a call's is not, and `slice(-0)`
@@ -501,7 +515,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
 
   // tools/list must show only the public MCP shape.
   const tools = allTools.map(({ run, kind, mutateGate, ...pub }) => pub);
-  return { log, status, callTool, cfgFor, tools };
+  return { log, status, callTool, cfgFor, tools, bin };
 }
 
 /** Start the unit as an MCP stdio server on this process. */
@@ -510,7 +524,7 @@ export function startUnit(unit, opts = {}) {
   const cfg = rt.cfgFor();
   for (const w of cfg.warnings) rt.log('config: ' + w);
   rt.log(
-    `up · bin=${resolveBin(unit, opts.env)} · mode=${cfg.values.mode}` +
+    `up · bin=${rt.bin} · mode=${cfg.values.mode}` +
     `${cfg.values.requestedMode !== cfg.values.mode ? ` (requested ${cfg.values.requestedMode}, ceiling closed)` : ''}` +
     ` · hard-kill=${cfg.values.timeoutS}s · default-model=${cfg.values.model || VENDOR_DEFAULT_MODEL}` +
     ` · status=${cfg.values.status ? cfg.home : 'off'} · config=${cfg.configPath}`,
