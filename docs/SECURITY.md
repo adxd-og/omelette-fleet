@@ -40,7 +40,7 @@ The short version: units read, the manager writes. Everything below explains wha
 
 Opening write mode for a unit takes **two independent keys**:
 
-<img src="../assets/diagrams/security-layers.svg" alt="Four compensating layers from the config ceiling inward to the guard hook, each labelled with what it does not cover, and the residual risk no layer removes." width="880">
+<img src="assets/diagrams/security-layers.svg" alt="Four compensating layers from the config ceiling inward to the guard hook, each labelled with what it does not cover, and the residual risk no layer removes." width="880">
 
 1. `"mode": "workspace-write"` for that unit in `fleet.config.json`, and
 2. the unit named in **`OMELETTE_ALLOW_WRITE`** (comma-separated, case-insensitive) in the MCP server's environment block.

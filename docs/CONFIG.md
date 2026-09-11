@@ -221,7 +221,7 @@ Leaving `model` unset means "the vendor's own default" for Gemini and Grok. **No
 
 Per key, lowest to highest:
 
-<img src="../assets/diagrams/config-resolution.svg" alt="How one config key of one unit resolves — environment, unit block, top-level defaults, built-in — and where the write ceiling narrows the result." width="720">
+<img src="assets/diagrams/config-resolution.svg" alt="How one config key of one unit resolves — environment, unit block, top-level defaults, built-in — and where the write ceiling narrows the result." width="720">
 
 1. the unit's built-in default (falling back to the schema default),
 2. file `defaults`,

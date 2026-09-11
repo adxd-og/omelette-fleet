@@ -21,7 +21,7 @@ How to run a session with a fleet: who decides, who proposes, and which unit get
 
 Your Claude Code session is the **orchestrator and the reviewer**. It plans, decomposes, routes, and it is the only thing that changes code — directly or through its own sub-agents, under whatever approval flow you already have. The units are **read-only proposers**: they research, analyse, review and give second opinions, and they hand back text. Nothing a unit says reaches your repository except by passing through you.
 
-<img src="../assets/diagrams/operating-model.svg" alt="Five lanes — operator, session, omelette-coder, omelette-tester, fleet units — with the commit and merge step sitting only in the session lane." width="880">
+<img src="assets/diagrams/operating-model.svg" alt="Five lanes — operator, session, omelette-coder, omelette-tester, fleet units — with the commit and merge step sitting only in the session lane." width="880">
 
 That split is what makes the fleet cheap to supervise. A unit's worst case is a wrong answer, not a wrong commit — so you review claims, not diffs. And because every unit reads untrusted material by design (web pages, repositories), keeping the mutating surface in one place is also the injection containment.
 
@@ -111,7 +111,7 @@ Two practical rules that follow: give each delegate one job and the context to d
 
 A long plan outlives the context it was made in. Compaction is the obvious way that happens, but it is not the only one: an interrupted evening, a session that had to be restarted, a hand-off to a colleague. Everything the orchestrator knows and never wrote down is lost at that moment — and what is lost first is exactly what is most expensive to recover, the *reasons*. The code is still in git. Why option B was rejected is not.
 
-<img src="../assets/diagrams/handoff-lifecycle.svg" alt="The handoff lifecycle of one session: below threshold, nudged at 90 per cent, gated once at Stop, handoff written, compacted, and back via the SessionStart print." width="880">
+<img src="assets/diagrams/handoff-lifecycle.svg" alt="The handoff lifecycle of one session: below threshold, nudged at 90 per cent, gated once at Stop, handoff written, compacted, and back via the SessionStart print." width="880">
 
 So: **keep a ledger file for every plan, from the first step.**
 
