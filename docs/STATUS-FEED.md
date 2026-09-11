@@ -4,6 +4,14 @@ What each unit is doing right now, on disk, in a format anything can read — a 
 
 Readers are built against a versioned contract: **schema 1**. A change bumps the number; fields are never silently reshaped.
 
+| Question | Where |
+|---|---|
+| What fields does the per-unit status snapshot carry? | [`status-<unit>.json` — per-unit snapshot](#status-unitjson--per-unit-snapshot) |
+| What does each line of the shared event log look like? | [`fleet-log.ndjson` — shared append log](#fleet-logndjson--shared-append-log) |
+| How reliable is the feed — does it ever crash or grow forever? | [Guarantees](#guarantees) |
+| How do I turn the status feed off? | [Turning it off](#turning-it-off) |
+| How do I actually read the feed from a shell? | [Reading it](#reading-it) |
+
 ## `status-<unit>.json` — per-unit snapshot
 
 One file per unit, rewritten on every event.
