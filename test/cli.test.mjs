@@ -3129,6 +3129,28 @@ test('doctor: a settings file that would BLOCK the read is named unreadable, and
   );
 });
 
+test('doctor: a rules file that would BLOCK the read is reported absent, and doctor comes back at once', (t) => {
+  const dir = home();
+  const proj = join(dir, 'proj');
+  mkdirSync(join(proj, '.claude', 'rules'), { recursive: true });
+  const fifo = join(proj, '.claude', 'rules', 'omelette-fleet.md');
+  // A FIFO where the rules file should be. Doctor opens that path twice — the
+  // `rules` line asks for its marker, the `merge policy` line for the sentence
+  // it was rendered with — and an ordinary read of a FIFO never returns.
+  if (spawnSync('mkfifo', [fifo], { encoding: 'utf8' }).status !== 0) return t.skip('mkfifo is unavailable here');
+  // PATH is empty on purpose: no `gh` to ask about branch protection, so the
+  // only thing that could hold this run is the pipe.
+  const empty = join(dir, 'empty-path');
+  mkdirSync(empty, { recursive: true });
+  const t0 = Date.now();
+  const r = cli(['doctor'], { dir: proj, env: { HOME: dir, OMELETTE_HOME: dir, PATH: empty }, timeout: 20000 });
+  assert.ok(Date.now() - t0 < 5000, `doctor took ${Date.now() - t0} ms`);
+  assert.equal(r.code, 0, r.out + r.err);
+  // A file we cannot read at all reads as absent, in both lines.
+  assert.match(r.out, /^rules {9}project: absent/m, r.out);
+  assert.match(r.out, /^merge policy {2}session \(config; no rules file\)$/m, r.out);
+});
+
 test('doctor: a settings file past the read cap is unreadable, exactly as the guard treats it', () => {
   const dir = home();
   mkdirSync(join(dir, '.claude'), { recursive: true });

@@ -44,7 +44,7 @@
  * honoured NOWHERE else: server paths, the shipped example config and doctor
  * all still come from the real ROOT below.
  */
-import { accessSync, chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { accessSync, chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, opendirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,7 +53,7 @@ import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
+import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
 import { createUnitRuntime, resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -683,6 +683,17 @@ const SETTINGS_READ_MAX = 1024 * 1024;
 const UNREADABLE = 'unreadable';
 
 /**
+ * THE SAME CEILING ON A RULES FILE. `rulesState` wants line 1 and
+ * `renderedMerge` one sentence out of a file this package renders at a few KiB,
+ * so a megabyte is generous; what the cap is really for is the file at that
+ * path that is NOT ours, which may be any size at all. The read itself goes
+ * through core/rules.mjs's `readRulesFile`, the same bounded reader the unit
+ * servers' marker test takes, so no reader of that path can be the one that
+ * hangs on a pipe.
+ */
+const RULES_READ_MAX = 1024 * 1024;
+
+/**
  * ONE bounded read for every settings file this CLI opens — the `env` block,
  * the top-level keys and the hook wiring all come through here, so no reader
  * can be the one that hangs.
@@ -1103,6 +1114,14 @@ const PR_GATE_FILES = [
 ];
 /** …and the multiple-template form: any `.md` file inside this directory is one. */
 const PR_GATE_DIR = '.github/PULL_REQUEST_TEMPLATE';
+/**
+ * How many of that directory's entries are looked at. A repository with
+ * templates has a handful; a directory with more than this behind that name is
+ * not a template set, and a HINT is not worth walking one. The entries are read
+ * in the order the filesystem hands them over — sorting would mean materialising
+ * the whole listing first, which is exactly the cost this bound exists to avoid.
+ */
+const PR_GATE_DIR_ENTRIES = 64;
 const GH_PROTECTION_TIMEOUT_MS = 5000;
 const PR_GATE_HINT = ' — this repository looks PR-gated: consider set workflow.merge=pr';
 
@@ -1114,14 +1133,27 @@ function prGateFile(cwd) {
   }
   // The directory form is a listing rather than a lookup: the names in it are
   // the repository's own, and only a regular `.md` among them is a template.
+  //
+  // NOTHING HERE FOLLOWS A LINK OUT OF THE REPOSITORY. The directory is lstat'd
+  // — a symlink under that name holds somebody else's templates, and this
+  // repository's workflow may not be read out of them — and so is each entry,
+  // so a linked-in file is not a template here either. Bounded and unsorted:
+  // `opendir` reads at most PR_GATE_DIR_ENTRIES entries, where a listing of the
+  // whole directory would be unbounded work for one hint.
   const dir = join(cwd, ...PR_GATE_DIR.split('/'));
-  let names = [];
-  try { names = readdirSync(dir).sort(); } catch { return null; }
-  for (const name of names) {
-    if (!/\.md$/i.test(name)) continue;
-    try { if (statSync(join(dir, name)).isFile()) return `${PR_GATE_DIR}/${name}`; }
-    catch { /* vanished between the listing and the stat */ }
-  }
+  let handle = null;
+  try {
+    if (!lstatSync(dir).isDirectory()) return null;
+    handle = opendirSync(dir);
+    for (let i = 0; i < PR_GATE_DIR_ENTRIES; i++) {
+      const entry = handle.readSync();
+      if (!entry) break;
+      if (!/\.md$/i.test(entry.name)) continue;
+      try { if (lstatSync(join(dir, entry.name)).isFile()) return `${PR_GATE_DIR}/${entry.name}`; }
+      catch { /* vanished between the listing and the lstat */ }
+    }
+  } catch { /* absent, not a directory, or one this process may not read */ }
+  finally { if (handle) { try { handle.closeSync(); } catch { /* already gone */ } } }
   return null;
 }
 
@@ -1163,9 +1195,8 @@ async function ghBranchProtected({ cwd = process.cwd(), env = process.env } = {}
 function renderedMerge({ cwd = process.cwd(), env = process.env } = {}) {
   for (const scope of [{}, { global: true }]) {
     const { path } = rulesTarget({ ...scope, cwd, env });
-    let text;
-    try { text = readFileSync(path, 'utf8'); } catch { continue; }
-    if (!parseRulesMarker(text)) continue;
+    const text = readRulesFile(path, RULES_READ_MAX);
+    if (text === null || !parseRulesMarker(text)) continue;
     const found = Object.entries(MERGE_SENTENCES).find(([, sentence]) => text.includes(sentence));
     if (found) return found[0];
   }
@@ -1819,14 +1850,15 @@ async function cmdRules(argv) {
  * What `doctor` and `update` REPORT about the managed files. These only ever
  * read: a stale rules file is something the operator is told about and never
  * something a diagnosis or a pull silently rewrites. A file we cannot read at
- * all reads as absent — this is a report line, not a fault.
+ * all — absent, a directory, a symlink, a pipe, or bytes this process may not
+ * have — reads as absent: a report line, not a fault.
  *
  * @returns {{path:string, state:'absent'|'foreign'|'ours', version:string|null}}
  */
 function rulesState({ global = false, cwd = process.cwd(), env = process.env } = {}) {
   const { path } = rulesTarget({ global, cwd, env });
-  let text;
-  try { text = readFileSync(path, 'utf8'); } catch { return { path, state: 'absent', version: null }; }
+  const text = readRulesFile(path, RULES_READ_MAX);
+  if (text === null) return { path, state: 'absent', version: null };
   const version = parseRulesMarker(text);
   return version ? { path, state: 'ours', version } : { path, state: 'foreign', version: null };
 }

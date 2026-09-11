@@ -116,6 +116,8 @@ One file, and only to decide how much text to send back. At startup each unit se
 
 **Nothing from the file is copied anywhere.** Not into `instructions`, not into the status feed, not into the result spool, and never into a vendor CLI's environment or prompt — so a rules file cannot be used to smuggle text into a session's context through this path, and a project you did not write cannot change what a unit says by putting something at that path. A file without the marker, an unreadable path, a directory, a symlink, a FIFO: all of them read as "no rules file here", and the full contract is sent. Only a regular file is opened at all — lstat first, `O_NONBLOCK` on the open and an fstat behind it, so a FIFO planted at that path cannot hold a starting server until somebody opens the other end — and at most 8 KiB of it is read, because the marker is on line 1. The read happens once, at server start, and `contract: full | short` in the fleet config skips it entirely.
 
+**`doctor` reads those same two paths, through that same reader.** Its `rules` line wants the marker and its `merge policy` line the one sentence the file was rendered with, so the cap there is 1 MiB rather than 8 KiB — but the three steps are the unit servers': lstat, `O_NONBLOCK`, fstat, and a regular file or nothing. A pipe, a directory or a symlink under that name reads as `absent` and holds no diagnosis up. Nothing else about your project is opened for those two lines.
+
 ## Per-unit enforcement matrix
 
 These are not equivalent mechanisms. Be honest with yourself about which unit you are trusting with what.

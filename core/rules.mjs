@@ -130,36 +130,56 @@ const CONTRACT_READ_BYTES = 8192;
 const NONBLOCK = constants.O_NONBLOCK || 0;
 
 /**
- * Is there a rules file of OURS at this path? Never throws; absent is the
- * normal answer.
+ * ONE BOUNDED READ FOR EVERY READER OF A RULES FILE — the marker test below,
+ * and `doctor`'s two lines about that same path in bin/omelette-fleet.mjs.
+ * Never throws; absent is the normal answer.
  *
- * A REGULAR FILE OR NOTHING, and the open must never wait. This runs at the
- * start of every unit server, before it can serve anything, so a path that is
- * not a file has to be refused rather than read: `open()` on a FIFO BLOCKS
- * until somebody opens the other end, and a server that hangs there never
- * answers `initialize` at all. lstat first, so a symlink at that path is seen
- * as a symlink (a link to a FIFO is exactly the case a plain stat would miss),
+ * A REGULAR FILE OR NOTHING, and the open must never wait. The marker test runs
+ * at the start of every unit server, before it can serve anything, so a path
+ * that is not a file has to be refused rather than read: `open()` on a FIFO
+ * BLOCKS until somebody opens the other end, and a server that hangs there
+ * never answers `initialize` at all — as would a `doctor` that read the same
+ * path with readFileSync. lstat first, so a symlink at that path is seen as a
+ * symlink (a link to a FIFO is exactly the case a plain stat would miss),
  * O_NONBLOCK on the open against the race between the two syscalls, and fstat
  * on the descriptor actually opened — the same three steps the guard's own
  * bounded reader takes, for the same reason.
+ *
+ * @param {string} path
+ * @param {number} maxBytes how much of it the caller can use — the marker is
+ *   line 1, a rendered file is a few KiB, and nothing here reads a whole
+ *   file just because it is there.
+ * @returns {string|null} the first `maxBytes` bytes as UTF-8, or null for
+ *   anything that is not a readable regular file.
  */
-function marked(path) {
+export function readRulesFile(path, maxBytes = CONTRACT_READ_BYTES) {
   let fd = null;
   try {
-    if (!lstatSync(path).isFile()) return false;
+    if (!lstatSync(path).isFile()) return null;
     fd = openSync(path, constants.O_RDONLY | NONBLOCK);
-    if (!fstatSync(fd).isFile()) return false;
-    const buf = Buffer.alloc(CONTRACT_READ_BYTES);
-    const n = readSync(fd, buf, 0, CONTRACT_READ_BYTES, 0);
-    return parseRulesMarker(buf.toString('utf8', 0, n)) !== null;
+    const st = fstatSync(fd);
+    if (!st.isFile()) return null;
+    const length = Math.max(0, Math.min(maxBytes, st.size));
+    if (!length) return '';
+    const buf = Buffer.alloc(length);
+    return buf.subarray(0, readSync(fd, buf, 0, length, 0)).toString('utf8');
   } catch {
     // Absent, a directory, a symlink, a device, unreadable: all of them mean
-    // "this session has no rules file of ours", which is the state the full
-    // contract exists for.
-    return false;
+    // there is no rules file of ours to read here.
+    return null;
   } finally {
     if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
   }
+}
+
+/**
+ * Is there a rules file of OURS at this path? The marker is LINE 1, so the
+ * bounded prefix above is all this test can use — and a file we could not read
+ * at all is the state the full contract exists for.
+ */
+function marked(path) {
+  const text = readRulesFile(path, CONTRACT_READ_BYTES);
+  return text !== null && parseRulesMarker(text) !== null;
 }
 
 /**
