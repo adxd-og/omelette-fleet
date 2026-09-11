@@ -2,6 +2,26 @@
 
 The short version: units read, the manager writes. Everything below explains what enforces that, how strong each mechanism actually is, and where the guarantees stop.
 
+| Question | Where |
+|---|---|
+| What attacks is this design actually defending against? | [Threat model](#threat-model) |
+| What does it actually take to open write mode for a unit? | [The ceiling](#the-ceiling) |
+| What does a vendor CLI's child process actually see in its environment? | [The environment allowlist](#the-environment-allowlist) |
+| What does this package send over the network on its own? | [Network](#network) |
+| What does the fleet write to disk, and how sensitive is it? | [What the fleet writes down locally](#what-the-fleet-writes-down-locally) |
+| What does a unit server read from my project at startup? | [What a unit server reads when it starts](#what-a-unit-server-reads-when-it-starts) |
+| How strong is read-only enforcement for each vendor? | [Per-unit enforcement matrix](#per-unit-enforcement-matrix) |
+| How is Codex's sandbox actually enforced? | [Codex — one real layer, plus isolation](#codex--one-real-layer-plus-isolation) |
+| What are Grok's layers of enforcement? | [Grok — layers L1–L6](#grok--layers-l1l6) |
+| Why is Gemini's read-only posture the weakest in the fleet? | [Gemini — the weakest posture, documented as such](#gemini--the-weakest-posture-documented-as-such) |
+| What does `doctor --probe-sandbox` actually prove? | [The sandbox probe](#the-sandbox-probe) |
+| How do I know an answer is incomplete rather than finished? | [Partial answers are never passed off as clean ones](#partial-answers-are-never-passed-off-as-clean-ones) |
+| What does the guard hook actually block, and how? | [The guard hook](#the-guard-hook) |
+| What will this package never do to my project or machine? | [What this package never does](#what-this-package-never-does) |
+| Which protections here are only best-effort, not guarantees? | [What is best-effort](#what-is-best-effort) |
+| What's the underlying design principle here? | [Units propose, the manager applies](#units-propose-the-manager-applies) |
+| What agy permission rules does Gemini research actually need? | [Recommended agy allow-rules](#recommended-agy-allow-rules) |
+
 ## Threat model
 
 **Prompt injection through content a unit ingests.** Every unit is pointed at untrusted material by design — fetched web pages during research, and repository contents during review. A page or a file can contain instructions aimed at the model. The mitigation is not detection; it is that a unit has nothing to act with. A compromised unit can return misleading *text*, and that text is what you have to distrust — never execute instructions a unit reports finding, and verify facts it brings back from the web.
