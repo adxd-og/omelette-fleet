@@ -29,7 +29,9 @@
  * PostCompact — the record. A compaction replaces the session's context with a
  * summary, and that summary is the only account of everything before it, held
  * in a context the NEXT compaction will replace in its turn. So it is written
- * to every ledger, under a heading that is deliberately NOT `## Handoff`: the
+ * to every ledger — from the event's own `compact_summary` where the client
+ * sends one, and from the transcript's tail where it does not — under a
+ * heading that is deliberately NOT `## Handoff`: the
  * SessionStart print and the Stop gate both ask for that heading, and a summary
  * the model wrote must never be mistaken for the handoff the session owes.
  *
@@ -619,11 +621,22 @@ function appendToLedgers(found, text) {
   }
 }
 
+/**
+ * WHICH COMPACTION THIS WAS, in the two words Claude Code documents for it.
+ * The value lands inside a heading line of a Markdown file, so anything else —
+ * a word this guard has never heard of, and above all a string carrying a
+ * newline and a `## Handoff` behind it — is `unknown` rather than written out:
+ * a field of somebody else's event must not be able to forge a heading in the
+ * ledger the print and the Stop gate both read.
+ */
+const TRIGGERS = new Set(['manual', 'auto']);
+const triggerOf = (event) => (TRIGGERS.has(event.trigger) ? event.trigger : 'unknown');
+
 /** Mark every ledger in this project, then say so on stdout. */
 function preCompact(event) {
   const found = ledgerDir(event);
   if (!found) return; // a `.omelette` that is not ours to write: no marker, and nothing to announce
-  appendToLedgers(found, `\n## Compaction ${new Date().toISOString()} (trigger: ${str(event.trigger, 'unknown')}) — re-read this ledger before continuing\n`);
+  appendToLedgers(found, `\n## Compaction ${new Date().toISOString()} (trigger: ${triggerOf(event)}) — re-read this ledger before continuing\n`);
   // The window this session crossed is about to be replaced. Its crossing
   // described a context that will not exist in a moment — and the sizes it
   // recorded describe a ledger this very handler has just stamped — so it goes
@@ -749,7 +762,8 @@ function sessionStart(event) {
   const ledgers = ledgerNames(found.dir);
   if (!ledgers.length) return;
 
-  const buf = Buffer.alloc(LEDGER_READ_MAX);
+  // One byte wider than the tail, because the read starts one byte EARLY.
+  const buf = Buffer.alloc(LEDGER_READ_MAX + 1);
   const parts = [];
   let total = 0;
   for (const name of ledgers) {
@@ -766,7 +780,19 @@ function sessionStart(event) {
         if (!st.isFile()) continue;
         const offset = Math.max(0, st.size - LEDGER_READ_MAX);
         tailed = offset > 0;
-        text = buf.subarray(0, readSync(fd, buf, 0, LEDGER_READ_MAX, offset)).toString('utf8');
+        // THE READ STARTS ONE BYTE EARLY, for the reason freshHandoff does the
+        // same: `^` is a line start only where a line ended, and a tail that
+        // opens in the middle of a line would make `## Handoff` out of the rest
+        // of one — an escaped `\## Handoff` in a compaction summary is exactly
+        // that shape. A newline in that byte means the tail opens a line of its
+        // own; anything else means the first line is the tail of an older one
+        // and goes, the newline itself kept so the next line still starts one.
+        const from = offset > 0 ? offset - 1 : 0;
+        text = buf.subarray(0, readSync(fd, buf, 0, Math.min(buf.length, st.size - from), from)).toString('utf8');
+        if (offset > 0 && text[0] !== '\n') {
+          const nl = text.indexOf('\n');
+          text = nl < 0 ? '' : text.slice(nl);
+        }
       } finally { closeSync(fd); }
     } catch { continue; } // a ledger we may not read is not a reason to fail a session start
     const block = lastHandoffBlock(text);
@@ -1323,6 +1349,18 @@ const SUMMARY_MAX = 8 * 1024;
 const MD_HEADING = /^#{1,6}[ \t]/;
 
 /**
+ * EVERY LINE SEPARATOR THE FRESHNESS SCAN RECOGNISES, normalised to `\n` before
+ * the body is split into lines at all. A JavaScript regex with the `m` flag
+ * ends a line at four characters — `\n`, `\r`, U+2028 and U+2029 — and
+ * FRESH_HANDOFF is such a regex, so a summary carrying `…text\r## Handoff` puts
+ * a line the gate reads as a handoff heading into the ledger while the escaping
+ * below, which splits on `\r?\n` alone, sees one long line with nothing at its
+ * start to escape. Normalising first is what makes "a line" mean the same thing
+ * to the writer and to both readers.
+ */
+const LINE_SEPARATORS = /\r\n|[\r\u2028\u2029]/g;
+
+/**
  * `message.content` as text. Claude Code writes the summary as a plain string;
  * the array form — the shape every other message in a transcript has — is read
  * too, and only its TEXT parts, one per line. Anything else in such an array (a
@@ -1357,21 +1395,30 @@ function summaryText(content) {
  * @returns {string} the block's body, or '' when there was nothing to write.
  */
 function boundSummary(text) {
+  const lines = String(text || '').replace(LINE_SEPARATORS, '\n').split('\n');
   const kept = [];
   let bytes = 0;
   let fence = '';
   let dropped = false;
-  for (const raw of String(text || '').split(/\r?\n/)) {
+  const size = (line) => Buffer.byteLength(line, 'utf8') + 1;
+  for (let i = 0; i < lines.length; i++) {
     // Escaped BEFORE it is measured: the backslash is a byte of the block too.
-    const line = MD_HEADING.test(raw) ? `\\${raw}` : raw;
-    const size = Buffer.byteLength(line, 'utf8') + 1;
-    if (bytes + size > SUMMARY_MAX) { dropped = true; break; }
-    kept.push(line);
-    bytes += size;
+    const line = MD_HEADING.test(lines[i]) ? `\\${lines[i]}` : lines[i];
     const f = FENCE.exec(line);
-    if (!f) continue;
-    if (!fence) fence = f[1];
-    else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = '';
+    const opens = !f ? fence
+      : !fence ? f[1]
+        : f[1][0] === fence[0] && f[1].length >= fence.length ? '' : fence;
+    // WHAT THE BLOCK WILL STILL OWE once this line is in it: the truncation
+    // marker, while there are lines behind this one to drop, and a closer for a
+    // fence this line leaves open. Both are appended below and both are bytes
+    // of the block, so a line is only kept while the cap has room for them too
+    // — otherwise a single line at the cap could be followed out of it by a
+    // closing fence as long as itself.
+    const owed = (i < lines.length - 1 ? size(TRUNCATED) : 0) + (opens ? size(opens) : 0);
+    if (bytes + size(line) + owed > SUMMARY_MAX) { dropped = true; break; }
+    kept.push(line);
+    bytes += size(line);
+    fence = opens;
   }
   while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
   if (dropped) kept.push(TRUNCATED);
@@ -1435,9 +1482,15 @@ function postCompact(event) {
   if (!AUTO_HANDOFF.compactSummary) return;
   const found = ledgerDir(event);
   if (!found || !found.exists) return;
-  const body = compactSummary(str(event.transcript_path));
+  // THE EVENT'S OWN SUMMARY FIRST. Claude Code documents `compact_summary` on
+  // this event, and a field it hands us is the summary of THIS compaction with
+  // no searching at all; the transcript scan is the fallback for a client that
+  // sends none. Bounded and escaped the same way either way — where the text
+  // came from changes nothing about what may be appended to a ledger.
+  const given = str(event.compact_summary);
+  const body = given ? boundSummary(given) : compactSummary(str(event.transcript_path));
   if (!body) return;
-  appendToLedgers(found, `\n## Compaction summary ${new Date().toISOString()} (trigger: ${str(event.trigger, 'unknown')})\n${body}\n\n`);
+  appendToLedgers(found, `\n## Compaction summary ${new Date().toISOString()} (trigger: ${triggerOf(event)})\n${body}\n\n`);
 }
 
 const event = await readEvent();
