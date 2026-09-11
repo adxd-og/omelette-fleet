@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1000 608" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="security-layers-title security-layers-desc">
+  <title id="security-layers-title">Compensating layers under the write ceiling</title>
+  <desc id="security-layers-desc">Layer stack read from the outside in: the config ceiling, closed by default and only ever narrowing; the child-environment allowlist and billing-key scrub built at every spawn; the per-unit sandbox, kernel-enforced for Codex, toolset-level for Grok and only a permission policy for Gemini, which is the weakest layer; and the guard hook, which is containment for the shipped coder and tester sub-agents rather than a security boundary. Each layer is labelled with what enforces it and the gap it leaves, and the residual risk that no layer removes is prompt injection through the content a unit reads.</desc>
+  <defs>
+    <marker id="sl-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4a6187"/></marker>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#f3f3f1"/>
+
+  <!-- ===== Risk thread, left margin ===== -->
+  <text x="52" y="96" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">RISK IN</text>
+  <line x1="80" y1="104" x2="80" y2="412" stroke="#012357" stroke-opacity="0.35" stroke-width="1"/>
+  <polygon points="76,412 84,412 80,420" fill="#4a6187"/>
+  <text x="52" y="464" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">RESIDUAL</text>
+
+  <!-- ===== Focal band fill (L3), painted under the dividers ===== -->
+  <rect x="112" y="248" width="840" height="72" fill="#fac440" fill-opacity="0.20"/>
+
+  <!-- ===== Stack dividers and silhouette ===== -->
+  <line x1="112" y1="176" x2="952" y2="176" stroke="#012357" stroke-opacity="0.12" stroke-width="1"/>
+  <line x1="112" y1="248" x2="952" y2="248" stroke="#012357" stroke-opacity="0.12" stroke-width="1"/>
+  <line x1="112" y1="320" x2="952" y2="320" stroke="#012357" stroke-opacity="0.12" stroke-width="1"/>
+  <rect x="112" y="104" width="840" height="288" fill="none" stroke="#012357" stroke-width="1"/>
+  <rect x="112" y="248" width="840" height="72" fill="none" stroke="#b8860b" stroke-width="1.4"/>
+
+  <!-- ===== L1 — the config ceiling ===== -->
+  <text x="132" y="144" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">L1</text>
+  <text x="180" y="138" fill="#012357" font-size="14" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">The config ceiling</text>
+  <text x="180" y="156" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace">OMELETTE_ALLOW_WRITE · closed by default · config can only narrow</text>
+  <text x="932" y="147" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">gap: says nothing about what a unit reads</text>
+
+  <!-- ===== L2 — the environment allowlist and the billing scrub ===== -->
+  <text x="132" y="216" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">L2</text>
+  <text x="180" y="210" fill="#012357" font-size="14" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Env allowlist + billing scrub</text>
+  <text x="180" y="228" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace">core/spawn.mjs · the child env is built, never inherited</text>
+  <text x="932" y="219" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">gap: the CLI's own credentials and network</text>
+
+  <!-- ===== L3 — the per-unit sandbox (focal: the layers are not equivalent) ===== -->
+  <text x="132" y="288" fill="#8a6200" font-size="8" font-weight="600" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">L3</text>
+  <text x="180" y="282" fill="#012357" font-size="14" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Per-unit sandbox</text>
+  <text x="180" y="300" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace">codex: kernel · grok: toolset L1–L6 · gemini: a permission policy</text>
+  <text x="932" y="291" fill="#8a6200" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">gap: gemini has no kernel — the weakest</text>
+
+  <!-- ===== L4 — the guard hook ===== -->
+  <text x="132" y="360" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">L4</text>
+  <text x="180" y="354" fill="#012357" font-size="14" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">The guard hook</text>
+  <text x="180" y="372" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace">PreToolUse · omelette-coder and omelette-tester never commit</text>
+  <text x="932" y="363" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">gap: containment, not a security boundary</text>
+
+  <!-- ===== Residual risk ===== -->
+  <rect x="112" y="424" width="840" height="72" rx="6" fill="#fac440" fill-opacity="0.07" stroke="#b8860b" stroke-opacity="0.55" stroke-width="1.2" stroke-dasharray="4,4"/>
+  <text x="132" y="446" fill="#8a6200" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">RESIDUAL RISK · WHAT NO LAYER REMOVES</text>
+  <text x="132" y="470" fill="#012357" font-size="13" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Prompt injection through the content a unit reads</text>
+  <text x="132" y="486" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace">a unit has nothing to act with — verify every claim, execute none of them</text>
+  <text x="932" y="478" fill="#8a6200" font-size="13" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="end">Units propose · the manager applies</text>
+
+  <!-- ===== Legend ===== -->
+  <line x1="40" y1="528" x2="960" y2="528" stroke="#012357" stroke-opacity="0.12" stroke-width="0.8"/>
+  <text x="40" y="544" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.18em">LEGEND</text>
+
+  <rect x="40" y="560" width="14" height="10" rx="2" fill="#f3f3f1" stroke="#012357" stroke-width="1"/>
+  <text x="60" y="568" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Named layer</text>
+
+  <rect x="180" y="560" width="14" height="10" rx="2" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1"/>
+  <text x="200" y="568" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Weakest layer</text>
+
+  <rect x="320" y="560" width="14" height="10" rx="2" fill="#fac440" fill-opacity="0.07" stroke="#b8860b" stroke-opacity="0.55" stroke-width="1" stroke-dasharray="3,3"/>
+  <text x="340" y="568" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Residual risk — no layer removes it</text>
+
+  <line x1="580" y1="565" x2="608" y2="565" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sl-arrow)"/>
+  <text x="616" y="568" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Risk carried inward, layer by layer</text>
+</svg>
