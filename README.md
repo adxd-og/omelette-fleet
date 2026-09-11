@@ -134,7 +134,7 @@ Zero runtime dependencies. Node core only, no build step.
 - **Node ≥ 20**
 - **Claude Code** (the MCP client that will host the units)
 - **Any subset** of the vendor CLIs, installed and logged in: `agy` (Antigravity, for Gemini), `grok` (Grok Build), `codex` (Codex CLI).
-- **macOS or Linux.** Windows works through WSL; native Windows is not supported yet — CI runs the suite on `windows-latest` as a signal only, and 43 tests fail there today (POSIX path assertions, fake binaries without `.cmd` shims, file modes). Tracked for a later release.
+- **macOS or Linux.** Native Windows is not supported yet — the package runs on Windows through WSL; a native harness (`.cmd` shims for the vendor CLIs, path and file-mode differences) is planned after 1.0. CI does not run on Windows.
 
 A partial fleet is normal and expected. `install` skips units whose CLI is not on `PATH`; the units you do have work exactly the same.
 
