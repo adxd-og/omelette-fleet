@@ -72,7 +72,7 @@ Defaults filled in by `defineUnit`: `version: '0.1.0'`, `serverName: 'omelette-<
 
 ## The path of one call
 
-The picture is the shape of the call; the list under it is the detail the picture leaves out.
+The picture is the shape of the call; the list under it is the detail the picture leaves out. Two things the picture folds away: a client cancellation under `cancel: kill` takes the same hard kill as the timeout, but its response is dropped (a cancelled request gets none) and the captured text lives on only in the spool, reachable through `<unit>_result`; and Gemini's timeout carries a 60 s grace (`HARD_KILL_GRACE_MS`) between `timeoutS` and the kill, so agy's own `--print-timeout` gets to end the run first.
 
 <img src="assets/diagrams/call-path.svg" alt="One tool call from Claude Code through core/unit.mjs and core/spawn.mjs to the vendor CLI and back, with the status feed and result spool written before the response." width="860">
 
