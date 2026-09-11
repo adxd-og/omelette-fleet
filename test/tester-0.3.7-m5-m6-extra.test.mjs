@@ -79,7 +79,7 @@ test('doctor bounds the gh branch-protection probe near 5s and stays silent when
   const r = doctorIn(proj, dir, { PATH: bindir }, 15000);
   const elapsed = Date.now() - start;
   assert.equal(r.status, 0, (r.stdout || '') + (r.stderr || ''));
-  assert.match(r.stdout, /^merge policy {2}session$/m, r.stdout);
+  assert.match(r.stdout, /^merge policy {2}session \(config; no rules file\)$/m, r.stdout);
   assert.doesNotMatch(r.stdout, /PR-gated/, 'a hung gh must never be read as a positive answer');
   assert.equal(readFileSync(join(dir, 'gh.log'), 'utf8').trim(), 'api repos/{owner}/{repo}/branches/main/protection');
   // Long enough that this only passes if the hard-kill timer actually fired

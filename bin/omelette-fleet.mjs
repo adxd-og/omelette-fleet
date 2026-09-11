@@ -53,7 +53,7 @@ import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
+import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
 import { createUnitRuntime, resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -167,7 +167,9 @@ const COMMANDS = {
       'key says when that is not `auto`. While',
       'something is missing it adds ONE `next` line naming the command that',
       'fixes it; none of that ever changes the exit code. A `merge policy`',
-      'line says which sentence the rules file carries — session or pr — and,',
+      'line says which policy the config holds — session or pr — and whether',
+      'the rendered rules file carries that sentence yet (`rules rendered`,',
+      '`config; rules not re-rendered — run rules`, `config; no rules file`);',
       'while it is `session` and this repository looks PR-gated (a pull-request',
       'template, a CODEOWNERS file, or a protected main when `gh` is on PATH),',
       'it ends with one hint. A hint, never a fault.',
@@ -1089,7 +1091,18 @@ function ceilingLine(name, cfg) {
  * questioned — a repository with no template can still be gated by a rule
  * nobody wrote down.
  */
-const PR_GATE_FILES = ['.github/PULL_REQUEST_TEMPLATE.md', 'CODEOWNERS', '.github/CODEOWNERS'];
+/**
+ * EVERY PLACE GITHUB READS ONE OF THE TWO FILES, because a repository is no
+ * less PR-gated for keeping its template where the other half of GitHub's
+ * documentation puts it: a pull-request template at the root, under `.github/`
+ * or under `docs/`, and a `CODEOWNERS` in those same three places.
+ */
+const PR_GATE_FILES = [
+  '.github/PULL_REQUEST_TEMPLATE.md', 'PULL_REQUEST_TEMPLATE.md', 'docs/PULL_REQUEST_TEMPLATE.md',
+  'CODEOWNERS', '.github/CODEOWNERS', 'docs/CODEOWNERS',
+];
+/** …and the multiple-template form: any `.md` file inside this directory is one. */
+const PR_GATE_DIR = '.github/PULL_REQUEST_TEMPLATE';
 const GH_PROTECTION_TIMEOUT_MS = 5000;
 const PR_GATE_HINT = ' — this repository looks PR-gated: consider set workflow.merge=pr';
 
@@ -1098,6 +1111,16 @@ function prGateFile(cwd) {
   for (const rel of PR_GATE_FILES) {
     try { if (statSync(join(cwd, ...rel.split('/'))).isFile()) return rel; }
     catch { /* absent is the normal case */ }
+  }
+  // The directory form is a listing rather than a lookup: the names in it are
+  // the repository's own, and only a regular `.md` among them is a template.
+  const dir = join(cwd, ...PR_GATE_DIR.split('/'));
+  let names = [];
+  try { names = readdirSync(dir).sort(); } catch { return null; }
+  for (const name of names) {
+    if (!/\.md$/i.test(name)) continue;
+    try { if (statSync(join(dir, name)).isFile()) return `${PR_GATE_DIR}/${name}`; }
+    catch { /* vanished between the listing and the stat */ }
   }
   return null;
 }
@@ -1123,14 +1146,48 @@ async function ghBranchProtected({ cwd = process.cwd(), env = process.env } = {}
 }
 
 /**
- * The merge policy as one value, for `doctor` and for `install --rules`.
- * @returns {Promise<string>} `session`, `pr`, or `session` with the hint.
+ * WHICH SENTENCE THE RENDERED RULES FILE ACTUALLY CARRIES — the project's file
+ * first, then the global one, exactly as `contractFor` looks for them, and only
+ * a file of OURS counts: an unmarked file at that path is somebody else's and
+ * says nothing about our policy.
+ *
+ * It is read because the CONFIG alone cannot answer the question an operator is
+ * asking. `workflow.merge` reaches a session only through `omelette-fleet
+ * rules`, so a config that says `pr` beside a file still carrying the `session`
+ * sentence means the session is being told to merge — and that gap is precisely
+ * what the line has to show.
+ *
+ * @returns {string|null} the policy the file spells, or null when no rendered
+ *   file of ours spells one.
+ */
+function renderedMerge({ cwd = process.cwd(), env = process.env } = {}) {
+  for (const scope of [{}, { global: true }]) {
+    const { path } = rulesTarget({ ...scope, cwd, env });
+    let text;
+    try { text = readFileSync(path, 'utf8'); } catch { continue; }
+    if (!parseRulesMarker(text)) continue;
+    const found = Object.entries(MERGE_SENTENCES).find(([, sentence]) => text.includes(sentence));
+    if (found) return found[0];
+  }
+  return null;
+}
+
+/**
+ * The merge policy as one value, for `doctor` and for `install --rules`: the
+ * configured policy, where the rendered file stands relative to it, and the
+ * PR-gate hint when a `session` policy sits in a repository that looks gated.
+ * @returns {Promise<string>} e.g. `session (rules rendered)`, `pr (config;
+ *   rules not re-rendered — run rules)`, `session (config; no rules file)`.
  */
 async function mergePolicy({ cwd = process.cwd(), env = process.env } = {}) {
   const { merge } = workflowSettings(env);
-  if (merge !== 'session') return merge;
+  const rendered = renderedMerge({ cwd, env });
+  const where = rendered === merge ? 'rules rendered'
+    : rendered === null ? 'config; no rules file'
+      : 'config; rules not re-rendered — run rules';
+  if (merge !== 'session') return `${merge} (${where})`;
   const gated = !!prGateFile(cwd) || await ghBranchProtected({ cwd, env });
-  return `session${gated ? PR_GATE_HINT : ''}`;
+  return `session (${where})${gated ? PR_GATE_HINT : ''}`;
 }
 
 // ─── install / uninstall ─────────────────────────────────────────────────────
@@ -2781,9 +2838,9 @@ function cmdSet(argv) {
       if (parts.length !== 3 || parts.some((p) => !p)) { errors.push(`"${a}" is not agents.<agent>.<key>=<value>`); continue; }
       const role = parts[1].toLowerCase();
       const key = parts[2];
-      const schema = AGENT_SETTINGS_SCHEMA[role];
+      const schema = Object.hasOwn(AGENT_SETTINGS_SCHEMA, role) ? AGENT_SETTINGS_SCHEMA[role] : null;
       if (!schema) { errors.push(`unknown agent "${role}" — known agents: ${Object.keys(AGENT_SETTINGS_SCHEMA).join(', ')}`); continue; }
-      if (!(key in schema)) { errors.push(`unknown key "${key}" for agent "${role}" — known keys: ${Object.keys(schema).join(', ')}`); continue; }
+      if (!Object.hasOwn(schema, key)) { errors.push(`unknown key "${key}" for agent "${role}" — known keys: ${Object.keys(schema).join(', ')}`); continue; }
       const c = coerce(schema[key], raw);
       if (!c.ok) { errors.push(`invalid value for agents.${role}.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(schema[key])}`); continue; }
       agentAssignments.push({ role, key, value: c.value });
@@ -2794,7 +2851,7 @@ function cmdSet(argv) {
     if (parts[0].toLowerCase() === 'handoff') {
       if (parts.length !== 2 || parts.some((p) => !p)) { errors.push(`"${a}" is not handoff.<key>=<value>`); continue; }
       const key = parts[1];
-      if (!(key in HANDOFF_SCHEMA)) { errors.push(`unknown key "${key}" for the handoff block — known keys: ${Object.keys(HANDOFF_SCHEMA).join(', ')}`); continue; }
+      if (!Object.hasOwn(HANDOFF_SCHEMA, key)) { errors.push(`unknown key "${key}" for the handoff block — known keys: ${Object.keys(HANDOFF_SCHEMA).join(', ')}`); continue; }
       const c = coerce(HANDOFF_SCHEMA[key], raw);
       if (!c.ok) { errors.push(`invalid value for handoff.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(HANDOFF_SCHEMA[key])}`); continue; }
       handoffAssignments.push({ key, value: c.value });
@@ -2805,7 +2862,7 @@ function cmdSet(argv) {
     if (parts[0].toLowerCase() === 'workflow') {
       if (parts.length !== 2 || parts.some((p) => !p)) { errors.push(`"${a}" is not workflow.<key>=<value>`); continue; }
       const key = parts[1];
-      if (!(key in WORKFLOW_SCHEMA)) { errors.push(`unknown key "${key}" for the workflow block — known keys: ${Object.keys(WORKFLOW_SCHEMA).join(', ')}`); continue; }
+      if (!Object.hasOwn(WORKFLOW_SCHEMA, key)) { errors.push(`unknown key "${key}" for the workflow block — known keys: ${Object.keys(WORKFLOW_SCHEMA).join(', ')}`); continue; }
       const c = coerce(WORKFLOW_SCHEMA[key], raw);
       if (!c.ok) { errors.push(`invalid value for workflow.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(WORKFLOW_SCHEMA[key])}`); continue; }
       workflowAssignments.push({ key, value: c.value });
@@ -2814,7 +2871,13 @@ function cmdSet(argv) {
     // A bare `<key>=<value>` is one of the fleet-wide keys — the ones that
     // describe the fleet itself and sit at the top level beside `units`.
     // Anything else with no dot is a shape mistake and says so.
-    if (parts.length === 1 && parts[0] in SETTINGS_SCHEMA) {
+    //
+    // `Object.hasOwn`, here and at every other schema lookup in this function:
+    // `in` walks the prototype chain, so `constructor`, `toString` and
+    // `hasOwnProperty` all read as known keys and are then coerced against a
+    // function — which refuses the VALUE ("expected a string") for a key that
+    // does not exist at all. A name nobody declared is an unknown name.
+    if (parts.length === 1 && Object.hasOwn(SETTINGS_SCHEMA, parts[0])) {
       const key = parts[0];
       const c = coerce(SETTINGS_SCHEMA[key], raw);
       if (!c.ok) { errors.push(`invalid value for ${key}: ${JSON.stringify(raw)} — expected ${describeSpec(SETTINGS_SCHEMA[key])}`); continue; }
@@ -2824,9 +2887,9 @@ function cmdSet(argv) {
     if (parts.length !== 2 || parts.some((p) => !p)) { errors.push(`"${a}" is not ${SET_SHAPE}`); continue; }
     const name = parts[0].toLowerCase();
     const key = parts[1];
-    if (!UNITS[name]) { errors.push(`unknown unit "${name}" — known units: ${UNIT_ORDER.join(', ')}`); continue; }
+    if (!Object.hasOwn(UNITS, name)) { errors.push(`unknown unit "${name}" — known units: ${UNIT_ORDER.join(', ')}`); continue; }
     const schema = schemaFor(name);
-    if (!(key in schema)) { errors.push(`unknown key "${key}" for unit "${name}" — known keys: ${Object.keys(schema).join(', ')}`); continue; }
+    if (!Object.hasOwn(schema, key)) { errors.push(`unknown key "${key}" for unit "${name}" — known keys: ${Object.keys(schema).join(', ')}`); continue; }
     const c = coerce(schema[key], raw);
     if (!c.ok) { errors.push(`invalid value for ${name}.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(schema[key])}`); continue; }
     assignments.push({ name, key, value: c.value });
@@ -3023,7 +3086,7 @@ const statsCells = (row) => [
   // rather than adding a zero nobody measured.
   row.reported === row.calls
     ? `${row.input} / ${row.output}`
-    : `n/a (${row.reported} of ${row.calls} calls reported)`,
+    : `n/a (${row.reported} of ${row.calls} ${row.calls === 1 ? 'call' : 'calls'} reported)`,
 ];
 
 /**
@@ -3034,19 +3097,41 @@ const statsCells = (row) => [
  * `resultsMaxBytes` left on disk, not the history of the install.
  */
 /**
+ * How far back a relative window may reach: ten years, in either unit. Past
+ * that it is not a window an operator meant — `99999999h` is a digit somebody
+ * held down, and it would resolve to a timestamp outside the range JavaScript
+ * dates cover, which `new Date(...).toISOString()` throws on when `--stats`
+ * prints the window it used.
+ */
+const SINCE_MAX = { h: 87600, d: 3650 };
+
+/**
  * `--since`: a window (`24h`, `7d`) or a date the reader wrote (`2026-09-09`,
  * or a whole ISO timestamp) → the epoch in milliseconds. `null` for a value
  * that is neither, which the caller refuses rather than quietly reporting on
  * everything. A relative window is measured from NOW — `24h` is the last 24
  * hours, not "since midnight".
+ *
+ * A DATE HAS TO BE THE DATE IT SPELLS. `Date.parse` rolls a bad day over —
+ * `2026-02-30` is 2 March and `2026-09-31` is 1 October — so the parse is only
+ * accepted when it round-trips to exactly what was typed: the ISO date for a
+ * bare `YYYY-MM-DD`, the whole ISO timestamp for the longer form. A window
+ * silently shifted by two days is worse than a refusal an operator can fix.
  */
 function parseSince(raw, now = Date.now()) {
   const s = String(raw).trim();
   const rel = /^(\d+)([hd])$/i.exec(s);
-  if (rel) return now - Number(rel[1]) * (rel[2].toLowerCase() === 'h' ? 3600000 : 86400000);
+  if (rel) {
+    const unit = rel[2].toLowerCase();
+    const n = Number(rel[1]);
+    if (!Number.isSafeInteger(n) || n > SINCE_MAX[unit]) return null;
+    return now - n * (unit === 'h' ? 3600000 : 86400000);
+  }
   if (!/^\d{4}-\d\d-\d\d/.test(s)) return null; // a date, or nothing this reads
   const t = Date.parse(s);
-  return Number.isFinite(t) ? t : null;
+  if (!Number.isFinite(t)) return null;
+  const iso = new Date(t).toISOString();
+  return (s.length === 10 ? iso.slice(0, 10) : iso) === s ? t : null;
 }
 
 function statsReport(name, sinceMs) {
@@ -3098,7 +3183,7 @@ function cmdResults(argv) {
     else {
       sinceMs = parseSince(flags.since);
       if (sinceMs === null) {
-        errors.push(`--since "${flags.since}" is neither a window (24h, 7d) nor a date (2026-09-09, or a whole ISO timestamp)`);
+        errors.push(`--since "${flags.since}" is neither a window (24h, 7d — at most ${SINCE_MAX.h}h / ${SINCE_MAX.d}d) nor a date (2026-09-09, or a whole ISO timestamp, spelling a day that exists)`);
       }
     }
   }

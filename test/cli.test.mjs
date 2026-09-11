@@ -2687,7 +2687,7 @@ test('results --stats: an empty spool prints `no results`; an id and --path are 
   // call that reported no tokens at all.
   const rows = cli(['results', '--stats'], { dir }).out.trim().split('\n');
   assert.equal(rows.length, 3);
-  assert.match(rows[1], /^grok +1 +1\/0\/0 +0 +42s +\d+ [KM]?B +n\/a \(0 of 1 calls reported\)$/);
+  assert.match(rows[1], /^grok +1 +1\/0\/0 +0 +42s +\d+ [KM]?B +n\/a \(0 of 1 call reported\)$/);
 
   assert.match(cli(['help', 'results'], { dir }).out, /--stats prints what the spool cost/);
 });
@@ -3347,7 +3347,7 @@ test('doctor prints the merge policy in the per-project block, and a bare projec
   // `gh`, so nothing here can reach a network call.
   const empty = join(dir, 'empty-path'); mkdirSync(empty);
   const out = doctorIn2(proj, dir, { PATH: empty });
-  assert.match(out, /^merge policy {2}session$/m, out);
+  assert.match(out, /^merge policy {2}session \(config; no rules file\)$/m, out);
   const lines = out.split('\n');
   const at = lines.findIndex((l) => l.startsWith('merge policy'));
   assert.ok(at > lines.findIndex((l) => l.startsWith('hooks ')), out);
@@ -3357,7 +3357,7 @@ test('doctor prints the merge policy in the per-project block, and a bare projec
   assert.equal(r.code, 0, r.out + r.err);
 
   assert.equal(cli(['set', 'workflow.merge=pr'], { dir }).code, 0);
-  assert.match(doctorIn2(proj, dir, { PATH: empty }), /^merge policy {2}pr$/m);
+  assert.match(doctorIn2(proj, dir, { PATH: empty }), /^merge policy {2}pr \(config; no rules file\)$/m);
   // The line an operator has to be able to look up is in the help page.
   assert.match(cli(['doctor', '--help'], { dir }).out, /merge policy/);
 });
@@ -3365,7 +3365,7 @@ test('doctor prints the merge policy in the per-project block, and a bare projec
 test('doctor hints at `pr` when the repository looks PR-gated — and only while the policy is `session`', () => {
   const dir = home();
   const empty = join(dir, 'empty-path'); mkdirSync(empty);
-  const HINT = /^merge policy {2}session — this repository looks PR-gated: consider set workflow\.merge=pr$/m;
+  const HINT = /^merge policy {2}session \(config; no rules file\) — this repository looks PR-gated: consider set workflow\.merge=pr$/m;
 
   const tpl = join(dir, 'tpl'); mkdirSync(join(tpl, '.github'), { recursive: true });
   writeFileSync(join(tpl, '.github', 'PULL_REQUEST_TEMPLATE.md'), '## What\n');
@@ -3381,13 +3381,13 @@ test('doctor hints at `pr` when the repository looks PR-gated — and only while
 
   // A directory of that name is not a file, and a project with neither says nothing.
   const dirNamed = join(dir, 'co-dir'); mkdirSync(join(dirNamed, 'CODEOWNERS'), { recursive: true });
-  assert.match(doctorIn2(dirNamed, dir, { PATH: empty }), /^merge policy {2}session$/m);
+  assert.match(doctorIn2(dirNamed, dir, { PATH: empty }), /^merge policy {2}session \(config; no rules file\)$/m);
 
   // `pr` is never questioned: a repository with no template can still be gated
   // by a rule nobody wrote down, and the hint is only ever about `session`.
   assert.equal(cli(['set', 'workflow.merge=pr'], { dir }).code, 0);
   const out = doctorIn2(tpl, dir, { PATH: empty });
-  assert.match(out, /^merge policy {2}pr$/m, out);
+  assert.match(out, /^merge policy {2}pr \(config; no rules file\)$/m, out);
   assert.doesNotMatch(out, /PR-gated/);
 });
 
@@ -3397,20 +3397,20 @@ test('doctor asks `gh` about branch protection only when nothing local said so, 
   const empty = join(dir, 'empty-path'); mkdirSync(empty);
 
   // No gh on PATH: no call at all, and no hint from that source.
-  assert.match(doctorIn2(proj, dir, { PATH: empty }), /^merge policy {2}session$/m);
+  assert.match(doctorIn2(proj, dir, { PATH: empty }), /^merge policy {2}session \(config; no rules file\)$/m);
   assert.equal(existsSync(join(dir, 'gh.log')), false, 'nothing was spawned');
 
   // gh present and answering non-zero (no repo, no permission, a 404): still no
   // hint — a failure says nothing, and it is asked exactly once, with the
   // documented endpoint.
   const failing = fakeGh(dir, { exitCode: 1, name: 'gh-404' });
-  assert.match(doctorIn2(proj, dir, { PATH: failing }), /^merge policy {2}session$/m);
+  assert.match(doctorIn2(proj, dir, { PATH: failing }), /^merge policy {2}session \(config; no rules file\)$/m);
   assert.equal(readFileSync(join(dir, 'gh.log'), 'utf8').trim(), 'api repos/{owner}/{repo}/branches/main/protection');
 
   // gh answering 0: the hint, from the network signal alone.
   const ok = fakeGh(dir, { exitCode: 0, name: 'gh-200' });
   assert.match(doctorIn2(proj, dir, { PATH: ok }),
-    /^merge policy {2}session — this repository looks PR-gated: consider set workflow\.merge=pr$/m);
+    /^merge policy {2}session \(config; no rules file\) — this repository looks PR-gated: consider set workflow\.merge=pr$/m);
 
   // A local signal answers first and gh is never asked.
   rmSync(join(dir, 'gh.log'));
@@ -3422,7 +3422,7 @@ test('doctor asks `gh` about branch protection only when nothing local said so, 
   // …and under a `pr` policy nothing is asked either.
   rmSync(join(proj, '.github', 'PULL_REQUEST_TEMPLATE.md'));
   assert.equal(cli(['set', 'workflow.merge=pr'], { dir }).code, 0);
-  assert.match(doctorIn2(proj, dir, { PATH: ok }), /^merge policy {2}pr$/m);
+  assert.match(doctorIn2(proj, dir, { PATH: ok }), /^merge policy {2}pr \(config; no rules file\)$/m);
   assert.equal(existsSync(join(dir, 'gh.log')), false, 'a `pr` policy asks nothing');
 });
 
@@ -3433,7 +3433,7 @@ test('install --rules prints the merge policy after the project files, hint and 
   const env = { PATH: join(dir, 'empty'), CODEX_BIN: fake };
   const r = cliIn(proj, dir, ['install', '--rules', '--dry-run', '--units', 'codex'], env);
   assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /^merge policy: session$/m, r.out);
+  assert.match(r.out, /^merge policy: session \(config; no rules file\)$/m, r.out);
   const lines = r.out.split('\n');
   assert.ok(
     lines.findIndex((l) => l.startsWith('merge policy:')) > lines.findIndex((l) => l.includes('omelette-fleet.md')),
@@ -3444,11 +3444,11 @@ test('install --rules prints the merge policy after the project files, hint and 
   mkdirSync(join(proj, '.github'), { recursive: true });
   writeFileSync(join(proj, '.github', 'PULL_REQUEST_TEMPLATE.md'), '## What\n');
   assert.match(cliIn(proj, dir, ['install', '--rules', '--dry-run', '--units', 'codex'], env).out,
-    /^merge policy: session — this repository looks PR-gated: consider set workflow\.merge=pr$/m);
+    /^merge policy: session \(config; no rules file\) — this repository looks PR-gated: consider set workflow\.merge=pr$/m);
 
   // …and `pr` is printed as it is.
   assert.equal(cli(['set', 'workflow.merge=pr'], { dir }).code, 0);
-  assert.match(cliIn(proj, dir, ['install', '--rules', '--dry-run', '--units', 'codex'], env).out, /^merge policy: pr$/m);
+  assert.match(cliIn(proj, dir, ['install', '--rules', '--dry-run', '--units', 'codex'], env).out, /^merge policy: pr \(config; no rules file\)$/m);
 
   // A plain `install` writes no rules file and says nothing about the policy.
   assert.doesNotMatch(cliIn(proj, dir, ['install', '--dry-run', '--units', 'codex'], env).out, /merge policy/);
