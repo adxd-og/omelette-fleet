@@ -97,33 +97,7 @@ No faults in units that are both enabled and registered.
 
 ## How it fits together
 
-```mermaid
-graph LR
-  CC["Claude Code (MCP client)"]
-
-  subgraph FLEET["one stdio MCP server per unit"]
-    SG["omelette-gemini"]
-    SK["omelette-grok"]
-    SX["omelette-codex"]
-  end
-
-  AGY["agy CLI"]
-  GRK["grok CLI"]
-  CDX["codex CLI"]
-  SUB["your Gemini / xAI / ChatGPT subscriptions"]
-
-  CFG["fleet.config.json + OMELETTE_ALLOW_WRITE ceiling"]
-  FEED["status-*.json + fleet-log.ndjson"]
-  READER["menu-bar app / tail -f"]
-
-  CC -->|stdio| FLEET
-  SG -->|spawn| AGY --> SUB
-  SK -->|spawn| GRK --> SUB
-  SX -->|spawn| CDX --> SUB
-  CFG -. "re-read per call" .-> FLEET
-  FLEET -. "writes" .-> FEED
-  FEED --> READER
-```
+<img src="docs/assets/diagrams/fleet-topology.svg" alt="Claude Code calls three stdio MCP servers, each spawning its vendor CLI; the servers read config from and write the status feed and result spool to the fleet home, and return text only." width="880">
 
 Plug Google Gemini, xAI Grok and OpenAI Codex into Claude Code as MCP **units** — read-only research and code-review peers. Each unit is its own stdio MCP server that spawns the vendor's own CLI headless (`agy`, `grok`, `codex`), so every call rides the subscription you already pay for. The child environment is built from a small allowlist rather than inherited, and API keys that would silently switch a CLI to metered billing are scrubbed on top of it. Claude Code stays the manager: **units propose, the manager applies.** A single config file with a two-key write ceiling keeps a unit from becoming a foot-gun, and a status feed reports what each unit is doing right now.
 
