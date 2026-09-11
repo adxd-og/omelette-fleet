@@ -2,6 +2,19 @@
 
 A unit is one vendor CLI exposed as one MCP server. Adding one is three files and a test. The runtime already owns everything that is not vendor-specific, so an adapter that reaches for `process.stdout`, `readFileSync` on the config, or `child_process` directly is doing the runtime's job.
 
+| Question | Where |
+|---|---|
+| What does the runtime handle for me vs what do I write myself? | [What the runtime does for you vs what the adapter owns](#what-the-runtime-does-for-you-vs-what-the-adapter-owns) |
+| How do I write the model catalog file? | [1. `units/<unit>/models.js`](#1-unitsunitmodelsjs) |
+| How do I write the adapter itself? | [2. `units/<unit>/adapter.mjs`](#2-unitsunitadaptermjs) |
+| What do I do when a run's output got capped mid-answer? | [Handle `capped`](#handle-capped) |
+| What is a `local` tool, and when should a tool be one? | [The `local` kind](#the-local-kind) |
+| How do progress notifications and cancellation work? | [Progress and cancellation](#progress-and-cancellation) |
+| Why prefer a streaming CLI format over whole-document JSON? | [Prefer a streaming output format](#prefer-a-streaming-output-format) |
+| What does the server entrypoint file need to contain? | [3. `servers/<unit>.mjs`](#3-serversunitmjs) |
+| How do I test a unit without the real vendor CLI? | [4. `test/<unit>.test.mjs` — the fake-binary pattern](#4-testunittestmjs--the-fake-binary-pattern) |
+| What's the full checklist before a new unit ships? | [Checklist](#checklist) |
+
 ## What the runtime does for you vs what the adapter owns
 
 | The runtime (`core/`) | The adapter (`units/<unit>/`) |
