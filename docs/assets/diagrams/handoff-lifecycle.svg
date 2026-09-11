@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1000 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="handoff-lifecycle-title handoff-lifecycle-desc">
+  <title id="handoff-lifecycle-title">The handoff lifecycle</title>
+  <desc id="handoff-lifecycle-desc">State machine for a session that keeps a ledger under .omelette: below the threshold until PostToolUse measures the context at or past 90 per cent of the window, then nudged with one line asking for a ## Handoff block; a Stop with no fresh handoff is refused once, and a second Stop ends the turn anyway; once the block is appended the state is handoff written; a compaction stamps the re-read line and appends its summary to the ledger; and the SessionStart hook matched on compact prints the last handoff block back into the fresh context, which starts below the threshold again.</desc>
+  <defs>
+    <marker id="hl-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4a6187"/></marker>
+    <marker id="hl-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#b8860b"/></marker>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#f3f3f1"/>
+
+  <!-- ===== Transitions (drawn before the states) ===== -->
+  <!-- start -> below threshold -->
+  <line x1="78" y1="200" x2="112" y2="200" stroke="#4a6187" stroke-width="1.2" marker-end="url(#hl-arrow)"/>
+  <!-- below threshold -> nudged -->
+  <line x1="280" y1="200" x2="400" y2="200" stroke="#4a6187" stroke-width="1.2" marker-end="url(#hl-arrow)"/>
+  <!-- nudged -> gated once -->
+  <line x1="568" y1="200" x2="688" y2="200" stroke="#4a6187" stroke-width="1.2" marker-end="url(#hl-arrow)"/>
+  <!-- gated once: a second stop ends the turn (self-loop above) -->
+  <path d="M 732,160 V 128 Q 732,120 740,120 H 804 Q 812,120 812,128 V 160" fill="none" stroke="#4a6187" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#hl-arrow)"/>
+  <!-- gated once -> handoff written -->
+  <line x1="772" y1="240" x2="772" y2="320" stroke="#4a6187" stroke-width="1.2" marker-end="url(#hl-arrow)"/>
+  <!-- nudged -> handoff written (written before any Stop) -->
+  <path d="M 484,240 V 344 Q 484,352 492,352 H 688" fill="none" stroke="#b8860b" stroke-width="1.6" marker-end="url(#hl-arrow-accent)"/>
+  <!-- handoff written -> compacted -->
+  <line x1="688" y1="376" x2="280" y2="376" stroke="#4a6187" stroke-width="1.2" marker-end="url(#hl-arrow)"/>
+  <!-- compacted -> below threshold, in the fresh context -->
+  <line x1="196" y1="320" x2="196" y2="240" stroke="#4a6187" stroke-width="1.2" marker-end="url(#hl-arrow)"/>
+
+  <!-- ===== Transition labels ===== -->
+  <rect x="702" y="98" width="140" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="772" y="107" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">2ND STOP · TURN ENDS</text>
+
+  <rect x="288" y="180" width="104" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="340" y="189" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">POSTTOOLUSE ≥ 90%</text>
+
+  <rect x="576" y="180" width="104" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="628" y="189" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STOP · NO HANDOFF</text>
+
+  <rect x="782" y="268" width="80" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="822" y="277" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">## HANDOFF</text>
+
+  <rect x="548" y="332" width="80" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="588" y="341" fill="#8a6200" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">## HANDOFF</text>
+
+  <rect x="410" y="386" width="148" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="484" y="395" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">PRECOMPACT · POSTCOMPACT</text>
+
+  <rect x="206" y="268" width="140" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="276" y="277" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">SESSIONSTART · COMPACT</text>
+
+  <!-- ===== States ===== -->
+  <circle cx="72" cy="200" r="6" fill="#012357"/>
+
+  <rect x="112" y="160" width="168" height="80" rx="8" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <rect x="120" y="166" width="40" height="12" rx="2" fill="none" stroke="#012357" stroke-opacity="0.40" stroke-width="0.8"/>
+  <text x="140" y="175" fill="#012357" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STATE</text>
+  <text x="196" y="204" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Below threshold</text>
+  <text x="196" y="220" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">context under 90%</text>
+  <text x="196" y="234" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the guard is silent</text>
+
+  <rect x="400" y="160" width="168" height="80" rx="8" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <rect x="408" y="166" width="40" height="12" rx="2" fill="none" stroke="#012357" stroke-opacity="0.40" stroke-width="0.8"/>
+  <text x="428" y="175" fill="#012357" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STATE</text>
+  <text x="484" y="204" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Nudged</text>
+  <text x="484" y="220" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">one line asks for a</text>
+  <text x="484" y="234" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">## Handoff block</text>
+
+  <rect x="688" y="160" width="168" height="80" rx="8" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <rect x="696" y="166" width="40" height="12" rx="2" fill="none" stroke="#012357" stroke-opacity="0.40" stroke-width="0.8"/>
+  <text x="716" y="175" fill="#012357" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STATE</text>
+  <text x="772" y="204" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Gated once</text>
+  <text x="772" y="220" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Stop refused,</text>
+  <text x="772" y="234" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">with the reason</text>
+
+  <rect x="688" y="320" width="168" height="80" rx="8" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1.4"/>
+  <rect x="696" y="326" width="40" height="12" rx="2" fill="none" stroke="#b8860b" stroke-opacity="0.55" stroke-width="0.8"/>
+  <text x="716" y="335" fill="#8a6200" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STATE</text>
+  <text x="772" y="364" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Handoff written</text>
+  <text x="772" y="380" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">appended to</text>
+  <text x="772" y="394" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">.omelette/ledger-*.md</text>
+
+  <rect x="112" y="320" width="168" height="80" rx="8" fill="#012357" fill-opacity="0.05" stroke="#4a6187" stroke-width="1"/>
+  <rect x="120" y="326" width="40" height="12" rx="2" fill="none" stroke="#4a6187" stroke-opacity="0.50" stroke-width="0.8"/>
+  <text x="140" y="335" fill="#4a6187" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STATE</text>
+  <text x="196" y="364" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Compacted</text>
+  <text x="196" y="380" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">re-read stamp +</text>
+  <text x="196" y="394" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">compaction summary</text>
+
+  <!-- ===== Legend ===== -->
+  <line x1="40" y1="440" x2="960" y2="440" stroke="#012357" stroke-opacity="0.12" stroke-width="0.8"/>
+  <text x="40" y="456" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.18em">LEGEND</text>
+
+  <circle cx="47" cy="477" r="5" fill="#012357"/>
+  <text x="60" y="480" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Start</text>
+
+  <rect x="140" y="472" width="14" height="10" rx="2" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="160" y="480" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">State</text>
+
+  <rect x="240" y="472" width="14" height="10" rx="2" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1"/>
+  <text x="260" y="480" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">The block is written</text>
+
+  <line x1="420" y1="477" x2="448" y2="477" stroke="#4a6187" stroke-width="1.2" marker-end="url(#hl-arrow)"/>
+  <text x="456" y="480" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Transition (hook event · guard)</text>
+
+  <line x1="700" y1="477" x2="728" y2="477" stroke="#4a6187" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#hl-arrow)"/>
+  <text x="736" y="480" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Gate spent — it holds one turn</text>
+</svg>

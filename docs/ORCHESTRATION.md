@@ -111,6 +111,8 @@ Two practical rules that follow: give each delegate one job and the context to d
 
 A long plan outlives the context it was made in. Compaction is the obvious way that happens, but it is not the only one: an interrupted evening, a session that had to be restarted, a hand-off to a colleague. Everything the orchestrator knows and never wrote down is lost at that moment — and what is lost first is exactly what is most expensive to recover, the *reasons*. The code is still in git. Why option B was rejected is not.
 
+<img src="../assets/diagrams/handoff-lifecycle.svg" alt="The handoff lifecycle of one session: below threshold, nudged at 90 per cent, gated once at Stop, handoff written, compacted, and back via the SessionStart print." width="880">
+
 So: **keep a ledger file for every plan, from the first step.**
 
 - One line per event, appended as it happens — not reconstructed afterwards from memory that has already been compacted.
