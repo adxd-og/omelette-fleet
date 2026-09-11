@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1000 872" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="config-resolution-title config-resolution-desc">
+  <title id="config-resolution-title">How one config key resolves</title>
+  <desc id="config-resolution-desc">Flowchart for resolving one config key of one unit: the unit's environment variable wins if it is set, then the units block of fleet.config.json, then the file's top-level defaults, and otherwise the adapter's built-in value or the schema default; the resolved value carries the layer it came from. A mode asking for workspace-write then passes the ceiling, which can only narrow: without the unit named in OMELETTE_ALLOW_WRITE the effective mode is clamped to read-only with a warning.</desc>
+  <defs>
+    <marker id="cr-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4a6187"/></marker>
+    <marker id="cr-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#b8860b"/></marker>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#f3f3f1"/>
+
+  <!-- ===== Arrows (drawn before the nodes) ===== -->
+  <line x1="232" y1="96" x2="232" y2="112" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+  <line x1="232" y1="192" x2="232" y2="216" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+  <line x1="232" y1="296" x2="232" y2="320" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+  <line x1="232" y1="400" x2="232" y2="448" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+
+  <path d="M 344,152 H 768 Q 776,152 776,160 V 444" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+  <path d="M 344,256 H 688 Q 696,256 696,264 V 444" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+  <path d="M 344,360 H 608 Q 616,360 616,368 V 444" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+  <line x1="328" y1="476" x2="560" y2="476" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+
+  <line x1="720" y1="508" x2="720" y2="556" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+  <line x1="580" y1="608" x2="400" y2="608" stroke="#b8860b" stroke-width="1.6" marker-end="url(#cr-arrow-accent)"/>
+  <line x1="720" y1="660" x2="720" y2="696" stroke="#4a6187" stroke-width="1.2" marker-end="url(#cr-arrow)"/>
+
+  <!-- ===== Arrow labels ===== -->
+  <rect x="484" y="132" width="112" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="540" y="141" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">YES → env:&lt;NAME&gt;</text>
+
+  <rect x="460" y="236" width="76" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="498" y="245" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">YES → file</text>
+
+  <rect x="396" y="340" width="124" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="458" y="349" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">YES → file:defaults</text>
+
+  <rect x="242" y="198" width="32" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="258" y="207" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+
+  <rect x="242" y="302" width="32" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="258" y="311" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+
+  <rect x="242" y="410" width="32" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="258" y="419" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+
+  <rect x="400" y="456" width="88" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="444" y="465" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">→ default</text>
+
+  <rect x="470" y="588" width="40" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="490" y="597" fill="#8a6200" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">YES</text>
+
+  <rect x="730" y="668" width="32" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="746" y="677" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+
+  <!-- ===== Nodes ===== -->
+  <!-- Start -->
+  <rect x="152" y="48" width="160" height="48" rx="24" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="232" y="76" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">One key, one unit</text>
+
+  <!-- D1: the environment -->
+  <polygon points="232,112 344,152 232,192 120,152" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="232" y="146" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Env override?</text>
+  <text x="232" y="160" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">AGY_* · GROK_* · CODEX_*</text>
+
+  <!-- D2: units.<unit> -->
+  <polygon points="232,216 344,256 232,296 120,256" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="232" y="250" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Unit block?</text>
+  <text x="232" y="264" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">units.&lt;unit&gt;</text>
+
+  <!-- D3: top-level defaults -->
+  <polygon points="232,320 344,360 232,400 120,360" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="232" y="354" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Top level?</text>
+  <text x="232" y="368" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">defaults</text>
+
+  <!-- R4: the floor -->
+  <rect x="152" y="448" width="176" height="56" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="240" y="472" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Built-in default</text>
+  <text x="240" y="488" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">adapter, else the schema</text>
+
+  <!-- R5: the resolved value -->
+  <rect x="560" y="444" width="320" height="64" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="720" y="466" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Resolved value</text>
+  <text x="720" y="482" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the layer it came from is recorded</text>
+  <text x="720" y="498" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">default · file:defaults · file · env:&lt;NAME&gt;</text>
+
+  <!-- D5: the ceiling (focal) -->
+  <polygon points="720,556 880,608 720,660 560,608" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1.4"/>
+  <text x="720" y="602" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Past the ceiling?</text>
+  <text x="720" y="620" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">mode=workspace-write · gate closed</text>
+
+  <!-- E2: clamped -->
+  <rect x="160" y="576" width="240" height="64" rx="32" fill="#012357" fill-opacity="0.05" stroke="#4a6187" stroke-width="1"/>
+  <text x="280" y="600" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Clamped to read-only</text>
+  <text x="280" y="616" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">OMELETTE_ALLOW_WRITE closed</text>
+  <text x="280" y="632" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">+ a warning on stderr</text>
+
+  <!-- E1: the effective value -->
+  <rect x="620" y="696" width="200" height="56" rx="28" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="720" y="720" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Effective value</text>
+  <text x="720" y="736" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">what the unit gets</text>
+
+  <!-- ===== Legend ===== -->
+  <line x1="40" y1="784" x2="960" y2="784" stroke="#012357" stroke-opacity="0.12" stroke-width="0.8"/>
+  <text x="40" y="800" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.18em">LEGEND · SHAPE CARRIES TYPE</text>
+
+  <rect x="40" y="816" width="24" height="12" rx="6" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="72" y="826" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Start / end (oval)</text>
+
+  <rect x="220" y="816" width="24" height="12" rx="2" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="252" y="826" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Step (rectangle)</text>
+
+  <polygon points="400,822 412,816 424,822 412,828" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="432" y="826" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Decision (diamond)</text>
+
+  <polygon points="600,822 612,816 624,822 612,828" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1"/>
+  <text x="632" y="826" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">The ceiling</text>
+
+  <line x1="740" y1="822" x2="768" y2="822" stroke="#b8860b" stroke-width="1.6" marker-end="url(#cr-arrow-accent)"/>
+  <text x="776" y="826" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Narrowed, never widened</text>
+</svg>
