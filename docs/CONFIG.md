@@ -2,6 +2,33 @@
 
 One file, read fresh on every call, and it can only ever *narrow* what a unit may do.
 
+| Question | Where |
+|---|---|
+| Where does the config file live? | [Location](#location) |
+| What does the whole config file look like? | [Shape](#shape) |
+| What do `contract` and `updateCheck` control? | [Top-level settings](#top-level-settings) |
+| How do I configure the coder and tester sub-agents? | [Agent settings](#agent-settings) |
+| How do I configure the auto-handoff threshold and window? | [Handoff settings](#handoff-settings) |
+| How do I set whether the session merges or opens a PR? | [Workflow settings](#workflow-settings) |
+| What config keys exist and what do they default to? | [Keys](#keys) |
+| What extra keys does one unit have, and what's its built-in default? | [Unit-specific extras and built-in overrides](#unit-specific-extras-and-built-in-overrides) |
+| Which config keys does a given unit actually read? | [Which unit actually uses which key](#which-unit-actually-uses-which-key) |
+| In what order do env, file and defaults get resolved? | [Resolution order](#resolution-order) |
+| How do I change a config value from the command line? | [Editing with `set`](#editing-with-set) |
+| Which environment variables override which config keys? | [Environment overrides](#environment-overrides) |
+| How does the self-update check work, and how do I disable it? | [Update check](#update-check) |
+| How does the write ceiling show up in resolved config? | [The ceiling, in config terms](#the-ceiling-in-config-terms) |
+| What does `doctor --probe-sandbox` actually do? | [The sandbox probe (`doctor --probe-sandbox`)](#the-sandbox-probe-doctor---probe-sandbox) |
+| Does a config change need a restart to take effect? | [Live reload](#live-reload) |
+| What happens when I disable a unit? | [`enabled: false`](#enabled-false) |
+| What happens to a run when the client cancels it? | [Cancellation](#cancellation) |
+| How does `timeoutS` behave differently per unit? | [How `timeoutS` differs per unit](#how-timeouts-differs-per-unit) |
+| What client-side timeouts can cut a call short? | [Client timeouts](#client-timeouts) |
+| What does `outputCap` actually bound? | [What `outputCap` does](#what-outputcap-does) |
+| What does the result spool store, and for how long? | [What the result spool keeps](#what-the-result-spool-keeps) |
+| What does a spooled result's `usage:` line mean? | [The `usage:` line](#the-usage-line) |
+| How do I see what the fleet has cost so far? | [`omelette-fleet results --stats`](#omelette-fleet-results---stats-unit---since-when) |
+
 ## Location
 
 ```
