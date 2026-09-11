@@ -33,7 +33,8 @@ function slug(text) {
 function headingIds(md) {
   const seen = new Map();
   const ids = new Set();
-  for (const m of md.matchAll(/^#{1,6}[ \t]+(.+?)\s*#*\s*$/gm)) {
+  const prose = md.replace(/^```[\s\S]*?^```[ \t]*$/gm, ''); // a heading inside a code fence is not a heading
+  for (const m of prose.matchAll(/^#{1,6}[ \t]+(.+?)\s*#*\s*$/gm)) {
     let id = slug(m[1]);
     if (seen.has(id)) { seen.set(id, seen.get(id) + 1); id = `${id}-${seen.get(id)}`; } else seen.set(id, 0);
     ids.add(id);
@@ -80,7 +81,7 @@ test('README maps the docs set: every row points at a file that exists', () => {
 test('every diagram the docs embed is a standalone offline SVG, and every shipped SVG is embedded', () => {
   const embedded = new Set();
   for (const rel of DOCS) {
-    for (const m of read(rel).matchAll(/<img src="([^"]+\.svg)"/g)) {
+    for (const m of read(rel).matchAll(/<img\b[^>]*?\bsrc="([^"]+\.svg)"/g)) {
       if (/^[a-z]+:/.test(m[1])) continue; // a badge from a remote host is not a diagram
       const abs = path.resolve(ROOT, path.dirname(rel), m[1]);
       assert.ok(fs.existsSync(abs), `${rel} embeds ${m[1]}, which exists`);
@@ -97,7 +98,8 @@ test('every diagram the docs embed is a standalone offline SVG, and every shippe
     assert.match(svg, /<svg[^>]*\sxmlns="http:\/\/www\.w3\.org\/2000\/svg"/, `${rel} declares the SVG namespace`);
     assert.match(svg, /<svg[^>]*\sviewBox="/, `${rel} has a viewBox`);
     assert.doesNotMatch(svg, /@import/, `${rel} imports no font`);
-    const urls = [...svg.matchAll(/https?:\/\/[^"' )]+/g)].map((m) => m[0]).filter((u) => !u.startsWith('http://www.w3.org/'));
+    const urls = [...svg.matchAll(/https?:\/\/[^"' )]+/g)].map((m) => m[0]).filter((u) => u !== 'http://www.w3.org/2000/svg' && u !== 'http://www.w3.org/1999/xlink');
     assert.deepEqual(urls, [], `${rel} references no external URL`);
+    assert.doesNotMatch(svg, /<(script|foreignObject|link|iframe|image)\b/i, `${rel} carries no active or external content`);
   }
 });
