@@ -72,6 +72,10 @@ Defaults filled in by `defineUnit`: `version: '0.1.0'`, `serverName: 'omelette-<
 
 ## The path of one call
 
+The picture is the shape of the call; the list under it is the detail the picture leaves out.
+
+<img src="../assets/diagrams/call-path.svg" alt="One tool call from Claude Code through core/unit.mjs and core/spawn.mjs to the vendor CLI and back, with the status feed and result spool written before the response." width="860">
+
 1. **Client → transport.** Claude Code writes a newline-delimited JSON-RPC frame to the server's stdin. `createLineSplitter` reassembles frames across arbitrary chunk boundaries; a frame that is not JSON is dropped without killing the loop, and so is any single frame that passes 16 MiB without a newline — it is dropped with one stderr line rather than growing the buffer until the process dies.
 2. **`tools/call` → runtime.** `createHandler` routes to `callTool(name, args)`. An unknown tool name returns a clean error result.
 3. **Catalog short-circuit.** If the tool's kind is `catalog`, the rendered catalog is returned. No config, no spawn, no status entry.
