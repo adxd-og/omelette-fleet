@@ -120,7 +120,7 @@ test('contractFor: `contract` overrides the lookup in both directions, from the 
 test('the short contract is ONE line naming the rules file, and the unit keeps its own line either way', () => {
   assert.equal(
     SHORT_CONTRACT,
-    'omelette-fleet: read-only unit; the operating model is in .claude/rules/omelette-fleet.md — the units propose, you apply.',
+    'omelette-fleet: read-only unit; the operating model is in your rules file (.claude/rules/omelette-fleet.md, project or global) — the units propose, you apply.',
   );
   assert.equal(SHORT_CONTRACT.includes('\n'), false, 'one line');
   assert.ok(SHORT_CONTRACT.length * 4 < FLEET_CONTRACT.length, 'the whole point of it is that it is short');

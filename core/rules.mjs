@@ -49,7 +49,7 @@
  * change. The marker stays the proof of ownership; a changed value simply makes
  * the content differ, and the file is rewritten at the same version.
  */
-import { closeSync, openSync, readFileSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -115,7 +115,7 @@ export const FLEET_CONTRACT = [
  * applies. Everything else is one `.claude/rules/omelette-fleet.md` away.
  */
 export const SHORT_CONTRACT =
-  'omelette-fleet: read-only unit; the operating model is in .claude/rules/omelette-fleet.md — the units propose, you apply.';
+  'omelette-fleet: read-only unit; the operating model is in your rules file (.claude/rules/omelette-fleet.md, project or global) — the units propose, you apply.';
 
 /**
  * How much of a candidate rules file the marker test reads. The marker is
@@ -126,18 +126,36 @@ export const SHORT_CONTRACT =
  */
 const CONTRACT_READ_BYTES = 8192;
 
-/** Is there a rules file of OURS at this path? Never throws; absent is the normal answer. */
+/** O_NONBLOCK where the platform defines it, 0 where it does not. */
+const NONBLOCK = constants.O_NONBLOCK || 0;
+
+/**
+ * Is there a rules file of OURS at this path? Never throws; absent is the
+ * normal answer.
+ *
+ * A REGULAR FILE OR NOTHING, and the open must never wait. This runs at the
+ * start of every unit server, before it can serve anything, so a path that is
+ * not a file has to be refused rather than read: `open()` on a FIFO BLOCKS
+ * until somebody opens the other end, and a server that hangs there never
+ * answers `initialize` at all. lstat first, so a symlink at that path is seen
+ * as a symlink (a link to a FIFO is exactly the case a plain stat would miss),
+ * O_NONBLOCK on the open against the race between the two syscalls, and fstat
+ * on the descriptor actually opened — the same three steps the guard's own
+ * bounded reader takes, for the same reason.
+ */
 function marked(path) {
   let fd = null;
   try {
-    fd = openSync(path, 'r');
+    if (!lstatSync(path).isFile()) return false;
+    fd = openSync(path, constants.O_RDONLY | NONBLOCK);
+    if (!fstatSync(fd).isFile()) return false;
     const buf = Buffer.alloc(CONTRACT_READ_BYTES);
     const n = readSync(fd, buf, 0, CONTRACT_READ_BYTES, 0);
     return parseRulesMarker(buf.toString('utf8', 0, n)) !== null;
   } catch {
-    // Absent, a directory, unreadable, a device that will not answer a read:
-    // all of them mean "this session has no rules file of ours", which is the
-    // state the full contract exists for.
+    // Absent, a directory, a symlink, a device, unreadable: all of them mean
+    // "this session has no rules file of ours", which is the state the full
+    // contract exists for.
     return false;
   } finally {
     if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
@@ -181,10 +199,16 @@ export function contractFor({ cwd = process.cwd(), env = process.env, mode } = {
  * options are `contractFor`'s, forwarded whole: which contract is sent is
  * decided in exactly one place, and a caller that passes nothing gets the
  * answer for this process's own directory and environment.
+ *
+ * `contract` is that answer ALREADY RESOLVED, for the caller that has one —
+ * `startUnit` resolves it to log which contract this server sends, and the line
+ * it logged and the text it sends must be the same decision rather than two
+ * reads of a file that can change between them.
  */
 export function unitInstructions(unit, o = {}) {
   const own = unit && typeof unit.instructions === 'string' ? unit.instructions.trim() : '';
-  const { text } = contractFor(o);
+  const given = isObj(o) && isObj(o.contract) && typeof o.contract.text === 'string' ? o.contract : null;
+  const { text } = given || contractFor(o);
   return own ? `${text}\n\n${own}` : text;
 }
 

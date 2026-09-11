@@ -537,8 +537,9 @@ export function startUnit(unit, opts = {}) {
   // that carries the rendered rules file already has everything the full
   // contract says — and more — in the same context. Resolved ONCE, here, like
   // `bin`: a rules file written later reaches the next session, which is when
-  // the rules file itself starts applying too. The same options object goes
-  // to the log line and to the instructions, so the two cannot disagree.
+  // the rules file itself starts applying too. The RESOLVED answer goes to the
+  // log line and to the instructions — one read of the file, so a rules file
+  // that appears or vanishes between them cannot make the two disagree.
   const where = { cwd: process.cwd(), env: opts.env || process.env };
   const contract = contractFor(where);
   rt.log(
@@ -561,7 +562,8 @@ export function startUnit(unit, opts = {}) {
   }).then(() => {});
   serve({
     serverInfo: { name: unit.serverName, version: unit.version },
-    instructions: unitInstructions(unit, where),
+    // The contract resolved above, not a second read of the same file.
+    instructions: unitInstructions(unit, { ...where, contract }),
     tools: rt.tools,
     callTool: rt.callTool,
     log: rt.log,
