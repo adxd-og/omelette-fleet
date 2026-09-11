@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -309,6 +309,38 @@ test('F: a fenced summary that does fit is kept whole, closed, and still inside 
   assert.match(written, /\[… truncated\]\n```$/, 'the closer goes after the marker, so a cut inside a fence still ends inside it');
 });
 
+test('F: a body that fits whole is kept whole — the marker is reserved only when there is a cut', () => {
+  const g = guard();
+  // 8178 bytes, well inside the cap: reserving a truncation marker that is
+  // never written would have dropped the first line for want of 16 bytes and
+  // left the whole summary as that marker.
+  const body = `${'x'.repeat(8176)}\ny`;
+  assert.equal(Buffer.byteLength(body, 'utf8'), 8178, 'the fixture is the size the case is about');
+  const p = guardProject(g, 'budget-whole', { lines: [boundaryLine(), summaryLine(body)] });
+  assert.equal(fire(g, postCompact(p)).code, 0);
+  assert.equal(bodyOf(p), body, 'every line of a summary that fits belongs in the ledger');
+});
+
+test('F: the last body that fits is kept whole, and one byte more is cut — inside 8 KiB either way', () => {
+  const g = guard();
+  // The body and the newline that follows it are what the ledger gains, so the
+  // largest body that fits the 8 KiB budget is 8191 bytes long.
+  const fits = `${'x'.repeat(8189)}\ny`;
+  const over = `${'x'.repeat(8190)}\ny`;
+  assert.equal(Buffer.byteLength(fits, 'utf8'), 8191);
+  assert.equal(Buffer.byteLength(over, 'utf8'), 8192);
+
+  const edge = guardProject(g, 'budget-edge', { lines: [boundaryLine(), summaryLine(fits)] });
+  assert.equal(fire(g, postCompact(edge)).code, 0);
+  assert.equal(bodyOf(edge), fits, 'the body at the cap is kept whole');
+
+  const cut = guardProject(g, 'budget-over', { lines: [boundaryLine(), summaryLine(over)] });
+  assert.equal(fire(g, postCompact(cut)).code, 0);
+  const written = bodyOf(cut);
+  assert.equal(written, '[… truncated]', `one byte over the cap keeps no line at all:\n${JSON.stringify(written.slice(0, 80))}`);
+  assert.ok(Buffer.byteLength(written, 'utf8') <= SUMMARY_MAX, `the block is ${Buffer.byteLength(written, 'utf8')} bytes`);
+});
+
 /* ── H · the event's own summary is preferred over the transcript scan ─────── */
 
 test('H: PostCompact writes event.compact_summary when it carries one, not the transcript\'s', () => {
@@ -467,6 +499,41 @@ test('J: the PR-gate signals cover docs/, the repository root and the template d
   const emptyDir = at('gate-empty');
   mkdirSync(join(emptyDir, '.github', 'PULL_REQUEST_TEMPLATE'), { recursive: true });
   assert.doesNotMatch(doctorIn(w, emptyDir), /PR-gated/);
+});
+
+test('J: the template scan never follows a symlink out of the repository', { skip: process.platform === 'win32' && 'symlinks need privileges here' }, () => {
+  const w = workspace('pr-gate-links');
+  // Somebody else's templates, outside the project entirely.
+  const external = join(w.dir, 'external-templates');
+  mkdirSync(external, { recursive: true });
+  writeFileSync(join(external, 'bug.md'), '## Bug\n');
+
+  // The template directory IS the link: what is behind it is not this
+  // repository's, and a hint about this repository may not be read out of it.
+  const linkedDir = join(w.dir, 'gate-linked-dir');
+  mkdirSync(join(linkedDir, '.github'), { recursive: true });
+  symlinkSync(external, join(linkedDir, '.github', 'PULL_REQUEST_TEMPLATE'), 'dir');
+  assert.doesNotMatch(doctorIn(w, linkedDir), /PR-gated/);
+
+  // …and the same for one entry of a real template directory.
+  const linkedFile = join(w.dir, 'gate-linked-file');
+  mkdirSync(join(linkedFile, '.github', 'PULL_REQUEST_TEMPLATE'), { recursive: true });
+  symlinkSync(join(external, 'bug.md'), join(linkedFile, '.github', 'PULL_REQUEST_TEMPLATE', 'bug.md'));
+  assert.doesNotMatch(doctorIn(w, linkedFile), /PR-gated/);
+});
+
+test('J: a template directory of a hundred entries is read bounded, and none of them is a file', () => {
+  const w = workspace('pr-gate-many');
+  const proj = join(w.dir, 'gate-many');
+  const dir = join(proj, '.github', 'PULL_REQUEST_TEMPLATE');
+  mkdirSync(dir, { recursive: true });
+  // A hundred DIRECTORIES with template names: the scan reads at most 64 of
+  // them and stats no more, and not one of them is a template.
+  for (let i = 0; i < 100; i++) mkdirSync(join(dir, `template-${i}.md`));
+  const t0 = Date.now();
+  const out = doctorIn(w, proj);
+  assert.ok(Date.now() - t0 < 10000, `doctor took ${Date.now() - t0} ms`);
+  assert.doesNotMatch(out, /PR-gated/, out);
 });
 
 /* ── K · one call is not "calls", and a prototype key is not a config key ──── */
