@@ -8,6 +8,15 @@ units/<unit>/          adapter.mjs (vendor knowledge) + models.js (catalog)
 core/                  everything that is not vendor-specific
 ```
 
+| Question | Where |
+|---|---|
+| What does each file under `core/` actually own? | [core/](#core) |
+| What must a unit adapter declare to `defineUnit`? | [The adapter contract](#the-adapter-contract) |
+| What happens, step by step, when a tool is called? | [The path of one call](#the-path-of-one-call) |
+| Why is each unit its own MCP server instead of one shared server? | [Why three servers, not one](#why-three-servers-not-one) |
+| Why spawn the vendor CLI instead of calling its API directly? | [Why spawn CLIs, not call APIs](#why-spawn-clis-not-call-apis) |
+| How is a unit's model catalog kept accurate over time? | [How catalogs are curated](#how-catalogs-are-curated) |
+
 ## core/
 
 | Module | Owns |
