@@ -13,6 +13,34 @@
   <img src="https://img.shields.io/badge/dependencies-zero-blue" alt="Zero runtime dependencies">
 </p>
 
+| Question | Where |
+|---|---|
+| What do I actually get, and is it really read-only? | [What you get](#what-you-get) |
+| How do the session, the units and the vendor CLIs connect? | [How it fits together](#how-it-fits-together) |
+| What do I need installed before I start? | [Requirements](#requirements) |
+| How do I install this and wire it into a project? | [Quickstart](#quickstart) |
+| How do I stop approving every unit call by hand? | [Fewer permission prompts](#fewer-permission-prompts) |
+| What CLI subcommands does `omelette-fleet` have? | [CLI](#cli) |
+| How do I update omelette-fleet itself? | [Keeping it up to date](#keeping-it-up-to-date) |
+| Which vendor does what, and what shouldn't I trust it with? | [Units](#units) |
+| Where does config live and what does it look like? | [Configuration](#configuration) |
+| How is read-only actually enforced? | [Security](#security) |
+| How do I see what a unit is doing right now? | [Status feed](#status-feed) |
+| How should a session actually be run with the fleet? | [Orchestration](#orchestration) |
+| Why CLIs instead of API keys, and other common questions? | [FAQ](#faq) |
+
+## Documentation
+
+| If you want to know… | Read |
+|---|---|
+| Who decides, who proposes, and which unit gets which task | [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md) |
+| Which config keys exist, what they default to, and how they resolve | [docs/CONFIG.md](docs/CONFIG.md) |
+| How strong each unit's read-only enforcement actually is | [docs/SECURITY.md](docs/SECURITY.md) |
+| How to add a fourth unit | [docs/ADAPTERS.md](docs/ADAPTERS.md) |
+| What the status feed looks like and how to read it | [docs/STATUS-FEED.md](docs/STATUS-FEED.md) |
+| How the pieces fit and what one call goes through | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| What changed release to release | [CHANGELOG.md](CHANGELOG.md) |
+
 ## What you get
 
 Three peers inside Claude Code, each on a subscription you already pay for, none of them able to write. `doctor` is where you find out whether that is actually true on your machine:
