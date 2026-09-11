@@ -2,8 +2,10 @@
 # dependencies, no build step", so the job is literally checkout + node + test:
 # no `npm install` (there is nothing to install), no cache, no secrets. The
 # matrix is the support floor (Node 20) and the current line (Node 22) on the
-# platforms the vendor CLIs run on, plus windows-latest as a signal (0.3.2 spike). Every test must pass without any vendor CLI
-# and without `claude` — the suite fakes those.
+# two supported platforms. Native Windows is not supported (WSL is); a Windows
+# harness is planned after 1.0, and until then no Windows job runs here. Every
+# test must pass without any vendor CLI and without `claude` — the suite fakes
+# those.
 name: test
 
 on:
@@ -13,15 +15,10 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
-    # windows-latest is a SIGNAL, not a gate: 43 tests fail there today (POSIX
-    # path assertions, fake vendor binaries without .cmd shims, 0600 modes, the
-    # env allowlist lacking SYSTEMROOT) — tracked as the 0.3.3 Windows item. Until
-    # then the package is macOS/Linux, and Windows via WSL.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         node: [20, 22]
     name: node ${{ matrix.node }} · ${{ matrix.os }}
     steps:
