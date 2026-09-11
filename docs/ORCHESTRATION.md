@@ -2,6 +2,21 @@
 
 How to run a session with a fleet: who decides, who proposes, and which unit gets which task.
 
+| Question | Where |
+|---|---|
+| Who's in charge, and what do the units actually do? | [The operating model](#the-operating-model) |
+| How does the operating model actually reach a running session? | [How the rules reach a session](#how-the-rules-reach-a-session) |
+| How should work be delegated once I'm inside a session? | [Inside Claude Code](#inside-claude-code) |
+| How do I keep a plan from getting lost across a compaction? | [Ledger and handoff](#ledger-and-handoff) |
+| Who tests the coder's work, and who decides test vs. code? | [Tester sub-agent and arbitration](#tester-sub-agent-and-arbitration) |
+| What does a review finding have to look like? | [Reviews](#reviews) |
+| How do I control a sub-agent's model and effort? | [Spawning sub-agents: model and effort](#spawning-sub-agents-model-and-effort) |
+| Which unit should a given task be routed to? | [Routing by task](#routing-by-task) |
+| When should I escalate to a stronger model or higher effort? | [Model and effort escalation](#model-and-effort-escalation) |
+| How much should I trust a unit's claims on their own? | [Never a sole source](#never-a-sole-source) |
+| How do I tell a slow run from a stuck one? | [Supervising with the status feed](#supervising-with-the-status-feed) |
+| What makes a good brief to a unit? | [Briefing a unit well](#briefing-a-unit-well) |
+
 ## The operating model
 
 Your Claude Code session is the **orchestrator and the reviewer**. It plans, decomposes, routes, and it is the only thing that changes code — directly or through its own sub-agents, under whatever approval flow you already have. The units are **read-only proposers**: they research, analyse, review and give second opinions, and they hand back text. Nothing a unit says reaches your repository except by passing through you.
