@@ -1387,7 +1387,13 @@ function summaryText(content) {
  * lastHandoffBlock counts them, and the closer goes AFTER the truncation
  * marker, so a cut that fell inside a fenced block still ends inside it.
  *
- * The cap is HARD, as it is there: a summary whose first line is longer than
+ * THE WHOLE BODY FIRST, and the marker is reserved only once a cut is certain:
+ * a summary that fits — closer, newlines and all — is written entire, because a
+ * block that is never truncated owes no truncation marker. Reserving one
+ * unconditionally is how a body sitting a few bytes under the cap would lose
+ * every line of itself to a marker that was never going to be written.
+ *
+ * The cap is HARD where it does bite: a summary whose first line is longer than
  * SUMMARY_MAX keeps no line at all and the block is that one marker — a record
  * saying there was a summary and it did not fit beats no record. Trailing blank
  * lines go, because the block supplies its own blank line.
@@ -1395,33 +1401,46 @@ function summaryText(content) {
  * @returns {string} the block's body, or '' when there was nothing to write.
  */
 function boundSummary(text) {
-  const lines = String(text || '').replace(LINE_SEPARATORS, '\n').split('\n');
-  const kept = [];
-  let bytes = 0;
-  let fence = '';
-  let dropped = false;
+  const lines = String(text || '').replace(LINE_SEPARATORS, '\n').split('\n')
+    // Escaped BEFORE anything is measured: the backslash is a byte of the block too.
+    .map((line) => (MD_HEADING.test(line) ? `\\${line}` : line));
+  // …and trimmed before it is measured too, because the block supplies its own
+  // blank line and trailing blanks are never written.
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  // One line's cost in the block: its bytes and the newline that follows it.
   const size = (line) => Buffer.byteLength(line, 'utf8') + 1;
-  for (let i = 0; i < lines.length; i++) {
-    // Escaped BEFORE it is measured: the backslash is a byte of the block too.
-    const line = MD_HEADING.test(lines[i]) ? `\\${lines[i]}` : lines[i];
+  /** The fence still open after `line`, given the one open before it. */
+  const fenceAfter = (open, line) => {
     const f = FENCE.exec(line);
-    const opens = !f ? fence
-      : !fence ? f[1]
-        : f[1][0] === fence[0] && f[1].length >= fence.length ? '' : fence;
-    // WHAT THE BLOCK WILL STILL OWE once this line is in it: the truncation
-    // marker, while there are lines behind this one to drop, and a closer for a
-    // fence this line leaves open. Both are appended below and both are bytes
-    // of the block, so a line is only kept while the cap has room for them too
-    // — otherwise a single line at the cap could be followed out of it by a
-    // closing fence as long as itself.
-    const owed = (i < lines.length - 1 ? size(TRUNCATED) : 0) + (opens ? size(opens) : 0);
-    if (bytes + size(line) + owed > SUMMARY_MAX) { dropped = true; break; }
+    return !f ? open
+      : !open ? f[1]
+        : f[1][0] === open[0] && f[1].length >= open.length ? '' : open;
+  };
+
+  // WHAT THE WHOLE BODY WOULD COST, the closer for a fence it left open
+  // included. While that fits, nothing is dropped and nothing is owed.
+  let fence = '';
+  let bytes = 0;
+  for (const line of lines) { fence = fenceAfter(fence, line); bytes += size(line); }
+  if (bytes + (fence ? size(fence) : 0) <= SUMMARY_MAX) return fence ? [...lines, fence].join('\n') : lines.join('\n');
+
+  // It does not fit, so a line WILL be dropped and the marker is certain. From
+  // here each line is kept only while the cap has room for the marker and for a
+  // closer this line leaves open — otherwise a single line at the cap could be
+  // followed out of it by a closing fence as long as itself.
+  const kept = [];
+  fence = '';
+  bytes = 0;
+  for (const line of lines) {
+    const opens = fenceAfter(fence, line);
+    if (bytes + size(line) + size(TRUNCATED) + (opens ? size(opens) : 0) > SUMMARY_MAX) break;
     kept.push(line);
     bytes += size(line);
     fence = opens;
   }
+  // A cut can end on a blank line of its own, and those go here too.
   while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
-  if (dropped) kept.push(TRUNCATED);
+  kept.push(TRUNCATED);
   if (fence) kept.push(fence);
   return kept.join('\n');
 }
