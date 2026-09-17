@@ -51,6 +51,7 @@ import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
+import { changedSince, checkPointers, parseCommit, parsePointers } from '../core/check.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
 import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
@@ -237,6 +238,21 @@ const COMMANDS = {
       'wall time, bytes, and tokens in / out where every call in the row',
       'reported them. --since 24h, --since 7d or --since 2026-09-09 narrows',
       'that on startedAt. Reads the files directly: no server, nothing spent.',
+    ],
+  },
+  check: {
+    args: '<file.md> [--strict] [--require <n>] [--root <dir>]',
+    body: [
+      'Verify the file:line · `fragment` pointers of a report or a scout',
+      'map: every pointer names a line and quotes it verbatim, and this',
+      'opens the file and looks. One line per pointer that is not ok —',
+      'moved (with the line it is on now), mismatch, missing, outside,',
+      'too-large, stale — then a tally. Paths resolve under --root (the',
+      'current directory) and never leave it. A `commit: <hash>` line in',
+      'the first 20 lines turns staleness on: a pointer whose file changed',
+      'since that commit is stale. Exit 1 on anything but ok, or on fewer',
+      'than --require pointers (default 1); --strict fails on stale too.',
+      'Reads; writes nothing.',
     ],
   },
 };
@@ -3248,6 +3264,78 @@ function cmdResults(argv) {
   return 0;
 }
 
+// ─── check ───────────────────────────────────────────────────────────────────
+
+/** A checked file is a report or a map, not a corpus: read this much or refuse. */
+const CHECK_READ_MAX = 1024 * 1024;
+
+/**
+ * `check <file.md>` — the pointers of a report or a scout map against the
+ * files they name. THIN ON PURPOSE: the grammar, the verdicts and the git call
+ * are core/check.mjs; what lives here is the argv, the two bounds a caller can
+ * trip (a file too big, a file with too many pointer lines — both exit 2), the
+ * output and the exit code.
+ *
+ * EXIT 0 is "every pointer ok, and there were at least --require of them".
+ * `stale` passes unless --strict, and so does a staleness git could not answer
+ * — the point of the default is that a moved branch does not fail a report,
+ * while --strict is there for the gate that wants the map re-taken.
+ */
+function cmdCheck(argv) {
+  const { flags, positional, errors } = parseArgv(argv, { booleans: ['strict'], options: ['require', 'root'] });
+  const [file] = positional;
+  if (!file) errors.push(`usage: omelette-fleet check ${COMMANDS.check.args}`);
+  if (positional.length > 1) errors.push(`unexpected argument: ${positional[1]}`);
+
+  let need = 1;
+  if (flags.require !== undefined) {
+    if (!/^\d+$/.test(String(flags.require))) errors.push(`--require needs a non-negative integer, not "${flags.require}"`);
+    else need = Number(flags.require);
+  }
+  const root = flags.root === undefined ? process.cwd() : resolvePath(String(flags.root));
+  let rootIsDir = false;
+  try { rootIsDir = statSync(root).isDirectory(); } catch { /* not there at all */ }
+  if (!rootIsDir) errors.push(`--root ${root} is not a directory`);
+  if (errors.length) { errors.forEach((e) => err(`omelette-fleet check: ${e}`)); return 2; }
+
+  // The checked file itself: a regular file, at most 1 MiB, read through the
+  // same bounded reader every other file of ours goes through.
+  const path = resolvePath(file);
+  let size = null;
+  try { const st = lstatSync(path); if (st.isFile()) size = st.size; } catch { /* absent */ }
+  if (size === null) { err(`omelette-fleet check: ${file} is not a readable file`); return 2; }
+  if (size > CHECK_READ_MAX) { err(`omelette-fleet check: ${file} is ${size} bytes — a checked file may be at most 1 MiB`); return 2; }
+  const text = readRulesFile(path, CHECK_READ_MAX);
+  if (text === null) { err(`omelette-fleet check: ${file} is not a readable file`); return 2; }
+  // The cap is a usage error, so it is ruled on BEFORE anything is spawned.
+  try { parsePointers(text); } catch (e) { err(`omelette-fleet check: ${e.message}`); return 2; }
+
+  // Staleness is opt-in and self-describing: no `commit:` line simply means
+  // off, which is not the same as an answer git could not give.
+  const hash = parseCommit(text);
+  let changed = null;
+  let unchecked = false;
+  if (hash !== null) {
+    const answer = changedSince({ hash, root });
+    if (answer.changed) changed = answer.changed;
+    else { unchecked = true; out(`staleness: not checked (${answer.reason})`); }
+  }
+
+  const { pointers, counts } = checkPointers({ text, root, changed });
+  for (const p of pointers) {
+    if (p.status === 'ok') continue;
+    out(`${p.status}  ${p.path}:${p.lineNo}  ${p.fragment}${p.status === 'moved' ? `  → found at ${p.foundAt}` : ''}`);
+  }
+  out(`check: ${counts.total} pointers · ${counts.ok} ok · ${counts.moved} moved · ${counts.mismatch} mismatch`
+    + ` · ${counts.missing} missing · ${counts.outside} outside · ${counts.stale} stale`
+    + (counts['too-large'] ? ` · ${counts['too-large']} too-large` : ''));
+  const short = counts.total < need;
+  if (short) out(`check: ${counts.total} pointers, at least ${need} required`);
+
+  const broken = counts.moved + counts.mismatch + counts.missing + counts.outside + counts['too-large'];
+  return broken || short || (flags.strict && (counts.stale || unchecked)) ? 1 : 0;
+}
+
 // ─── dispatch ────────────────────────────────────────────────────────────────
 
 async function main(argv) {
@@ -3267,9 +3355,10 @@ async function main(argv) {
     case 'set': return cmdSet(rest);
     case 'call': return cmdCall(rest);
     case 'results': return cmdResults(rest);
+    case 'check': return cmdCheck(rest);
     default:
       err(`omelette-fleet: unknown command "${cmd}"`);
-      err('commands: install, uninstall, update, rules, doctor, show, set, call, results — `omelette-fleet --help` for the full usage.');
+      err('commands: install, uninstall, update, rules, doctor, show, set, call, results, check — `omelette-fleet --help` for the full usage.');
       return 1;
   }
 }
