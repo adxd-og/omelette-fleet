@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0 — 2026-09-17
+
+Fewer tokens spent re-reading, without trusting a digest blindly.
+
+- **Evidence travels with pointers.** One line shape for every piece of delegated evidence — `path:line` · a verbatim fragment of that line in backticks · the claim. Quoted, not paraphrased, so it can be checked by a machine.
+- **`omelette-fleet check <file.md> [--strict] [--require <n>] [--root <dir>]`** verifies those lines: `ok`, `moved` (the fragment sits on another line, which is named), `mismatch`, `missing`, `outside` the project root (or a symlink, or not a regular file), `too-large`, and `stale` when the file changed since the `commit:` the document is stamped with. Exit `0` only when every pointer holds and there is at least one. Read-only: it reads files under the root, runs one `git diff --name-only`, writes nothing.
+- **A report shape for the shipped sub-agents.** `omelette-coder` and `omelette-tester` write their full report as `TASK / FINDINGS / DIFF / TEST RESULTS / OPEN QUESTIONS`, with findings as pointer lines; the short reply is unchanged. Re-render with `omelette-fleet rules --agents`.
+- **One scout map per release.** The rules and ORCHESTRATION describe it: before planning several packages, one read-only scout writes `.omelette/map-<plan>.md` — stamped with its commit, factual pointer lines, a mandatory `## Not read` — and the planners get it instead of each re-reading the code. Run `check` on it, open three pointers yourself, re-take stale lines. A scout map never goes to a first review: that review stays clean-context on purpose.
+
 ## 1.0.0 — 2026-09-11
 
 The first stable release. Nothing in the package behaves differently from 0.3.7; what changed is how it reads and what it promises.
