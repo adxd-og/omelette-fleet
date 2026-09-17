@@ -51,7 +51,7 @@ import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
-import { changedSince, checkPointers, parseCommit, parsePointers } from '../core/check.mjs';
+import { changedSince, checkPointers, parseCommit, parsePointers, readBoundedFile } from '../core/check.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
 import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
@@ -243,15 +243,22 @@ const COMMANDS = {
   check: {
     args: '<file.md> [--strict] [--require <n>] [--root <dir>]',
     body: [
-      'Verify the file:line · `fragment` pointers of a report or a scout',
-      'map: every pointer names a line and quotes it verbatim, and this',
-      'opens the file and looks. One line per pointer that is not ok —',
-      'moved (with the line it is on now), mismatch, missing, outside,',
-      'too-large, stale — then a tally. Paths resolve under --root (the',
-      'current directory) and never leave it. A `commit: <hash>` line in',
-      'the first 20 lines turns staleness on: a pointer whose file changed',
-      'since that commit is stale. Exit 1 on anything but ok, or on fewer',
-      'than --require pointers (default 1); --strict fails on stale too.',
+      'Verify the file:line · `fragment` · claim pointers of a report or a',
+      'scout map: every pointer names a line and quotes it verbatim, and',
+      'this opens the file and looks. One line per pointer that is not ok',
+      '— moved (with the line it is on now), mismatch, missing, outside,',
+      'too-large, weak (a fragment under 8 characters or without three',
+      'alphanumerics), malformed (a line that opens like a pointer and',
+      'does not parse), stale — then a tally. Paths resolve under --root',
+      '(the current directory) and never leave it. A `commit: <hash>` line',
+      'in the first 20 lines turns staleness on: a pointer whose file',
+      'changed since that commit, committed or not, is stale.',
+      'Exit 1 when any pointer is worse than ok, or when fewer than',
+      '--require (default 1) DISTINCT path:line pairs were checked; stale',
+      'passes unless --strict, which also fails an unchecked staleness.',
+      'Exit 2 for a usage error, and then nothing is reported: no file, an',
+      'unreadable one, over 1 MiB, over 2000 pointer lines, a bad flag, a',
+      'root that is not a directory. A target over 2 MiB is too-large.',
       'Reads; writes nothing.',
     ],
   },
@@ -3268,18 +3275,24 @@ function cmdResults(argv) {
 
 /** A checked file is a report or a map, not a corpus: read this much or refuse. */
 const CHECK_READ_MAX = 1024 * 1024;
+/** How much of a malformed line is echoed back — enough to recognise it by. */
+const MALFORMED_ECHO_MAX = 120;
 
 /**
  * `check <file.md>` — the pointers of a report or a scout map against the
  * files they name. THIN ON PURPOSE: the grammar, the verdicts and the git call
- * are core/check.mjs; what lives here is the argv, the two bounds a caller can
- * trip (a file too big, a file with too many pointer lines — both exit 2), the
- * output and the exit code.
+ * are core/check.mjs; what lives here is the argv, the bounds a caller can
+ * trip (a file too big, a file with too many pointer lines, a root that is not
+ * a directory or vanishes — all exit 2), the output and the exit code.
  *
- * EXIT 0 is "every pointer ok, and there were at least --require of them".
- * `stale` passes unless --strict, and so does a staleness git could not answer
- * — the point of the default is that a moved branch does not fail a report,
- * while --strict is there for the gate that wants the map re-taken.
+ * A USAGE ERROR WINS OVER EVERYTHING: every one of them is ruled on before a
+ * single line of report is printed, because a run that could not be set up
+ * right has no findings to report, only a mistake to fix.
+ *
+ * EXIT 0 is "every pointer ok, and at least --require DISTINCT path:line pairs
+ * among them". `stale` passes unless --strict, and so does a staleness git
+ * could not answer — the point of the default is that a moved branch does not
+ * fail a report, while --strict is there for the gate that wants it re-taken.
  */
 function cmdCheck(argv) {
   const { flags, positional, errors } = parseArgv(argv, { booleans: ['strict'], options: ['require', 'root'] });
@@ -3296,26 +3309,33 @@ function cmdCheck(argv) {
   let rootIsDir = false;
   try { rootIsDir = statSync(root).isDirectory(); } catch { /* not there at all */ }
   if (!rootIsDir) errors.push(`--root ${root} is not a directory`);
+  // It is a directory — but every path is resolved against its REAL path, so a
+  // root that cannot be resolved is a usage error too, not a stack trace.
+  else { try { realpathSync(root); } catch { errors.push(`--root ${root} cannot be resolved`); } }
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet check: ${e}`)); return 2; }
 
-  // The checked file itself: a regular file, at most 1 MiB, read through the
-  // same bounded reader every other file of ours goes through.
+  // The checked file may live anywhere — a report sits in a scratchpad — but it
+  // is read like any target: a regular file, no symlink, at most 1 MiB.
   const path = resolvePath(file);
   let size = null;
   try { const st = lstatSync(path); if (st.isFile()) size = st.size; } catch { /* absent */ }
   if (size === null) { err(`omelette-fleet check: ${file} is not a readable file`); return 2; }
   if (size > CHECK_READ_MAX) { err(`omelette-fleet check: ${file} is ${size} bytes — a checked file may be at most 1 MiB`); return 2; }
-  const text = readRulesFile(path, CHECK_READ_MAX);
+  const text = readBoundedFile(path, CHECK_READ_MAX);
   if (text === null) { err(`omelette-fleet check: ${file} is not a readable file`); return 2; }
   // The cap is a usage error, so it is ruled on BEFORE anything is spawned.
   try { parsePointers(text); } catch (e) { err(`omelette-fleet check: ${e.message}`); return 2; }
 
-  // Staleness is opt-in and self-describing: no `commit:` line simply means
-  // off, which is not the same as an answer git could not give.
+  // Staleness has three states, and each says something different: no `commit:`
+  // line means off, a value that is not a hash means unusable (and git is never
+  // asked), a hash means asked — and possibly unanswered.
   const hash = parseCommit(text);
   let changed = null;
   let unchecked = false;
-  if (hash !== null) {
+  if (hash === null) {
+    unchecked = true;
+    out('staleness: not checked (unusable commit value)');
+  } else if (hash !== undefined) {
     const answer = changedSince({ hash, root });
     if (answer.changed) changed = answer.changed;
     else { unchecked = true; out(`staleness: not checked (${answer.reason})`); }
@@ -3324,15 +3344,19 @@ function cmdCheck(argv) {
   const { pointers, counts } = checkPointers({ text, root, changed });
   for (const p of pointers) {
     if (p.status === 'ok') continue;
+    if (p.status === 'malformed') { out(`malformed  line ${p.line}  ${p.raw.trim().slice(0, MALFORMED_ECHO_MAX)}`); continue; }
     out(`${p.status}  ${p.path}:${p.lineNo}  ${p.fragment}${p.status === 'moved' ? `  → found at ${p.foundAt}` : ''}`);
   }
   out(`check: ${counts.total} pointers · ${counts.ok} ok · ${counts.moved} moved · ${counts.mismatch} mismatch`
     + ` · ${counts.missing} missing · ${counts.outside} outside · ${counts.stale} stale`
-    + (counts['too-large'] ? ` · ${counts['too-large']} too-large` : ''));
-  const short = counts.total < need;
-  if (short) out(`check: ${counts.total} pointers, at least ${need} required`);
+    + (counts['too-large'] ? ` · ${counts['too-large']} too-large` : '')
+    + (counts.weak ? ` · ${counts.weak} weak` : '')
+    + (counts.malformed ? ` · ${counts.malformed} malformed` : ''));
+  const short = counts.distinct < need;
+  if (short) out(`check: ${counts.distinct} distinct pointers, at least ${need} required`);
 
-  const broken = counts.moved + counts.mismatch + counts.missing + counts.outside + counts['too-large'];
+  const broken = counts.moved + counts.mismatch + counts.missing + counts.outside
+    + counts['too-large'] + counts.weak + counts.malformed;
   return broken || short || (flags.strict && (counts.stale || unchecked)) ? 1 : 0;
 }
 

@@ -111,8 +111,8 @@ test('pointer paths: a Windows-style backslash separator resolves inside root, a
   const base = tmp();
   const escRoot = join(base, 'proj');
   mkdirSync(escRoot, { recursive: true });
-  writeFileSync(join(base, 'outside.txt'), 'secret\n');
-  const escape = checkPointers({ text: '..\\outside.txt:1 · `secret` · c', root: escRoot, changed: null }).pointers[0];
+  writeFileSync(join(base, 'outside.txt'), 'the secret line\n');
+  const escape = checkPointers({ text: '..\\outside.txt:1 · `the secret line` · c', root: escRoot, changed: null }).pointers[0];
   assert.equal(escape.status, 'outside', 'a backslash .. is caught exactly like a forward-slash one');
 });
 
@@ -120,36 +120,40 @@ test('pointer paths: a Windows-style backslash separator resolves inside root, a
 
 test('ok/moved: CRLF line endings in the TARGET file do not shift line numbers or break matching', () => {
   const root = project({});
-  writeFileSync(join(root, 'a.txt'), 'one\r\ntwo\r\nthree\r\n');
-  const ok = checkPointers({ text: 'a.txt:2 · `two` · c', root, changed: null }).pointers[0];
+  writeFileSync(join(root, 'a.txt'), 'first line here\r\nthe second line\r\nthird line here\r\n');
+  const ok = checkPointers({ text: 'a.txt:2 · `the second line` · c', root, changed: null }).pointers[0];
   assert.equal(ok.status, 'ok');
-  const moved = checkPointers({ text: 'a.txt:1 · `three` · c', root, changed: null }).pointers[0];
+  const moved = checkPointers({ text: 'a.txt:1 · `third line here` · c', root, changed: null }).pointers[0];
   assert.deepEqual([moved.status, moved.foundAt], ['moved', 3]);
 });
 
 test('check: CRLF line endings in the CHECKED report parse cleanly, and no stray \\r reaches the output', () => {
-  const root = project({ 'a.txt': 'one\ntwo\n' });
-  writeFileSync(join(root, 'report.md'), 'a.txt:2 · `two` · ok\r\na.txt:1 · `zzz` · mismatch\r\n');
+  const root = project({ 'a.txt': 'first line here\nthe second line\n' });
+  writeFileSync(join(root, 'report.md'), 'a.txt:2 · `the second line` · ok\r\na.txt:1 · `nowhere at all here` · mismatch\r\n');
   const r = cli(['check', 'report.md'], { cwd: root });
   assert.equal(r.code, 1);
-  assert.equal(r.out, `mismatch  a.txt:1  zzz\n${summary(2, { ok: 1, mismatch: 1 })}\n`, 'no \\r before either newline');
+  assert.equal(
+    r.out,
+    `mismatch  a.txt:1  nowhere at all here\n${summary(2, { ok: 1, mismatch: 1 })}\n`,
+    'no \\r before either newline, and the claim survives the carriage return',
+  );
 });
 
 // ─── §4 a root that is itself a symlink ─────────────────────────────────────
 
 test('checkPointers: a root that is itself a symlink resolves pointers as if it were the real directory', () => {
-  const real = project({ 'c.txt': 'kept\n' });
+  const real = project({ 'c.txt': 'the kept line here\n' });
   const rootLink = join(tmp(), 'root-link');
   symlinkSync(real, rootLink);
-  const p = checkPointers({ text: 'c.txt:1 · `kept` · c', root: rootLink, changed: null }).pointers[0];
+  const p = checkPointers({ text: 'c.txt:1 · `the kept line here` · c', root: rootLink, changed: null }).pointers[0];
   assert.equal(p.status, 'ok');
 });
 
 test('check: --root pointing at a symlinked directory works end to end', () => {
-  const real = project({ 'c.txt': 'kept\n' });
+  const real = project({ 'c.txt': 'the kept line here\n' });
   const rootLink = join(tmp(), 'root-link');
   symlinkSync(real, rootLink);
-  const elsewhere = project({ 'report.md': 'c.txt:1 · `kept` · c\n' });
+  const elsewhere = project({ 'report.md': 'c.txt:1 · `the kept line here` · c\n' });
   const r = cli(['check', join(elsewhere, 'report.md'), '--root', rootLink], { cwd: elsewhere });
   assert.equal(r.code, 0, `${r.out}${r.err}`);
   assert.equal(r.out, `${summary(1, { ok: 1 })}\n`);
@@ -159,8 +163,8 @@ test('check: --root pointing at a symlinked directory works end to end', () => {
 
 test('check: a checked file of exactly 1 MiB is accepted — only one byte over is a usage error', () => {
   const CHECK_FILE_MAX = 1024 * 1024;
-  const root = project({ 'a.txt': 'one\n' });
-  const pointerLine = 'a.txt:1 · `one` · exactly the boundary\n';
+  const root = project({ 'a.txt': 'first line here\n' });
+  const pointerLine = 'a.txt:1 · `first line here` · exactly the boundary\n';
   const padLen = CHECK_FILE_MAX - Buffer.byteLength(pointerLine, 'utf8') - 1; // -1 for the padding line's own \n
   assert.ok(padLen > 0, 'fixture sanity: room to pad');
   const content = pointerLine + 'x'.repeat(padLen) + '\n';
@@ -267,10 +271,13 @@ test('README: the check row names its flags, statuses, the exit-0 rule and the O
 
 test('SECURITY.md: check gets its one-sentence bullet — root only, no writes, git diff --name-only', () => {
   const security = readFileSync(join(ROOT, 'docs/SECURITY.md'), 'utf8');
-  const bullet = security.split('\n').find((l) => l.includes('`check` never leaves the project root'));
+  // The sentence was rewritten with the review round (spec §4 "The git child is
+  // boxed"): the bullet is found by what it is about, not by its old wording.
+  const bullet = security.split('\n').find((l) => l.startsWith('- **`check` opens only paths that resolve inside the project root'));
   assert.ok(bullet, 'the check bullet is present');
   assert.match(bullet, /git diff --name-only/);
   assert.match(bullet, /writes nothing/);
+  assert.match(bullet, /O_NOFOLLOW/, 'and says how a target is opened');
 });
 
 test('agent templates: the short reply keeps its current fields (§2) for both roles', () => {
