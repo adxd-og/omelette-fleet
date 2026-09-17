@@ -39,6 +39,7 @@
 | How to add a fourth unit | [docs/ADAPTERS.md](docs/ADAPTERS.md) |
 | What the status feed looks like and how to read it | [docs/STATUS-FEED.md](docs/STATUS-FEED.md) |
 | How the pieces fit and what one call goes through | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| What has been measured — planning cost, review yield, `check` before and after — and what has not | [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) |
 | What changed release to release | [CHANGELOG.md](CHANGELOG.md) |
 
 ## What you get
