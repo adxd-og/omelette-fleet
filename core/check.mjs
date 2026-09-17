@@ -118,7 +118,9 @@ export function parseCommit(text) {
 }
 
 /**
- * The files a commit range touched, for the `stale` verdict.
+ * The files a commit range touched, for the `stale` verdict — named from ROOT
+ * (`--relative`), which is how a map checked from a subdirectory names them,
+ * and without whatever changed outside it.
  *
  * @param {{hash:string, root:string}} o
  * @returns {{changed:Set<string>}|{reason:string}} a short reason the caller
@@ -127,7 +129,7 @@ export function parseCommit(text) {
 export function changedSince({ hash, root }) {
   if (!HASH.test(String(hash || ''))) return { reason: 'invalid commit' }; // defence in depth: the parser already refused it
   try {
-    const stdout = execFileSync('git', ['diff', '--name-only', `${hash}..HEAD`, '--'], {
+    const stdout = execFileSync('git', ['diff', '--name-only', '--relative', `${hash}..HEAD`, '--'], {
       cwd: root, timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
     });
     const changed = new Set(stdout.split('\n').map((l) => normalisePath(l.trim())).filter(Boolean));

@@ -508,3 +508,32 @@ test('check: the help lists it next to the other subcommands', () => {
   assert.equal(page.code, 0);
   assert.match(page.out, /check/);
 });
+
+test('changedSince: under a --root that is a subdirectory of the repository, paths are root-relative', { skip: GIT_SKIP }, () => {
+  // git names paths from the repository's top; a map checked from `pkg/` names
+  // them from `pkg/`. `--relative` makes git speak the root's language, and
+  // leaves out what changed outside it.
+  const top = tmp('omelette-check-git-sub-');
+  const run = (args) => {
+    const r = spawnSync('git', [...GIT_ID, ...args], { cwd: top, encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    return (r.stdout || '').trim();
+  };
+  run(['init', '-q']);
+  mkdirSync(join(top, 'pkg'));
+  writeFileSync(join(top, 'pkg', 'a.txt'), 'hello world\n');
+  writeFileSync(join(top, 'outside.txt'), 'one\n');
+  run(['add', '-A']);
+  run(['commit', '-q', '-m', 'first']);
+  const first = run(['rev-parse', 'HEAD']);
+  writeFileSync(join(top, 'pkg', 'a.txt'), 'hello world\nmore\n');
+  writeFileSync(join(top, 'outside.txt'), 'two\n');
+  run(['add', '-A']);
+  run(['commit', '-q', '-m', 'second']);
+
+  const root = join(top, 'pkg');
+  const r = changedSince({ hash: first, root });
+  assert.deepEqual([...r.changed].sort(), ['a.txt']);
+  const map = `commit: ${first}\n- \`a.txt:1\` · \`hello world\` · greeting\n`;
+  assert.equal(checkPointers({ text: map, root, changed: r.changed }).pointers[0].status, 'stale');
+});
