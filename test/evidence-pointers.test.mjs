@@ -43,10 +43,34 @@ test('the rendered rules carry the two evidence bullets, and stay short', () => 
 
 test('ORCHESTRATION explains the pointer line, the report shape, the scout map and check', () => {
   const md = fs.readFileSync(path.join(ROOT, 'docs/ORCHESTRATION.md'), 'utf8');
-  const section = md.slice(md.indexOf('\n## Evidence with pointers\n'));
-  assert.ok(section.length > 0, 'section present');
+  // THE SECTION AND NOTHING AFTER IT: an unbounded slice would let a later
+  // section satisfy these assertions with this one gutted.
+  const from = md.indexOf('\n## Evidence with pointers\n');
+  assert.notEqual(from, -1, 'section present');
+  const to = md.indexOf('\n## ', from + 1);
+  const section = md.slice(from, to === -1 ? undefined : to);
   for (const s of SECTIONS) assert.ok(section.includes(`\`${s}\``), `${s} named`);
   assert.match(section, /## Not read/);
   assert.match(section, /never goes to a first review/);
   assert.match(section, /three pointers of its own choosing/);
+  // The contract a caller wires a gate to (three reviews found the first
+  // wording overstated it): stale passes unless --strict, near-misses fail.
+  assert.match(section, /`stale` too, unless `--strict`/);
+  for (const status of ['weak', 'malformed', 'moved', 'mismatch', 'missing', 'outside', 'too-large']) {
+    assert.ok(section.includes(`\`${status}\``), `${status} named`);
+  }
+  assert.match(section, /relative to the project root, never absolute/);
+  assert.match(section, /1 MiB and 2000 pointer lines, targets of 2 MiB/);
+  assert.match(section, /against the working tree/);
+});
+
+test('the templates tell a sub-agent the three things its default habits get wrong', () => {
+  for (const name of AGENT_FILES) {
+    const text = renderAgentFile(name, '1.1.0');
+    assert.match(text, /relative to the project root/, `${name}: relative paths`);
+    assert.match(text, /never absolute/, `${name}: not absolute`);
+    assert.match(text, /not a range/, `${name}: one line`);
+    assert.match(text, /at least 8 characters/, `${name}: a fragment that proves something`);
+    assert.match(text, /holds no backtick/, `${name}: no backtick`);
+  }
 });
