@@ -14,7 +14,8 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +64,19 @@ const summary = (n, { ok = 0, moved = 0, mismatch = 0, missing = 0, outside = 0,
   + (malformed ? ` · ${malformed} malformed` : '');
 
 const statuses = (o) => checkPointers({ changed: null, ...o }).pointers.map((p) => p.status);
+
+/** Every file under a directory, recursively, by name and content hash — `.git` included. */
+function snapshot(dir, prefix = '') {
+  const rows = [];
+  for (const name of readdirSync(dir).sort()) {
+    const p = join(dir, name);
+    const st = lstatSync(p);
+    if (st.isSymbolicLink()) rows.push(`L ${prefix}${name} -> ${readlinkSync(p)}`);
+    else if (st.isDirectory()) rows.push(`D ${prefix}${name}`, ...snapshot(p, `${prefix}${name}/`));
+    else rows.push(`F ${prefix}${name} ${createHash('sha256').update(readFileSync(p)).digest('hex')}`);
+  }
+  return rows;
+}
 
 /** Exactly `bytes` bytes, padding first and `line` as the second line of the file. */
 function padded(bytes, line) {
@@ -120,6 +134,16 @@ test('parsePointers: a line that opens like a pointer and does not parse is malf
   }
 });
 
+test('parsePointers: ordinary prose that happens to hold a colon and a middle dot stays prose', () => {
+  const prose = [
+    '12:30 · lunch with the team',
+    'key:1 · value of the first key',
+    'http://example.com:80 · details of the endpoint',
+    '- 1:2 · a ratio, not a pointer',
+  ];
+  assert.deepEqual(parsePointers(prose.join('\n')), [], `none of these is evidence: ${prose.join(' | ')}`);
+});
+
 test('parsePointers: an absolute path parses — it is outside, not malformed', () => {
   assert.deepEqual(parsePointers('/abs/path.js:3 · `an absolute path parses` · claim'), [
     { line: 1, path: '/abs/path.js', lineNo: 3, fragment: 'an absolute path parses' },
@@ -148,6 +172,11 @@ test('parseCommit: no line is undefined, an unusable value is null, a hash is th
   assert.equal(parseCommit('commit: 3dd368\n'), null, 'six hex is shorter than the grammar');
   assert.equal(parseCommit(`commit: ${'a'.repeat(41)}\n`), null, 'forty-one hex is longer');
   assert.equal(parseCommit('commit:\n'), null, 'a commit: line with nothing on it is unusable');
+});
+
+test('parseCommit: a CRLF map is read like any other — the carriage return is not part of the value', () => {
+  assert.equal(parseCommit('# Map — demo\r\ncommit: 3dd368d\r\n\r\na.txt:1 · `x` · c\r\n'), '3dd368d');
+  assert.equal(parseCommit('commit: HEAD~1\r\n'), null, 'and an unusable value is still announced, not silently off');
 });
 
 // ─── §4 statuses ────────────────────────────────────────────────────────────
@@ -267,6 +296,28 @@ test('stale: an ok pointer whose file changed — by resolved location, not by s
   const { pointers, counts } = checkPointers({ text, root, changed: new Set(['a.txt']) });
   assert.deepEqual(pointers.map((p) => p.status), ['stale', 'stale', 'stale', 'ok', 'moved']);
   assert.deepEqual([counts.stale, counts.ok, counts.moved], [3, 1, 1]);
+});
+
+test('distinct counts the file, not the spelling: two ways to the same line are one pair', () => {
+  const root = project({ 'a.txt': 'first line here\n', 'sub/keep.txt': 'x\n' });
+  const text = [
+    'a.txt:1 · `first line here` · one pair',
+    'sub/../a.txt:1 · `first line here` · the same pair by another road',
+    './a.txt:1 · `first line here` · and a third spelling of it',
+  ].join('\n');
+  assert.equal(checkPointers({ text, root, changed: null }).counts.distinct, 1);
+  writeFileSync(join(root, 'report.md'), `${text}\n`);
+  const r = cli(['check', 'report.md', '--require', '2'], { cwd: root });
+  assert.equal(r.code, 1);
+  assert.equal(r.out.split('\n').at(-2), 'check: 1 distinct pointers, at least 2 required');
+});
+
+test('a root that is already real can be passed in, and one that is gone throws for the caller to catch', () => {
+  const root = project({ 'a.txt': 'first line here\n' });
+  const real = realpathSync(root);
+  const text = 'a.txt:1 · `first line here` · c';
+  assert.deepEqual(statuses({ text, root: join(root, 'gone'), realRoot: real }), ['ok'], 'realRoot is used as given');
+  assert.throws(() => checkPointers({ text, root: join(root, 'gone'), changed: null }), { code: 'ENOENT' });
 });
 
 test('the pointer objects keep their documented shape', () => {
@@ -646,11 +697,47 @@ test('check: no commit line is not "unchecked" — staleness is simply off, --st
 
 test('check: the command writes nothing — the project is byte-for-byte what it was', () => {
   const root = project({ 'a.txt': 'first line here\n', 'report.md': 'a.txt:1 · `first line here` · c\nb.txt:1 · `alpha beta gamma` · c\n' });
-  const snapshot = () => readdirSync(root).sort().map((n) => `${n} ${readFileSync(join(root, n), 'utf8')}`);
-  const before = snapshot();
+  const before = snapshot(root);
   cli(['check', 'report.md'], { cwd: root });
   cli(['check', 'report.md', '--strict', '--require', '0'], { cwd: root });
-  assert.deepEqual(snapshot(), before);
+  assert.deepEqual(snapshot(root), before);
+});
+
+test('check: nothing under .git is written either, not even the index git would like to refresh', { skip: GIT_SKIP }, () => {
+  const { root, first } = gitRepo();
+  // Same bytes, older timestamps: the state in which `git diff` wants to
+  // rewrite its cached stat information — and a read-only command must not.
+  const b = join(root, 'b.txt');
+  writeFileSync(b, readFileSync(b));
+  const past = new Date(Date.now() - 86400000);
+  utimesSync(b, past, past);
+  const index = join(root, '.git', 'index');
+  const indexDigest = () => createHash('sha256').update(readFileSync(index)).digest('hex');
+
+  const beforeIndex = indexDigest();
+  changedSince({ hash: first, root });
+  assert.equal(indexDigest(), beforeIndex, 'changedSince refreshes nothing');
+
+  writeFileSync(join(root, 'map.md'), `commit: ${first}\n\n- \`b.txt:1\` · \`alpha beta gamma\` · c\n`);
+  const before = snapshot(root);
+  cli(['check', 'map.md'], { cwd: root });
+  cli(['check', 'map.md', '--strict'], { cwd: root });
+  assert.equal(indexDigest(), beforeIndex, 'and neither does the command');
+  assert.deepEqual(snapshot(root), before, 'nothing anywhere under the repository, .git included');
+  assert.ok(before.some((row) => row.startsWith('F .git/index ')), 'the snapshot really did cover .git');
+});
+
+test('check: a CRLF map still has its commit line read', { skip: GIT_SKIP }, () => {
+  const { root, first } = gitRepo();
+  writeFileSync(join(root, 'map.md'), `commit: ${first}\r\n\r\n- \`a.txt:1\` · \`hello world line\` · c\r\n`);
+  const r = cli(['check', 'map.md'], { cwd: root });
+  assert.equal(r.code, 0);
+  assert.equal(r.out, `stale  a.txt:1  hello world line\n${summary(1, { stale: 1 })}\n`, 'staleness is on, not silently off');
+
+  writeFileSync(join(root, 'bad.md'), 'commit: HEAD~1\r\n\r\n- `a.txt:1` · `hello world line` · c\r\n');
+  const bad = cli(['check', 'bad.md'], { cwd: root });
+  assert.equal(bad.out, `staleness: not checked (unusable commit value)\n${summary(1, { ok: 1 })}\n`);
+  assert.equal(cli(['check', 'bad.md', '--strict'], { cwd: root }).code, 1);
 });
 
 test('the example pointer in docs/ORCHESTRATION.md still points at a real line', () => {

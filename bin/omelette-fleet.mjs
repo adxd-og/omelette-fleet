@@ -3307,11 +3307,13 @@ function cmdCheck(argv) {
   }
   const root = flags.root === undefined ? process.cwd() : resolvePath(String(flags.root));
   let rootIsDir = false;
+  let realRoot = null;
   try { rootIsDir = statSync(root).isDirectory(); } catch { /* not there at all */ }
   if (!rootIsDir) errors.push(`--root ${root} is not a directory`);
-  // It is a directory — but every path is resolved against its REAL path, so a
-  // root that cannot be resolved is a usage error too, not a stack trace.
-  else { try { realpathSync(root); } catch { errors.push(`--root ${root} cannot be resolved`); } }
+  // It is a directory — but every path is resolved against its REAL path, so
+  // that resolution happens ONCE, here, where a failure is still a usage error
+  // and not a stack trace out of the middle of a run.
+  else { try { realRoot = realpathSync(root); } catch { errors.push(`--root ${root} cannot be resolved`); } }
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet check: ${e}`)); return 2; }
 
   // The checked file may live anywhere — a report sits in a scratchpad — but it
@@ -3326,34 +3328,47 @@ function cmdCheck(argv) {
   // The cap is a usage error, so it is ruled on BEFORE anything is spawned.
   try { parsePointers(text); } catch (e) { err(`omelette-fleet check: ${e.message}`); return 2; }
 
-  // Staleness has three states, and each says something different: no `commit:`
-  // line means off, a value that is not a hash means unusable (and git is never
-  // asked), a hash means asked — and possibly unanswered.
-  const hash = parseCommit(text);
-  let changed = null;
+  // THE REPORT IS BUILT BEFORE ANY OF IT IS PRINTED, so that a failure half way
+  // through — the root taken away under us is the one that is real — is still a
+  // usage error with nothing but one line on stderr, and never half a report.
+  const report = [];
+  let counts;
   let unchecked = false;
-  if (hash === null) {
-    unchecked = true;
-    out('staleness: not checked (unusable commit value)');
-  } else if (hash !== undefined) {
-    const answer = changedSince({ hash, root });
-    if (answer.changed) changed = answer.changed;
-    else { unchecked = true; out(`staleness: not checked (${answer.reason})`); }
+  try {
+    // Staleness has three states, and each says something different: no
+    // `commit:` line means off, a value that is not a hash means unusable (and
+    // git is never asked), a hash means asked — and possibly unanswered.
+    const hash = parseCommit(text);
+    let changed = null;
+    if (hash === null) {
+      unchecked = true;
+      report.push('staleness: not checked (unusable commit value)');
+    } else if (hash !== undefined) {
+      const answer = changedSince({ hash, root });
+      if (answer.changed) changed = answer.changed;
+      else { unchecked = true; report.push(`staleness: not checked (${answer.reason})`); }
+    }
+
+    const checked = checkPointers({ text, root, realRoot, changed });
+    counts = checked.counts;
+    for (const p of checked.pointers) {
+      if (p.status === 'ok') continue;
+      if (p.status === 'malformed') { report.push(`malformed  line ${p.line}  ${p.raw.trim().slice(0, MALFORMED_ECHO_MAX)}`); continue; }
+      report.push(`${p.status}  ${p.path}:${p.lineNo}  ${p.fragment}${p.status === 'moved' ? `  → found at ${p.foundAt}` : ''}`);
+    }
+  } catch (e) {
+    err(`omelette-fleet check: ${firstLine((e && e.message) || e) || 'the check could not be completed'}`);
+    return 2;
   }
 
-  const { pointers, counts } = checkPointers({ text, root, changed });
-  for (const p of pointers) {
-    if (p.status === 'ok') continue;
-    if (p.status === 'malformed') { out(`malformed  line ${p.line}  ${p.raw.trim().slice(0, MALFORMED_ECHO_MAX)}`); continue; }
-    out(`${p.status}  ${p.path}:${p.lineNo}  ${p.fragment}${p.status === 'moved' ? `  → found at ${p.foundAt}` : ''}`);
-  }
-  out(`check: ${counts.total} pointers · ${counts.ok} ok · ${counts.moved} moved · ${counts.mismatch} mismatch`
+  report.push(`check: ${counts.total} pointers · ${counts.ok} ok · ${counts.moved} moved · ${counts.mismatch} mismatch`
     + ` · ${counts.missing} missing · ${counts.outside} outside · ${counts.stale} stale`
     + (counts['too-large'] ? ` · ${counts['too-large']} too-large` : '')
     + (counts.weak ? ` · ${counts.weak} weak` : '')
     + (counts.malformed ? ` · ${counts.malformed} malformed` : ''));
   const short = counts.distinct < need;
-  if (short) out(`check: ${counts.distinct} distinct pointers, at least ${need} required`);
+  if (short) report.push(`check: ${counts.distinct} distinct pointers, at least ${need} required`);
+  report.forEach((line) => out(line));
 
   const broken = counts.moved + counts.mismatch + counts.missing + counts.outside
     + counts['too-large'] + counts.weak + counts.malformed;

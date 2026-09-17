@@ -77,12 +77,15 @@ const HASH = /^[0-9a-f]{7,40}$/i;
  */
 const POINTER = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?(`?)([^\s`:]+):(\d+)\1 · `([^`]+)` · (.*)$/;
 /**
- * What it takes to *open* like a pointer: a bullet, a backtick, something with
- * no space in it, a colon, digits — and a separator somewhere after. Its path
- * part deliberately allows colons and its line part deliberately allows zero,
- * so `C:/x.js:3` and `a.txt:0` land here rather than passing as prose.
+ * What it takes to *open* like a pointer: a bullet, a backtick, something that
+ * LOOKS LIKE A PATH — it holds a `/` or a `.` — a colon, digits, and a
+ * separator somewhere after. Its path part deliberately allows colons and its
+ * line part deliberately allows zero, so `C:/x.js:3` and `a.txt:0` land here
+ * rather than passing as prose; the path test is what keeps `12:30 · lunch`
+ * and `key:1 · value` out, and a `://` (checked at the use site, because the
+ * greedy match has already chosen the path) keeps a URL out.
  */
-const OPENER = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?`?[^\s`]+:\d+/;
+const OPENER = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?`?([^\s`]*[./][^\s`]*):\d+/;
 /** `commit: <value>` — the whole value, so a trailing note is seen and refused. */
 const COMMIT = /^[ \t]*commit:[ \t]*(.*)$/i;
 
@@ -145,8 +148,8 @@ function parseLine(line, at) {
     }
   }
   const opener = OPENER.exec(line);
-  if (opener && line.slice(opener[0].length).includes(' · ')) return { line: at, malformed: true, raw: line };
-  return null;
+  const opens = opener && !opener[1].includes('://') && line.slice(opener[0].length).includes(' · ');
+  return opens ? { line: at, malformed: true, raw: line } : null;
 }
 
 /**
@@ -162,7 +165,9 @@ function parseLine(line, at) {
  */
 export function parseCommit(text) {
   for (const line of String(text).split('\n').slice(0, COMMIT_SCAN_LINES)) {
-    const m = COMMIT.exec(line);
+    // The same carriage return parsePointers strips: anchored at the end of the
+    // line, it would otherwise turn a CRLF map's staleness silently off.
+    const m = COMMIT.exec(line.replace(/\r$/, ''));
     if (!m) continue;
     const value = m[1].trim().replace(/^`(.*)`$/, '$1'); // the backticks a markdown map puts round it
     return HASH.test(value) ? value : null; // the first `commit:` line decides
@@ -208,6 +213,11 @@ export function changedSince({ hash, root }) {
   try {
     const stdout = execFileSync('git', [
       '-c', 'core.fsmonitor=false',
+      // A working-tree diff refreshes the index — it REWRITES `.git/index` for
+      // a file whose stat data went stale. A command that promises to write
+      // nothing does not get to do that, at the price of reporting a touched
+      // but unchanged file as changed.
+      '-c', 'diff.autoRefreshIndex=false',
       '-c', `core.hooksPath=${devNull}`,
       'diff', '--no-ext-diff', '--no-textconv', `-O${devNull}`, '--name-only', '--relative', hash, '--',
     ], {
@@ -238,28 +248,30 @@ function gitReason(e, hash) {
 /**
  * The verdict on every pointer of a checked file.
  *
- * @param {{text:string, root:string, changed:Set<string>|null, cacheBytes:number}} o
+ * @param {{text:string, root:string, changed:Set<string>|null, cacheBytes:number, realRoot:string}} o
  *   `changed` is null when staleness was not checked at all — `stale` then
  *   never happens, which is not the same as "nothing changed". `cacheBytes` is
  *   the read cache's budget, there so a test can starve it: the verdicts are
- *   the same at any budget.
+ *   the same at any budget. `realRoot` lets a caller that has already resolved
+ *   the root pass it in, so the resolution — and the error it can raise when
+ *   the root is gone — happens once, where that caller can answer for it.
  * @returns {{pointers:Array<object>, counts:object}} each pointer with its
  *   `status` (and `foundAt` for `moved`), plus the tally the summary prints —
  *   including `distinct`, the number of different `path:line` pairs, which is
  *   what `--require` is about.
  */
-export function checkPointers({ text, root, changed = null, cacheBytes = MAX_CACHE_BYTES }) {
-  const realRoot = realpathSync(root);
+export function checkPointers({ text, root, changed = null, cacheBytes = MAX_CACHE_BYTES, realRoot = realpathSync(root) }) {
   const cache = { targets: new Map(), bytes: 0, budget: cacheBytes };
   const pairs = new Set();
   const pointers = parsePointers(text).map((p) => {
     if (p.malformed) return { ...p, status: 'malformed' };
-    pairs.add(`${normalisePath(p.path)}:${p.lineNo}`);
     // `resolved` is the root-relative path of the file actually READ — the
     // spelling git uses, so `sub/../a.txt` and `./a.txt` are the same file to
-    // the changed set, as they are on disk.
+    // the changed set and to the distinct count, as they are on disk. Where
+    // there is none — nothing was opened — the written path is all there is.
     const { resolved, ...answer } = verdict(p, realRoot, cache);
-    const stale = answer.status === 'ok' && changed !== null && resolved !== undefined && changed.has(resolved);
+    pairs.add(`${resolved === undefined ? normalisePath(p.path) : resolved}:${p.lineNo}`);
+    const stale = answer.status === 'ok' && changed !== null && changed.has(resolved);
     return { ...p, ...answer, status: stale ? 'stale' : answer.status };
   });
   const counts = {
