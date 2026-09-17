@@ -322,7 +322,10 @@ test('the worst case is bounded: 2000 mismatching pointers into a 2 MiB target',
   const { counts } = checkPointers({ text, root, changed: null });
   const spent = Date.now() - started;
   assert.equal(counts.mismatch, MAX_POINTERS);
-  assert.ok(spent < 5000, `2000 pointers into 2 MiB took ${spent} ms`);
+  // The scan-per-pointer version took 28 s on a laptop; this one takes under two.
+  // The bound sits between them with room for a CI runner several times slower:
+  // it is there to catch the quadratic shape coming back, not to race the clock.
+  assert.ok(spent < 15000, `2000 pointers into 2 MiB took ${spent} ms`);
 });
 
 // ─── §4 staleness: the git child ────────────────────────────────────────────
