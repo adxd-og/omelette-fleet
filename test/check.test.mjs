@@ -13,11 +13,11 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MAX_POINTERS, MAX_TARGET_BYTES, changedSince, checkPointers, parseCommit, parsePointers } from '../core/check.mjs';
+import { MAX_CACHE_BYTES, MAX_POINTERS, MAX_TARGET_BYTES, TARGET_OPEN_FLAGS, changedSince, checkPointers, parseCommit, parsePointers } from '../core/check.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -436,6 +436,67 @@ test('check: the command writes nothing — the project is byte-for-byte what it
   cli(['check', 'report.md'], { cwd: root });
   cli(['check', 'report.md', '--strict', '--require', '0'], { cwd: root });
   assert.deepEqual(snapshot(), before);
+});
+
+// ─── the review round: the open flags, the cache budget, the stale lookup ───
+
+test('the target open carries O_NOFOLLOW where the platform defines it — lstat alone leaves a race', () => {
+  if (constants.O_NONBLOCK) assert.equal(TARGET_OPEN_FLAGS & constants.O_NONBLOCK, constants.O_NONBLOCK);
+  if (!constants.O_NOFOLLOW) return; // where the platform has no such flag it folds to 0, by design
+  assert.equal(TARGET_OPEN_FLAGS & constants.O_NOFOLLOW, constants.O_NOFOLLOW);
+  const root = project({ 'a.txt': 'one\n' });
+  symlinkSync(join(root, 'a.txt'), join(root, 'link.txt'));
+  let code = null;
+  try { closeSync(openSync(join(root, 'link.txt'), TARGET_OPEN_FLAGS)); } catch (e) { code = e.code; }
+  assert.match(String(code), /^(ELOOP|EMLINK)$/, 'a symlink swapped in is refused at the open itself');
+  const p = checkPointers({ text: 'link.txt:1 · `one` · c', root, changed: null }).pointers[0];
+  assert.equal(p.status, 'outside', 'and the caller sees a status, never the ELOOP');
+});
+
+test('the read cache has a byte budget: past it a target is read and judged but not kept', () => {
+  assert.equal(MAX_CACHE_BYTES, 32 * 1024 * 1024);
+  const root = project({ 'one.txt': 'alpha\nbeta\n', 'two.txt': 'gamma\ndelta\n', 'three.txt': 'epsilon\n' });
+  const text = [
+    'one.txt:1 · `alpha` · ok',
+    'two.txt:2 · `delta` · ok',
+    'three.txt:1 · `epsilon` · ok',
+    'one.txt:2 · `alpha` · moved back to 1',
+    'two.txt:1 · `nowhere` · mismatch',
+    'three.txt:9 · `epsilon` · past the end, moved',
+  ].join('\n');
+  const shape = (o) => checkPointers({ text, root, changed: null, ...o }).pointers.map((p) => `${p.status}${p.foundAt ? `@${p.foundAt}` : ''}`);
+  const cached = shape({});
+  assert.deepEqual(cached, ['ok', 'ok', 'ok', 'moved@1', 'mismatch', 'moved@1']);
+  assert.deepEqual(shape({ cacheBytes: 1 }), cached, 'a budget of one byte caches nothing and changes nothing');
+  assert.deepEqual(shape({ cacheBytes: 0 }), cached, 'and neither does a budget of none');
+});
+
+test('stale is looked up by the resolved location, so sub/../a.txt is git\'s a.txt', () => {
+  const root = project({ 'a.txt': 'hello world\n', 'sub/keep.txt': 'x\n' });
+  const text = [
+    'sub/../a.txt:1 · `hello world` · c',
+    './a.txt:1 · `hello world` · c',
+    'a.txt:1 · `hello world` · c',
+  ].join('\n');
+  const { pointers } = checkPointers({ text, root, changed: new Set(['a.txt']) });
+  assert.deepEqual(pointers.map((p) => p.status), ['stale', 'stale', 'stale']);
+});
+
+test('check: a pointer written sub/../a.txt is stale against the real commit range', { skip: GIT_SKIP }, () => {
+  const { root, first } = gitRepo();
+  mkdirSync(join(root, 'sub'));
+  writeFileSync(join(root, 'map.md'), `commit: ${first}\n\n- \`sub/../a.txt:1\` · \`hello world\` · c\n`);
+  const r = cli(['check', 'map.md'], { cwd: root });
+  assert.equal(r.code, 0);
+  assert.equal(r.out, `stale  sub/../a.txt:1  hello world\n${summary(1, { stale: 1 })}\n`);
+  assert.equal(cli(['check', 'map.md', '--strict'], { cwd: root }).code, 1);
+});
+
+test('the example pointer in docs/ORCHESTRATION.md still points at a real line', () => {
+  const md = readFileSync(join(ROOT, 'docs', 'ORCHESTRATION.md'), 'utf8');
+  const { pointers, counts } = checkPointers({ text: md, root: ROOT, changed: null });
+  assert.ok(counts.total >= 1, 'the section shows at least one pointer line');
+  assert.deepEqual(pointers.filter((p) => p.status !== 'ok').map((p) => `${p.path}:${p.lineNo} ${p.status}`), []);
 });
 
 test('check: the help lists it next to the other subcommands', () => {

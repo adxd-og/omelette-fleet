@@ -10,7 +10,7 @@
  *
  * ONE GRAMMAR (spec 2026-09-17 §1), and everything that does not match it is
  * prose:
- *   - `core/unit.mjs:436` · `const finish = (text, isError` · the claim
+ *   - `core/unit.mjs:435` · `const finish = (text, isError` · the claim
  * The bullet and the backticks around `path:line` are optional, the separator
  * is ` · ` (U+00B7), the fragment is in single backticks — so it can hold no
  * backtick — and the claim after it is free text this file NEVER checks.
@@ -22,8 +22,12 @@
  * WHAT A PATH MAY REACH. Everything resolves against the REAL path of the root
  * and is refused when it leaves it — including through a symlinked parent
  * directory, which is why the target's directory is realpath'd and not just
- * the target. A symlink, a directory, a device: `outside`. Over 2 MiB:
- * `too-large`, unread. Each target is read at most once per run.
+ * the target. A symlink, a directory, a device: `outside` — and the open
+ * carries O_NOFOLLOW, so a symlink swapped in after the lstat is refused by
+ * the kernel rather than followed. Over 2 MiB: `too-large`, unread. A target
+ * is read at most once per run, up to a 32 MiB cache budget; past it files are
+ * still read and judged, they are simply not kept, so a map full of large
+ * targets costs bounded memory and the verdicts never depend on the cache.
  *
  * NOTHING BUT A HASH REACHES GIT. `changedSince` validates the `commit:` value
  * as hex before it builds a revision range, and spawns git through execFile
@@ -32,12 +36,18 @@
  */
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /** At most this many pointer lines per checked file; more is a usage error. */
 export const MAX_POINTERS = 2000;
 /** A target over this is reported, not read. */
 export const MAX_TARGET_BYTES = 2 * 1024 * 1024;
+/**
+ * How much of what was read a run may keep. 2000 pointers at 2 MiB each is
+ * 4 GB of lines if the cache is unbounded, so it is not: past this budget a
+ * target is read and judged like any other and simply not kept.
+ */
+export const MAX_CACHE_BYTES = 32 * 1024 * 1024;
 /** How far into a checked file a `commit:` line still counts. */
 const COMMIT_SCAN_LINES = 20;
 
@@ -52,8 +62,15 @@ const POINTER = /^[ \t]*(?:[-*][ \t]+)?(`?)([^\s`:]+):([1-9]\d*)\1 · `([^`]+)`/
 /** `commit: <value>` — the value is validated as hex before it is believed. */
 const COMMIT = /^[ \t]*commit:[ \t]*`?([^\s`]+)`?[ \t]*$/i;
 
-/** O_NONBLOCK where the platform defines it, 0 where it does not. */
-const NONBLOCK = constants.O_NONBLOCK || 0;
+/**
+ * HOW A TARGET IS OPENED, exported so a test can see the flags rather than
+ * trust a comment. O_NONBLOCK so the open cannot wait on a FIFO that appeared
+ * between the lstat and the open; O_NOFOLLOW so a symlink swapped in over the
+ * same race is refused by the kernel (ELOOP) instead of followed — the lstat
+ * decides what the path WAS, these flags decide what we may actually open.
+ * Each folds to 0 where the platform does not define it.
+ */
+export const TARGET_OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK || 0) | (constants.O_NOFOLLOW || 0);
 
 /** One whitespace rule for both sides of every comparison. */
 const normalise = (s) => String(s).replace(/\s+/g, ' ').trim();
@@ -133,94 +150,113 @@ function gitReason(e, hash) {
 /**
  * The verdict on every pointer of a checked file.
  *
- * @param {{text:string, root:string, changed:Set<string>|null}} o
+ * @param {{text:string, root:string, changed:Set<string>|null, cacheBytes:number}} o
  *   `changed` is null when staleness was not checked at all — `stale` then
- *   never happens, which is not the same as "nothing changed".
+ *   never happens, which is not the same as "nothing changed". `cacheBytes` is
+ *   the read cache's budget, there so a test can starve it: the verdicts are
+ *   the same at any budget.
  * @returns {{pointers:Array<object>, counts:object}} each pointer with its
  *   `status` (and `foundAt` for `moved`), plus the tally the summary prints.
  */
-export function checkPointers({ text, root, changed = null }) {
+export function checkPointers({ text, root, changed = null, cacheBytes = MAX_CACHE_BYTES }) {
   const realRoot = realpathSync(root);
-  const cache = new Map(); // resolved path → lines, so a target is read once a run
+  // resolved path → lines, so a target is read once a run, within a budget.
+  const cache = { lines: new Map(), bytes: 0, budget: cacheBytes };
   const pointers = parsePointers(text).map((p) => {
-    const status = verdict(p, realRoot, cache);
-    if (status.status === 'ok' && changed && changed.has(normalisePath(p.path))) return { ...p, status: 'stale' };
-    return { ...p, ...status };
+    // `resolved` is the root-relative path of the file actually READ — the
+    // spelling git uses, so `sub/../a.txt` and `./a.txt` are the same file to
+    // the changed set, as they are on disk.
+    const { resolved, ...answer } = verdict(p, realRoot, cache);
+    const stale = answer.status === 'ok' && changed !== null && resolved !== undefined && changed.has(resolved);
+    return { ...p, ...answer, status: stale ? 'stale' : answer.status };
   });
   const counts = { total: pointers.length, ok: 0, moved: 0, mismatch: 0, missing: 0, outside: 0, stale: 0, 'too-large': 0 };
   for (const p of pointers) counts[p.status]++;
   return { pointers, counts };
 }
 
-/** One pointer against the file it names. `{status, foundAt?}`. */
+/**
+ * One pointer against the file it names: `{status, foundAt?, resolved?}`, where
+ * `resolved` is that file's root-relative path and is there only when a file
+ * was read — the caller needs it for the staleness lookup and resolving it
+ * twice would be resolving it two ways.
+ */
 function verdict(p, realRoot, cache) {
   const rel = normalisePath(p.path);
   if (isAbsolute(p.path) || isAbsolute(rel)) return { status: 'outside' };
   const target = resolve(realRoot, rel);
   if (target !== realRoot && !target.startsWith(realRoot + sep)) return { status: 'outside' };
 
-  const lines = readLines(target, realRoot, cache);
-  if (typeof lines === 'string') return { status: lines }; // missing / outside / too-large
+  const read = readLines(target, realRoot, cache);
+  if (read.status) return { status: read.status }; // missing / outside / too-large
+  const { lines } = read;
+  const resolved = normalisePath(relative(realRoot, read.path));
 
   const fragment = normalise(p.fragment);
-  if (!fragment) return { status: 'mismatch' }; // a fragment of nothing proves nothing
+  if (!fragment) return { status: 'mismatch', resolved }; // a fragment of nothing proves nothing
   const at = lines[p.lineNo - 1];
-  if (at !== undefined && normalise(at).includes(fragment)) return { status: 'ok' };
+  if (at !== undefined && normalise(at).includes(fragment)) return { status: 'ok', resolved };
   // Not there: the nearest line that does carry it, ties to the lower line.
   let foundAt = 0;
   for (let i = 0; i < lines.length; i++) {
     if (!normalise(lines[i]).includes(fragment)) continue;
     if (!foundAt || Math.abs(i + 1 - p.lineNo) < Math.abs(foundAt - p.lineNo)) foundAt = i + 1;
   }
-  return foundAt ? { status: 'moved', foundAt } : { status: 'mismatch' };
+  return foundAt ? { status: 'moved', foundAt, resolved } : { status: 'mismatch', resolved };
 }
 
 /**
- * The target's lines, or the status that says why there are none.
+ * The target's lines and the path they came from — `{lines, path}` — or
+ * `{status}` saying why there are none.
  *
  * THE DIRECTORY IS REALPATH'D, not just the target: a symlinked parent
  * component is the escape a check on the final path alone would miss. The
  * target itself is lstat'd, so a symlink is seen as a symlink and never
- * followed.
+ * followed, and `path` is where the bytes actually came from.
  */
 function readLines(target, realRoot, cache) {
   let dir;
   try {
     dir = realpathSync(dirname(target));
   } catch (e) {
-    return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'missing' : 'outside';
+    return { status: e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'missing' : 'outside' };
   }
-  if (dir !== realRoot && !dir.startsWith(realRoot + sep)) return 'outside';
+  if (dir !== realRoot && !dir.startsWith(realRoot + sep)) return { status: 'outside' };
   const path = join(dir, basename(target));
-  if (cache.has(path)) return cache.get(path);
+  if (cache.lines.has(path)) return { lines: cache.lines.get(path), path };
 
   let st;
   try {
     st = lstatSync(path);
   } catch (e) {
-    return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'missing' : 'outside';
+    return { status: e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'missing' : 'outside' };
   }
-  if (!st.isFile()) return 'outside'; // a symlink, a directory, a device: not evidence
-  if (st.size > MAX_TARGET_BYTES) return 'too-large';
+  if (!st.isFile()) return { status: 'outside' }; // a symlink, a directory, a device: not evidence
+  if (st.size > MAX_TARGET_BYTES) return { status: 'too-large' };
 
   const text = readBounded(path, MAX_TARGET_BYTES);
-  if (text === null) return 'outside'; // it is there and we may not read it
+  if (text === null) return { status: 'outside' }; // it is there and we may not read it
   const lines = text.split('\n');
-  cache.set(path, lines);
-  return lines;
+  // Past the budget a target is judged all the same, just not kept.
+  if (cache.bytes + st.size <= cache.budget) {
+    cache.lines.set(path, lines);
+    cache.bytes += st.size;
+  }
+  return { lines, path };
 }
 
 /**
- * A bounded, non-blocking read of a regular file — the pattern core/rules.mjs
- * uses for a rules file: lstat, O_NONBLOCK so the open cannot wait on a FIFO
- * that appeared between the two syscalls, fstat on the descriptor actually
- * opened. Never throws; null means "not a file we could read".
+ * A bounded read of a regular file — the pattern core/rules.mjs uses for a
+ * rules file: lstat, an open that can neither wait nor follow a link
+ * (TARGET_OPEN_FLAGS), fstat on the descriptor actually opened. Never throws:
+ * an ELOOP from a swapped-in symlink comes back as null like any other
+ * refusal, and the caller reads null as `outside`.
  */
 function readBounded(path, maxBytes) {
   let fd = null;
   try {
     if (!lstatSync(path).isFile()) return null;
-    fd = openSync(path, constants.O_RDONLY | NONBLOCK);
+    fd = openSync(path, TARGET_OPEN_FLAGS);
     const st = fstatSync(fd);
     if (!st.isFile()) return null;
     const length = Math.max(0, Math.min(maxBytes, st.size));
