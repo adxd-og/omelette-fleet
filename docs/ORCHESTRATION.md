@@ -10,6 +10,7 @@ How to run a session with a fleet: who decides, who proposes, and which unit get
 | How do I keep a plan from getting lost across a compaction? | [Ledger and handoff](#ledger-and-handoff) |
 | Who tests the coder's work, and who decides test vs. code? | [Tester sub-agent and arbitration](#tester-sub-agent-and-arbitration) |
 | What does a review finding have to look like? | [Reviews](#reviews) |
+| How do I trust a report or a code map without re-reading the code? | [Evidence with pointers](#evidence-with-pointers) |
 | How do I control a sub-agent's model and effort? | [Spawning sub-agents: model and effort](#spawning-sub-agents-model-and-effort) |
 | Which unit should a given task be routed to? | [Routing by task](#routing-by-task) |
 | When should I escalate to a stronger model or higher effort? | [Model and effort escalation](#model-and-effort-escalation) |
@@ -161,6 +162,24 @@ The one exception, and it runs the other way: **the tester may fix or drop its O
 **A finding has four parts, or it is a question.** Every review brief asks for, and every finding is recorded as, `location · scenario · consequence · how to confirm`. The orchestrator rules on each: `verified`, `rejected (reason)` or `needs-check (what)`, in the ledger.
 
 **First review clean, re-review continued.** The first review of a change runs with a clean context — no coder summary, no earlier findings. A re-review after a fix round is briefed with the previous findings and the rulings on them, so it verifies the fixes instead of rediscovering the file.
+
+## Evidence with pointers
+
+Delegation multiplies reading: four planners re-read the same modules, and a report in free prose has to be taken on faith or re-derived. The answer is a funnel — explore once, pass compact evidence up — with one guard against the funnel's own failure: a digest that cannot be checked turns one agent's mistake into everyone's premise. So evidence is written as **pointer lines**, and a command verifies them.
+
+```
+- `core/unit.mjs:435` · `const finish = (text, isError` · finish() closes the status entry and spools the record
+```
+
+`path:line`, relative to the project root · a **verbatim fragment** of that line in backticks (no backtick inside it) · the claim. Quote, never paraphrase: paraphrase is where mistakes enter. Anything that does not match the shape is prose and is ignored.
+
+| Piece | What it is |
+|---|---|
+| **Report shape** | `omelette-coder` and `omelette-tester` write their full report as `## TASK`, `## FINDINGS` (pointer lines), `## DIFF`, `## TEST RESULTS`, `## OPEN QUESTIONS`; the short reply is unchanged. |
+| **Scout map** | Before planning a release of more than one package, **one** read-only scout writes `.omelette/map-<plan>.md`, once: `# Map — <plan>`, `commit: <hash>`, pointer lines grouped by module and factual only (*owns / exports / calls / reads / writes*), and a mandatory closing `## Not read` so silence is not read as absence. Planners and the coder get the map instead of re-reading what it covers. |
+| **`omelette-fleet check <file.md>`** | Verifies every pointer: `ok`, `moved` (the fragment is on another line — the found line is named), `mismatch`, `missing`, `outside` (leaves the project root, a symlink, not a regular file), `too-large`, and `stale` when the file changed since the map's `commit:`. Exit `0` only when all are `ok` and there is at least one pointer (`--require <n>` changes the floor, `--strict` fails on `stale` and on a staleness git could not answer). It reads files under the root, runs `git diff --name-only`, and writes nothing. |
+
+How to use them: run `check` on a map before handing it on and again when the branch has moved; re-take stale lines rather than trusting them; a consumer opens **three pointers of its own choosing** before relying on a map, and one false line rejects the map whole. A right pointer can still carry a wrong conclusion — which is why map lines stay factual, and why **a scout map never goes to a first review**: that review runs clean-context precisely so it does not inherit the scout's blind spots.
 
 ## Spawning sub-agents: model and effort
 
