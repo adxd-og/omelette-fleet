@@ -9,6 +9,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | What do `contract` and `updateCheck` control? | [Top-level settings](#top-level-settings) |
 | How do I configure the coder and tester sub-agents? | [Agent settings](#agent-settings) |
 | How do I configure the auto-handoff threshold and window? | [Handoff settings](#handoff-settings) |
+| What do the handoff hooks do to my ledger, and when? | [The handoff hooks](#the-handoff-hooks) |
 | How do I set whether the session merges or opens a PR? | [Workflow settings](#workflow-settings) |
 | What config keys exist and what do they default to? | [Keys](#keys) |
 | What extra keys does one unit have, and what's its built-in default? | [Unit-specific extras and built-in overrides](#unit-specific-extras-and-built-in-overrides) |
@@ -122,7 +123,7 @@ Validation is deliberately forgiving in one direction: an unknown agent, an unkn
 
 ### Handoff settings
 
-The `handoff` block configures the other managed file that is rendered rather than read at call time: the guard hook's auto-handoff, which asks for the `## Handoff` block once the session's context passes a threshold and holds one `Stop` until it is written.
+The `handoff` block configures the other managed file that is rendered rather than read at call time: the guard hook's auto-handoff, which asks for the `## Handoff` block once the session's context passes a threshold and holds one `Stop` until it is written. What each hook does with these values: [The handoff hooks](#the-handoff-hooks).
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -168,6 +169,24 @@ The file is rewritten at the same package version — the marker is the proof of
 **The policy is printed where you would look for it.** `doctor` puts `merge policy  session (rules rendered)` in its per-project block, and `install --rules` prints `merge policy: session (rules rendered)` after the files it wrote. The value is the one in the config; the parenthesis is where the rendered rules file stands beside it — `rules rendered` when the file carries that same sentence, `config; rules not re-rendered — run rules` when it still carries the other one (the config alone changes no session), and `config; no rules file` when this project has no rendered file of ours at all, in either scope. While the policy is `session` **and** the repository looks like one whose changes go through pull requests, the line ends with one hint: `— this repository looks PR-gated: consider set workflow.merge=pr`. Three signals, and any one of them is enough: a pull-request template — `PULL_REQUEST_TEMPLATE.md` at the root, under `.github/` or under `docs/`, or any `.md` file inside `.github/PULL_REQUEST_TEMPLATE/`, the directory GitHub reads when a repository offers several — a `CODEOWNERS` file in those same three places (root, `.github/`, `docs/`), and — **only** when no file said so, only when `gh` is on your PATH, and bounded at five seconds — `gh api repos/{owner}/{repo}/branches/main/protection` exiting 0 for the repository you are standing in. Regular files of this repository's own only: a directory carrying one of those names is not a template, and the multiple-template directory is read without following a link out of the repository — a symlink where `.github/PULL_REQUEST_TEMPLATE/` should be is not scanned at all, and a linked-in `.md` inside a real one is not a template either. That listing is bounded too: at most 64 entries, in the order the filesystem hands them over, because this is a hint and not a search. No `gh`, no network call at all; a `gh` that fails for any reason whatsoever says nothing. It is a hint and never a fault: no exit code moves, the fleet opens and merges nothing, and a `pr` policy is never questioned — a repository with no template can still be gated by a rule nobody wrote down.
 
 Validation is the same as everywhere else: an invalid value is a warning (`omelette-fleet rules` prints it on stderr and renders the default sentence), and `set` refuses it outright. There are no environment overrides for this block.
+
+## The handoff hooks
+
+What `omelette-fleet rules --hooks` does for the ledger, event by event. The rules file keeps only the obligations; the mechanism is here. Every handler reads `<session cwd>/.omelette/ledger-*.md` — the directory the session runs in, not the repository the plan is about — so **a ledger kept in another repository gets neither the stamp nor the print**. None of it happens unless `.omelette/` holds a `ledger-*.md`: that file is the opt-in.
+
+| Event | What the guard does | Bounds and switch |
+|---|---|---|
+| `PreCompact` | Appends `## Compaction <ISO> (trigger: …) — re-read this ledger before continuing` to every ledger, announced compaction or not, and drops this session's threshold crossing | Regular files only: a symlink or a FIFO named like a ledger is skipped. On whenever the guard is wired |
+| `SessionStart`, matcher `compact` | Prints each ledger's **last handoff block** into the context that opens after the compaction, so the re-read is a paste rather than a search | Only for the source `compact`; 40 lines / 4 KB per ledger, 12 KB in all |
+| `PostToolUse` | Reads the last request's token usage out of the session transcript; once the context passes `handoff.threshold` (90 % by default) of the window `handoff.contextWindow` resolves to ([Handoff settings](#handoff-settings)), puts one line into the context asking for a `## Handoff` block now | Once per crossing; silent in a sub-agent; `handoff.enabled=false` turns it off |
+| `Stop` | Refuses the first `Stop` after the crossing while no `## Handoff` has been appended since; stop again and the turn ends | Once per crossing; silent in a sub-agent; `handoff.enabled=false` turns it off |
+| `PostCompact` | Appends Claude Code's own summary of the compaction to every ledger under `## Compaction summary <ISO> (trigger: …)`: the account of what the context dropped, kept where the plan is kept | Bounded to 8 KB; `handoff.compactSummary=false` turns it off |
+
+**The summary is not a handoff.** Its heading is deliberately not `## Handoff`, and a heading quoted inside it is escaped on the way in, so the `SessionStart` print and the `Stop` gate both ignore it: the handoff block is still yours to write.
+
+**What the hooks do not do.** They remind **once** and gate **once** per crossing, and they print only the handoff block you wrote. A manual `/compact` below the threshold gets no reminder. The discipline is the ledger file, not the hook: handoffs at every natural pause, and the hook is the net under it.
+
+A changed value reaches a session only through a re-render — `omelette-fleet set handoff.compactSummary=false && omelette-fleet rules --hooks` — because the values are substituted into the script ([Handoff settings](#handoff-settings)).
 
 ## Keys
 
