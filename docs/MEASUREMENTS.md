@@ -9,6 +9,9 @@ What has actually been measured on this project, how each number was taken, and 
 | What are three release reviews worth? | [Review yield per release](#review-yield-per-release) |
 | What does the short fleet contract save in every session? | [The fleet contract, full and short](#the-fleet-contract-full-and-short) |
 | Where do sub-agent tokens go, by role? | [Sub-agents by role](#sub-agents-by-role) |
+| What fills a sub-agent's context — reading, its own output, the harness? | [Where a sub-agent's context goes](#where-a-sub-agents-context-goes) |
+| Who runs past 200 k tokens, and doing what? | [Past 200 k](#past-200-k) |
+| Does the guard's context estimate match the engine's? | [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) |
 | How do I repeat these on my own sessions? | [How the numbers are taken](#how-the-numbers-are-taken) |
 | Which claims has nobody measured? | [Not measured yet](#not-measured-yet) |
 
@@ -83,9 +86,56 @@ Every sub-agent the orchestrating session of releases 0.3.3 → 1.1.0 saw finish
 
 Minutes are wall clock and include time an agent spent waiting on a permission prompt — one reviewer sat on prompts for seven hours — so they say more about the harness than about the work. The fleet's own units (Gemini, Grok, Codex) are not in this table: they run on their vendors' subscriptions and are counted by `omelette-fleet results --stats`.
 
+## Where a sub-agent's context goes
+
+Every sub-agent of the 0.3.3 → 1.1.0 session — 76, those that started before 2026-09-18 — read from its own transcript (`scripts/context-by-source.mjs --before 2026-09-18`; [how](#how-the-numbers-are-taken)). "Logged text" is what each turn *added* to the agent's context, by where it came from; the resident context of a request is the `usage` sum, whose peak is the second column. All ran on `claude-opus-5` (coders, planners, reviewers, docs) or `claude-sonnet-5` (testers).
+
+| Role | Agents | Peak context, mean | Requests, mean | Logged text by source: brief · Read · Bash that reads a file · other Bash · Edit · harness attachments · the agent's own output | Read calls overlapping an earlier Read of the same file |
+|---|---:|---:|---:|---|---:|
+| coder | 27 | 208 449 | 103 | 1 % · 32 % · 30 % · 5 % · 2 % · 4 % · 27 % | 43 of 230 |
+| planner | 16 | 283 587 | 47 | 1 % · 35 % · 32 % · 5 % · 0 % · 3 % · 24 % | 15 of 175 |
+| tester | 19 | 125 049 | 40 | 2 % · 46 % · 34 % · 6 % · 0 % · 0 % · 12 % | 20 of 136 |
+| reviewer | 6 | 197 962 | 54 | 1 % · 32 % · 49 % · 4 % · 0 % · 5 % · 9 % | 1 of 31 |
+| docs | 3 | 237 373 | 34 | 1 % · 72 % · 16 % · 2 % · 0 % · 2 % · 8 % | 1 of 18 |
+
+Three things the table says:
+
+- **Reading is two thirds of everything an agent takes in** — 62 % for coders, 67 % for planners, 80 % and more for testers and reviewers — and half of that reading goes through `cat`/`sed -n` rather than `Read`, which a count of `Read` calls alone would miss.
+- **An agent rarely re-reads within itself** (9 % of a planner's `Read` calls overlap an earlier one, 19 % of a coder's). The repetition is *across* agents: `bin/omelette-fleet.mjs` (3 400 lines) was read 89 times by the 16 planners and 255 times by the 27 coders; `test/cli.test.mjs` 61 and 138 times. That is what one scout map per release is aimed at, and it is the right target.
+- **Harness attachments are a floor.** The 2–5 % counts only attachment entries that carry text (instructions, skill listings); bookkeeping entries without text are not counted, because the transcript does not say what of them the model saw.
+- **A quarter of a planner's or coder's context is its own output** — thinking, and the plan or the code it writes through `Write`/`Edit`, which then sits in the context for every later request. A planner's plan file is ~100 k characters.
+
+The four transcripts the 1.2.0 spec asked for, one line each (the two 1.1.0 coders; the 1.1.0 planner and one from 0.3.7 as the second, 1.1.0 having had one planner):
+
+| Agent | Requests | Peak context | Output tokens | Cache-read tokens, summed over requests | Read chars | Bash-read chars | Own output chars | Overlapping Reads |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Plan P1 (1.1.0, `check`) | 78 | 437 208 | 94 187 | 21 040 175 | 414 852 | 95 480 | 203 496 | 2 of 26 |
+| Plan P4 (0.3.7, merge policy + lane) | 47 | 363 734 | 27 266 | 10 230 094 | 462 928 | 29 039 | 106 816 | 4 of 24 |
+| Implement `check` (1.1.0, four rounds) | 138 | 319 330 | 188 112 | 27 331 176 | 88 401 | 44 906 | 246 155 | 3 of 15 |
+| Implement P1 code (1.1.0) | 120 | 291 275 | 42 798 | 23 598 599 | 212 329 | 136 330 | 145 092 | 3 of 7 |
+
+The cache-read column is the rent: the `check` coder's 138 requests each re-read an average of 198 k tokens from cache, 27 M in all, at a tenth of the input price — more input-token equivalents than everything it read fresh.
+
+## Past 200 k
+
+From the same transcripts: 31 of 76 sub-agents ran a request whose context exceeded 200 000 tokens — every one of the 16 planners, 11 of the 27 coders, none of the 19 testers — typically between 40 % and 65 % of the way through their requests. No sub-agent transcript holds a compaction marker: they ran in the 1 M window and never compacted. Of the logged text after the crossing, 87 % is reading (53 % `Read`, 34 % Bash reads) and 2 % editing; since overlapping reads are rare (above), that tail is new reading, not recovery. It argues for keeping the `[1m]` window on the shipped definitions, but it does not settle it: whether the same task done inside 200 k with a compaction comes out as good is a matched experiment (1.2.0 spec, P0), not something a tail can say.
+
+## The guard's estimate against the engine
+
+The handoff guard estimates the context fill from the session transcript; Claude Code's function-hooks API (early access, behind `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` on 2.1.280) reports the engine's own figure, `$.session.usage().context`. A throwaway probe plugin logged both on the same request (2026-09-22, three short sessions, early point only).
+
+| What | Engine | Guard | Gap |
+|---|---:|---:|---|
+| `tokens` (the last response's input side) | 32 770 · 33 755 · 35 342 | the same three numbers | none — the arithmetic is the same |
+| `window` | 200 000 (the session's model was Haiku) | 1 000 000 | the whole gap: the guard takes the window from `handoff.contextWindow` when the config sets it, and this install sets it to 1 M for its `[1m]` sessions; the engine knows the live model's window |
+| `percent` at the same request | 16–18 | 3 | 13–15 points, all from the window; at an equal window the two differ by at most 1 point (the engine rounds, the guard floors) |
+
+Not yet taken: the near-threshold and post-compaction points, which need a working `[1m]` session run with the probe loaded. The row that matters for the guard's design is the window one: an estimate that reads its window from config cannot follow a session whose model differs, and the engine's figure can — which is the case for moving the guard into a function-hooks module once that API leaves early access (backlog N1).
+
 ## How the numbers are taken
 
 - **Sub-agent tokens.** `node scripts/agent-usage.mjs <transcript.jsonl>` (in the repository; not part of the installed package) reads a Claude Code session transcript (`~/.claude/projects/<project>/<session>.jsonl`) and collects the task notifications the harness writes when a background sub-agent finishes — `subagent_tokens`, `tool_uses`, `duration_ms` — one row per agent. It reads nothing else, and a description that carries an absolute path is cut to its last segment. The transcript itself is private and is not in this repository; only the aggregates above are.
+- **Per-request usage, by source.** `node scripts/context-by-source.mjs <session.jsonl> <subagents dir> [--agents]` reads each sub-agent's own transcript (`~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl`; since Claude Code 2.1.280 a `.meta.json` beside it names the role and model). One API request is one `message.id`; its context is `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`; text is attributed to the tool that produced it, a Bash command counting as reading when a pipeline segment starts with `cat`, `head`, `tail`, `sed -n`, `git show`, `git diff` or the like. It prints aggregates and repository-relative file names, never content; `--before <ISO date>` names the cutoff, because a resumed session keeps writing sub-agents into the same directory. This is the better source, and the one 1.2.0's measurements are taken from.
 - **What `subagent_tokens` means.** It is the harness's count for the agent at the moment it stopped. A resumed agent reports again with a larger number (the 1.1.0 coder reported 139 834, 184 245, 286 692 and 320 000 across four rounds), so the script keeps the largest. Read it as the size of the context the agent ended with — a floor on what it had to read — not as a bill: the billed total, with cache reads on every turn, is larger and is not in the transcript in this form.
 - **`check` timings.** A throwaway harness imports `core/check.mjs` from each commit, builds the fixture in a temp directory, and times `checkPointers` with `process.hrtime`; memory is `process.resourceUsage().maxRSS` from a fresh process per run (an idle Node process on that machine: 33 MiB). The fixtures are the ones described in the table; the timing one is also a test (`test/check.test.mjs`, "the worst case is bounded").
 - **Review yield.** The `review yield:` line of each release's ledger (`.omelette/ledger-<release>.md`, kept by the orchestrator, not in the repository).
