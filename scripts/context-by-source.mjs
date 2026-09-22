@@ -230,8 +230,13 @@ function fail(message) { console.error(`context-by-source: ${message}`); process
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const args = process.argv.slice(2);
+  // --before <ISO date>: only transcripts whose first entry is older — a resumed
+  // session keeps writing into the same subagents/ directory, so a published
+  // table names its cutoff to stay reproducible.
+  const at = args.indexOf('--before');
+  const before = at === -1 ? null : args.splice(at, 2)[1];
   const [session, dir] = args.filter((a) => !a.startsWith('--'));
-  if (!session || !dir) { console.error('usage: node scripts/context-by-source.mjs <session.jsonl> <subagents dir> [--agents] [--json]'); process.exit(2); }
+  if (!session || !dir || (at !== -1 && !before)) { console.error('usage: node scripts/context-by-source.mjs <session.jsonl> <subagents dir> [--agents] [--json] [--before <ISO date>]'); process.exit(2); }
   let sessionText, names;
   try { sessionText = readFileSync(session, 'utf8'); } catch (e) { fail(`cannot read ${basename(session)}: ${e.code || e.message}`); }
   try { names = readdirSync(dir).filter((f) => /^agent-.*\.jsonl$/.test(f)); } catch (e) { fail(`cannot read ${basename(dir)}: ${e.code || e.message}`); }
@@ -243,8 +248,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     const lines = text.split('\n').filter(Boolean).map((l, i) => {
       try { return JSON.parse(l); } catch { return fail(`${f} line ${i + 1} is not JSON`); }
     });
+    if (before && lines[0] && String(lines[0].timestamp || '') >= before) return null;
     return { id, ...analyseTranscript(lines, metaFor(dir, id, notified)) };
-  });
+  }).filter(Boolean);
   const summary = summarise(records);
   const mapsAsObjects = (k, v) => v instanceof Map ? Object.fromEntries(v) : v;
   console.log(args.includes('--json') ? JSON.stringify({ summary, records }, mapsAsObjects, 2) : renderMarkdown(summary, records, { agents: args.includes('--agents') }));

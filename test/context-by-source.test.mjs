@@ -230,3 +230,16 @@ test('without both arguments the CLI prints its usage and exits 2', () => {
   assert.equal(r.status, 2);
   assert.match(r.stderr, /^usage: node scripts\/context-by-source\.mjs <session\.jsonl> <subagents dir> \[--agents\] \[--json\]/);
 });
+
+test('--before keeps only transcripts whose first entry is older than the date', () => {
+  const old = jsonl([{ ...brief('go'), timestamp: '2026-09-10T10:00:00.000Z' }, ...call('Read', { file_path: '/home/someone/omelette-fleet/a.mjs' }, 'x')]);
+  const fresh = jsonl([{ ...brief('go'), timestamp: '2026-09-20T10:00:00.000Z' }, ...call('Read', { file_path: '/home/someone/omelette-fleet/b.mjs' }, 'x')]);
+  const root = sessionDir({ 'session.jsonl': notice('a1', 'Implement P1') + '\n' + notice('a2', 'Implement P2'), 'subagents/agent-a1.jsonl': old, 'subagents/agent-a2.jsonl': fresh });
+  const cut = run(join(root, 'session.jsonl'), join(root, 'subagents'), '--json', '--before', '2026-09-18');
+  assert.equal(cut.status, 0, cut.stderr);
+  assert.deepEqual(JSON.parse(cut.stdout).records.map((r) => r.id), ['a1']);
+  const all = run(join(root, 'session.jsonl'), join(root, 'subagents'), '--json');
+  assert.equal(JSON.parse(all.stdout).records.length, 2);
+  const bare = run(join(root, 'session.jsonl'), join(root, 'subagents'), '--before');
+  assert.equal(bare.status, 2, 'a --before without a date is a usage error');
+});
