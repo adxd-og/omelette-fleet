@@ -344,7 +344,7 @@ Every finding from every run goes to a fresh agent with a clean context, told to
 
 **What the result decides.** A dedicated auditor definition is built only if the brief verifies findings that the plain review and the plugin both missed. Otherwise this section is the security brief, and a release's security review is a review run with it.
 
-**Result.** Not counted yet: this line becomes the three runs' one-line summary, linked to their row in MEASUREMENTS.
+**Result.** Over `d7180b2`: plain 34 found, 18 verified; brief 16 found, 9 verified; plugin not run; 3 verified by the brief only. The brief found three real defects the plain review missed and dropped seven in ten of the plain review's candidates before refutation; `omelette-auditor` is not built. The row, with the overlap and what only the brief found: [MEASUREMENTS](MEASUREMENTS.md#security-audit-plain-brief-and-plugin-over-one-revision).
 
 ## Recommended agy allow-rules
 

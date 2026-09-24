@@ -184,3 +184,95 @@ test('SECURITY says what the P0 refutations found true: proxy URLs pass as they 
     assert.match(read(rel), /alone or inside a cluster like `-qb`/, `${rel} lists the branch-creating flags as Task 4 reads them`);
   }
 });
+
+// ── Task 3: the row, and the line SECURITY carries from it ───────────────────
+// Two runs, plain and brief: the plugin run needs the operator's own
+// `/claude-security` invocation, which has not happened, so its column reads
+// `not run` in every cell and stays out of the arithmetic (1.3.0 ledger ruling).
+
+const ROW = '## Security audit: plain, brief and plugin over one revision';
+const ROW_ANCHOR = 'security-audit-plain-brief-and-plugin-over-one-revision';
+const SUMMARY = /^\*\*In one line\.\*\* (Over `d7180b2`: plain (\d+) found, (\d+) verified; brief (\d+) found, (\d+) verified; plugin not run; (\d+) verified by the brief only\.)$/;
+const COUNTS = ['Calls', 'Found', 'Verified', 'Refuted'];
+
+/** The row's table, by run: one column per run, one line per measure. */
+function runs(row) {
+  const lines = row.split('\n').filter((l) => l.startsWith('| '));
+  const cells = (l) => l.split('|').slice(1, -1).map((c) => c.trim());
+  const [head] = lines;
+  const columns = cells(head).slice(1);
+  const index = Object.fromEntries(['Plain', 'Brief', 'Plugin'].map((run) => {
+    const at = columns.findIndex((c) => c.startsWith(run));
+    assert.notEqual(at, -1, `a ${run} column in the table`);
+    return [run, at + 1];
+  }));
+  const byMeasure = Object.fromEntries(lines.slice(1).map((l) => [cells(l)[0], cells(l)]));
+  for (const m of ['Model', ...COUNTS]) assert.ok(byMeasure[m], `a ${m} line in the table`);
+  const out = {};
+  for (const [run, at] of Object.entries(index)) {
+    const model = byMeasure.Model[at];
+    const counts = COUNTS.map((m) => byMeasure[m][at]);
+    if (run === 'Plugin') {
+      out[run] = { model, counts };
+      continue;
+    }
+    for (const n of counts) assert.match(n, /^\d+$/, `${run}: ${n} is a count`);
+    const [calls, found, verified, refuted] = counts.map(Number);
+    out[run] = { model, calls, found, verified, refuted };
+  }
+  return out;
+}
+
+test('MEASUREMENTS has the security-audit row: plain and brief over d7180b2, each with its model, every finding verified or refuted, the plugin not run, the lines agreeing', () => {
+  const md = read('docs/MEASUREMENTS.md');
+  const row = section(md, ROW);
+  assert.doesNotMatch(row, /\[\[[^\]\n]+\]\]/, 'every slot filled from the ledger');
+  assert.ok(row.includes('`d7180b2`'), 'the revision is named');
+  const t = runs(row);
+  assert.equal(t.Plain.model, '`gpt-6-astra`');
+  assert.equal(t.Brief.model, '`gpt-6-astra`');
+  assert.equal(t.Plugin.model, 'not run', 'the plugin column says it did not run');
+  assert.deepEqual(t.Plugin.counts, COUNTS.map(() => 'not run'), 'in every cell');
+  assert.ok(row.includes('`/claude-security`'), "the row says the plugin waits for the operator's own invocation");
+  for (const run of ['Plain', 'Brief']) {
+    const r = t[run];
+    assert.ok(r.calls >= 1, `${run}: at least one call`);
+    assert.equal(r.verified + r.refuted, r.found, `${run}: every finding ends verified or refuted`);
+  }
+  const lines = row.split('\n');
+  const refutation = lines.find((l) => l.startsWith('**Refutation.** '));
+  assert.ok(refutation && /`[^`]+`/.test(refutation), "the refuting agents' model is named");
+  assert.match(refutation, /[Cc]onfound/, 'and the shared-context confound');
+  const overlap = (lines.find((l) => l.startsWith('**Overlap.** ')) || '').match(/plain and brief (\d+)\.$/);
+  assert.ok(overlap, 'the overlap line, in its one count');
+  const both = Number(overlap[1]);
+  const [P, B] = [t.Plain.verified, t.Brief.verified];
+  // The three disjoint regions of two sets: every one is a count of defects,
+  // so none can be negative.
+  const regions = { 'plain only': P - both, 'brief only': B - both, both };
+  for (const [region, n] of Object.entries(regions)) assert.ok(n >= 0, `${region}: ${n} is not a count — the overlap line and the table disagree`);
+  const only = (lines.find((l) => l.startsWith('**Verified by the brief only.** ')) || '').match(/^\*\*Verified by the brief only\.\*\* (\d+)(\.| — .+)$/);
+  assert.ok(only, 'the brief-only line: a count, then the findings');
+  const briefOnly = Number(only[1]);
+  assert.equal(briefOnly, regions['brief only'], 'brief-only = what the brief verified less what plain verified too');
+  const summary = lines.find((l) => SUMMARY.test(l));
+  assert.ok(summary, 'the one-line summary');
+  const [pf, pv, bf, bv, bo] = summary.match(SUMMARY).slice(2).map(Number);
+  assert.deepEqual([pf, pv, bf, bv, bo], [t.Plain.found, t.Plain.verified, t.Brief.found, t.Brief.verified, briefOnly], 'the summary says what the table says');
+  const reading = lines.find((l) => l.startsWith('Reading: '));
+  assert.ok(reading, 'the reading');
+  assert.equal(reading.startsWith('Reading: the brief verified nothing that'), briefOnly === 0, 'the reading follows the brief-only count');
+  const head = md.slice(0, md.indexOf('\n## '));
+  assert.ok(head.split('\n').some((l) => l.endsWith(`| [${ROW.slice(3)}](#${ROW_ANCHOR}) |`)), 'the map at the top links the row');
+  assert.ok(section(md, '## How the numbers are taken').includes('\n- **Security-audit counts.** '), 'and says how the counts are taken');
+});
+
+test("SECURITY carries the row's one-line summary word for word, linked to the row", () => {
+  const line = section(read('docs/MEASUREMENTS.md'), ROW).split('\n').find((l) => SUMMARY.test(l));
+  assert.ok(line, 'the summary line');
+  const summary = line.match(SUMMARY)[1];
+  const result = section(read('docs/SECURITY.md'), AUDITED).split('\n').find((l) => l.startsWith('**Result.** '));
+  assert.ok(result.startsWith(`**Result.** ${summary} `), 'the summary, word for word, first');
+  assert.match(result, /omelette-auditor. is not built/, 'what the result decided');
+  assert.ok(result.endsWith(` The row, with the overlap and what only the brief found: [MEASUREMENTS](MEASUREMENTS.md#${ROW_ANCHOR}).`), 'linked to the row');
+});

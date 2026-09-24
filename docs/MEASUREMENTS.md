@@ -7,11 +7,14 @@ What has actually been measured on this project, how each number was taken, and 
 | What does planning cost today — the number the scout map is aimed at? | [Planning cost before the scout map](#planning-cost-before-the-scout-map) |
 | What did the 1.1.0 review rounds change that a clock can see? | [`check` before and after its reviews](#check-before-and-after-its-reviews) |
 | What are three release reviews worth? | [Review yield per release](#review-yield-per-release) |
+| Does a security brief find what a plain review and a plugin miss? | [Security audit: plain, brief and plugin over one revision](#security-audit-plain-brief-and-plugin-over-one-revision) |
 | What does the short fleet contract save in every session? | [The fleet contract, full and short](#the-fleet-contract-full-and-short) |
 | How big is the rules file every session loads, before and after 1.2.0? | [The rules file, before and after](#the-rules-file-before-and-after) |
+| What did the session carry per request in 1.3.0, and did the rules file cause it? | [Rent and the rules file, 1.2.0 to 1.3.0](#rent-and-the-rules-file-120-to-130) |
 | What does planning cost with the scout map, and did a fork do better? | [Planning cost with the scout map](#planning-cost-with-the-scout-map) |
 | What does a task lead cost against the session running the coder and tester itself? | [A task lead between the session and the coder](#a-task-lead-between-the-session-and-the-coder) |
 | Does a coder's effort level change what it builds? | [Coder effort: medium, high, xhigh on one task](#coder-effort-medium-high-xhigh-on-one-task) |
+| Does medium hold against xhigh when the coder has to judge, not follow? | [The matched repeat: medium and xhigh on a judgement-heavy task](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) |
 | Where do sub-agent tokens go, by role? | [Sub-agents by role](#sub-agents-by-role) |
 | What fills a sub-agent's context — reading, its own output, the harness? | [Where a sub-agent's context goes](#where-a-sub-agents-context-goes) |
 | Who runs past 200 k tokens, and doing what? | [Past 200 k](#past-200-k) |
@@ -61,8 +64,31 @@ Every release closes its ledger with one line: findings found, accepted, rejecte
 | 0.3.7 | 31 | 28 | 3 | A FIFO at the rules path hanging every server start; a compaction summary able to forge a handoff heading |
 | 1.0.0 | 10 | 8 | 1 / 1 | Three diagram labels that contradicted the code; three blind spots in the docs test itself |
 | 1.1.0 | 37 | 29 | 6 / 2 | `check` writing git's index; a one-character fragment passing; staleness blind to the working tree; an unusable `commit:` value switching staleness off in silence |
+| 1.3.0 | — | — | — | (filled at release close) |
 
 Across six releases, 163 findings and 145 accepted: the reviewers are rarely wrong, and the rejected ones are mostly stricter readings of a brief than of the spec. A docs-only release (1.0.0) still produced eight real defects.
+
+## Security audit: plain, brief and plugin over one revision
+
+Two runs over the same revision, `d7180b2` (v1.2.0), on 2026-09-24: Codex with no method (the control), and Codex with the whole brief SECURITY describes under [How this package is audited](SECURITY.md#how-this-package-is-audited) — the trust-class table, the attacker model, the refutation gate with the Trail of Bits links, and Cloudflare's core discipline, trust-class section and validation rules. Both on `gpt-6-astra` at effort high, one call per group — the unit servers with `units/` and `core/`, the guard, the CLI and what it renders. The third run, the `claude-security` plugin, needs the operator's own `/claude-security` invocation and has not run; the table gains its third column when it does. Counts are distinct defects per run: the brief run reported 17 items, one a duplicate.
+
+| | Plain — Codex, no method | Brief — Codex, with the brief | Plugin — `claude-security` |
+|---|---:|---:|---:|
+| Model | `gpt-6-astra` | `gpt-6-astra` | not run |
+| Calls | 3 | 3 | not run |
+| Found | 34 | 16 | not run |
+| Verified | 18 | 9 | not run |
+| Refuted | 16 | 7 | not run |
+
+**Refutation.** Seven fresh agents on `claude-opus-5-5`, each with a clean context, one per file cluster (guard-io, guard-git, core-fs, adapters, spawn-rpc, cli-text, cli-fs), each told to disprove every finding in its cluster against the code at `d7180b2`; `verified` means the attempt failed. Confound: the findings of one cluster shared one agent's context, so a ruling on one could lean on another. A defect both runs reported is one finding in each run's count and one in the overlap. Among the verified: S3 was already known and documented, C3 is narrow (both runs), S17 is conditional (brief), and S2 and G6 (plain) came back `needs-check` and were then settled — S2 by a vendor probe, G6 documented as a fail-open by design.
+
+**Overlap.** Verified defects both runs found — G4, G5, S3, C3, C5, C7: plain and brief 6.
+
+**Verified by the brief only.** 3 — S17: a bare vendor name is resolved from the caller's `cwd` when `PATH` holds an empty or relative entry (Task 8); S18: the `GOOGLE_*` passthrough admits `GOOGLE_CREDENTIALS` (Task 6); S19: a gemini retry replays an accept-edits run (Task 6).
+
+**In one line.** Over `d7180b2`: plain 34 found, 18 verified; brief 16 found, 9 verified; plugin not run; 3 verified by the brief only.
+
+Reading: the brief verified 3 defects the plain review missed, and 12 of the plain review's verified defects were not among its findings; the spec's condition for `omelette-auditor` — defects the plain review and the plugin both missed — cannot be read without the plugin run, and the three are real but low, so no auditor definition is built: the security brief is SECURITY's section, and a release's security review is a review run with it. What landed: the 19 findings verified at the session's ruling (S2 and G6 were settled after it) became ten tasks of the release, T4–T13 of the fixes plan, each fix with its test, all committed.
 
 ## The fleet contract, full and short
 
@@ -89,6 +115,17 @@ The rendered `.claude/rules/omelette-fleet.md` is loaded at every session start,
 | **Net, resident in every session** | 1 321 | 1 339 | **~330** |
 
 Rendered under the default merge policy (`session`; the `pr` sentence is 32 characters shorter). Tokens at four characters per token, as for the contract above: the character counts are exact, the token figures an estimate. The ceiling is 13 100 characters, pinned by `test/rules-size.test.mjs`.
+
+## Rent and the rules file, 1.2.0 to 1.3.0
+
+The rent is the resident context of the orchestrating session (`claude-fable-5-1`) on every request it makes; the rules file is part of it in every session.
+
+| | 1.2.0 | 1.3.0 |
+|---|---|---|
+| Session's resident context per request (`claude-fable-5-1`) | 210–250k | last 200 requests: mean 442k (min 259k, max 627k); all-time mean 339k over 1 354 requests |
+| Rendered rules file, characters | 13 069 | 13 922 (`session` merge policy) · 13 890 (`pr`); ceiling 14 030 |
+
+One line: the session ran 1.3.0 end to end without a compaction, so its rent roughly doubled while the rules file grew by 853 characters (about 210 tokens at four characters per token) — the growth is the session's length, not the rules file.
 
 ## Planning cost with the scout map
 
@@ -135,6 +172,17 @@ Same brief (turn the P0 scratchpad script into `scripts/context-by-source.mjs` w
 Approximate cost at `claude-opus-5-5` list prices: $0.7 (medium) · $0.8 (high) · $1.3 (xhigh). Codex's review (static, blinded, four criteria) called the differences material on robustness and test depth.
 
 Reading: on a plan-driven task all three effort levels built the same behaviour — identical fixture numbers against the shipped tool — and xhigh bought edge-case tests and robustness, largely what the clean-context tester and the review already pay for, at ~2.5× the cache reads and 3.6× the wall clock of medium. N = 1, and the one design defect landing on high rather than medium or xhigh, say this is not yet a ranking. Decision: the coder stays at `effort: xhigh` in 1.2.0; 1.3.0 repeats the trial on a judgement-heavy task and, if xhigh's edge still holds, sets `agents.coder.effort=medium`.
+
+## The matched repeat: medium and xhigh on a judgement-heavy task
+
+The release's largest security fix — the guard's git classifier, T4 of the P0 fixes plan — built twice from one commit in two worktrees, with the same decision brief word for word. The acceptance tests were written once, from the plan, by a clean-context tester (`claude-sonnet-5`; 31 requests, $0.83, 8 min) before either arm ran; a blind `omelette-reviewer` (`claude-opus-5-5`, xhigh; 61 requests, $3.77, 41 min for both rounds) judged both arms without knowing which was which.
+
+| Arm | Definition · model · effort | Requests | Cache-read Σ | Cache-write Σ | Peak context | Wall | Cost | Rounds | Acceptance | Blind review |
+|---|---|---:|---:|---:|---:|---|---:|---:|---:|---|
+| A | `omelette-coder-medium` · `claude-opus-5-5` · medium | 30 | 3.08M | 139k | 139k | 17.3 min | $1.33 | 1 | 39/39 | 3 real defects — a second quadratic path left in place (117 s on a 448 KB command before exit 2, a fail-open class); branch writes in a nested shell missed; a redirection before the subcommand missed — and 1 pre-existing |
+| B | `omelette-coder` · `claude-opus-5-5` · xhigh | 67 | 16.38M | 785k | 373k | 46.5 min round 1 + ~12 min round 2 | $7.28 | 2 | 39/39 | 2 narrow missed writes (a value-less global option before the subcommand; split quoting) and 1 maintainability, fixed in round 2 — shipped |
+
+Reading: the acceptance tests could not tell the arms apart (39/39 each); the blind review could; N = 1. Arm A cost a fifth of arm B and left a fail-open class in the guard; arm B cost 5.5× and shipped after one fix round. Bucket log: 21 plan-driven tasks ran at medium in one round each with 0 acceptance defects and 1 tester-found defect (a line-splitting disagreement the printed diff missed), 4 stopped for a ruling the plan lacked (all stale test pins), and docs went to Sonnet 5 times. The coder default does not move: the spec moves it only if the matched repeat holds for medium, and it did not — `omelette-coder` stays at xhigh, and `omelette-coder-medium` is the plan-driven bucket.
 
 ## Sub-agents by role
 
@@ -205,6 +253,9 @@ Not yet taken: the near-threshold and post-compaction points, which need a worki
 - **What `subagent_tokens` means.** It is the harness's count for the agent at the moment it stopped. A resumed agent reports again with a larger number (the 1.1.0 coder reported 139 834, 184 245, 286 692 and 320 000 across four rounds), so the script keeps the largest. Read it as the size of the context the agent ended with — a floor on what it had to read — not as a bill: the billed total, with cache reads on every turn, is larger and is not in the transcript in this form.
 - **`check` timings.** A throwaway harness imports `core/check.mjs` from each commit, builds the fixture in a temp directory, and times `checkPointers` with `process.hrtime`; memory is `process.resourceUsage().maxRSS` from a fresh process per run (an idle Node process on that machine: 33 MiB). The fixtures are the ones described in the table; the timing one is also a test (`test/check.test.mjs`, "the worst case is bounded").
 - **Review yield.** The `review yield:` line of each release's ledger (`.omelette/ledger-<release>.md`, kept by the orchestrator, not in the repository).
+- **Security-audit counts.** The P0 lines of the 1.3.0 ledger (same place): one `candidate` line per finding per run, then its `verified` or `refuted` ruling once a fresh agent had tried to disprove it — seven agents on `claude-opus-5-5`, one per file cluster (guard-io, guard-git, core-fs, adapters, spawn-rpc, cli-text, cli-fs), each clean-context and handed every finding in its cluster. The confound: findings in one cluster shared one agent's context, so the rulings within a cluster are not independent. Duplicates within a run are merged before counting; the overlap is matched by the session, by location and scenario. Two runs only: the plugin run waits for the operator's own `/claude-security` invocation.
+- **Matched-repeat numbers.** Per-request usage from each sub-agent's own transcript, priced at the list prices of the day ([above](#a-task-lead-between-the-session-and-the-coder)); output tokens are taken as the maximum per message id, so they are under-counted, equally in both arms. Acceptance is the tester's tests, written before either arm ran, run against each arm's tree.
+- **Rent.** Per-request context from the orchestrating session's own transcript, counted as under "Per-request usage, by source" above; the 1.3.0 rules sizes are `renderRulesFile` under each merge policy, as above.
 - **Contract sizes.** `FLEET_CONTRACT.length` and `SHORT_CONTRACT.length` from `core/rules.mjs`.
 - **Rules file size.** `renderRulesFile('1.2.0', { merge: 'session' })` from `core/rules.mjs` — `.length` for characters, `Buffer.byteLength` for bytes — and, for 1.1.0, the same three substitutions applied to `git show v1.1.0:rules/omelette-fleet.md`.
 - **Per-task cost tables.** Taken from sub-agent transcripts with `scripts/context-by-source.mjs --agents` — roles come from each agent's `.meta.json` `agentType` since commit `1997a71`, guessed from the description only when a run predates it — and that day's list prices. Session-side numbers are estimates: the session's own windows overlap other, concurrent work, so they are not read off a clean transcript the way a sub-agent's are.
@@ -216,4 +267,6 @@ Not yet taken: the near-threshold and post-compaction points, which need a worki
 - **What the units cost per release.** `results --stats --since` has the data; it has not been cut by release.
 - **Whether `check` catches wrong evidence in practice.** In 1.1.0 it caught one off-by-one pointer in the orchestrator's own documentation and one weak fragment in the coder's own report. Two is an anecdote.
 - **N0: the near-threshold and post-compaction points.** Flagged as not yet taken under [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) — the probe mod exists in the scratchpad; it needs an operator session with function hooks enabled to run.
-- **A judgement-heavy effort trial, and the two-bucket effort rule.** [Coder effort: medium, high, xhigh on one task](#coder-effort-medium-high-xhigh-on-one-task) was a plan-driven text edit; not measured is whether the same gap holds on a task the coder has to judge rather than follow, and whether the rule that follows — medium when the plan prints the diff, xhigh when the coder decides — holds up.
+- **A second judgement-heavy effort trial.** [The matched repeat](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) is one task, N = 1; the two-bucket rule rests on it and on an observational bucket log. A second judgement-heavy pair is what would make it a ranking.
+- **The plugin run of the security audit.** [The row](#security-audit-plain-brief-and-plugin-over-one-revision) has two runs; the `claude-security` plugin waits for the operator's own `/claude-security` invocation.
+- **The shipped reviewer against 1.2.0's hand-briefed review.** Filled at release close, in [Review yield per release](#review-yield-per-release).
