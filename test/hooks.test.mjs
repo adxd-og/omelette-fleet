@@ -217,7 +217,10 @@ test('PreToolUse: `git tag` reads and `git rebase --abort` pass; the tag writes 
     // the next word.
     'git tag --sort refname',
     'git tag --format "%(refname)"',
-    'git tag --column always',
+    // `--column` and `--color` take a value only ATTACHED: git 2.38.1 reads
+    // `git tag --column always` as creating a tag called `always`, so that
+    // command is in the refused list below (1.3.0, G5).
+    'git tag --column=always',
     // A shell comment is not part of the command — and a `git tag` inside one
     // is not a command at all.
     'echo hi # git tag v1',
@@ -283,6 +286,9 @@ test('PreToolUse: `git tag` reads and `git rebase --abort` pass; the tag writes 
     // A name is a name after an option that took its own value, too.
     'git tag --sort refname v1',
     'git tag -m msg v1',
+    // …and after an option whose value is attached-only: `--column` takes
+    // none from the next word, so `always` here is the tag it creates.
+    'git tag --column always',
     // …and a flag quoted inside a value is text, not a flag: `--exec` runs its
     // argument once per commit, which is a rebase in every sense.
     "git rebase --exec 'echo --abort now' HEAD~1",
@@ -446,7 +452,8 @@ test('PreToolUse: a command of nothing but option-shaped tokens is answered at o
     // classified by scanning them once, so they cannot be tiled either.
     `git tag${' --contains x'.repeat(60)}`,
     // …and the same shape at 10 KB, because the comment scan, the tokenizer and
-    // the classifier each walk the command once and none of them re-reads it.
+    // the classifier each walk the command once; only a quoted word is read
+    // again, as a command of its own, and never deeper than QUOTE_DEPTH.
     `git tag${' --contains x'.repeat(800)}`,
     `echo ${'x'.repeat(5000)} # ${'a comment '.repeat(500)}`,
   ]) {
@@ -1099,5 +1106,73 @@ test('PreToolUse: omelette-coder-medium is matched WHOLE — a name around it, o
     const r = fire(g.path, preToolUse({ agent_type, tool_input: { command: 'git commit -m "x"' } }));
     assert.equal(r.code, 0, `agent_type ${JSON.stringify(agent_type)} is not guarded: ${r.out}${r.err}`);
     assert.equal(r.err, '', `agent_type ${JSON.stringify(agent_type)} printed to stderr`);
+  }
+});
+
+/*
+ * 1.3.0 P0 Task 4, review round 2: two writes the base guard refused and the
+ * first token-level classifier let through.
+ */
+test('PreToolUse: a global long option git takes without a value never swallows the subcommand behind it', () => {
+  const g = guard();
+  for (const command of [
+    // `--no-pager` takes no value, so `checkout` is the subcommand and `tag/v1`
+    // the branch it creates — not a `tag` listing that happens to come last.
+    'git --no-pager checkout -b tag/v1',
+    'git --no-pager switch -c tag/fix',
+    'git --no-optional-locks branch tag',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+  const r = fire(g.path, preToolUse({ tool_input: { command: 'git --no-pager tag -l' } }));
+  assert.equal(r.code, 0, `git --no-pager tag -l should pass: ${r.out}${r.err}`);
+  assert.equal(r.err, '');
+});
+
+test('PreToolUse: adjacent quoted pieces are ONE shell word — a split-quoted `sh -c` script is read whole', () => {
+  const g = guard();
+  for (const command of [
+    // The shell joins `'git tag '` and `"v1"` into the one word `git tag v1`,
+    // which is the script `sh -c` runs; read piece by piece it looked like a listing.
+    `sh -c 'git tag '"v1"`,
+    `BR=x; bash -c 'git branch '"$BR"`,
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+  const r = fire(g.path, preToolUse({ tool_input: { command: `sh -c 'git tag '"-l"` } }));
+  assert.equal(r.code, 0, `sh -c 'git tag '"-l" should pass: ${r.out}${r.err}`);
+  assert.equal(r.err, '');
+});
+
+/*
+ * 1.3.0 P0 Task 4, review round 2's one open finding: a history write, or a
+ * write by argument, hidden inside nested quoting is still refused at every
+ * depth — the quoted word is re-read as a command of its own — while a
+ * listing nested the same way still passes, so the depth bound (QUOTE_DEPTH)
+ * is not a blanket refusal of quotes.
+ */
+test('PreToolUse: a git write inside nested quoting is refused at every depth; a nested listing still passes', () => {
+  const g = guard();
+  // Real nesting: each level wraps the previous command in `sh -c "…"` with the
+  // inner quotes and backslashes escaped, the way a shell script would.
+  const wrap = (s) => `sh -c "${s.replace(/(["\\])/g, '\\$1')}"`;
+  const nest = (s, n) => { let out = s; for (let i = 0; i < n; i++) out = wrap(out); return out; };
+  for (const base of ['git push', 'git commit -m x', 'git tag v1', 'git checkout -b x', 'git branch x']) {
+    for (const depth of [1, 3, 6]) {
+      const command = base === 'git push' && depth === 1 ? `sh -c "bash -c 'git push'"` : nest(base, depth);
+      const r = fire(g.path, preToolUse({ tool_input: { command } }));
+      assert.equal(r.code, 2, `${base} at depth ${depth} should be blocked: ${r.out}${r.err}`);
+    }
+  }
+  for (const base of ['git tag -l', 'echo hi']) {
+    for (const depth of [1, 3, 6]) {
+      const r = fire(g.path, preToolUse({ tool_input: { command: nest(base, depth) } }));
+      assert.equal(r.code, 0, `${base} at depth ${depth} should pass: ${r.out}${r.err}`);
+      assert.equal(r.err, '');
+    }
   }
 });

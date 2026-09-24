@@ -83,89 +83,50 @@ const NOFOLLOW = constants.O_NOFOLLOW || 0;
 const NONBLOCK = constants.O_NONBLOCK || 0;
 
 /**
- * One option token's VALUE. Written as "a quoted span or a character that is
- * neither quote nor space, repeated" rather than `\S+`, for two reasons:
- *   - a value is quoted the moment it holds a space (`-C "/My Dir"`,
- *     `-c user.name="A B"`), and `\S+` stops at that space;
- *   - and exactly one alternative can start at any position, so the repetition
- *     itself is unambiguous. `(?:"…"|'…'|\S)+` matches the same strings and
- *     takes seconds on a token full of quote characters, because there a `"`
- *     can start either branch.
- */
-const OPT_VALUE = '(?:"[^"]*"|\'[^\']*\'|[^\\s"\'])+';
-
-/**
- * The options git accepts BEFORE the subcommand: `-c key=value` / `-C <dir>`
- * attached or spaced, quoted or bare; a long flag with its value attached by
- * `=` or separated by a space; a value-less short flag (`-p`); and the bare
- * `--` separator. Anything in this run is skipped over on the way to the
- * subcommand, so no amount of prefixing hides one.
- *
- * NO TWO ALTERNATIVES MAY READ THE SAME TOKEN, or the run has exponentially
- * many tilings of a command it will not match in the end — and the commands
- * it does not match ARE the hot path: every Bash call in the session. Hence
- * the `(?!-)` on every space-separated value. Without it, ` -c` reads both as
- * its own value-less flag and as the previous option's value, and `git` +
- * ` -c`×N took 5 ms at N=20, 94 ms at N=30 and 11.4 s at N=40; with it every
- * token has exactly one reading and N=200 is 0.01 ms. A value that really does
- * begin with `-` just ends the run there, which costs nothing — the flag is
- * then read as a flag, and the subcommand behind it is still found.
- */
-const OPTION_RUN = '(?:'
-  + `\\s+-[cC]=?${OPT_VALUE}`
-  + `|\\s+-[cC]\\s+(?!-)${OPT_VALUE}`
-  + `|\\s+--[\\w-]+(?:=${OPT_VALUE}|\\s+(?!-)${OPT_VALUE})?`
-  + '|\\s+-[A-Za-z]'
-  + '|\\s+--'
-  + ')*';
-
-/** Subcommands that create a commit, or move a stash / worktree — nothing after them makes them read-only. */
-const WRITES_HISTORY = 'commit|merge|cherry-pick|revert|am|pull|push|stash|worktree';
-
-/** `git branch` flags that MOVE a ref: rename (`-m`/`-M`), copy (`-c`/`-C`), force-reset (`-f`), upstream (`-u`). */
-const BRANCH_WRITES = '-[mMcCfu]|--force|--set-upstream';
-
-/**
- * What a guarded role is never allowed to run, whatever it was asked to do — matched
- * against real git syntax rather than its tidiest form:
- *   - a longer subcommand that merely starts like a forbidden one is NOT this:
+ * What a guarded role is never allowed to run, whatever it was asked to do: a
+ * `git` invocation that writes history, a ref, a stash or a worktree. Matched
+ * against real git syntax rather than its tidiest form, and read the way the
+ * shell reads the command — the comments come off (withoutComments), the rest
+ * becomes words, separators and redirections in one pass (tokenize), and every
+ * `git … <subcommand>` in those words is found with its own arguments
+ * (invocations). Then:
+ *   - a subcommand in WRITES_HISTORY writes, whatever follows it;
+ *   - `branch`, `checkout`, `switch`, `tag` and `rebase` are read by their
+ *     ARGUMENTS, because a flag anywhere among them decides what they do — see
+ *     branchWrites, createsBranch, tagWrites and rebaseWrites below;
+ *   - and a longer subcommand that merely starts like one of these is NOT it:
  *     `git commit-tree` writes an object and commits nothing, and `merge-base`
- *     only computes — hence `(?![\w-])` on the bare subcommands;
- *   - `git branch` READS (listing, `-d`, `-a`, `-r`, `-v`) until it is handed a
- *     name to create or a flag that moves a ref (BRANCH_WRITES);
- *   - and the branch-creating flags of `checkout`/`switch` may come after other
- *     flags and arguments (`checkout -q -b feat`) or with the name attached to
- *     them (`checkout -bfeat`, and `-B`/`-C` force it), so the scan runs to the
- *     end of the command rather than looking only at the next word. `[^\s;&|]`
- *     keeps that scan inside ONE command instead of crossing `;`, `&&` or `|`.
- *
- * `tag` and `rebase` are not here: a flag anywhere in the invocation decides
- * what they do, so they are classified by reading their arguments — see below.
+ *     only computes — hence the `(?![\w-])` in SUBCOMMAND.
  *
  * NOT a security boundary: this is containment for a delegated agent that is
  * asked to behave, so an argv-array spawn, a backslash-escaped `g\it`, an alias
  * or `$(which git)` are deliberately out of scope. See docs/SECURITY.md.
  */
-const FORBIDDEN = new RegExp(
-  `\\bgit${OPTION_RUN}\\s+(?:(?:${WRITES_HISTORY})(?![\\w-])`
-  + '|branch(?![\\w-])\\s+(?!-)\\S'
-  + `|branch(?![\\w-])(?:\\s+[^\\s;&|]+)*?\\s+(?:${BRANCH_WRITES})`
-  + '|checkout(?:\\s+[^\\s;&|]+)*?\\s+(?:-[bB]|--orphan|--track)'
-  + '|switch(?:\\s+[^\\s;&|]+)*?\\s+(?:-[cC]|--create|--force-create)'
-  + ')',
-);
+
+/** Subcommands that create a commit, or move a stash / worktree — nothing after them makes them read-only. */
+const WRITES_HISTORY = new Set(['commit', 'merge', 'cherry-pick', 'revert', 'am', 'pull', 'push', 'stash', 'worktree']);
 
 /**
- * Where one subcommand's arguments BEGIN: the match ends just past the
- * subcommand word, and the tokens after it — up to the first separator that is
- * not inside quotes — are its arguments. The tail is not part of the pattern,
- * because `;`, `&&` and `|` mean nothing inside a quoted value and a regex
- * class cannot tell the difference: `git tag --format="x; y" v1` is ONE command
- * whose name is `v1`.
+ * The options git accepts BEFORE the subcommand, one word each. GLOBAL_VALUED
+ * may take the NEXT word as its value: `-c`/`-C` (`-C "/My Dir"`, `-c
+ * user.name="A B"`) and a long flag (`--work-tree /tmp/x`) — unless that word
+ * opens with `-`, which leaves the flag without one. GLOBAL_FLAG needs nothing
+ * after it: `-c`/`-C` with the value attached (`-cuser.name=a`, `-C/x`), a long
+ * flag with its value attached by `=`, a value-less short flag (`-p`) and the
+ * bare `--` separator. Everything in the run is stepped over on the way to the
+ * subcommand, so no amount of prefixing hides one.
+ *
+ * GLOBAL_NO_VALUE are the long options git itself reads WITHOUT a value, so the
+ * word behind one is never its value: `git --no-pager checkout -b tag/v1` checks
+ * out, and creates `tag/v1`. A long option on neither list may take one.
  */
-const subcommandCall = (sub) => new RegExp(`\\bgit${OPTION_RUN}\\s+${sub}(?![\\w-])`, 'g');
-const TAG_CALL = subcommandCall('tag');
-const REBASE_CALL = subcommandCall('rebase');
+const GLOBAL_VALUED = /^(?:-[cC]|--[\w-]+)$/;
+const GLOBAL_FLAG = /^(?:--|-[A-Za-z]|-[cC].+|--[\w-]+=.+)$/s;
+const GLOBAL_NO_VALUE = new Set([
+  '--bare', '--exec-path', '--glob-pathspecs', '--html-path', '--icase-pathspecs', '--info-path',
+  '--literal-pathspecs', '--man-path', '--no-advice', '--no-lazy-fetch', '--no-optional-locks', '--no-pager',
+  '--no-replace-objects', '--noglob-pathspecs', '--paginate',
+]);
 
 /**
  * The command with every shell COMMENT removed: from a `#` that starts a line or
@@ -198,55 +159,149 @@ function withoutComments(command) {
 const SEPARATORS = new Set([';', '&', '|', '\n', '\r']);
 
 /**
- * The whole command as TOKENS, in one left-to-right pass: a word, or a
- * separator. A quoted span is opaque — the whitespace and the `;` inside it
- * belong to the value, and a token that OPENS with a quote is a value rather
- * than a flag, so `--exec 'echo --abort now'` is a rebase that runs a command
- * and not a rebase that aborts. Each token carries where it ended, which is how
- * a subcommand match below finds its own arguments.
+ * The whole command as WORDS and SEPARATORS, in one left-to-right pass. A quoted
+ * span is opaque — the whitespace, the `;` and the `>` inside it belong to the
+ * value, and a word that OPENS with a quote is a value rather than a flag, so
+ * `--exec 'echo --abort now'` is a rebase that runs a command and not a rebase
+ * that aborts. Every word that holds a quote is handed back too, as the shell
+ * passes it on — quotes off and its pieces JOINED, so `'git tag '"v1"` is the
+ * one word `git tag v1` — because `sh -c 'git commit'` runs that word, and
+ * forbidden reads it again as a command.
  *
- * @returns {Array<{text: string, quoted: boolean, separator: boolean, end: number}>}
+ * A REDIRECTION IS THE SHELL'S. An unquoted `<`, `>`, `>>`, `>|`, `<>`, `&>`,
+ * `&>>`, `>&`, `<&`, `<<`, `<<-` or `<<<` ends the word before it, takes a
+ * leading fd number with it (`2>`, `2>&1`), and makes the next word — attached
+ * (`>--abort`) or after a space — its TARGET. git sees neither, so a target is
+ * nobody's argument: `git tag t > --list` creates `t`, and `git tag > tags.txt`
+ * lists. A target stays in the list, flagged, because a command substitution can
+ * start there (`> $(git tag v1)`); a `<(` or `>(` is a process substitution and
+ * no redirection at all.
+ *
+ * @returns {object} `{ tokens, spans }`: each token `{ text, quoted, separator, redirect }`, each span one quoted word with its quotes off
  */
 function tokenize(command) {
   const tokens = [];
+  const spans = [];
   let text = '';
   let quoted = false;
   let quote = '';
-  const push = (end) => {
-    if (text) tokens.push({ text, quoted, separator: false, end });
+  let redirect = false; // the next word is a redirection's target
+  const push = () => {
+    if (!text) return;
+    tokens.push({ text, quoted, separator: false, redirect });
+    const plain = unquote(text); // only a word that held a quote loses a character here
+    if (plain !== text) spans.push(plain);
     text = '';
     quoted = false;
+    redirect = false;
   };
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
-    if (quote) { text += c; if (c === quote) quote = ''; continue; }
+    if (quote) {
+      if (c === quote) quote = '';
+      text += c;
+      continue;
+    }
     if (c === '"' || c === "'") { quoted = quoted || !text; text += c; quote = c; continue; }
-    if (SEPARATORS.has(c)) { push(i); tokens.push({ text: c, quoted: false, separator: true, end: i + 1 }); continue; }
-    if (/\s/.test(c)) { push(i); continue; }
+    const next = command[i + 1] ?? '';
+    if (((c === '<' || c === '>') && next !== '(') || (c === '&' && next === '>')) {
+      if (/^\d+$/.test(text)) text = ''; else push(); // `2>`: the fd number is part of the operator
+      if (c === '&') i++; //                             `&>`, `&>>`: the `>` comes next
+      const follows = (chars) => i + 1 < command.length && chars.includes(command[i + 1]);
+      if (command[i] === '>' && follows('>|&')) i++; //                     `>>`, `>|`, `>&`
+      else if (command[i] === '<' && follows('<')) { i++; if (follows('<-')) i++; } // `<<`, `<<<`, `<<-`
+      else if (command[i] === '<' && follows('>&')) i++; //                 `<>`, `<&`
+      redirect = true;
+      continue;
+    }
+    if (SEPARATORS.has(c)) {
+      push();
+      redirect = false;
+      tokens.push({ text: c, quoted: false, separator: true, redirect: false });
+      continue;
+    }
+    if (/\s/.test(c)) { push(); continue; }
     text += c;
   }
-  push(command.length);
-  return tokens;
+  push(); // a quote the command never closed runs to its end, inside the last word
+  return { tokens, spans };
+}
+
+/** A word that ends in `git` where a word begins — `git`, `/usr/bin/git`, `$(git` — which is where an invocation can start. */
+const isGitWord = ({ text, separator }) => !separator && text.endsWith('git') && !/\w/.test(text.charAt(text.length - 4));
+
+/**
+ * The subcommand of the `git` word at `at`, as `{ name, from }` — `from` is the
+ * index its arguments start at — or null when the words after it name none. A
+ * redirection's target inside the option run is stepped over.
+ *
+ * A SPACED VALUE MAY BE THE SUBCOMMAND INSTEAD, behind a value-less option this
+ * guard has not heard of (`git --no-newflag commit`). So when the run ends on a
+ * word that names no subcommand, the LAST value that names one is the
+ * subcommand, and its arguments start right behind it — `git -c commit` is
+ * refused, as the regex before 1.3.0 refused it.
+ *
+ * THE RUN STOPS AT A `git` WORD, even one in a value position (`git -c git …`):
+ * that word is read as an invocation of its own from the same place, so no
+ * subcommand behind it is missed, and no word is walked by two runs. Until
+ * 1.3.0 a regex walked the run again from every `git` word inside it: `git -c `
+ * ×4 000 took 2.4 s, and ×16 000 before a `; git commit` 8.9 s.
+ */
+function subcommandAt(tokens, at) {
+  let j = at + 1;
+  let fallback = -1;
+  const skipTargets = () => { while (j < tokens.length && tokens[j].redirect && !isGitWord(tokens[j])) j++; };
+  const isWord = () => j < tokens.length && !tokens[j].separator && !isGitWord(tokens[j]);
+  for (skipTargets(); isWord(); skipTargets()) {
+    const { text } = tokens[j];
+    if (GLOBAL_VALUED.test(text) && !GLOBAL_NO_VALUE.has(text)) {
+      j++;
+      skipTargets();
+      if (isWord() && !tokens[j].text.startsWith('-')) {
+        if (SUBCOMMAND.test(tokens[j].text)) fallback = j;
+        j++;
+      }
+    } else if (GLOBAL_FLAG.test(text) || GLOBAL_NO_VALUE.has(text)) j++;
+    else break;
+  }
+  const sub = isWord() ? SUBCOMMAND.exec(tokens[j].text) : null;
+  if (sub) return { name: sub[1], from: j + 1 };
+  return fallback < 0 ? null : { name: SUBCOMMAND.exec(tokens[fallback].text)[1], from: fallback + 1 };
 }
 
 /**
- * The arguments of every `git … <sub>` in the command: the tokens after each
- * match, up to the first unquoted separator. The token cursor only moves
- * forward — a `g` regex hands its matches over in order and they never overlap
- * — so the whole scan stays linear however many invocations there are.
+ * Every `git … <subcommand>` in the words, each with its ARGUMENTS: the words
+ * after the subcommand, up to the next separator, and no redirection's target
+ * among them. A `git` word with no subcommand behind it (`git tag x-git`) is an
+ * argument like any other. One that starts an invocation of its own is too, and
+ * so is everything up to and including ITS subcommand — git hands those words
+ * to the first invocation (`git checkout git -b tag` creates `tag` from a ref
+ * called `git`) — but the words after that subcommand are the new invocation's
+ * alone.
+ *
+ * That cut is what keeps the whole scan linear in the command's length however
+ * many invocations it holds: every word is read at most twice, once by a
+ * subcommandAt run and once here. Until 1.3.0 each invocation copied every word
+ * up to the next separator, and 32 000 of them in one command ran V8 out of heap
+ * before the refusal was written. One thing it costs: `git tag git tag -l`,
+ * which git reads as one listing, is refused as a tag called `git`.
  */
-function invocations(re, command, tokens) {
-  re.lastIndex = 0;
-  const runs = [];
-  let i = 0;
-  for (let m = re.exec(command); m; m = re.exec(command)) {
-    const end = m.index + m[0].length;
-    while (i < tokens.length && tokens[i].end <= end) i++;
-    const args = [];
-    for (let j = i; j < tokens.length && !tokens[j].separator; j++) args.push(tokens[j]);
-    runs.push(args);
+function invocations(tokens) {
+  const calls = [];
+  let call = null; // the invocation whose arguments are being collected
+  const collect = (from, to) => {
+    for (let k = from; k < to; k++) if (call && !tokens[k].redirect) call.args.push(tokens[k]);
+  };
+  for (let i = 0; i < tokens.length;) {
+    if (tokens[i].separator) { call = null; i++; continue; }
+    const found = isGitWord(tokens[i]) ? subcommandAt(tokens, i) : null;
+    if (!found) { collect(i, i + 1); i++; continue; }
+    collect(i, found.from); // the `git` word, its options and its subcommand
+    call = { name: found.name, args: [] };
+    calls.push(call);
+    i = found.from;
   }
-  return runs;
+  return calls;
 }
 
 /**
@@ -273,11 +328,13 @@ const TAG_READ_LONG = new Set(['--contains', '--list', '--merged', '--no-contain
  * has to be stepped over, or `git tag --sort refname` reads as a tag called
  * `refname` and a listing is blocked as a creation. `-n` is not here: its count
  * is only ever attached (`-n5`), and a bare `-n` swallowing the next word would
- * hide a real name.
+ * hide a real name. Nor are `--column` and `--color`, for the same reason: git
+ * takes their value attached only (`--column=always`), so `git tag --column
+ * always` creates a tag called `always` — measured on git 2.38.1.
  */
 const TAG_VALUE_SHORT = new Set([...'mFu']);
 const TAG_VALUE_LONG = new Set([
-  '--cleanup', '--color', '--column', '--contains', '--format', '--local-user',
+  '--cleanup', '--contains', '--format', '--local-user',
   '--merged', '--no-contains', '--no-merged', '--points-at', '--sort',
 ]);
 
@@ -454,16 +511,149 @@ function rebaseWrites(args) {
 }
 
 /**
- * Everything a guarded role may not run, in one question: the comments come off, the
- * command is tokenized once, and the three classifiers read that. Each step is a
- * single pass, so a 10 KB command costs milliseconds and never a tiling.
+ * `git branch` CREATES a branch whenever it is handed a name and no mode that
+ * takes an existing one: a listing (`-l`/`--list`, or a filter that implies one —
+ * `--contains`, `--no-contains`, `--merged`, `--no-merged`, `--points-at`), a
+ * delete (`-d`/`-D`/`--delete`), `--show-current`, `--edit-description` or
+ * `--unset-upstream`. Every other flag leaves a name a name — `-q`, `-v`, `-t`,
+ * `--no-track`, `--create-reflog`, one git has never heard of — and so does a
+ * bare `--`: measured on git 2.38.1, `git branch -v x` and `git branch -- x`
+ * each create `x`. A branch that exists MOVES under rename (`-m`/`-M`/`--move`),
+ * copy (`-c`/`-C`/`--copy`), force-reset (`-f`/`--force`) or a new upstream
+ * (`-u`/`--set-upstream-to`), whatever mode sits beside them.
  */
-const forbidden = (raw) => {
-  const command = withoutComments(raw);
-  if (FORBIDDEN.test(command)) return true;
-  const tokens = tokenize(command);
-  return invocations(TAG_CALL, command, tokens).some(tagWrites)
-    || invocations(REBASE_CALL, command, tokens).some(rebaseWrites);
+const BRANCH_WRITE_SHORT = new Set([...'cCfmMu']);
+const BRANCH_WRITE_LONG = new Set(['--copy', '--force', '--move', '--set-upstream-to']);
+const BRANCH_MODE_SHORT = new Set([...'dDl']);
+const BRANCH_MODE_LONG = new Set([
+  '--contains', '--delete', '--edit-description', '--list', '--merged', '--no-contains', '--no-merged',
+  '--points-at', '--show-current', '--unset-upstream',
+]);
+
+/**
+ * …and the options whose value may arrive as the NEXT WORD, which is then never
+ * a name: `git branch --sort refname x` creates `x` and nothing called
+ * `refname`. `--color`, `--column` and `--abbrev` are not here — git takes
+ * their value attached only, as it does for `tag`, so the word behind one of
+ * them is a name.
+ */
+const BRANCH_VALUE_SHORT = new Set([...'u']);
+const BRANCH_VALUE_LONG = new Set(['--contains', '--format', '--merged', '--no-contains', '--no-merged', '--points-at', '--set-upstream-to', '--sort']);
+
+/**
+ * Does this `git branch` write? Read the way tagWrites reads a tag — a write flag
+ * always does, and otherwise a name does unless a mode took it — except that
+ * the quotes come off every word first (unquote), as they do in rebaseWrites,
+ * because the shell hands git `-m` for `"-m"`. A short run is a cluster (`-qm`
+ * is `-q -m`), and `-u` ends it: the rest of the word is its value, and sitting
+ * last it takes the next word.
+ */
+function branchWrites(args) {
+  let write = false;
+  let mode = false;
+  let names = false;
+  let afterSeparator = false;
+  let takesValue = false;
+  for (const { text } of args) {
+    if (takesValue) { takesValue = false; continue; } // the previous option's value
+    const token = unquote(text);
+    if (afterSeparator || token === '-' || !token.startsWith('-')) { names = true; continue; }
+    if (token === '--') { afterSeparator = true; continue; }
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      const name = eq < 0 ? token : token.slice(0, eq);
+      if (BRANCH_WRITE_LONG.has(name)) write = true;
+      else if (BRANCH_MODE_LONG.has(name)) mode = true;
+      if (eq < 0 && BRANCH_VALUE_LONG.has(name)) takesValue = true;
+      continue;
+    }
+    for (let k = 1; k < token.length; k++) {
+      const ch = token[k];
+      if (BRANCH_WRITE_SHORT.has(ch)) write = true;
+      else if (BRANCH_MODE_SHORT.has(ch)) mode = true;
+      if (BRANCH_VALUE_SHORT.has(ch)) { takesValue = k === token.length - 1; break; }
+    }
+  }
+  return write || (names && !mode);
+}
+
+/**
+ * `git checkout` and `git switch` create a branch only by a FLAG: `-b`/`-B`,
+ * `--orphan` and `-t`/`--track` for checkout (`-t origin/feat` creates `feat`);
+ * `-c`/`-C`, `--create`, `--force-create`, `--orphan` and `-t`/`--track` for
+ * switch.
+ */
+const CHECKOUT_CREATES = { short: new Set([...'bBt']), long: new Set(['--orphan', '--track']) };
+const SWITCH_CREATES = { short: new Set([...'cCt']), long: new Set(['--create', '--force-create', '--orphan', '--track']) };
+
+/**
+ * Does this `git checkout` / `git switch` create a branch? The flag counts
+ * wherever it sits (`checkout -q -b feat`), inside a short cluster (`-qb`), with
+ * the name attached (`-bfeat`), with a value after `=` (`--track=direct`) and
+ * quoted (`"-b"` reaches git as `-b`) — but not behind a bare `--`, where every
+ * word is a path. The letters that take a value here are the creating ones, so
+ * a cluster that holds one creates, and no letter before it can hide it.
+ *
+ * A NAME ALONE CREATES NOTHING, and that includes a residual kept on purpose:
+ * where only `origin/main` exists, `git checkout main` makes a local `main` by
+ * git's guess. It stays allowed — checking out a branch is how a role reads the
+ * tree, and a local branch that tracks a remote one that already exists starts
+ * no new line of history.
+ */
+const createsBranch = ({ short, long }) => (args) => {
+  for (const { text } of args) {
+    const token = unquote(text);
+    if (token === '--') return false; //                     paths from here on
+    if (token === '-' || !token.startsWith('-')) continue; // a branch, a commit or `-`, the previous branch
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      if (long.has(eq < 0 ? token : token.slice(0, eq))) return true;
+      continue;
+    }
+    for (let k = 1; k < token.length; k++) if (short.has(token[k])) return true;
+  }
+  return false;
+};
+
+/** The subcommands read by their arguments, and the question each one is asked. */
+const WRITES_BY_ARGUMENTS = new Map([
+  ['branch', branchWrites],
+  ['checkout', createsBranch(CHECKOUT_CREATES)],
+  ['switch', createsBranch(SWITCH_CREATES)],
+  ['tag', tagWrites],
+  ['rebase', rebaseWrites],
+]);
+
+/**
+ * A word that OPENS with a subcommand the guard answers for, and which one —
+ * built from the two tables above, so a subcommand the guard can find is always
+ * one it can answer. Whatever follows the name inside the same word is no
+ * argument of it (`$(git tag)` ends in `tag)`); a name followed by `-` or a word
+ * character is another subcommand altogether.
+ */
+const SUBCOMMAND = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUMENTS.keys()].join('|')})(?![\\w-])`);
+
+/**
+ * How deep a quoted word is read again inside another. `sh -c "bash -c 'git
+ * push'"` is two levels, and joined pieces (`'"'"'`) let the shell nest deeper
+ * — without end, which the scan must not follow. A level is never longer than
+ * the one it came from, so each adds at most one more reading of the command;
+ * past the last, a quoted word that still names `git` is refused unread.
+ */
+const QUOTE_DEPTH = 4;
+
+/**
+ * Everything a guarded role may not run, in one question: the comments come off,
+ * the command is tokenized once, and each invocation is answered — a history
+ * writer always, the other five by their arguments. Then every quoted word is
+ * asked the same question, because `sh -c 'git commit'` runs it. Each step is a
+ * single pass and there are at most QUOTE_DEPTH + 1 levels, so a 10 KB command
+ * costs milliseconds and is never tiled.
+ */
+const forbidden = (raw, depth = 0) => {
+  const { tokens, spans } = tokenize(withoutComments(raw));
+  return invocations(tokens).some(({ name, args }) => WRITES_HISTORY.has(name) || WRITES_BY_ARGUMENTS.get(name)(args))
+    || spans.some((span) => (depth < QUOTE_DEPTH ? forbidden(span, depth + 1) : /\bgit\b/.test(span)));
 };
 /**
  * THE ROLES THIS GUARD CONTAINS. Both shipped definitions run the same Bash
