@@ -8,6 +8,7 @@ What has actually been measured on this project, how each number was taken, and 
 | What did the 1.1.0 review rounds change that a clock can see? | [`check` before and after its reviews](#check-before-and-after-its-reviews) |
 | What are three release reviews worth? | [Review yield per release](#review-yield-per-release) |
 | What does the short fleet contract save in every session? | [The fleet contract, full and short](#the-fleet-contract-full-and-short) |
+| How big is the rules file every session loads, before and after 1.2.0? | [The rules file, before and after](#the-rules-file-before-and-after) |
 | Where do sub-agent tokens go, by role? | [Sub-agents by role](#sub-agents-by-role) |
 | What fills a sub-agent's context — reading, its own output, the harness? | [Where a sub-agent's context goes](#where-a-sub-agents-context-goes) |
 | Who runs past 200 k tokens, and doing what? | [Past 200 k](#past-200-k) |
@@ -69,6 +70,18 @@ Since 0.3.7 a unit server that starts in a project carrying the rendered rules f
 | **Saved, resident in every session** | 1 048 | **3 144** |
 
 In tokens that is roughly 900 down to 120 at four characters per token — the ratio is exact, the token figures are an estimate.
+
+## The rules file, before and after
+
+The rendered `.claude/rules/omelette-fleet.md` is loaded at every session start, so every character of it is resident in every session. 1.2.0 kept every rule in it word for word and moved out only the prose that explained how the handoff hooks work, to CONFIG ("The handoff hooks").
+
+| Rendered rules file | Characters | UTF-8 bytes | Tokens, estimated |
+|---|---:|---:|---:|
+| 1.1.0 | 14 390 | 14 479 | ~3 600 |
+| 1.2.0, after P1 | 12 521 | 12 592 | ~3 100 |
+| **Saved, resident in every session** | 1 869 | 1 887 | **~500** |
+
+Rendered under the default merge policy (`session`; the `pr` sentence is 32 characters shorter). Tokens at four characters per token, as for the contract above: the character counts are exact, the token figures an estimate. The ceiling is 13 100 characters, pinned by `test/rules-size.test.mjs`.
 
 ## Sub-agents by role
 
@@ -140,6 +153,7 @@ Not yet taken: the near-threshold and post-compaction points, which need a worki
 - **`check` timings.** A throwaway harness imports `core/check.mjs` from each commit, builds the fixture in a temp directory, and times `checkPointers` with `process.hrtime`; memory is `process.resourceUsage().maxRSS` from a fresh process per run (an idle Node process on that machine: 33 MiB). The fixtures are the ones described in the table; the timing one is also a test (`test/check.test.mjs`, "the worst case is bounded").
 - **Review yield.** The `review yield:` line of each release's ledger (`.omelette/ledger-<release>.md`, kept by the orchestrator, not in the repository).
 - **Contract sizes.** `FLEET_CONTRACT.length` and `SHORT_CONTRACT.length` from `core/rules.mjs`.
+- **Rules file size.** `renderRulesFile('1.2.0', { merge: 'session' })` from `core/rules.mjs` — `.length` for characters, `Buffer.byteLength` for bytes — and, for 1.1.0, the same three substitutions applied to `git show v1.1.0:rules/omelette-fleet.md`.
 
 ## Not measured yet
 
