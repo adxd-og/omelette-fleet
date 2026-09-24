@@ -6,13 +6,15 @@
  * file and PRINTS the settings.json snippet that calls it; Claude Code's
  * settings.json is read by this package and written by nobody but the operator.
  *
- * PreToolUse (matcher Bash) — the git guard on the two sub-agent roles this
- * package ships. The operating model says "coder sub-agents never commit" and
- * asks the same of the tester, which reports what it saw rather than moving the
- * tree; a settings-level hook is what MAKES both true: the stdin event carries
- * `agent_type` for a sub-agent and nothing for the main thread, so the block
- * lands on omelette-coder and omelette-tester and on nothing else. Exit 2 is
- * what stops the call, and the reason it hands back names the agent it caught.
+ * PreToolUse (matcher Bash) — the git guard on the sub-agent roles this package
+ * ships. The operating model says "coder sub-agents never commit" and asks the
+ * same of the tester, which reports what it saw rather than moving the tree, and
+ * of the reviewer, which reads and writes one report; a settings-level hook is
+ * what MAKES that true for git: the stdin event carries `agent_type` for a
+ * sub-agent and nothing for the main thread, so the block lands on
+ * omelette-coder, omelette-tester and omelette-reviewer and on nothing else.
+ * Exit 2 is what stops the call, and the reason it hands back names the agent
+ * it caught.
  *
  * PreCompact — the ledger's re-read marker. A compaction is where a plan loses
  * its context, so every `.omelette/ledger-*.md` gets a line saying it must be
@@ -470,13 +472,19 @@ const forbidden = (raw) => {
  * A tester that stashed the tree to get a clean run was hiding the very diff the
  * orchestrator was about to review, and nothing stopped it.
  *
+ * The reviewer (1.3.0) joins them for the same reason: it has Bash to read the
+ * change and run the suite, and a review that committed or stashed would move
+ * the tree it was asked to judge. This guard is ALL the enforcement it gets —
+ * that it writes nothing but its report is its definition's text and the
+ * session's `git status --porcelain` after it.
+ *
  * A name is matched WHOLE: `omelette-coder-2` is somebody else's agent, and the
  * main thread carries no `agent_type` at all.
  *
  * The refusal NAMES the agent it caught. Two roles reading one another's line is
  * how an agent decides the block was meant for somebody else.
  */
-const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-tester']);
+const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-tester', 'omelette-reviewer']);
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
 const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
 

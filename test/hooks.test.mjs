@@ -713,9 +713,9 @@ test('SessionStart(compact): a ledger past 1 MiB is read from its TAIL, and the 
   assert.equal(r.out.includes('STALE'), false, 'the stale first block is behind the tail, and stays there');
 });
 
-test('PreToolUse: both shipped roles are guarded, and the refusal names the agent it caught', () => {
+test('PreToolUse: every shipped role is guarded, and the refusal names the agent it caught', () => {
   const g = guard();
-  for (const agent of ['omelette-coder', 'omelette-tester']) {
+  for (const agent of ['omelette-coder', 'omelette-tester', 'omelette-reviewer']) {
     for (const command of [
       'git commit -m "wip"',
       'git stash',
@@ -730,9 +730,10 @@ test('PreToolUse: both shipped roles are guarded, and the refusal names the agen
       assert.equal(r.err.trim(), REFUSAL(agent), 'the refusal names the agent that was caught');
       assert.equal(r.out, '', 'a block says nothing on stdout');
     }
-    // …and neither role loses a read: the tester runs the suite and reads the
-    // diff it was handed, the coder reads its own history. Containment is about
-    // what moves the tree, and nothing here moves it.
+    // …and no role loses a read: the tester runs the suite and reads the diff
+    // it was handed, the coder reads its own history, the reviewer reads the
+    // change it judges. Containment is about what moves the tree, and nothing
+    // here moves it.
     for (const command of ['git status', 'git diff HEAD', 'git log --oneline -3', 'git branch --list', 'npm test']) {
       const r = fire(g.path, preToolUse({ agent_type: agent, tool_input: { command } }));
       assert.equal(r.code, 0, `${agent}: ${command} should pass: ${r.out}${r.err}`);
@@ -747,6 +748,7 @@ test('PreToolUse: the guarded set is EXACT — the main thread is nobody, and a 
     undefined,               // the main thread carries no agent_type at all
     null, '', 42, { name: 'omelette-coder' },
     'omelette-coder-2', 'omelette-tester-2', 'my-omelette-coder', 'omelette',
+    'omelette-reviewer-2', 'my-omelette-reviewer', 'reviewer',
     'OMELETTE-CODER',        // matched whole and case-sensitively, as Claude Code spells it
   ]) {
     const r = fire(g.path, preToolUse({ agent_type, tool_input: { command: 'git commit -m "x"' } }));

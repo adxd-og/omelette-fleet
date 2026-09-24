@@ -138,7 +138,7 @@ test('PreToolUse: merge, cherry-pick, revert, am, pull and a branch MOVE are ref
 
 test('PreToolUse: a genuinely different, plausible future role name is not in the guarded set', () => {
   const g = guard();
-  for (const agent of ['omelette-reviewer', 'omelette-docwriter', 'coder', 'tester']) {
+  for (const agent of ['omelette-planner', 'omelette-docwriter', 'coder', 'tester']) {
     const r = fire(g, preToolUse(agent, 'git commit -m "x"'));
     assert.equal(r.code, 0, `agent_type ${agent} should not be guarded: ${r.out}${r.err}`);
     assert.equal(r.err, '');
