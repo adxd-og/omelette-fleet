@@ -98,9 +98,9 @@ function listFilesRec(dir) {
 
 const gitAvailable = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
 
-// ─── §3: rules --agents writes EXACTLY rules + 2 agents + the skill ──────────
+// ─── §3: rules --agents writes EXACTLY rules + 3 agents + the skill ──────────
 
-test('rules --agents writes exactly the rules file, the two agent definitions and the skill — nothing else under .claude', () => {
+test('rules --agents writes exactly the rules file, the three agent definitions and the skill — nothing else under .claude', () => {
   const dir = home();
   const proj = join(dir, 'proj');
   mkdirSync(proj);
@@ -108,6 +108,7 @@ test('rules --agents writes exactly the rules file, the two agent definitions an
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(listFilesRec(join(proj, '.claude')), [
     'agents/omelette-coder.md',
+    'agents/omelette-reviewer.md',
     'agents/omelette-tester.md',
     'rules/omelette-fleet.md',
     'skills/omelette-test/SKILL.md',
@@ -201,7 +202,7 @@ test('rules --global --hooks writes under CLAUDE_CONFIG_DIR, prints an absolute 
   assert.match(after, /^hooks {9}project: absent · global: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)$/m, after);
 });
 
-test('rules --global --agents writes the skill (and both agent definitions) under CLAUDE_CONFIG_DIR, and doctor counts them at global scope', () => {
+test('rules --global --agents writes the skill (and every agent definition) under CLAUDE_CONFIG_DIR, and doctor counts them at global scope', () => {
   const dir = home();
   const cfg = join(dir, 'cfgdir');
   const proj = join(dir, 'proj');
@@ -211,7 +212,7 @@ test('rules --global --agents writes the skill (and both agent definitions) unde
   const write = rulesIn(proj, dir, ['--global', '--agents'], env);
   assert.equal(write.status, 0, write.stderr);
   assert.ok(existsSync(join(cfg, 'rules', 'omelette-fleet.md')));
-  for (const f of ['omelette-coder.md', 'omelette-tester.md']) assert.ok(existsSync(join(cfg, 'agents', f)));
+  for (const f of ['omelette-coder.md', 'omelette-tester.md', 'omelette-reviewer.md']) assert.ok(existsSync(join(cfg, 'agents', f)));
   const skill = join(cfg, 'skills', 'omelette-test', 'SKILL.md');
   assert.ok(existsSync(skill), 'the skill also lands under CLAUDE_CONFIG_DIR for --global --agents');
   assert.equal(readFileSync(skill, 'utf8').split('\n')[1], SKILL_MARKER(pkgVersion(ROOT)));
@@ -219,7 +220,7 @@ test('rules --global --agents writes the skill (and both agent definitions) unde
 
   const out = doctorIn(proj, dir, env);
   assert.match(out, /^skills {8}project: absent · global: v\d+\.\d+\.\d+\S* \(1\)$/m, out);
-  assert.match(out, /^agents {8}project: absent · global: v\d+\.\d+\.\d+\S* \(2\)$/m, out);
+  assert.match(out, /^agents {8}project: absent · global: v\d+\.\d+\.\d+\S* \(3\)$/m, out);
 });
 
 // ─── update --check hints for a stale skill and a stale hook ────────────────

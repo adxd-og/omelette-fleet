@@ -66,8 +66,12 @@ test('coerce: a `line` spec is one printable line — no blank, no control chara
   assert.deepEqual(coerce({ type: 'string' }, ''), { ok: true, value: '' });
 });
 
-test('AGENT_SETTINGS_SCHEMA: the two shipped roles, their keys and the defaults the templates render', () => {
-  assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA), ['coder', 'tester']);
+test('AGENT_SETTINGS_SCHEMA: the shipped roles, their keys and the defaults the templates render', () => {
+  assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA), ['coder', 'tester', 'reviewer']);
+  assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.reviewer), ['model', 'effort']);
+  assert.equal(AGENT_SETTINGS_SCHEMA.reviewer.model.default, 'opus');
+  assert.equal(AGENT_SETTINGS_SCHEMA.reviewer.effort.default, 'xhigh');
+  assert.deepEqual(AGENT_SETTINGS_SCHEMA.reviewer.effort.values, AGENT_SETTINGS_SCHEMA.coder.effort.values, 'the same effort ladder as the coder');
   assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.coder), ['model', 'effort']);
   assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.tester), ['model', 'effort', 'maxTurns']);
   assert.equal(AGENT_SETTINGS_SCHEMA.coder.model.default, 'opus');

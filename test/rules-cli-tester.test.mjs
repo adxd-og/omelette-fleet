@@ -205,7 +205,7 @@ test('a FIFO where the rules file should be is refused, and the run never blocks
 
 // ─── §4: doctor — one agent file missing (partial), and one foreign ─────────
 
-test('doctor reports agents as partial (N/2) when one of the two files is missing', () => {
+test('doctor reports agents as partial (N/3) when some of the three files are missing', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(join(proj, '.claude', 'agents'), { recursive: true });
   // At the running package's own version, so this is "partial" but never "behind" —
@@ -213,7 +213,7 @@ test('doctor reports agents as partial (N/2) when one of the two files is missin
   writeFileSync(join(proj, '.claude', 'agents', 'omelette-coder.md'), AGENT_MARKER(pkgVersion));
   const r = cli(['doctor'], { dir, cwd: proj });
   assert.equal(r.code, 0, 'a partial agent set is informational, never a fault');
-  assert.match(r.out, /^agents {8}project: partial \(1\/2\) · global: absent$/m);
+  assert.match(r.out, /^agents {8}project: partial \(1\/3\) · global: absent$/m);
 });
 
 test('doctor reports agents as foreign (no marker) as soon as one file lacks the marker', () => {
@@ -263,6 +263,10 @@ test('update --check also hints a refresh for outdated agent definitions, one li
     /agent files under .*\.claude(\/|\\)agents are v0\.0\.1 \(this install is v0\.2\.0\) — refresh: omelette-fleet rules --agents/,
     'spec §3b: "update hints a refresh for outdated agent files too" — no such hint was found in stdout',
   );
+  // 1.3.0: the set has three definitions and this fixture holds the two a 1.2.0
+  // install wrote — a partial scope, every file in it ours, and the refresh
+  // writes the third. The hint says how many are missing, after the command.
+  assert.match(r.out, /— refresh: omelette-fleet rules --agents \(1 of 3 missing\)$/m, 'a scope missing the new definition is hinted, with the count');
   assert.equal(readFileSync(coderPath, 'utf8'), AGENT_MARKER('0.0.1'), 'update --check must never rewrite an agent file');
   assert.equal(readFileSync(testerPath, 'utf8'), AGENT_MARKER('0.0.1'));
 });

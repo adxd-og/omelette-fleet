@@ -195,22 +195,25 @@ test('rulesTarget: project under cwd, global under ~/.claude or CLAUDE_CONFIG_DI
 });
 
 test('agent templates render with a YAML-comment marker on line 2 and valid frontmatter', () => {
-  assert.deepEqual(AGENT_FILES, ['omelette-coder.md', 'omelette-tester.md']);
+  assert.deepEqual(AGENT_FILES, ['omelette-coder.md', 'omelette-tester.md', 'omelette-reviewer.md']);
   for (const name of AGENT_FILES) {
     const text = renderAgentFile(name, '1.2.3');
     const lines = text.split('\n');
     assert.equal(lines[0], '---');
     assert.match(lines[1], /^# omelette-fleet agent v1\.2\.3 /);
     assert.equal(parseAgentMarker(text), '1.2.3');
-    assert.match(text, /^name: omelette-(coder|tester)$/m);
+    assert.match(text, new RegExp(`^name: ${name.replace(/\.md$/, '')}$`, 'm'), 'the name is the file name');
     assert.match(text, /^effort: xhigh$/m);
     assert.match(text, /^model: (opus|sonnet)$/m);
-    // Enforced by the harness, not by prose: neither shipped role may spawn.
-    assert.match(text, /^disallowedTools: Agent$/m);
+    // Enforced by the harness, not by prose: no shipped role may spawn.
+    assert.match(text, /^disallowedTools: Agent(, \w+)*$/m);
     assert.ok(text.indexOf('\n---\n', 4) > 0, 'frontmatter is closed');
     assert.ok(!text.includes('{{version}}'));
   }
   assert.match(renderAgentFile('omelette-tester.md', '0.0.0'), /^tools: Read, Glob, Grep, Bash, Write, Edit$/m);
+  // The coder and the tester lose the Agent tool and nothing else; the reviewer's list is test/reviewer.test.mjs's.
+  assert.match(renderAgentFile('omelette-coder.md', '0.0.0'), /^disallowedTools: Agent$/m);
+  assert.match(renderAgentFile('omelette-tester.md', '0.0.0'), /^disallowedTools: Agent$/m);
 });
 
 test('parseAgentMarker rejects a file without the line-2 comment', () => {
@@ -273,10 +276,10 @@ test('agentSettings: a block of the wrong shape, an unknown role and a malformed
   assert.equal(arr.coder.model, 'opus');
   assert.ok(arr.warnings.some((w) => /agents is not an object/.test(w)));
 
-  const str = agentSettings({ OMELETTE_HOME: home({ agents: { tester: 'sonnet', reviewer: { model: 'x' } } }) });
+  const str = agentSettings({ OMELETTE_HOME: home({ agents: { tester: 'sonnet', docwriter: { model: 'x' } } }) });
   assert.equal(str.tester.maxTurns, 80);
   assert.ok(str.warnings.some((w) => /agents\.tester is not an object/.test(w)));
-  assert.ok(str.warnings.some((w) => /agents\.reviewer is not a known agent/.test(w)));
+  assert.ok(str.warnings.some((w) => /agents\.docwriter is not a known agent/.test(w)));
 
   const broken = agentSettings({ OMELETTE_HOME: home('{ not json') });
   assert.equal(broken.tester.maxTurns, 80);
@@ -317,7 +320,7 @@ test('renderAgentFile: a partial settings object still renders a usable definiti
 });
 
 test('AGENT_ROLES ties each shipped definition to the agents block it renders from', () => {
-  assert.deepEqual(AGENT_ROLES, { 'omelette-coder.md': 'coder', 'omelette-tester.md': 'tester' });
+  assert.deepEqual(AGENT_ROLES, { 'omelette-coder.md': 'coder', 'omelette-tester.md': 'tester', 'omelette-reviewer.md': 'reviewer' });
   assert.deepEqual(Object.keys(AGENT_ROLES), AGENT_FILES, 'AGENT_FILES is the map\'s keys — one source, one order');
 });
 

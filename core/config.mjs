@@ -6,7 +6,8 @@
  *   { "version": 1,
  *     "updateCheck": true,
  *     "contract": "auto",
- *     "agents": { "coder": { model, effort }, "tester": { model, effort, maxTurns } },
+ *     "agents": { "coder": { model, effort }, "tester": { model, effort, maxTurns },
+ *                 "reviewer": { model, effort } },
  *     "handoff": { enabled, threshold, contextWindow, compactSummary },
  *     "workflow": { merge },
  *     "defaults": { ...keys applied to every unit... },
@@ -212,6 +213,12 @@ export const AGENT_SETTINGS_SCHEMA = {
     model: { type: 'line', default: 'sonnet' },
     effort: { type: 'enum', values: EFFORT_LEVELS, default: 'xhigh' },
     maxTurns: { type: 'posint', default: 80 },
+  },
+  // The clean-context reviewer (1.3.0): one review of one thing. Opus at xhigh
+  // by default — review is judgement, the thing a release pays for.
+  reviewer: {
+    model: { type: 'line', default: 'opus' },
+    effort: { type: 'enum', values: EFFORT_LEVELS, default: 'xhigh' },
   },
 };
 

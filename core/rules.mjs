@@ -23,10 +23,11 @@
  * in a fleet session) → the definition's `effort:` key → the session's own
  * level, inherited. Set it explicitly when it matters, which means a definition.
  * The other is `disallowedTools: Agent`: the harness applies it before `tools`
- * resolves, so neither shipped role can spawn anything — "the orchestrator
- * spawns the tester, never the coder" stops being advice. So the two roles the
- * operating model names — the coder and the clean-context tester — ship as
- * ready `.claude/agents/` definitions, written by `omelette-fleet rules --agents`.
+ * resolves, so no shipped role can spawn anything — "the orchestrator spawns
+ * the tester, never the coder" stops being advice. So the roles the operating
+ * model names — the coder, the clean-context tester and (1.3.0) the
+ * clean-context reviewer — ship as ready `.claude/agents/` definitions, written
+ * by `omelette-fleet rules --agents`.
  * Their marker is a YAML COMMENT on line 2 (line 1 must be the frontmatter's
  * `---`) and it means exactly what the rules-file marker means: ours to refresh
  * and to remove, and anything without it is the operator's own file.
@@ -324,7 +325,7 @@ export function settingsTargets(o = {}) {
  * renders from. One map, and AGENT_FILES is its keys, so a role can never be
  * half-added: a template with no settings block, or settings with no template.
  */
-export const AGENT_ROLES = { 'omelette-coder.md': 'coder', 'omelette-tester.md': 'tester' };
+export const AGENT_ROLES = { 'omelette-coder.md': 'coder', 'omelette-tester.md': 'tester', 'omelette-reviewer.md': 'reviewer' };
 
 /** The sub-agent definitions `rules --agents` ships, in the order they are written. */
 export const AGENT_FILES = Object.keys(AGENT_ROLES);
@@ -339,7 +340,7 @@ const isObj = (o) => o && typeof o === 'object' && !Array.isArray(o);
  * fleet-wide keys — because the alternative is `rules --agents` failing to
  * write a definition the session needs.
  *
- * @returns {{coder:object, tester:object, sources:object, warnings:string[], configPath:string}}
+ * @returns {{coder:object, tester:object, reviewer:object, sources:object, warnings:string[], configPath:string}}
  */
 export function agentSettings(env = process.env) {
   const { config, error, path } = loadFleetConfig(env);

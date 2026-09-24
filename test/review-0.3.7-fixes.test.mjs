@@ -574,7 +574,7 @@ test('K: `set` reads its schemas with Object.hasOwn — an inherited name is not
   };
   refused(['workflow.constructor=1'], /unknown key "constructor" for the workflow block — known keys: merge/);
   refused(['handoff.constructor=1'], /unknown key "constructor" for the handoff block — known keys: /);
-  refused(['agents.constructor.model=x'], /unknown agent "constructor" — known agents: coder, tester/);
+  refused(['agents.constructor.model=x'], /unknown agent "constructor" — known agents: coder, tester, reviewer/);
   refused(['agents.tester.constructor=1'], /unknown key "constructor" for agent "tester" — known keys: /);
   refused(['codex.constructor=1'], /unknown key "constructor" for unit "codex" — known keys: /);
   // A bare inherited name is refused exactly as any other unknown bare key is.

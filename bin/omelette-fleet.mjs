@@ -103,7 +103,7 @@ const COMMANDS = {
       'shipped example if it does not exist yet (never overwritten).',
       'A unit whose vendor CLI is not in PATH is skipped unless --force.',
       '--rules then does `rules --agents --hooks` in the current directory:',
-      'the operating rules, both sub-agent definitions, the /omelette-test',
+      'the operating rules, the three sub-agent definitions, the /omelette-test',
       'skill and the guard script, followed by the settings.json snippet',
       'and the `merge policy` the rules file was written with.',
       '--dry-run prints every command and every write, and runs nothing.',
@@ -142,12 +142,13 @@ const COMMANDS = {
       'the text to stdout; --remove deletes only a file with the marker, plus',
       "the skill's own directory once its SKILL.md is gone and it is empty —",
       'a skill IS a directory, and an empty one still reads as installed.',
-      '--agents also writes two sub-agent definitions (omelette-coder:',
-      'Opus xhigh; omelette-tester: Sonnet xhigh, both disallowedTools:',
-      'Agent) into .claude/agents, where their effort is set, and the',
-      '/omelette-test skill into .claude/skills. --hooks writes the',
-      'guard script into .claude/hooks and prints the settings.json',
-      'snippet that calls it — that file is yours to edit, never ours.',
+      '--agents also writes three sub-agent definitions (omelette-coder:',
+      'Opus xhigh; omelette-tester: Sonnet xhigh; omelette-reviewer: Opus',
+      'xhigh; all three disallowedTools: Agent) into .claude/agents, where',
+      'their effort is set, and the /omelette-test skill into',
+      '.claude/skills. --hooks writes the guard script into .claude/hooks',
+      'and prints the settings.json snippet that calls it — that file is',
+      'yours to edit, never ours.',
     ],
   },
   doctor: {
@@ -1512,15 +1513,22 @@ async function cmdUpdate(argv) {
       out(`rules file ${r.path} is v${r.version} (this install is v${version}) — refresh: ${refreshCommand('rules', r.scope)}`);
     }
     // One line per SCOPE and kind, not per file: the files of a kind are
-    // refreshed together — and only when the whole scope is ours. A scope
+    // refreshed together — and only when every file present is ours. A scope
     // holding a file that is not ours would refuse that refresh, so pointing at
-    // it is worse than saying nothing.
+    // it is worse than saying nothing. A PARTIAL scope — every file present is
+    // ours, one or more absent — is hinted whatever its version: a release that
+    // ships a new definition (1.3.0's omelette-reviewer) leaves exactly that in
+    // every install the last release wrote, and the refresh writes what is
+    // missing. The count goes after the command, so the line still reads as
+    // one command to copy.
     for (const kind of DIR_KINDS) {
       for (const r of dirReport(kind, version)) {
         const key = realOrSelf(r.dir);
-        if (r.state !== 'ours' || !r.behind || seen.has(key)) continue;
+        const partial = r.state === 'partial';
+        if (!(partial || (r.state === 'ours' && r.behind)) || seen.has(key)) continue;
         seen.add(key);
-        out(`${KINDS[kind].noun} files under ${r.dir} are v${r.version} (this install is v${version}) — refresh: ${refreshCommand(kind, r.scope)}`);
+        const missing = partial ? ` (${r.total - r.present} of ${r.total} missing)` : '';
+        out(`${KINDS[kind].noun} files under ${r.dir} are v${r.version} (this install is v${version}) — refresh: ${refreshCommand(kind, r.scope)}${missing}`);
       }
     }
   };

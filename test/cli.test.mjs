@@ -310,6 +310,7 @@ const MANAGED = [
   'rules/omelette-fleet.md',
   'agents/omelette-coder.md',
   'agents/omelette-tester.md',
+  'agents/omelette-reviewer.md',
   'skills/omelette-test/SKILL.md',
   'hooks/omelette-guard.mjs',
 ];
@@ -1259,7 +1260,7 @@ test('set refuses an unknown agent, an unknown agent key and an out-of-range val
   const dir = home();
   const role = cli(['set', 'agents.nope.model=x'], { dir });
   assert.equal(role.code, 1);
-  assert.match(role.err, /unknown agent "nope" — known agents: coder, tester/);
+  assert.match(role.err, /unknown agent "nope" — known agents: coder, tester, reviewer/);
   const key = cli(['set', 'agents.tester.turns=1'], { dir });
   assert.equal(key.code, 1);
   assert.match(key.err, /unknown key "turns" for agent "tester" — known keys: model, effort, maxTurns/);
@@ -1697,14 +1698,14 @@ test('rules: --global honours CLAUDE_CONFIG_DIR; --print and --dry-run write not
   assert.match(help.out, /omelette-fleet rules \[--global\]/);
 });
 
-test('rules --agents writes both managed agent definitions, refreshes them, and --remove --agents takes them away', () => {
+test('rules --agents writes every managed agent definition, refreshes them, and --remove --agents takes them away', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);
   const run = (args) => spawnSync(process.execPath, [BIN, 'rules', ...args], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
   const r1 = run(['--agents']);
   assert.equal(r1.status, 0, r1.stderr);
   assert.ok(existsSync(join(proj, '.claude', 'rules', 'omelette-fleet.md')), 'the rules file is written too');
-  for (const f of ['omelette-coder.md', 'omelette-tester.md']) assert.ok(existsSync(join(proj, '.claude', 'agents', f)), f);
+  for (const f of ['omelette-coder.md', 'omelette-tester.md', 'omelette-reviewer.md']) assert.ok(existsSync(join(proj, '.claude', 'agents', f)), f);
   assert.match(r1.stdout, /written .*agents\/omelette-coder\.md/);
   const r2 = run(['--agents']);
   assert.match(r2.stdout, /up to date .*omelette-tester\.md/);
@@ -1717,6 +1718,7 @@ test('rules --agents writes both managed agent definitions, refreshes them, and 
   const r5 = run(['--remove', '--agents']);
   assert.equal(r5.status, 0);
   assert.ok(!existsSync(join(proj, '.claude', 'agents', 'omelette-coder.md')));
+  assert.ok(!existsSync(join(proj, '.claude', 'agents', 'omelette-reviewer.md')), '--remove --agents takes the reviewer too');
   assert.ok(!existsSync(join(proj, '.claude', 'rules', 'omelette-fleet.md')), '--remove --agents removes the rules file as well');
 });
 
@@ -2361,10 +2363,10 @@ test('a PRERELEASE marker next to the same release reads as behind, in doctor an
   // compareSemver ignores the prerelease tail, so 0.3.0-rc.1 and 0.3.0 compare
   // EQUAL: only "the marker is not this install's string" catches it.
   writeFileSync(rulesPath, rules(`${installed}-rc.1`));
-  for (const f of ['omelette-coder.md', 'omelette-tester.md']) writeFileSync(join(proj, '.claude', 'agents', f), agent(`${installed}-rc.1`));
+  for (const f of ['omelette-coder.md', 'omelette-tester.md', 'omelette-reviewer.md']) writeFileSync(join(proj, '.claude', 'agents', f), agent(`${installed}-rc.1`));
   const d = spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } });
   assert.ok(d.stdout.includes(`project: v${installed}-rc.1 [run: omelette-fleet rules]`), d.stdout);
-  assert.match(d.stdout, /^agents {8}project: v.*-rc\.1 \(2\) \[run: omelette-fleet rules --agents\]/m);
+  assert.match(d.stdout, /^agents {8}project: v.*-rc\.1 \(3\) \[run: omelette-fleet rules --agents\]/m);
 
   // …and the same file under an npm-kind install of exactly that release is hinted, not rewritten.
   const pkgRoot = mkdtempSync(join(tmpdir(), 'omelette-npm-pre-'));
