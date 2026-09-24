@@ -277,7 +277,7 @@ test('CONFIG "Agent settings" documents agents.reviewer.model and agents.reviewe
   const md = read('docs/CONFIG.md');
   const lines = section(md, '### Agent settings').split('\n');
   for (const row of CONFIG_ROWS) assert.ok(lines.includes(row), `a key row: ${row.slice(0, 40)}`);
-  assert.ok(lines.some((l) => l.includes('the three Claude Code sub-agent definitions `omelette-fleet rules --agents` writes')), 'the intro counts three');
+  assert.ok(lines.some((l) => l.includes('the four Claude Code sub-agent definitions `omelette-fleet rules --agents` writes')), 'the intro counts four');
   assert.ok(md.split('\n').includes('| How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |'), 'the map row names the reviewer');
   assert.ok(md.includes('    "reviewer": { "model": "opus", "effort": "xhigh" }'), 'the Shape block shows the reviewer entry');
 });

@@ -246,3 +246,25 @@ test('ORCHESTRATION: "Spawning sub-agents" lists the four definitions, the mediu
   assert.doesNotMatch(spawning, /both shipped|BOTH shipped|Both are refreshed/, 'no sentence still counts two');
   assert.ok(md.includes(`when the caller is one of the four roles this package ships — ${FOUR_ROLES} — and the command is`), 'Layer 3 names the four guarded roles');
 });
+
+// ── Task 8: CONFIG documents agents.coderMedium ──────────────────────────────
+
+test('CONFIG "Agent settings": agents.coderMedium.* rows, the 1.2.0 trial as the reason, the coder\'s default unchanged, and what a default change does to a rendered file', () => {
+  const agentSection = section(read('docs/CONFIG.md'), '### Agent settings');
+  const lines = agentSection.split('\n');
+  assert.ok(agentSection.includes('the four Claude Code sub-agent definitions'), 'the intro counts four');
+  const effortRow = lines.findIndex((l) => l.startsWith('| `agents.coder.effort` |'));
+  assert.notEqual(effortRow, -1, 'the coder effort row');
+  assert.ok(lines[effortRow + 1].startsWith('| `agents.coderMedium.model` | one printable line | `"opus"` |'), 'the model row follows the coder rows');
+  assert.ok(lines[effortRow + 2].startsWith('| `agents.coderMedium.effort` | `low` \\| `medium` \\| `high` \\| `xhigh` \\| `max` | `"medium"` |'), 'the effort row, default medium');
+  assert.ok(agentSection.includes('(MEASUREMENTS.md#coder-effort-medium-high-xhigh-on-one-task)'), 'the 1.2.0 trial is the reason');
+  assert.ok(read('docs/MEASUREMENTS.md').includes('\n## Coder effort: medium, high, xhigh on one task\n'), 'and the anchor is a heading there');
+  assert.ok(agentSection.includes('so `agents.coder.effort` stays `"xhigh"`'), 'the deep coder keeps its default');
+  for (const fact of [
+    'reaches it only when `omelette-fleet rules --agents` runs',
+    'a key you never set follows the new default',
+    '`omelette-fleet set agents.coder.effort=xhigh` survives any later change of the default',
+    'already sets `agents.coder` and `agents.tester` explicitly',
+    'it does not compare what they say with the config',
+  ]) assert.ok(agentSection.includes(fact), `the migration paragraph says: ${fact}`);
+});
