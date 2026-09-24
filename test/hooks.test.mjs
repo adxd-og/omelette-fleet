@@ -326,14 +326,20 @@ test('PreCompact: every ledger gets the re-read marker and the handoff line goes
   assert.equal(readFileSync(join(proj, '.omelette', 'ledger-old.txt'), 'utf8'), 'untouched\n');
 });
 
-test('PreCompact: no .omelette directory at all is still a clean exit with the handoff line', () => {
+test('PreCompact: no ledger — no .omelette at all, or one without a ledger-*.md — is a clean, silent exit (1.2.0: the ledger is the opt-in)', () => {
   const g = guard();
   const proj = join(g.dir, 'empty');
   mkdirSync(proj);
-  const r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'auto', cwd: proj });
+  let r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'auto', cwd: proj });
   assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /^HANDOFF: /);
+  assert.equal(r.out, '', 'nothing was stamped, so nothing is announced');
   assert.deepEqual(readdirSync(proj), [], 'a missing ledger is not a reason to create one');
+  mkdirSync(join(proj, '.omelette'));
+  writeFileSync(join(proj, '.omelette', 'notes.md'), 'untouched\n');
+  r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'auto', cwd: proj });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out, '', 'a .omelette without a ledger-*.md is the same as none');
+  assert.deepEqual(readdirSync(join(proj, '.omelette')), ['notes.md']);
 });
 
 test('PreCompact: a ledger that is not a regular file is skipped — a symlink is never followed, a FIFO never blocks', { skip: process.platform === 'win32' && 'POSIX symlinks and FIFOs' }, () => {

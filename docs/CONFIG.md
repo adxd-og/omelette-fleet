@@ -176,7 +176,7 @@ What `omelette-fleet rules --hooks` does for the ledger, event by event. The rul
 
 | Event | What the guard does | Bounds and switch |
 |---|---|---|
-| `PreCompact` | Appends `## Compaction <ISO> (trigger: …) — re-read this ledger before continuing` to every ledger, announced compaction or not, and drops this session's threshold crossing | Regular files only: a symlink or a FIFO named like a ledger is skipped. On whenever the guard is wired |
+| `PreCompact` | Appends `## Compaction <ISO> (trigger: …) — re-read this ledger before continuing` to every ledger, announced compaction or not, and drops this session's threshold crossing | Regular files only: a symlink or a FIFO named like a ledger is skipped. Silent when no ledger exists (nothing stamped, nothing announced); otherwise on whenever the guard is wired |
 | `SessionStart`, matcher `compact` | Prints each ledger's **last handoff block** into the context that opens after the compaction, so the re-read is a paste rather than a search | Only for the source `compact`; 40 lines / 4 KB per ledger, 12 KB in all |
 | `PostToolUse` | Reads the last request's token usage out of the session transcript; once the context passes `handoff.threshold` (90 % by default) of the window `handoff.contextWindow` resolves to ([Handoff settings](#handoff-settings)), puts one line into the context asking for a `## Handoff` block now | Once per crossing; silent in a sub-agent; `handoff.enabled=false` turns it off |
 | `Stop` | Refuses the first `Stop` after the crossing while no `## Handoff` has been appended since; stop again and the turn ends | Once per crossing; silent in a sub-agent; `handoff.enabled=false` turns it off |
