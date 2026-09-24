@@ -145,3 +145,25 @@ test('"Reviews" says how the session reviews a plan, after the four-part finding
   const clean = lines.findIndex((l) => l.startsWith('- **First review clean, re-review continued.**'));
   assert.ok(four !== -1 && clean !== -1 && four < at && clean < at, 'it follows the two rules it rests on');
 });
+
+/**
+ * ORCHESTRATION's list under "Evidence with pointers" (spec P2): the same three
+ * rules and the principle, in the spec's full wording, each a whole line. The
+ * rules file says each in one line; this is where the full text lives.
+ */
+const HANDED_DOC = [
+  "- **A planner starts from the map.** Its brief carries the scout map's path and the package's section of the spec, and says: read the map first; open three of its pointers yourself before relying on it, and if one is false treat the whole map as unverified; then open only what the map does not cover; record in the plan's header which map lines you relied on and which you re-took. If you keep a planner definition of your own (none ships), give it the same sentence.",
+  "- **A coder gets its task, not the release.** Its brief carries the task's section of the plan and the pointers it needs, not the whole spec; the spec's path is there for the cases the plan did not settle.",
+  "- **The session reviews a plan by its header, task list and Self-Review.** The full plan file goes to a unit — `codex_code_review` or `grok_code_review`, with the spec's path and the plan's path, asking for four-part findings — and the session opens the pointers of the findings, not the file. The ledger records the findings and the rulings as for any review.",
+  "- **Pay for judgement, not for repetition.** Reviews, clean-context testers and arbitration are what the tokens are for; re-reading, re-running and re-deriving are where they are lost. A planner does not dry-run its plan: the review reads it, and the coder and the tester run it for real.",
+];
+
+test('ORCHESTRATION "Evidence with pointers" says what each agent is handed, and its map links it', () => {
+  const md = read('docs/ORCHESTRATION.md');
+  const handed = section(md, '### What each agent is handed');
+  assert.ok(section(md, '## Evidence with pointers').includes(handed), 'the subsection sits inside "Evidence with pointers"');
+  const lines = handed.split('\n');
+  for (const item of HANDED_DOC) assert.ok(lines.includes(item), `a line of its own: ${item.slice(0, 60)}`);
+  const head = md.slice(0, md.indexOf('\n## '));
+  assert.match(head, /^\| .+ \| \[What each agent is handed\]\(#what-each-agent-is-handed\) \|$/m, 'the map at the top, before the first section, links it');
+});

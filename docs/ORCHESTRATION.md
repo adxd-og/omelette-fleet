@@ -11,6 +11,7 @@ How to run a session with a fleet: who decides, who proposes, and which unit get
 | Who tests the coder's work, and who decides test vs. code? | [Tester sub-agent and arbitration](#tester-sub-agent-and-arbitration) |
 | What does a review finding have to look like? | [Reviews](#reviews) |
 | How do I trust a report or a code map without re-reading the code? | [Evidence with pointers](#evidence-with-pointers) |
+| What does a planner, a coder or a plan reviewer get handed? | [What each agent is handed](#what-each-agent-is-handed) |
 | How do I control a sub-agent's model and effort? | [Spawning sub-agents: model and effort](#spawning-sub-agents-model-and-effort) |
 | Which unit should a given task be routed to? | [Routing by task](#routing-by-task) |
 | When should I escalate to a stronger model or higher effort? | [Model and effort escalation](#model-and-effort-escalation) |
@@ -180,6 +181,15 @@ Delegation multiplies reading: four planners re-read the same modules, and a rep
 | **`omelette-fleet check <file.md>`** | Verifies every pointer: `ok`, `moved` (the fragment is on another line — the nearest is named, ties to the smaller line number), `mismatch`, `missing`, `outside` (absolute, leaves the project root, a symlink, not a regular file), `too-large`, `weak`, `malformed`, and `stale` when the file changed since the map's `commit:` — committed or not. Exit `0` when every pointer is `ok` — `stale` too, unless `--strict` — and there is at least one distinct pointer (`--require <n>` moves the floor; `--require 0` is for a report whose findings say `none`); `1` otherwise; `2` for a usage error. `--strict` also fails on a staleness that could not be checked, including a `commit:` value that is not a plain hash. Limits: a checked file of 1 MiB and 2000 pointer lines, targets of 2 MiB. The file you check may live anywhere (a report in a scratchpad); the paths it names are opened only when they resolve inside the root. git runs only when there is a `commit:` line — `git diff --name-only --relative <hash>`, against the working tree, in a built environment with lazy fetch, tracing, external diff and hooks shut off — and `check` writes nothing. |
 
 How to use them: run `check` on a map before handing it on and again when the branch has moved; re-take stale lines rather than trusting them (a file whose timestamps moved while its content did not can read `stale` too — re-taking a line is a read, whereas refreshing git's index for you would be a write, and `check` writes nothing); a consumer opens **three pointers of its own choosing** before relying on a map, and one false line rejects the map whole. A right pointer can still carry a wrong conclusion — which is why map lines stay factual, and why **a scout map never goes to a first review**: that review runs clean-context precisely so it does not inherit the scout's blind spots.
+
+### What each agent is handed
+
+Reading is two thirds of what a sub-agent takes in, and the repetition is across agents, not within one ([MEASUREMENTS](MEASUREMENTS.md#where-a-sub-agents-context-goes)). So each agent is handed what its job needs, pointed at, and nothing it has to rediscover. The rules file says each of these in one line; this is the full text.
+
+- **A planner starts from the map.** Its brief carries the scout map's path and the package's section of the spec, and says: read the map first; open three of its pointers yourself before relying on it, and if one is false treat the whole map as unverified; then open only what the map does not cover; record in the plan's header which map lines you relied on and which you re-took. If you keep a planner definition of your own (none ships), give it the same sentence.
+- **A coder gets its task, not the release.** Its brief carries the task's section of the plan and the pointers it needs, not the whole spec; the spec's path is there for the cases the plan did not settle.
+- **The session reviews a plan by its header, task list and Self-Review.** The full plan file goes to a unit — `codex_code_review` or `grok_code_review`, with the spec's path and the plan's path, asking for four-part findings — and the session opens the pointers of the findings, not the file. The ledger records the findings and the rulings as for any review.
+- **Pay for judgement, not for repetition.** Reviews, clean-context testers and arbitration are what the tokens are for; re-reading, re-running and re-deriving are where they are lost. A planner does not dry-run its plan: the review reads it, and the coder and the tester run it for real.
 
 ## Spawning sub-agents: model and effort
 
