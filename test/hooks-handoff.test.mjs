@@ -1325,3 +1325,25 @@ test('PostCompact: a Markdown heading inside the summary is escaped, so a quoted
   assert.equal(parsed.decision, 'block');
   assert.match(parsed.reason, /no `## Handoff` block has been appended/);
 });
+
+test('Stop: a `## Handoff` inside a fenced block is an example, not the block — the gate holds, as the print ignores it (G8)', () => {
+  const g = guard();
+  for (const [name, fenced] of [
+    ['fenced-tilde', '\n~~~md\n## Handoff\nexample only\n~~~\n'],
+    ['fenced-backtick', '\n```md\n## Handoff 2026-09-24T12:00Z\nexample only\n```\n'],
+  ]) {
+    const p = project(g, name);
+    cross(g, p);
+    appendFileSync(p.ledger(), fenced);
+    assert.equal(blocked(fire(g, stopEvent(p))), BLOCK(91, 200000, 'default'), `${name}: a quoted heading let the turn end`);
+    // …and the print agrees: this ledger holds no handoff block at all.
+    const printed = fire(g, { hook_event_name: 'SessionStart', source: 'compact', cwd: p.dir });
+    assert.equal(printed.code, 0, printed.err);
+    assert.equal(printed.out, '', `${name}: the print showed a fenced heading`);
+  }
+  // A real heading AFTER the closing fence is the block, and the turn ends.
+  const real = project(g, 'fenced-then-real');
+  cross(g, real);
+  appendFileSync(real.ledger(), '\n~~~md\n## Handoff\nexample only\n~~~\n\n## Handoff 2026-09-24T12:05Z\nWhere it stands: T5 in review.\n');
+  silent(fire(g, stopEvent(real)), 'a heading outside the fence is the handoff');
+});

@@ -669,15 +669,24 @@ const HEADING = /^##\s/;
  * `[ \t]` and not `\s`, because a `\s` spans the newline and `##\nHandoff` is
  * two lines, neither of them a handoff heading. `\b` and not the bare word,
  * because `## Handoffs, and why we write them` is a heading ABOUT handoffs.
- * The grammar is one string and the flags are what differ: the print reads a
- * line at a time, the gate scans a whole buffer.
+ * Both readers test it a LINE at a time, and both skip a line inside a fenced
+ * block (lastHandoffBlock, freshHeading): a heading quoted in a fence is an
+ * example, and the gate must never let a turn end on a block the print would
+ * not show.
  */
 const HANDOFF_HEADING_SOURCE = '^##[ \\t]+handoff\\b';
 const HANDOFF_HEADING = new RegExp(HANDOFF_HEADING_SOURCE, 'i');
-const FRESH_HANDOFF = new RegExp(HANDOFF_HEADING_SOURCE, 'im');
 
 /** A fenced block's delimiter, indented up to 3 spaces, as Markdown spells one. */
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+
+/**
+ * Where a ledger line ends, for BOTH readers (lastHandoffBlock, freshHeading):
+ * `\r\n`, `\n`, `\r`, U+2028 and U+2029 — the breaks a JavaScript `m` regex
+ * ends a line at. One splitter, so the gate and the print never count a
+ * different set of lines.
+ */
+const HANDOFF_LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 const TRUNCATED = '[… truncated]';
 
 /**
@@ -701,7 +710,7 @@ const TRUNCATED = '[… truncated]';
  *   ledger has no handoff block at all.
  */
 function lastHandoffBlock(text, { maxLines = 40, maxBytes = 4096 } = {}) {
-  const lines = String(text || '').split(/\r?\n/);
+  const lines = String(text || '').split(HANDOFF_LINE_BREAK);
   let fence = '';
   let start = -1;
   let end = lines.length;
@@ -731,6 +740,29 @@ function lastHandoffBlock(text, { maxLines = 40, maxBytes = 4096 } = {}) {
     bytes += size;
   }
   return kept.join('\n');
+}
+
+/**
+ * THE FRESHNESS GATE'S QUESTION, asked the way lastHandoffBlock reads: is there
+ * a handoff heading on a line of its own OUTSIDE a fenced block? Fences are
+ * counted and lines split exactly as above (HANDOFF_LINE_BREAK) — the four
+ * breaks a JavaScript `m` regex ends a line at, so every unfenced heading the
+ * gate counted before still counts. Only the bytes
+ * appended since the crossing are read, so a fence opened BEFORE the crossing
+ * and still open is not seen: the limit TAIL_NOTE names for the print.
+ */
+function freshHeading(text) {
+  let fence = '';
+  for (const line of String(text || '').split(HANDOFF_LINE_BREAK)) {
+    const f = FENCE.exec(line);
+    if (f) {
+      if (!fence) fence = f[1];
+      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = '';
+      continue;
+    }
+    if (!fence && HANDOFF_HEADING.test(line)) return true;
+  }
+  return false;
 }
 
 /** One ledger is read at most this far; the whole print is bounded on top of that. */
@@ -1184,8 +1216,9 @@ function writeState(dir, change) {
 
 /**
  * Has a handoff been APPENDED since the crossing? Every ledger is read from the
- * size it had at that moment — at most 64 KiB of it — and a `^## Handoff` line
- * in those bytes is the block. Nothing else counts: a `Ruling:` line is not a
+ * size it had at that moment — at most 64 KiB of it — and a `## Handoff` line
+ * in those bytes, outside a fenced block (freshHeading), is the block. Nothing
+ * else counts: a `Ruling:` line is not a
  * handoff and neither is the `## Compaction` stamp, and a block written before
  * the crossing sits behind the offset where it belongs.
  *
@@ -1217,7 +1250,7 @@ function freshHandoff(dir, names, entry) {
       const nl = text.indexOf('\n');
       text = nl < 0 ? '' : text.slice(nl);
     }
-    if (text && FRESH_HANDOFF.test(text)) return true;
+    if (text && freshHeading(text)) return true;
   }
   return false;
 }
@@ -1364,7 +1397,7 @@ const MD_HEADING = /^#{1,6}[ \t]/;
  * EVERY LINE SEPARATOR THE FRESHNESS SCAN RECOGNISES, normalised to `\n` before
  * the body is split into lines at all. A JavaScript regex with the `m` flag
  * ends a line at four characters — `\n`, `\r`, U+2028 and U+2029 — and
- * FRESH_HANDOFF is such a regex, so a summary carrying `…text\r## Handoff` puts
+ * freshHeading splits on those four, so a summary carrying `…text\r## Handoff` puts
  * a line the gate reads as a handoff heading into the ledger while the escaping
  * below, which splits on `\r?\n` alone, sees one long line with nothing at its
  * start to escape. Normalising first is what makes "a line" mean the same thing
