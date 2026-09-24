@@ -207,12 +207,17 @@ test('a .meta.json beside the transcript names the agent over the notification',
     'subagents/agent-a3.jsonl': agent,
     'subagents/agent-a3.meta.json': '{ not json', // an unreadable meta: the notification still names it
     'subagents/agent-a4.jsonl': agent, // neither
+    'subagents/agent-a5.jsonl': agent,
+    'subagents/agent-a5.meta.json': JSON.stringify({ agentType: 'omelette-coder', description: 'Plan the widget, then build it', model: 'opus' }), // agentType beats the description's "Plan"
+    'subagents/agent-a6.jsonl': agent,
+    'subagents/agent-a6.meta.json': JSON.stringify({ agentType: 'omelette-coder-medium', description: 'Effort trial', model: 'opus' }), // an effort suffix is still the coder
   });
   const json = run(join(root, 'session.jsonl'), join(root, 'subagents'), '--json');
   assert.equal(json.status, 0, json.stderr);
   const { records } = JSON.parse(json.stdout);
   assert.deepEqual(Object.fromEntries(records.map((r) => [r.id, [r.role, r.description]])), {
     a1: ['tester', '/omelette-test spec.md'], a2: ['planner', 'Plan P2'], a3: ['coder', 'Implement P3'], a4: ['unknown', ''],
+    a5: ['coder', 'Plan the widget, then build it'], a6: ['coder', 'Effort trial'],
   });
   assert.deepEqual(records.find((r) => r.id === 'a1').files, { '<outside>/notes.md': 1 });
 

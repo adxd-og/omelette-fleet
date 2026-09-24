@@ -213,13 +213,20 @@ export function renderMarkdown(summary, records, { agents = false } = {}) {
   return out.join('\n');
 }
 
-/** Who an agent was: its .meta.json when readable (description, role by roleOf), else its task notification. */
+/** The role a .meta.json `agentType` names outright (a definition's name), or null to fall back to the description. */
+const ROLE_OF_TYPE = { 'omelette-coder': 'coder', 'omelette-tester': 'tester', 'omelette-lead': 'lead', planner: 'planner', 'test-verifier': 'tester', executor: 'coder' };
+function roleOfType(agentType) {
+  if (typeof agentType !== 'string') return null;
+  return ROLE_OF_TYPE[agentType] || ROLE_OF_TYPE[agentType.replace(/-(medium|high|xhigh|max|low)$/, '')] || null;
+}
+
+/** Who an agent was: its .meta.json when readable (role by agentType, else by roleOf on the description), else its task notification. */
 function metaFor(dir, id, notified) {
   const file = join(dir, `agent-${id}.meta.json`);
   if (existsSync(file)) {
     try {
-      const { description } = JSON.parse(readFileSync(file, 'utf8'));
-      if (typeof description === 'string') { const label = sanitise(description); return { role: roleOf(label), description: label }; }
+      const { agentType, description } = JSON.parse(readFileSync(file, 'utf8'));
+      if (typeof description === 'string') { const label = sanitise(description); return { role: roleOfType(agentType) || roleOf(label), description: label }; }
     } catch { /* unreadable: fall back to the notification */ }
   }
   const row = notified.get(id);
