@@ -6,8 +6,8 @@
  *   { "version": 1,
  *     "updateCheck": true,
  *     "contract": "auto",
- *     "agents": { "coder": { model, effort }, "tester": { model, effort, maxTurns },
- *                 "reviewer": { model, effort } },
+ *     "agents": { "coder": { model, effort }, "coderMedium": { model, effort },
+ *                 "tester": { model, effort, maxTurns }, "reviewer": { model, effort } },
  *     "handoff": { enabled, threshold, contextWindow, compactSummary },
  *     "workflow": { merge },
  *     "defaults": { ...keys applied to every unit... },
@@ -208,6 +208,15 @@ export const AGENT_SETTINGS_SCHEMA = {
   coder: {
     model: { type: 'line', default: 'opus' },
     effort: { type: 'enum', values: EFFORT_LEVELS, default: 'xhigh' },
+  },
+  // The coder's own template under a second name (1.3.0): same instructions,
+  // its own effort. Medium because on a plan-driven task it built what xhigh
+  // built for far less reading (docs/MEASUREMENTS.md, "Coder effort: medium,
+  // high, xhigh on one task"); `coder` keeps xhigh until a judgement-heavy
+  // repeat says otherwise.
+  coderMedium: {
+    model: { type: 'line', default: 'opus' },
+    effort: { type: 'enum', values: EFFORT_LEVELS, default: 'medium' },
   },
   tester: {
     model: { type: 'line', default: 'sonnet' },

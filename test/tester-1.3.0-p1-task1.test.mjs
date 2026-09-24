@@ -48,22 +48,24 @@ function cli(args, { dir, cwd = dir, env = {} } = {}) {
 // four" (three, in this task). Neither reviewer.test.mjs nor any test in the
 // diff drives `rules --help` or `install --help` — the two places the CLI's
 // own help text was rewritten to say "three" instead of "two" and to name
-// omelette-reviewer explicitly.
+// omelette-reviewer explicitly. 1.3.0 P2 Task 2 makes it four, the medium
+// coder among them; the reviewer is still named, Opus at xhigh.
 
-test('`rules --help` names three sub-agent definitions and the reviewer by name, opus at xhigh', () => {
+test('`rules --help` names four sub-agent definitions and the reviewer by name, opus at xhigh', () => {
   const dir = home();
   const help = cli(['rules', '--help'], { dir });
   assert.equal(help.code, 0, help.err);
-  assert.match(help.out, /^\s*--agents also writes three sub-agent definitions \(omelette-coder:\s*$/m);
-  assert.match(help.out, /^\s*Opus xhigh; omelette-tester: Sonnet xhigh; omelette-reviewer: Opus\s*$/m);
-  assert.match(help.out, /^\s*xhigh; all three disallowedTools: Agent\) into \.claude\/agents, where\s*$/m);
+  assert.match(help.out, /^\s*--agents also writes four sub-agent definitions \(omelette-coder:\s*$/m);
+  assert.match(help.out, /^\s*Opus xhigh; omelette-coder-medium: Opus medium; omelette-tester:\s*$/m);
+  assert.match(help.out, /^\s*Sonnet xhigh; omelette-reviewer: Opus xhigh; all four\s*$/m);
+  assert.match(help.out, /^\s*disallowedTools: Agent\) into \.claude\/agents, where their effort is\s*$/m);
 });
 
-test('`install --help` says --rules writes the three sub-agent definitions', () => {
+test('`install --help` says --rules writes the four sub-agent definitions', () => {
   const dir = home();
   const help = cli(['install', '--help'], { dir });
   assert.equal(help.code, 0, help.err);
-  assert.match(help.out, /^\s*the operating rules, the three sub-agent definitions, the \/omelette-test\s*$/m);
+  assert.match(help.out, /^\s*the operating rules, the four sub-agent definitions, the \/omelette-test\s*$/m);
 });
 
 test('the top-level --help listing carries the same rewritten "rules" body line as `rules --help`', () => {
@@ -71,12 +73,12 @@ test('the top-level --help listing carries the same rewritten "rules" body line 
   const top = cli(['--help'], { dir });
   const scoped = cli(['rules', '--help'], { dir });
   assert.equal(top.code, 0, top.err);
-  assert.match(top.out, /--agents also writes three sub-agent definitions \(omelette-coder:/);
+  assert.match(top.out, /--agents also writes four sub-agent definitions \(omelette-coder:/);
   // Spec's own claim (core/rules.mjs doc comment on COMMANDS): "the global
   // listing is assembled from the same bodies the per-command pages print" —
   // so the sentence should not merely appear twice by coincidence, it is the
   // literal same array entry in both outputs.
-  assert.ok(scoped.out.includes('--agents also writes three sub-agent definitions (omelette-coder:'));
+  assert.ok(scoped.out.includes('--agents also writes four sub-agent definitions (omelette-coder:'));
 });
 
 // ─── the reviewer's own, narrower schema surfacing through `set` ────────────
@@ -125,7 +127,7 @@ test('an invalid agents.reviewer.effort warns on `show agents` and on `rules --a
 // (bin/omelette-fleet.mjs) walks `dirReport`, which reports project AND
 // global — the global half of that loop is untested anywhere in the diff.
 
-test('`update --check` also hints the partial agents scope at --global, with the same "N of 3 missing" count', () => {
+test('`update --check` also hints the partial agents scope at --global, with the same "N of 4 missing" count', () => {
   const dir = home();
   const cfg = join(dir, 'cfgdir');
   const proj = join(dir, 'proj');
@@ -141,7 +143,7 @@ test('`update --check` also hints the partial agents scope at --global, with the
   assert.equal(r.code, 0, r.err);
   assert.match(
     r.out,
-    /^agent files under .*(\/|\\)agents are v0\.2\.0 \(this install is v0\.2\.0\) — refresh: omelette-fleet rules --agents --global \(1 of 3 missing\)$/m,
+    /^agent files under .*(\/|\\)agents are v0\.2\.0 \(this install is v0\.2\.0\) — refresh: omelette-fleet rules --agents --global \(2 of 4 missing\)$/m,
     r.out,
   );
   assert.equal(existsSync(join(agents, 'omelette-reviewer.md')), false, 'a hint is never a write');

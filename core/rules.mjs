@@ -325,7 +325,21 @@ export function settingsTargets(o = {}) {
  * renders from. One map, and AGENT_FILES is its keys, so a role can never be
  * half-added: a template with no settings block, or settings with no template.
  */
-export const AGENT_ROLES = { 'omelette-coder.md': 'coder', 'omelette-tester.md': 'tester', 'omelette-reviewer.md': 'reviewer' };
+export const AGENT_ROLES = {
+  'omelette-coder.md': 'coder',
+  'omelette-coder-medium.md': 'coderMedium',
+  'omelette-tester.md': 'tester',
+  'omelette-reviewer.md': 'reviewer',
+};
+
+/**
+ * A definition rendered from ANOTHER one's template. `omelette-coder-medium` is
+ * the coder at another effort (1.3.0): its instructions are the coder's, word
+ * for word, so they live in one file and cannot drift apart. What it has of its
+ * own is its `name:` (the template's `{{name}}`, filled from the file name) and
+ * its `agents.coderMedium` block. A file absent here is its own template.
+ */
+export const AGENT_TEMPLATES = { 'omelette-coder-medium.md': 'omelette-coder.md' };
 
 /** The sub-agent definitions `rules --agents` ships, in the order they are written. */
 export const AGENT_FILES = Object.keys(AGENT_ROLES);
@@ -340,7 +354,7 @@ const isObj = (o) => o && typeof o === 'object' && !Array.isArray(o);
  * fleet-wide keys — because the alternative is `rules --agents` failing to
  * write a definition the session needs.
  *
- * @returns {{coder:object, tester:object, reviewer:object, sources:object, warnings:string[], configPath:string}}
+ * @returns {{coder:object, coderMedium:object, tester:object, reviewer:object, sources:object, warnings:string[], configPath:string}}
  */
 export function agentSettings(env = process.env) {
   const { config, error, path } = loadFleetConfig(env);
@@ -388,9 +402,11 @@ export function renderAgentFile(name, version, settings = agentSettings()) {
   const role = AGENT_ROLES[name];
   const schema = AGENT_SETTINGS_SCHEMA[role];
   const given = isObj(settings) && isObj(settings[role]) ? settings[role] : {};
-  let body = readFileSync(join(AGENT_TEMPLATE_DIR, name), 'utf8')
+  const template = Object.hasOwn(AGENT_TEMPLATES, name) ? AGENT_TEMPLATES[name] : name;
+  let body = readFileSync(join(AGENT_TEMPLATE_DIR, template), 'utf8')
     .replaceAll('{{marker}}', AGENT_MARKER(String(version)))
-    .replaceAll('{{version}}', String(version));
+    .replaceAll('{{version}}', String(version))
+    .replaceAll('{{name}}', name.replace(/\.md$/, ''));
   for (const [key, spec] of Object.entries(schema)) {
     // A FUNCTION replacement: a string one expands `$&`, `$'`, `` $` `` and `$$`,
     // and a `line` value may hold any of them — `opus$'…` would paste the rest

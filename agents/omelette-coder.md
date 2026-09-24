@@ -1,6 +1,6 @@
 ---
 {{marker}}
-name: omelette-coder
+name: {{name}}
 description: Implements ONE task from a written brief — code and tests only, no commits unless the brief says so. Spawned by the orchestrating session; reviewed by it afterwards.
 model: {{model}}
 effort: {{effort}}

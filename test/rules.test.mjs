@@ -196,7 +196,7 @@ test('rulesTarget: project under cwd, global under ~/.claude or CLAUDE_CONFIG_DI
 });
 
 test('agent templates render with a YAML-comment marker on line 2 and valid frontmatter', () => {
-  assert.deepEqual(AGENT_FILES, ['omelette-coder.md', 'omelette-tester.md', 'omelette-reviewer.md']);
+  assert.deepEqual(AGENT_FILES, ['omelette-coder.md', 'omelette-coder-medium.md', 'omelette-tester.md', 'omelette-reviewer.md']);
   for (const name of AGENT_FILES) {
     const text = renderAgentFile(name, '1.2.3');
     const lines = text.split('\n');
@@ -204,7 +204,7 @@ test('agent templates render with a YAML-comment marker on line 2 and valid fron
     assert.match(lines[1], /^# omelette-fleet agent v1\.2\.3 /);
     assert.equal(parseAgentMarker(text), '1.2.3');
     assert.match(text, new RegExp(`^name: ${name.replace(/\.md$/, '')}$`, 'm'), 'the name is the file name');
-    assert.match(text, /^effort: xhigh$/m);
+    assert.match(text, name === 'omelette-coder-medium.md' ? /^effort: medium$/m : /^effort: xhigh$/m);
     assert.match(text, /^model: (opus|sonnet)$/m);
     // Enforced by the harness, not by prose: no shipped role may spawn.
     assert.match(text, /^disallowedTools: Agent(, \w+)*$/m);
@@ -321,7 +321,7 @@ test('renderAgentFile: a partial settings object still renders a usable definiti
 });
 
 test('AGENT_ROLES ties each shipped definition to the agents block it renders from', () => {
-  assert.deepEqual(AGENT_ROLES, { 'omelette-coder.md': 'coder', 'omelette-tester.md': 'tester', 'omelette-reviewer.md': 'reviewer' });
+  assert.deepEqual(AGENT_ROLES, { 'omelette-coder.md': 'coder', 'omelette-coder-medium.md': 'coderMedium', 'omelette-tester.md': 'tester', 'omelette-reviewer.md': 'reviewer' });
   assert.deepEqual(Object.keys(AGENT_ROLES), AGENT_FILES, 'AGENT_FILES is the map\'s keys — one source, one order');
 });
 
