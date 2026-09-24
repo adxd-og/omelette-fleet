@@ -20,6 +20,7 @@ The short version: units read, the manager writes. Everything below explains wha
 | What will this package never do to my project or machine? | [What this package never does](#what-this-package-never-does) |
 | Which protections here are only best-effort, not guarantees? | [What is best-effort](#what-is-best-effort) |
 | What's the underlying design principle here? | [Units propose, the manager applies](#units-propose-the-manager-applies) |
+| How is this package itself audited for security, and what did the audit find? | [How this package is audited](#how-this-package-is-audited) |
 | What agy permission rules does Gemini research actually need? | [Recommended agy allow-rules](#recommended-agy-allow-rules) |
 
 ## Threat model
@@ -272,6 +273,75 @@ Call these defence in depth, not guarantees:
 ## Units propose, the manager applies
 
 The design principle underneath all of the above. A unit's job ends at a proposal: a review, an analysis, a report, a diff described in prose. The change itself is made by Claude Code, where your normal approval flow already sits and where one agent has the whole picture. This keeps the mutating surface in exactly one place, makes prompt injection into a unit a *reporting* problem rather than an *execution* problem, and means an untrustworthy answer costs you a re-read instead of a revert.
+
+## How this package is audited
+
+A security review of this package is a review with a brief: what each part is trusted with, and the classes of defect that trust invites. A finding counts only once a fresh reader has tried to disprove it against the code and failed. The brief was tested before anything relies on it — three runs over one revision, below.
+
+**The parts and their trust class.** What each part runs as, what it can reach, and what an audit asks of it:
+
+| Part | Files | Trust class | What the audit asks |
+|---|---|---|---|
+| Three unit servers | `servers/*.mjs`, `units/`, `core/` | Read-only MCP servers, each spawning a vendor CLI (`agy`, `grok`, `codex`) that runs a model with a shell or a toolset | Does a vendor CLI get more than its call needs — environment, config, write access — and is what it returns treated as untrusted? |
+| The guard hook | `hooks/omelette-guard.mjs` | A hook with git rights: it runs inside your session as your user, on the events your settings wire it to, and appends to the project's ledgers | Can a role it guards get a git write past it, and can a file planted in the project turn the hook's reads or writes against you? |
+| The CLI | `bin/omelette-fleet.mjs` | A command you run, which writes managed files into `.claude/` — the project's, or your user's with `--global` — and reads Claude Code's settings without writing them | Can it be made to write outside its own files: through a link, or over a file that is not its own? |
+| The sub-agent definitions it renders | `agents/` | Instructions, a model and a toolset for a delegated Claude Code agent, rendered into `.claude/agents/` by `rules --agents` | Does each role get only the tools its job needs, and does its definition say what it must never do? |
+
+**The brief.** Four parts, as the brief run carried them: the table above; an attacker model — another local process running as the same user, and a model a prompt injection has turned; a refutation gate, with the two Trail of Bits skills below; and Cloudflare's `security-audit-skill`, from `skills/security-audit/AI-AND-LLM.md` at commit `c1c8a8c1471069fb0e188eeaff69b8e8db6564a8` ([source](https://github.com/cloudflare/security-audit-skill/blob/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8/skills/security-audit/AI-AND-LLM.md)) — its core discipline, its validation rules, and the section written for exactly these parts, MCP servers and delegated agents, quoted here verbatim from its heading to the next. `test/security-audit.test.mjs` holds the quote byte for byte against `test/fixtures/cloudflare-mcp-trust-classes.txt`, which carries the same upstream header.
+
+```text
+## MCP and sub-agent trust classes (subagent_type: `general`)
+
+**Sub-agent and MCP trust inheritance**
+A delegated task receives the full session, credentials, memory, or capabilities rather than the least authority required. Check the principal and tenant carried into each call, capability narrowing, credential audience, and whether delegated results are treated as untrusted on return.
+
+**MCP server and tool identity confusion**
+Calls or results are routed by attacker-influenceable server names, tool names, request IDs, resource URIs, or model-selected aliases rather than the authenticated connection and outstanding request. Check whether two servers can claim the same tool or resource identity, whether reconnect changes the binding, and whether a response from one server can satisfy another server's pending call.
+
+**MCP metadata and schema as policy**
+Tool descriptions, resource metadata, prompts, completion hints, or schemas supplied by an MCP peer are trusted as policy or authorization. These fields can guide the model but cannot grant capability. Find the deterministic allowlist, server identity check, and handler authorization that remain authoritative when metadata conflicts.
+```
+
+Cloudflare's text is MIT-licensed, and its copyright line and permission notice travel with the quote — this package's own MIT notice does not stand in for Cloudflare's:
+
+```text
+Copyright (c) 2025-2026 Cloudflare, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**Method: linked, never copied.** Two Trail of Bits skills, from `trailofbits/skills` at commit `32e34f8173796e3566a51aee877dc96bc5191f64`, shape how findings are read. They are CC-BY-SA-4.0 and this package is MIT, so they are linked and described in our own words; a test checks that three of their sentences appear nowhere in this repository.
+
+- [`differential-review`](https://github.com/trailofbits/skills/blob/32e34f8173796e3566a51aee877dc96bc5191f64/plugins/differential-review/skills/differential-review/SKILL.md) — review the change rather than the tree: rank what a diff touches by risk, and size each change by its blast radius, everything that calls into it.
+- [`fp-check`](https://github.com/trailofbits/skills/blob/32e34f8173796e3566a51aee877dc96bc5191f64/plugins/fp-check/skills/fp-check/SKILL.md) — treat each finding as a claim to disprove: a reader with a clean context restates it, traces it through the code, and keeps it only when the refutation fails.
+
+**Three runs over one revision.** All three read `d7180b2` (v1.2.0):
+
+1. **Plain** — Codex on `gpt-6-astra`, asked to review this package for security defects, with no method; one call per group — the unit servers with `units/` and `core/`, the guard, the CLI and what it renders. The control.
+2. **Brief** — the same three calls with the whole brief above: the trust table, the attacker model, the refutation gate with the Trail of Bits links, and Cloudflare's core discipline, trust-class section and validation rules.
+3. **Plugin** — one run of the `claude-security` plugin over the same tree.
+
+Every finding from every run goes to a fresh agent with a clean context, told to disprove it against the code at that revision — `fp-check`'s gate: `verified` if the attempt fails, `refuted` if it succeeds. For these runs that was seven agents, one per cluster of files (guard-io, guard-git, core-fs, adapters, spawn-rpc, cli-text, cli-fs), so the findings of one cluster shared one agent's context. A verified finding becomes a task of the release, a fix and its test in one commit. Nothing is acted on because a tool said so, nothing an auditor read off the web is executed, and the runs stay on the read-only units and read-only sub-agents.
+
+**What the result decides.** A dedicated auditor definition is built only if the brief verifies findings that the plain review and the plugin both missed. Otherwise this section is the security brief, and a release's security review is a review run with it.
+
+**Result.** Not counted yet: this line becomes the three runs' one-line summary, linked to their row in MEASUREMENTS.
 
 ## Recommended agy allow-rules
 
