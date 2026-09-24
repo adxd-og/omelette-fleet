@@ -97,6 +97,12 @@
  *   of the operator's code; it is not what makes an artifact contract possible,
  *   and an image tool that cannot produce a file is not a tool. Same posture as
  *   `gemini_image`'s temp cwd; the operator copies the file out by hand.
+ *   ONE DIRECTORY MEANS ONE: workspace-write's default writable roots also
+ *   include /tmp and $TMPDIR, so image runs pass
+ *   `-c sandbox_workspace_write.exclude_slash_tmp=true` and
+ *   `-c sandbox_workspace_write.exclude_tmpdir_env_var=true`; the `-C`
+ *   directory stays writable as the workspace root although it sits under
+ *   $TMPDIR (buildArgs, `excludeTmp`).
  *   `tools.web_search=false` on image runs (nothing to search), no `effort`
  *   (the reasoning budget does not reach the image model), and NO retry — a
  *   re-issued generation bills image quota twice. The result is preferred from
@@ -176,8 +182,13 @@ const AUTH_HELP =
   'Codex CLI is not authenticated — operator action needed: run `codex login` ' +
   '(ChatGPT account), then retry this call.';
 
-/** Build the `codex exec` argv. Exported for tests. */
-export function buildArgs({ model, effort, cwd, mode, webSearch }) {
+/**
+ * Build the `codex exec` argv. Exported for tests. `excludeTmp` (image runs
+ * only) takes /tmp and $TMPDIR out of workspace-write's writable roots, which
+ * include both by default: the run's own `-C` directory — the workspace root,
+ * writable though it sits under $TMPDIR — is then the one place it may write.
+ */
+export function buildArgs({ model, effort, cwd, mode, webSearch, excludeTmp = false }) {
   const args = [
     'exec', '--json', '--skip-git-repo-check',
     // ISOLATION (see header): no ~/.codex/config.toml (MCP servers, plugins,
@@ -187,6 +198,12 @@ export function buildArgs({ model, effort, cwd, mode, webSearch }) {
     '-c', 'notify=[]',
     '-c', `tools.web_search=${webSearch ? 'true' : 'false'}`,
   ];
+  if (excludeTmp) {
+    args.push(
+      '-c', 'sandbox_workspace_write.exclude_slash_tmp=true',
+      '-c', 'sandbox_workspace_write.exclude_tmpdir_env_var=true',
+    );
+  }
   if (cwd) args.push('-C', cwd);
   if (model) args.push('-m', model);
   if (effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(effort)}`);
@@ -310,11 +327,11 @@ const isDeterministic = (e) => /not authenticated|turn failed|hard-killed|not fo
  * answer: `codex_image` answers with a bare path, so when there is no artifact
  * it has to explain the RUN — and `killed` / `capped` / `cancelled` live on
  * the spawn result, never on the text. `webSearch` / `effort` default to the
- * resolved config and may be overridden per tool (image runs pass web=false
- * and no effort).
+ * resolved config and may be overridden per tool (image runs pass web=false,
+ * no effort and `excludeTmp`).
  * @returns {Promise<{out:object, res:object}>}
  */
-async function runOnceRaw(ctx, { prompt, cwd, mode, webSearch, effort }) {
+async function runOnceRaw(ctx, { prompt, cwd, mode, webSearch, effort, excludeTmp = false }) {
   // --ignore-user-config removed the operator's configured default, so an
   // unpinned run would take whatever the CLI hard-codes. Pin the catalog head.
   const model = ctx.model || catalog.ids[0];
@@ -326,7 +343,7 @@ async function runOnceRaw(ctx, { prompt, cwd, mode, webSearch, effort }) {
   ctx.usedModel(model);
   const web = webSearch === undefined ? ctx.cfg.webSearch : webSearch;
   const eff = effort === undefined ? ctx.effort : effort;
-  const args = buildArgs({ model, effort: eff, cwd, mode, webSearch: web });
+  const args = buildArgs({ model, effort: eff, cwd, mode, webSearch: web, excludeTmp });
   ctx.log(`codex exec · sandbox=${mode} · model=${model}${ctx.model ? '' : ' (catalog default)'} · effort=${eff || '(default)'} · web=${web} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd: cwd || undefined, stdinText: prompt });
   const out = extractResult(res, { timeoutS: ctx.cfg.timeoutS, outputCap: ctx.cfg.outputCap });
@@ -497,6 +514,7 @@ export default defineUnit({
             mode: 'workspace-write',
             webSearch: false,
             effort: '',
+            excludeTmp: true,
           }));
         } catch (e) {
           // extractResult refused the run — a kill with nothing salvaged, a

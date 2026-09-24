@@ -625,3 +625,24 @@ test('codex_image: a hard-killed run answers with the file it had already saved 
   assert.equal(snap2.lastEvent.status, 'ok');
   assert.equal(snap2.lastEvent.partial, true);
 });
+
+test('codex_image: its sandbox is the run\'s own directory — /tmp and $TMPDIR are excluded from the writable roots (S2)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-img-tmp-'));
+  const argvLog = join(dir, 'argv.json');
+  const fake = fakeImageCodex({ dir, name: 'fake-img.mjs', argvLog, writeImage: true, answer: '<CWD>/image.png' });
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 30 } } }));
+  const r = await wrapCodex({ ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake)
+    .callTool('codex_image', { prompt: 'a small flat red circle' });
+  assert.ok(!r.isError, r.text);
+
+  const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
+  const overrides = argv.filter((x, i) => argv[i - 1] === '-c');
+  assert.ok(overrides.includes('sandbox_workspace_write.exclude_slash_tmp=true'), argv.join(' '));
+  assert.ok(overrides.includes('sandbox_workspace_write.exclude_tmpdir_env_var=true'), argv.join(' '));
+  // The -C directory stays the workspace root: the one place the run may write.
+  assert.equal(argv[argv.indexOf('-s') + 1], 'workspace-write');
+  assert.match(argv[argv.indexOf('-C') + 1], /omelette-codex-image-/);
+  // …and nothing else changes: research and review argv carry no such override.
+  assert.ok(!buildArgs({ mode: 'workspace-write', cwd: '/x', webSearch: false }).some((x) => /sandbox_workspace_write/.test(x)));
+  assert.ok(!buildArgs({ mode: 'read-only', webSearch: true }).some((x) => /sandbox_workspace_write/.test(x)));
+});
