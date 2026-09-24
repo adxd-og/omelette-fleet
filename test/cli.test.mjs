@@ -19,13 +19,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { callUnitServer, MAX_TIMEOUT_S } from '../core/client.mjs';
 import { renderResult } from '../core/results.mjs';
-import { AGENT_MARKER, FLEET_CONTRACT, HOOK_EVENTS, HOOK_MARKER, RULES_MARKER, SHORT_CONTRACT, SKILL_MARKER } from '../core/rules.mjs';
+import { AGENT_MARKER, FLEET_CONTRACT, HOOK_EVENTS, HOOK_MARKER, RULES_MARKER, SHORT_CONTRACT, SKILL_MARKER, shellWord } from '../core/rules.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -274,7 +274,8 @@ test('install --dry-run prints the exact claude commands with absolute server pa
   assert.equal(r.code, 0);
   for (const unit of ['gemini', 'grok', 'codex']) {
     const server = join(ROOT, 'servers', `${unit}.mjs`);
-    assert.ok(r.out.includes(`claude mcp add -s user test-${unit} -- node ${server}`), `missing add line for ${unit}`);
+    // Through the helper install prints with: bare here, quoted in a checkout whose path holds a space.
+    assert.ok(r.out.includes(`claude mcp add -s user test-${unit} -- node ${shellWord(server)}`), `missing add line for ${unit}`);
     assert.ok(r.out.includes(`claude mcp remove -s user test-${unit}`), `missing remove line for ${unit}`);
     assert.ok(server.startsWith('/') || /^[A-Za-z]:/.test(server));
   }
@@ -322,7 +323,7 @@ test('install --rules --dry-run prints BOTH halves — the registrations and the
   const r = cliIn(proj, dir, ['install', '--rules', '--dry-run'], { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake });
   assert.equal(r.code, 0, r.err);
   // half one, unchanged: the registrations
-  assert.ok(r.out.includes(`claude mcp add -s user omelette-codex -- node ${join(ROOT, 'servers', 'codex.mjs')}`), r.out);
+  assert.ok(r.out.includes(`claude mcp add -s user omelette-codex -- node ${shellWord(join(ROOT, 'servers', 'codex.mjs'))}`), r.out);
   assert.match(r.out, /Nothing was changed \(--dry-run\)/);
   // half two: everything `rules --agents --hooks` would write, in the CWD (which
   // reaches the CLI resolved — a macOS temp dir is /private/var/…)
@@ -3478,3 +3479,126 @@ test('install --rules prints the merge policy after the project files, hint and 
   assert.doesNotMatch(cliIn(proj, dir, ['install', '--dry-run', '--units', 'codex'], env).out, /merge policy/);
   assert.match(cli(['install', '--help'], { dir }).out, /merge policy/);
 });
+
+test('set and doctor refuse a link planted at their temporary name — the target is never written, the link never removed (C3)',
+  { skip: process.platform === 'win32' && 'POSIX symlinks' }, () => {
+    for (const [args, plant, said] of [
+      [['doctor'], '.doctor-<pid>.tmp', /status feed .*is NOT writable — \S+\.doctor-\d+\.tmp already exists/],
+      [['set', 'grok.timeoutS=300'], 'fleet.config.json.<pid>.tmp',
+        /^omelette-fleet set: cannot write \S+fleet\.config\.json: temporary file \S+fleet\.config\.json\.\d+\.tmp already exists/m],
+    ]) {
+      const dir = home();
+      const victim = join(dir, 'victim.txt');
+      writeFileSync(victim, 'SENTINEL-ORIGINAL');
+      // The name carries the CLI's own pid, so the link is planted from inside
+      // that process: a `--require` preload runs there before the CLI's main.
+      const preload = join(dir, 'plant.cjs');
+      writeFileSync(preload, [
+        "const { symlinkSync } = require('fs');",
+        "const { join } = require('path');",
+        "symlinkSync(process.env.VICTIM, join(process.env.OMELETTE_HOME, process.env.PLANT.replace('<pid>', String(process.pid))));",
+      ].join('\n'));
+      const empty = join(dir, 'empty-path');
+      mkdirSync(empty, { recursive: true });
+      const r = spawnSync(process.execPath, ['--require', preload, BIN, ...args], {
+        cwd: dir, encoding: 'utf8', timeout: 20000,
+        env: { PATH: empty, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', VICTIM: victim, PLANT: plant },
+      });
+      const output = `${r.stdout}${r.stderr}`;
+      assert.equal(r.signal, null, output);
+      assert.equal(readFileSync(victim, 'utf8'), 'SENTINEL-ORIGINAL', `${args[0]} wrote through the planted link:\n${output}`);
+      assert.match(output, said, output);
+      const planted = readdirSync(dir).filter((f) => f.startsWith(plant.split('<pid>')[0]) && f.endsWith('.tmp'));
+      assert.equal(planted.length, 1, `${args[0]}: a file this run did not create is not its to remove`);
+      assert.equal(lstatSync(join(dir, planted[0])).isSymbolicLink(), true);
+    }
+  });
+
+test('install: a dangling link where fleet.config.json should be is refused, never written through (C3)',
+  { skip: process.platform === 'win32' && 'POSIX symlinks' }, () => {
+    const dir = home();
+    const fake = fakeBin(dir);
+    const victim = join(dir, 'victim', 'install.txt');
+    mkdirSync(dirname(victim), { recursive: true });
+    symlinkSync(victim, join(dir, 'fleet.config.json'));
+    const r = cli(['install', '--units', 'codex'], { dir, env: { PATH: join(dir, 'empty'), CODEX_BIN: fake } });
+    assert.equal(r.code, 1, r.out + r.err);
+    assert.match(r.out, /^config {2}FAILED to write .*fleet\.config\.json: EEXIST/m, r.out);
+    assert.equal(existsSync(victim), false, 'the link was followed and its target created');
+    assert.equal(lstatSync(join(dir, 'fleet.config.json')).isSymbolicLink(), true);
+  });
+
+test('doctor --probe-sandbox: a probe directory replaced by a symlink — the cleanup leaves the target\'s mode alone (C5)',
+  { skip: process.platform === 'win32' && 'POSIX symlinks and modes' }, () => {
+    for (const kind of ['dir', 'file']) {
+      const dir = home();
+      const gone = join(dir, 'no-such');
+      const decoy = join(dir, `decoy-${kind}`);
+      if (kind === 'dir') { mkdirSync(decoy); chmodSync(decoy, 0o755); } else { writeFileSync(decoy, 'not the probe'); chmodSync(decoy, 0o644); }
+      const before = lstatSync(decoy).mode & 0o777;
+      const fake = probeScript(dir, `symlink-${kind}-cli`, [
+        "process.chdir('/');",
+        'fs.rmdirSync(cwd);',
+        `fs.symlinkSync(${JSON.stringify(decoy)}, cwd);`,
+        "console.log('done');",
+        'process.exit(0);',
+      ].join('\n'));
+      registerOurs(dir, ['grok']);
+      const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+      assert.match(r.out, /sandbox\s+BREACHED — \S+omelette-probe-grok-\S+ directory was removed or replaced/, r.out + r.err);
+      assert.equal(lstatSync(decoy).mode & 0o777, before, `${kind}: the cleanup chmodded what the link pointed at`);
+    }
+  });
+
+test('doctor: a FIFO — or a link to /dev/zero — where .mcp.json, an agent definition or the guard should be is skipped, and doctor comes back at once (C7)', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX FIFOs and devices');
+  for (const [label, rel, plant, line] of [
+    ['a FIFO agent definition', ['.claude', 'agents', 'omelette-coder.md'], 'fifo', /^agents {8}project: absent/m],
+    ['a FIFO guard script', ['.claude', 'hooks', 'omelette-guard.mjs'], 'fifo', /^hooks {9}project: absent/m],
+    ['a FIFO .mcp.json', ['.mcp.json'], 'fifo', /^mcp\.json {6}\S+\.mcp\.json \(not a regular file, or unreadable — not consulted\)$/m],
+    ['.mcp.json linked to /dev/zero', ['.mcp.json'], 'zero', /^mcp\.json {6}\S+\.mcp\.json \(not a regular file, or unreadable — not consulted\)$/m],
+  ]) {
+    const dir = home();
+    const proj = join(dir, 'proj');
+    const path = join(proj, ...rel);
+    mkdirSync(dirname(path), { recursive: true });
+    if (plant === 'zero') symlinkSync('/dev/zero', path);
+    else if (spawnSync('mkfifo', [path], { encoding: 'utf8' }).status !== 0) return t.skip('mkfifo is unavailable here');
+    // PATH is empty on purpose: no vendor CLI and no `gh`, so the only thing
+    // that could hold this run is the file under test.
+    const empty = join(dir, 'empty-path');
+    mkdirSync(empty, { recursive: true });
+    const t0 = Date.now();
+    const r = cli(['doctor'], { dir: proj, env: { HOME: dir, OMELETTE_HOME: dir, PATH: empty }, timeout: 20000 });
+    assert.ok(Date.now() - t0 < 10000, `${label}: doctor took ${Date.now() - t0} ms`);
+    assert.equal(r.code, 0, `${label}: ${r.out}${r.err}`);
+    assert.match(r.out, line, `${label}:\n${r.out}`);
+  }
+});
+
+test('install: a printed registration quotes a server path that holds a space, and a shell reads it as one word (C11)',
+  { skip: process.platform === 'win32' && 'POSIX quoting' }, () => {
+    const dir = home();
+    const pkg = join(dir, 'fleet with space');
+    for (const part of ['bin', 'core', 'units', 'servers', 'examples', 'rules', 'agents', 'skills', 'hooks', 'package.json']) {
+      cpSync(join(ROOT, part), join(pkg, part), { recursive: true });
+    }
+    const fake = fakeBin(dir);
+    // The CLI names its servers by its own real location (a macOS temp dir is /private/var/…).
+    const server = join(realpathSync(pkg), 'servers', 'codex.mjs');
+    const run = (args) => spawnSync(process.execPath, [join(pkg, 'bin', 'omelette-fleet.mjs'), ...args], {
+      cwd: dir, encoding: 'utf8',
+      env: { PATH: join(dir, 'empty'), HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', CODEX_BIN: fake },
+    });
+    const dry = run(['install', '--dry-run', '--units', 'codex']);
+    assert.equal(dry.status, 0, dry.stdout + dry.stderr);
+    assert.ok(dry.stdout.includes(`would run: claude mcp add -s user omelette-codex -- node '${server}'`), dry.stdout);
+    const printed = run(['install', '--units', 'codex']);
+    assert.equal(printed.status, 0, printed.stdout + printed.stderr);
+    const line = printed.stdout.split('\n').find((l) => l.includes('claude mcp add'));
+    assert.equal(line, `  claude mcp add -s user omelette-codex -- node '${server}'`, printed.stdout);
+    assert.equal(line, `  claude mcp add -s user omelette-codex -- node ${shellWord(server)}`, 'the helper the other assertions use spells the spaced path the same way');
+    // What the operator pastes: the path is ONE argument to a POSIX shell.
+    const words = spawnSync('sh', ['-c', `set -- ${line.trim().slice('claude '.length)}; printf '%s\\n' "$@"`], { encoding: 'utf8' });
+    assert.equal(words.stdout.trim().split('\n').pop(), server, words.stdout + words.stderr);
+  });

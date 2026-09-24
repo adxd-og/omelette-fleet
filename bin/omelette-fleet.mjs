@@ -54,7 +54,7 @@ import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WOR
 import { changedSince, checkPointers, parseCommit, parsePointers, readBoundedFile } from '../core/check.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets } from '../core/rules.mjs';
+import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets, shellWord } from '../core/rules.mjs';
 import { createUnitRuntime, resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -538,12 +538,12 @@ const sameLocation = (a, b) => {
  */
 function readProjectMcp({ cwd = process.cwd() } = {}) {
   const path = join(cwd, '.mcp.json');
-  let raw;
-  try { raw = readFileSync(path, 'utf8'); }
-  catch (e) {
-    if (e && e.code === 'ENOENT') return { path, exists: false, config: null, error: null };
-    return { path, exists: true, config: null, error: (e && e.message) || String(e) };
-  }
+  // Bounded and non-blocking (readSettingsFile): the file is PROJECT content,
+  // and a FIFO — or a link to /dev/zero, which a clone carries — under that
+  // name must not hold doctor.
+  const raw = readSettingsFile(path);
+  if (raw === null) return { path, exists: false, config: null, error: null };
+  if (raw === UNREADABLE) return { path, exists: true, config: null, error: 'not a regular file, or unreadable — not consulted' };
   try {
     const parsed = JSON.parse(raw);
     return isObj(parsed)
@@ -658,17 +658,22 @@ function adoptPrefix(asked, found) {
   };
 }
 
-/** The status feed is only real if the home directory takes a write — prove it, do not assume it. */
+/**
+ * The status feed is only real if the home directory takes a write — prove it,
+ * do not assume it. 'wx': the probe's name is predictable, so something already
+ * sitting there — a link planted to catch the write, or a leftover — fails the
+ * probe instead of being followed and truncated, and is not removed.
+ */
 function probeHome(env = process.env) {
   const dir = fleetHome(env);
   const probe = join(dir, `.doctor-${process.pid}.tmp`);
   try {
     mkdirSync(dir, { recursive: true });
-    writeFileSync(probe, 'ok', { mode: 0o600 });
+    writeFileSync(probe, 'ok', { mode: 0o600, flag: 'wx' });
     unlinkSync(probe);
     return { dir, writable: true, error: null };
   } catch (e) {
-    return { dir, writable: false, error: (e && e.message) || String(e) };
+    return { dir, writable: false, error: e && e.code === 'EEXIST' ? `${probe} already exists` : (e && e.message) || String(e) };
   }
 }
 
@@ -720,7 +725,10 @@ const RULES_READ_MAX = 1024 * 1024;
 /**
  * ONE bounded read for every settings file this CLI opens — the `env` block,
  * the top-level keys and the hook wiring all come through here, so no reader
- * can be the one that hangs.
+ * can be the one that hangs. The project files doctor and `update` read beside
+ * them come through here too — `.mcp.json` and the managed agent, skill and
+ * hook files — because they arrive with the project, and a FIFO or a link to a
+ * device under one of those names must not hold the CLI either.
  *
  * O_NONBLOCK and an fstat, exactly like the guard's own reader: a FIFO under
  * the name of a settings file opens instantly and is then refused as not a
@@ -1258,6 +1266,15 @@ async function mergePolicy({ cwd = process.cwd(), env = process.env } = {}) {
 const runClaude = (bin, argv) => runProcess({ bin, args: argv.slice(1), inheritEnv: true, hardKillMs: 60000 })
   .catch((e) => ({ code: -1, stdout: '', stderr: (e && e.message) || String(e) }));
 
+/**
+ * A command this CLI PRINTS for the operator to paste, word by word through
+ * core/rules.mjs's shellWord: bare where a POSIX shell reads the word as
+ * itself, quoted otherwise. The server path is the word that can need it — an
+ * install directory with a space would otherwise paste as two arguments. The
+ * argv runClaude executes is never quoted: it is not a command line.
+ */
+const printed = (argv) => argv.map((word) => shellWord(word)).join(' ');
+
 /** What `install` would do to <home>/fleet.config.json — an existing file is never touched. */
 function planConfig(env = process.env) {
   const target = configPath(env);
@@ -1266,7 +1283,10 @@ function planConfig(env = process.env) {
 
 function writeConfigFromExample(plan) {
   mkdirSync(dirname(plan.target), { recursive: true });
-  writeFileSync(plan.target, readFileSync(plan.source, 'utf8'), { mode: 0o600 });
+  // 'wx': planConfig's existsSync follows a link, so a DANGLING one reads as
+  // absent — and a plain write would then create the file it points at. O_EXCL
+  // refuses any name that exists, a link included.
+  writeFileSync(plan.target, readFileSync(plan.source, 'utf8'), { mode: 0o600, flag: 'wx' });
 }
 
 /**
@@ -1343,8 +1363,8 @@ async function cmdInstall(argv) {
     out();
     for (const p of plans) {
       if (p.skip) { out(`  # ${p.name}: ${p.skip} — skipped (re-run with --force to register anyway)`); continue; }
-      out(`  ${p.remove.join(' ')}`);
-      out(`  ${p.add.join(' ')}`);
+      out(`  ${printed(p.remove)}`);
+      out(`  ${printed(p.add)}`);
     }
     out();
     const cfgFailed = createConfig(cfgPlan);
@@ -1365,8 +1385,8 @@ async function cmdInstall(argv) {
     }
     out(`${pad(p.name, 7)} ${p.bin} → ${p.binPath || '(not found, --force)'}`);
     if (dry) {
-      out(`        would run: ${p.remove.join(' ')}`);
-      out(`        would run: ${p.add.join(' ')}`);
+      out(`        would run: ${printed(p.remove)}`);
+      out(`        would run: ${printed(p.add)}`);
       registered.push(p.name);
       continue;
     }
@@ -1917,8 +1937,11 @@ function dirState({ kind, current, global = false, cwd = process.cwd(), env = pr
   const spec = KINDS[kind];
   const { dir } = spec.dir({ global, cwd, env });
   const found = spec.files.map((name) => {
-    let text;
-    try { text = readFileSync(join(dir, ...name.split('/')), 'utf8'); } catch { return { name, state: 'absent', version: null }; }
+    // Bounded and non-blocking (readSettingsFile): a FIFO or a device under a
+    // managed name reads as absent — as the rules file does — instead of
+    // holding doctor and update.
+    const text = readSettingsFile(join(dir, ...name.split('/')));
+    if (text === null || text === UNREADABLE) return { name, state: 'absent', version: null };
     const version = spec.parse(text);
     return version ? { name, state: 'ours', version } : { name, state: 'foreign', version: null };
   });
@@ -2196,8 +2219,8 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
   let fromGlobal = false;
   for (const global of [false, true]) {
     const { dir } = KINDS.hooks.dir({ global, cwd, env });
-    let text;
-    try { text = readFileSync(join(dir, HOOK_FILES[0]), 'utf8'); } catch { continue; }
+    const text = readSettingsFile(join(dir, HOOK_FILES[0]));
+    if (text === null || text === UNREADABLE) continue; // absent, or a FIFO / device that must not hold doctor
     if (!KINDS.hooks.parse(text)) continue; // somebody else's script says nothing about ours
     rendered = parseHookHandoff(text);
     if (rendered) { fromGlobal = global; break; }
@@ -2532,7 +2555,10 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
     // the probe. A removal that fails is one line, never a lost diagnosis.
     // A unit that stripped the directory's own bits (the "could not inspect"
     // case) would otherwise leave it behind: reopen it, then remove it.
-    try { chmodSync(dir, 0o700); } catch { /* gone, or not ours to reopen */ }
+    // lstat FIRST: a directory the run REPLACED with a symlink (BREACHED above)
+    // is not ours to reopen, and chmod follows a link — the mode of whatever it
+    // points at would change on the way out. rmSync below removes the link itself.
+    try { if (lstatSync(dir).isDirectory()) chmodSync(dir, 0o700); } catch { /* gone, or not ours to reopen */ }
     try { rmSync(dir, { recursive: true, force: true }); }
     catch (e) { log(`probe: could not remove ${dir}: ${(e && e.message) || e}`); }
   }
@@ -3031,7 +3057,11 @@ function cmdSet(argv) {
   // A scalar at the top level: there is no block to merge into and so no
   // shape to refuse — the key is either replaced or added.
   for (const a of fleetAssignments) next[a.key] = a.value;
-  const written = writeFleetConfig(next);
+  // A link planted at the temporary name — or a leftover — refuses the write
+  // (core/config.mjs): one line and exit 1, never a stack.
+  let written;
+  try { written = writeFleetConfig(next); }
+  catch (e) { err(`omelette-fleet set: ${(e && e.message) || e}`); return 1; }
 
   for (const a of assignments) {
     const cfg = before.get(a.name);

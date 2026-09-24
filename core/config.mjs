@@ -34,7 +34,7 @@
  * not implement a mode (supportedModes[mode] falsy) refuses it explicitly.
  * ORION_ALLOW_GEMINI_MUTATE=1 is honoured as a legacy alias for `gemini`.
  */
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -466,13 +466,33 @@ export function unitConfig({ unit, envMap = {}, builtin = {}, extraSchema = {}, 
   };
 }
 
-/** Atomic write of the whole config (0600). Returns the path. */
+/**
+ * Atomic write of the whole config (0600). Returns the path.
+ *
+ * The temporary name is predictable (one process, one pid), so it is created
+ * with O_EXCL ('wx'), as bin/omelette-fleet.mjs's syncManagedFile creates its
+ * own: a link planted there to catch the write — or a leftover — fails the open
+ * instead of being followed, truncated and renamed into place. A file this call
+ * did not create is not removed.
+ */
 export function writeFleetConfig(config, env = process.env) {
   const path = configPath(env);
   mkdirSync(fleetHome(env), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ version: CONFIG_VERSION, ...config }, null, 2) + '\n', { mode: 0o600 });
-  renameSync(tmp, path);
+  let fd;
+  try { fd = openSync(tmp, 'wx', 0o600); }
+  catch (e) {
+    if (e && e.code === 'EEXIST') throw new Error(`cannot write ${path}: temporary file ${tmp} already exists`);
+    throw e;
+  }
+  try {
+    try { writeFileSync(fd, `${JSON.stringify({ version: CONFIG_VERSION, ...config }, null, 2)}\n`); }
+    finally { closeSync(fd); }
+    renameSync(tmp, path);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* already gone */ }
+    throw e;
+  }
   cache = { path: null, mtimeMs: -1, data: null, error: null };
   return path;
 }

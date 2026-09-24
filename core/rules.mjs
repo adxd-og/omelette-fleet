@@ -609,6 +609,17 @@ const shellQuote = (s, platform) => (platform === 'win32'
   : `'${String(s).replaceAll("'", "'\\''")}'`);
 
 /**
+ * ONE WORD of a command this package PRINTS for the operator to paste: bare
+ * when a POSIX shell reads it as itself, shellQuote'd otherwise. `install`
+ * prints its registrations through this, and the tests compute the line they
+ * expect through the same function, so an assertion holds in a checkout whose
+ * path needs quoting as well as in one that does not.
+ */
+export const shellWord = (s, platform = process.platform) => (/^[\w@%+=:,./-]+$/.test(String(s))
+  ? String(s)
+  : shellQuote(String(s), platform));
+
+/**
  * What to paste into settings.json to make the guard actually run. PRINTED by
  * `omelette-fleet rules --hooks`, never applied: Claude Code's settings files
  * are read by this package and written by the operator alone.
