@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.3.0 — 2026-09-25
+
+Roles: a shipped reviewer, two coder buckets, and a security brief that proved itself first.
+
+- **Security.**
+  - **The package is audited with a brief, and the brief was tested first.** SECURITY gains "How this package is audited": the trust class of each part, Cloudflare's "MCP and sub-agent trust classes" quoted with Cloudflare's MIT notice beside it, Trail of Bits' `differential-review` and `fp-check` linked (CC-BY-SA-4.0, not copied), and two runs over v1.2.0 (`d7180b2`) — plain Codex and Codex with the brief, both `gpt-6-astra` — every finding put to a fresh `claude-opus-5-5` refuter: plain 34 found, 18 verified; brief 16 found, 9 verified; 3 verified by the brief only. The `claude-security` plugin run waits for the operator's own `/claude-security`. `omelette-auditor` is not built. MEASUREMENTS has the row.
+  - **Ten fix commits, each fix with its test:**
+    - The guard's git classifier: a git write behind a redirection, a flag cluster, `--orphan`/`-t` or a detached `--column` value is refused, and the scan stays linear.
+    - The Stop gate: a fenced `## Handoff` no longer lets it go, and both handoff readers split lines the same way.
+    - gemini: Google Cloud credentials and the Vertex switch never reach agy, and an accept-edits run is never re-issued.
+    - codex: an image run can write only its own directory — `/tmp` and `$TMPDIR` are out of its sandbox.
+    - units: a bare vendor name is resolved once, from absolute `PATH` entries — never from the call's cwd.
+    - `check`: a changed file whose name git would quote (`café.js`) makes its pointers stale (`git diff -z`).
+    - CLI: `set`, `doctor` and `install` refuse a planted link; the probe's cleanup leaves a link's target alone; `doctor` never blocks on a project FIFO; printed commands quote a spaced path.
+    - rules: an agent setting holding `$'` or `$&` renders literally.
+    - scripts: `agent-usage` reads a transcript without backtracking, and a spaced parent directory never reaches a report.
+    - SECURITY says what the refutations proved: proxy URLs pass as they are, the stdin cap fails open, gemini's per-tool posture, the probe's environment, the kill's limit.
+- **Roles.**
+  - **`omelette-reviewer`** ships beside the coder and the tester: a clean-context review definition (Opus, xhigh; `disallowedTools: Agent, Edit, NotebookEdit`; the only file it writes is `.omelette/reports/<name>-review.md`), its own `agents.reviewer.model` / `agents.reviewer.effort` keys, its git writes refused by the guard by name, a "Reviews" rules line naming it and the session's `git status --porcelain` check after it, and the docs in ORCHESTRATION, CONFIG, SECURITY and README.
+  - **`omelette-coder-medium`** ships beside `omelette-coder`: the coder's own template rendered under a second name (`{{name}}`) at `effort: medium`, its `agents.coderMedium.model` / `agents.coderMedium.effort` keys, contained by the guard like the coder by its whole name, `set agents.coderMedium.<key>` reachable because the role is matched against the schema's spelling ignoring case, and the bucket rule on the rules' coder line — medium when the plan section prints the exact text, diff, tests and expected numbers, `omelette-coder` otherwise, `NEEDS_CONTEXT` at any effort for a brief that leaves a required decision open. Docs: ORCHESTRATION (the two buckets, four definitions, four guarded roles), CONFIG (the keys, why medium, what a default change does to a rendered file), SECURITY. `omelette-coder` stays at xhigh: the matched repeat did not hold for medium.
+- **Measurements.** Three new MEASUREMENTS sections: the security audit over one revision (above); the matched repeat — the guard classifier fix built at medium and xhigh from one commit, same brief, acceptance 39/39 each, the blind review telling them apart (medium left a fail-open quadratic path; xhigh shipped after a second round, at 5.5× the cost), N = 1, with the release's bucket log in one sentence; and rent and the rules file, 1.2.0 to 1.3.0 — the session's resident context grew with its length, not with the rules file (13 069 → 13 922 characters).
+- **Rules.** The definitions line counts four; the branch line, the nesting line and the guard sentence no longer count roles at all (a spec amendment, recorded in the ledger), their explanations untouched; the coder line carries the bucket clause after its 1.2.0 words; the ceiling follows the content, 13 100 → 14 030.
+- **Backlog notes.** Flaky tests; the pointer grammar and spaces; the rules ceiling pinned in five files; the guard over-blocking quoted git text inside non-git commands; abbreviated long options.
+- Spec: `docs/superpowers/specs/2026-09-24-1.3.0-roles-design.md`; plans under `docs/superpowers/plans/2026-09-24-1.3.0-*`.
+
 ## 1.2.0 — 2026-09-24
 
 Context engineering, measured: what fills a sub-agent's context, what the rules file costs every session, and what a task lead, a scout-map planner and a coder's effort level buy.
