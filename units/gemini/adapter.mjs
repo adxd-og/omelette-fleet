@@ -89,8 +89,9 @@
  * hard kill sits 60 s above it so agy gets to report its own timeout first.
  *
  * BILLING — the OAuth subscription is the only billing path this unit accepts;
- * every API-key env var that could flip agy to metered billing is deleted from
- * the child env.
+ * every env var that could flip agy to metered billing is deleted from the
+ * child env: the API keys, and the Google Cloud credentials and Vertex switch
+ * the GOOGLE_* passthrough would otherwise admit (BILLING_RISK_ENV).
  *
  * DEEP RESEARCH — reimplemented in-process as DECOMPOSE → parallel GATHER →
  * SYNTHESIZE over agy one-shots, with the decompose stage shape-locked by
@@ -129,12 +130,24 @@ export const catalog = makeCatalog({
   vendorDefaultNote: 'omit `model` for the fleet default, else agy\'s own default',
 });
 
-/** Billing-risk env vars — any of these reaching agy can flip it to metered API-key billing. */
+/**
+ * Billing-risk env vars — any of these reaching agy can take it off the OAuth
+ * subscription: an API key to metered API-key billing, and a Google Cloud
+ * credential (a service-account key, the path of an ADC file) with the Vertex
+ * switch to metered Vertex billing. The last three are here because GOOGLE_*
+ * is passed through for project and region, and a wildcard admits every
+ * secret that shares its prefix: the ones this unit knows to be credentials
+ * are named and removed after it. Another GOOGLE_* secret still passes — a
+ * denylist under a wildcard is never complete.
+ */
 const BILLING_RISK_ENV = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_CREDENTIALS',
+  'GOOGLE_GENAI_USE_VERTEXAI',
   'GOOGLE_GENERATIVE_AI_API_KEY',
 ];
 
@@ -523,7 +536,8 @@ export default defineUnit({
   billingRiskEnv: BILLING_RISK_ENV,
   // agy's own knobs (AGY_BIN/AGY_*), plus the GEMINI_*/GOOGLE_* namespaces the
   // CLI reads for project + region; the billing scrub runs after this and
-  // removes GEMINI_API_KEY / GOOGLE_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY.
+  // removes the API keys, the Google Cloud credentials and the Vertex switch
+  // the wildcard would otherwise admit (BILLING_RISK_ENV).
   envPassthrough: ['AGY_*', 'GEMINI_*', 'GOOGLE_*'],
   envMap: { model: 'AGY_DEFAULT_MODEL', timeoutS: 'AGY_TIMEOUT_S' },
   builtin: { timeoutS: 300 },
@@ -566,7 +580,11 @@ export default defineUnit({
         const c = checkCwd(args.cwd);
         if (c.error) return { text: c.error, isError: true };
         const acceptEdits = ctx.mode === 'workspace-write';
-        const r = await runAgyWithRetry(ctx, { prompt: NO_GIT_PREFIX + prompt, model: ctx.model, acceptEdits, cwd: c.cwd || undefined });
+        const a = { prompt: NO_GIT_PREFIX + prompt, model: ctx.model, acceptEdits, cwd: c.cwd || undefined };
+        // Never re-issue a run that may have written something: an accept-edits
+        // run that came back empty may still have made its edits. Codex's
+        // codex_code_review follows the same rule.
+        const r = acceptEdits ? await runAgy(ctx, a) : await runAgyWithRetry(ctx, a);
         return { text: r.text, usage: r.usage, ...(r.partial ? { partial: true } : {}) };
       },
     },

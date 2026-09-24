@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import unit, { deepResearchModel, interpretAgy, parseSubquestions, stageModels, catalog } from '../units/gemini/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 import { parseResult } from '../core/results.mjs';
+import { buildChildEnv } from '../core/spawn.mjs';
 
 const ok = (over = {}) => ({ stdout: '', stderr: '', code: 0, killed: false, ...over });
 const envelope = (o) => JSON.stringify({ status: 'SUCCESS', response: 'answer', usage: { input_tokens: 10, output_tokens: 3 }, ...o });
@@ -884,4 +885,47 @@ test('gemini_image: a hard-killed run whose file is already on disk answers with
   const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.equal(snap.lastEvent.partial, true);
+});
+
+test('the gemini child env: GOOGLE_* still carries project and region, never a Google Cloud credential or the Vertex switch (S18)', () => {
+  const parent = {
+    PATH: '/usr/bin', HOME: '/nonexistent',
+    GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CLOUD_LOCATION: 'us-central1',
+    GOOGLE_CREDENTIALS: 'SYNTHETIC_SA_SECRET',
+    GOOGLE_APPLICATION_CREDENTIALS: '/fake/sa.json',
+    GOOGLE_GENAI_USE_VERTEXAI: 'true',
+    GOOGLE_API_KEY: 'k1', GEMINI_API_KEY: 'k2', GH_TOKEN: 'gh',
+  };
+  assert.deepEqual(
+    buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.billingRiskEnv }),
+    { PATH: '/usr/bin', HOME: '/nonexistent', GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CLOUD_LOCATION: 'us-central1' },
+  );
+  // The scrub runs after the operator's escape hatch too: naming a credential
+  // there does not re-admit it, exactly as it does not re-admit an API key.
+  const hatch = buildChildEnv({
+    env: { ...parent, OMELETTE_ENV_PASSTHROUGH: 'GOOGLE_APPLICATION_CREDENTIALS,GOOGLE_CREDENTIALS' },
+    passthrough: unit.envPassthrough, scrub: unit.billingRiskEnv,
+  });
+  assert.equal(hatch.GOOGLE_APPLICATION_CREDENTIALS, undefined);
+  assert.equal(hatch.GOOGLE_CREDENTIALS, undefined);
+});
+
+test('gemini_research under workspace-write: a run that came back empty is NOT re-issued — it may already have written (S19)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-gemini-noretry-'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { mode: 'workspace-write' } } }));
+  const calls = [];
+  const stub = (o) => { calls.push(o.args); return spawnRes({ stdout: '' }); };
+
+  const open = await deepRt({ ...process.env, OMELETTE_HOME: dir, OMELETTE_ALLOW_WRITE: 'gemini' }, stub)
+    .callTool('gemini_research', { prompt: 'q' });
+  assert.equal(calls.length, 1, 'one approved write request is one write-capable run');
+  assert.ok(calls[0].includes('accept-edits'), calls[0].join(' '));
+  assert.equal(open.text, '(empty response from Gemini)');
+
+  // …while a read-only run keeps its one bounded retry on empty output.
+  calls.length = 0;
+  await deepRt({ ...process.env, OMELETTE_HOME: dir, OMELETTE_ALLOW_WRITE: '', ORION_ALLOW_GEMINI_MUTATE: '' }, stub)
+    .callTool('gemini_research', { prompt: 'q' });
+  assert.equal(calls.length, 2, 'the read-only research run is still retried once');
+  assert.ok(!calls[0].includes('accept-edits'), calls[0].join(' '));
 });
