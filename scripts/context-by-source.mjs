@@ -226,7 +226,9 @@ function metaFor(dir, id, notified) {
   if (existsSync(file)) {
     try {
       const { agentType, description } = JSON.parse(readFileSync(file, 'utf8'));
-      if (typeof description === 'string') { const label = sanitise(description); return { role: roleOfType(agentType) || roleOf(label), description: label }; }
+      const label = typeof description === 'string' ? sanitise(description) : '';
+      const role = roleOfType(agentType) || (label ? roleOf(label) : null);
+      if (role) return { role, description: label };
     } catch { /* unreadable: fall back to the notification */ }
   }
   const row = notified.get(id);
@@ -252,10 +254,17 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     const id = f.replace(/^agent-|\.jsonl$/g, '');
     let text;
     try { text = readFileSync(join(dir, f), 'utf8'); } catch (e) { fail(`cannot read ${f}: ${e.code || e.message}`); }
-    const lines = text.split('\n').filter(Boolean).map((l, i) => {
-      try { return JSON.parse(l); } catch { return fail(`${f} line ${i + 1} is not JSON`); }
+    // Physical line numbers in errors (blank lines count); an entry that is
+    // valid JSON but not an object is an error too, never an uncaught throw
+    // whose stack would name this checkout's absolute path.
+    const lines = [];
+    text.split('\n').forEach((l, i) => {
+      if (!l.trim()) return;
+      let e; try { e = JSON.parse(l); } catch { return fail(`${f} line ${i + 1} is not JSON`); }
+      if (!e || typeof e !== 'object' || Array.isArray(e)) return fail(`${f} line ${i + 1} is not a transcript entry`);
+      lines.push(e);
     });
-    if (before && lines[0] && String(lines[0].timestamp || '') >= before) return null;
+    if (before && lines[0] && lines[0].timestamp && Date.parse(lines[0].timestamp) >= Date.parse(before)) return null;
     return { id, ...analyseTranscript(lines, metaFor(dir, id, notified)) };
   }).filter(Boolean);
   const summary = summarise(records);

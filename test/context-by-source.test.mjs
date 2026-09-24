@@ -247,4 +247,24 @@ test('--before keeps only transcripts whose first entry is older than the date',
   assert.equal(JSON.parse(all.stdout).records.length, 2);
   const bare = run(join(root, 'session.jsonl'), join(root, 'subagents'), '--before');
   assert.equal(bare.status, 2, 'a --before without a date is a usage error');
+  // Dates compare as instants, not strings: a cutoff with a timezone offset still cuts at the right moment.
+  const offset = run(join(root, 'session.jsonl'), join(root, 'subagents'), '--json', '--before', '2026-09-10T11:30:00+02:00'); // = 09:30Z, before a1's 10:00Z
+  assert.deepEqual(JSON.parse(offset.stdout).records.map((r) => r.id), [], 'a1 (10:00Z) is not older than 09:30Z');
+});
+
+test('a transcript line that is valid JSON but not an entry (null, a number, an array) is an error naming file and physical line, never a stack trace', () => {
+  const root = sessionDir({ 'session.jsonl': '', 'subagents/agent-a1.jsonl': `${JSON.stringify(brief('go'))}\n\nnull\n` });
+  const out = run(join(root, 'session.jsonl'), join(root, 'subagents'));
+  assert.equal(out.status, 2);
+  assert.match(out.stderr, /agent-a1\.jsonl line 3 is not a transcript entry/, 'the physical line, blank lines counted');
+  assert.doesNotMatch(out.stderr, /at .*\.mjs|file:\/\//, 'no stack trace, no path of this checkout');
+  assert.ok(!out.stderr.includes(root));
+});
+
+test('a .meta.json with agentType and no description still names the role', () => {
+  const agent = jsonl([brief('go')]);
+  const root = sessionDir({ 'session.jsonl': '', 'subagents/agent-a1.jsonl': agent, 'subagents/agent-a1.meta.json': JSON.stringify({ agentType: 'omelette-tester' }) });
+  const json = run(join(root, 'session.jsonl'), join(root, 'subagents'), '--json');
+  assert.equal(json.status, 0, json.stderr);
+  assert.deepEqual(JSON.parse(json.stdout).records.map((r) => [r.id, r.role, r.description]), [['a1', 'tester', '']]);
 });
