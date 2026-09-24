@@ -16,8 +16,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { createUnitRuntime } from '../core/unit.mjs';
+import { delimiter, dirname, join } from 'node:path';
+import { createUnitRuntime, locateBin } from '../core/unit.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
 import grokUnit from '../units/grok/adapter.mjs';
 import codexUnit from '../units/codex/adapter.mjs';
@@ -89,3 +89,55 @@ for (const [name, spec] of Object.entries(UNITS)) {
     assert.equal(existsSync(join(callDir, 'ran.txt')), false, 'the decoy in the call directory ran');
   });
 }
+
+for (const [name, spec] of Object.entries(UNITS)) {
+  test(`${name}: a bare <UNIT>_BIN is looked up in the ABSOLUTE PATH entries only — a program in the call's cwd never runs (S17)`,
+    { skip: process.platform === 'win32' && 'POSIX PATH search' }, async (t) => {
+      const goodDir = mkdtempSync(join(tmpdir(), `omelette-bin-good-${name}-`));
+      const callDir = mkdtempSync(join(tmpdir(), `omelette-bin-evil-${name}-`));
+      t.after(() => {
+        rmSync(goodDir, { recursive: true, force: true });
+        rmSync(callDir, { recursive: true, force: true });
+      });
+      const bare = `omelette-s17-${name}`;
+      fake(goodDir, bare, 'server', spec);
+      fake(callDir, bare, 'decoy', spec);
+      // `.` and an empty entry both mean "the directory the child runs in" to
+      // the OS's own PATH search — the directory the CALL chose.
+      for (const rel of ['.', '']) {
+        rmSync(join(goodDir, 'ran.txt'), { force: true });
+        rmSync(join(callDir, 'ran.txt'), { force: true });
+        const env = { ...process.env, OMELETTE_HOME: goodDir, [spec.binEnv]: bare, PATH: `${rel}${delimiter}${goodDir}` };
+        const r = await createUnitRuntime(spec.unit, { env }).callTool(spec.tool, { prompt: 'q', cwd: callDir });
+        assert.match(r.text, /answer from server/, `PATH=${JSON.stringify(env.PATH)}: ${r.text}`);
+        assert.equal(existsSync(join(callDir, 'ran.txt')), false, `PATH=${JSON.stringify(env.PATH)}: the program planted in the call's cwd ran`);
+      }
+      // …and with no absolute entry holding it, the answer is "not found" — never the decoy.
+      rmSync(join(callDir, 'ran.txt'), { force: true });
+      const env = { ...process.env, OMELETTE_HOME: goodDir, [spec.binEnv]: bare, PATH: `.${delimiter}/usr/bin` };
+      const r = await createUnitRuntime(spec.unit, { env }).callTool(spec.tool, { prompt: 'q', cwd: callDir });
+      assert.equal(r.isError, true, r.text);
+      assert.match(r.text, new RegExp(`${bare} not found in PATH`));
+      assert.equal(existsSync(join(callDir, 'ran.txt')), false, 'the planted program ran');
+    });
+}
+
+test('locateBin: a bare name becomes the first executable FILE in an absolute PATH entry; a path is left as it is (S17)',
+  { skip: process.platform === 'win32' && 'POSIX PATH search' }, (t) => {
+    const a = mkdtempSync(join(tmpdir(), 'omelette-locate-a-'));
+    const b = mkdtempSync(join(tmpdir(), 'omelette-locate-b-'));
+    t.after(() => {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    });
+    writeFileSync(join(a, 'tool'), 'not executable'); //   a file without the execute bit: skipped
+    mkdirSync(join(b, 'dirtool')); //                         a directory under the name: skipped
+    writeFileSync(join(b, 'tool'), '#!/bin/sh\n');
+    chmodSync(join(b, 'tool'), 0o755);
+    const env = { PATH: ['.', '', 'rel/bin', a, b].join(delimiter) };
+    assert.equal(locateBin('tool', env), join(b, 'tool'));
+    assert.equal(locateBin('dirtool', env), null);
+    assert.equal(locateBin('missing', env), null);
+    assert.equal(locateBin('/abs/tool', env), '/abs/tool', 'a path is not searched for');
+    assert.equal(locateBin('tool', {}), null, 'no PATH, nothing found');
+  });

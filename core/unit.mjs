@@ -75,7 +75,8 @@
  * worth filing. A `local` tool gets a no-op of the same name: it produces no
  * record, and an adapter helper shared with a spawn tool must not have to ask.
  */
-import { resolve as resolvePath } from 'node:path';
+import { accessSync, constants, statSync } from 'node:fs';
+import { delimiter, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { serve } from './jsonrpc.mjs';
 import { contractFor, unitInstructions } from './rules.mjs';
 import { runProcess } from './spawn.mjs';
@@ -152,12 +153,40 @@ export function defineUnit(spec) {
  * ONCE at unit start. Every tool then spawns the same executable whatever `cwd`
  * a caller asks the run to happen in: the OS resolves a relative command
  * against the CHILD's cwd, so an unresolved override would be a different
- * binary — or none — per call. A bare name is not a path and is left alone:
- * that one is for PATH to resolve.
+ * binary — or none — per call. A bare name is not a path and is left alone
+ * here: locateBin finds it in PATH's ABSOLUTE entries.
  */
 export function resolveBin(unit, env = process.env) {
   const bin = (unit.bin.env && env[unit.bin.env]) || unit.bin.default;
   return bin && (bin.includes('/') || bin.includes('\\')) ? resolvePath(bin) : bin;
+}
+
+/**
+ * WHERE A BARE NAME LIVES, decided without the caller's `cwd`. The OS searches
+ * PATH for a bare command AFTER the child has moved into its cwd, so an empty
+ * or relative entry (`::`, a trailing `:`, `.`, `bin`) is searched in the
+ * directory the CALL asked the run to happen in — and a program planted there
+ * would run as the operator, before any vendor sandbox exists. So the name is
+ * looked up here, in the ABSOLUTE entries of the server's own PATH only, and
+ * the absolute path is what every spawn uses. A name with a path separator is
+ * already a path (resolveBin made it absolute) and is returned as it is.
+ * Native Windows is not supported (README): there the name is left to the OS.
+ * @returns {string|null} the executable's absolute path, or null when no
+ *   absolute PATH entry holds an executable file of that name
+ */
+export function locateBin(bin, env = process.env) {
+  if (!bin) return null;
+  if (bin.includes('/') || bin.includes('\\') || process.platform === 'win32') return bin;
+  for (const dir of String(env.PATH || '').split(delimiter)) {
+    if (!dir || !isAbsolute(dir)) continue;
+    const p = join(dir, bin);
+    try {
+      if (!statSync(p).isFile()) continue;
+      accessSync(p, constants.X_OK);
+      return p;
+    } catch { /* not here */ }
+  }
+  return null;
 }
 
 /**
@@ -242,6 +271,10 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
   // ONCE, at unit start, in the SERVER's own cwd: a relative override is
   // resolved here or the executable would depend on where each call runs.
   const bin = resolveBin(unit, env);
+  // …and a BARE name is looked up once too, in the absolute PATH entries only
+  // (locateBin): left to the OS, an empty or relative entry would be searched
+  // in the directory each CALL asked the run to happen in.
+  let exe = locateBin(bin, env);
   let resultSeq = 0;
   const cfgFor = () => unitConfig({
     unit: unit.name, envMap: unit.envMap, builtin: unit.builtin, extraSchema: unit.extraSchema,
@@ -300,14 +333,20 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
     // keeps the WHOLE string — an adapter passing 0 would silently UNCAP stdout.
     const asked = Number(outputCap ?? cfg.values.outputCap);
     const cap = Number.isFinite(asked) ? Math.max(1, Math.floor(asked)) : cfg.values.outputCap;
-    log(`spawn · bin=${bin} · argc=${args.length} · cwd=${cwd || '(process cwd)'} · hard-kill=${Math.round(timeoutMs / 1000)}s · output-cap=${cap}`);
+    const notFoundHelp = `${bin} not found in PATH — install the ${unit.label} CLI${unit.bin.env ? ` or point ${unit.bin.env} at it` : ''}`;
+    // Not found at start: looked for again, absolute entries only, so a CLI
+    // installed while the server runs is found at its next call — and a
+    // program in the call's cwd never is.
+    if (!exe) exe = locateBin(bin, env);
+    if (!exe) return Promise.reject(new Error(notFoundHelp));
+    log(`spawn · bin=${exe} · argc=${args.length} · cwd=${cwd || '(process cwd)'} · hard-kill=${Math.round(timeoutMs / 1000)}s · output-cap=${cap}`);
     return runProcess({
       // env is the PARENT env to select from: core/spawn.mjs builds the child
       // from the allowlist + this unit's passthrough, never by inheritance.
-      bin, args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
+      bin: exe, args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
       scrubEnv: unit.billingRiskEnv,
       hardKillMs: timeoutMs, signal, stdinText, outputCap: cap, log,
-      notFoundHelp: `${bin} not found in PATH — install the ${unit.label} CLI${unit.bin.env ? ` or point ${unit.bin.env} at it` : ''}`,
+      notFoundHelp,
     }).then((res) => {
       // Auth check ONLY on empty-stdout runs: a real answer that merely mentions
       // signing in must never false-positive.
