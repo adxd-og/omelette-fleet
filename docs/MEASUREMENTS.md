@@ -9,6 +9,9 @@ What has actually been measured on this project, how each number was taken, and 
 | What are three release reviews worth? | [Review yield per release](#review-yield-per-release) |
 | What does the short fleet contract save in every session? | [The fleet contract, full and short](#the-fleet-contract-full-and-short) |
 | How big is the rules file every session loads, before and after 1.2.0? | [The rules file, before and after](#the-rules-file-before-and-after) |
+| What does planning cost with the scout map, and did a fork do better? | [Planning cost with the scout map](#planning-cost-with-the-scout-map) |
+| What does a task lead cost against the session running the coder and tester itself? | [A task lead between the session and the coder](#a-task-lead-between-the-session-and-the-coder) |
+| Does a coder's effort level change what it builds? | [Coder effort: medium, high, xhigh on one task](#coder-effort-medium-high-xhigh-on-one-task) |
 | Where do sub-agent tokens go, by role? | [Sub-agents by role](#sub-agents-by-role) |
 | What fills a sub-agent's context — reading, its own output, the harness? | [Where a sub-agent's context goes](#where-a-sub-agents-context-goes) |
 | Who runs past 200 k tokens, and doing what? | [Past 200 k](#past-200-k) |
@@ -83,6 +86,52 @@ The rendered `.claude/rules/omelette-fleet.md` is loaded at every session start,
 
 Rendered under the default merge policy (`session`; the `pr` sentence is 32 characters shorter). Tokens at four characters per token, as for the contract above: the character counts are exact, the token figures an estimate. The ceiling is 13 100 characters, pinned by `test/rules-size.test.mjs`.
 
+## Planning cost with the scout map
+
+1.2.0 package P1 was planned twice from the same scout map, then compared against the 1.1.0 baseline that had none (same [Plan P1 row](#where-a-sub-agents-context-goes) above). Arm A is a fresh planner; arm B is a fork of the orchestrating session taken mid-task. Both arms ran with the map in hand; a static rubric (0–3 across 5 criteria, judged blind by Codex `gpt-6-astra`) scored the two plans.
+
+| Arm | Model | Requests | Peak context | Cache-write Σ | Cache-read Σ | Output | Fresh-read chars | Wall | Input-token equiv. |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Baseline (1.1.0, no map) | claude-opus-5 | 78 | 437 208 | 771 607 | 21 040 175 | 94 187 | 510k | — | ≈ 3.13M |
+| Arm A: fresh planner + map | claude-opus-5-5 | 109 | 390 330 | 374 406 | 26 630 333 | 33 588 | 306k (Read 67k + Bash 239k) | 35 min | ≈ 3.07M |
+| Arm B: forked session + map | claude-fable-5-1 (inherited from the parent, not chosen) | 29 | 498 728 (≈460k inherited) | 137 442 | 12 633 430 | 8 423 | 106k | 20.5 min | ≈ 1.44M (≈ 2.9M Opus-equivalent at 2× the per-token price) |
+| Scout map itself | claude-opus-5-5 | 34 | — | 137k | 3.15M | — | — | — | ≈ 0.49M, amortised over the release |
+
+Input-token equivalents at 1.25× cache-write / 0.1× cache-read. Blinded rubric: arm A 11/15, arm B 6/15 — B's findings included a test suite left red between two tasks and a protected evidence bullet it had changed; the session built P1 from A, not B. The plan then took three more planner rounds to reach move-only (611 101 tokens, cumulative) against P2 — planned once from the map with P1's rulings already in hand: 202 772 tokens, one round, 12.6 min, 3 review findings (2 accepted, 1 rejected).
+
+Reading: the map halves fresh reading (cache-write 771 607 → 374 406), but arm A's input-equivalent landed within 2 % of the baseline (≈3.07M vs ≈3.13M) because it ran 40 % more requests — it dry-ran its plan on a scratch copy, since forbidden in the planner definition; the cost lever is requests × resident context ("rent"), and a dry run doubles both. The forked arm was cheapest but scored lowest and was not adopted. Planned once from the map with rulings in hand, P2 closed in a third of P1's cumulative cost. One lesson from watching a dry run shorten the rules file: an LLM asked to shorten a rules file loses about ten binding conditions per pass, and a substring pin cannot hold them — move explanation out, never rewrite a rule.
+
+## A task lead between the session and the coder
+
+Matched pair on 1.2.0: P1's three tasks ran through `omelette-lead` (private definition, `claude-fable-5-1`, xhigh — it briefs `omelette-coder` on `claude-opus-5-5` and `omelette-tester` on `claude-sonnet-5`, arbitrates, and reports once); P2's three tasks ran directly by the session, with the same coder and tester definitions. All six tasks were plan-driven text edits with tests.
+
+| Task | Arm | Lead (req · cache-read Σ · cache-write Σ · min · $) | Coder $ | Tester $ | Total $ | Cache-read Σ, whole task | Wall | Rulings | Escaped defects |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| P1-T1 | lead (Fable 5.1) | 29 · 1.41M · 252k · 42 · $3.59 | $0.77 | $0.59 + $1.34 (two rounds) | $6.29 | 8.64M | 42 min | 2 | 0 |
+| P1-T2 | lead (Fable 5.1) | 22 · 0.87M · 228k · 39 · $3.17 | $0.57 | $0.97 + $0.44 | $5.14 | 5.69M | 39 min | 1 | 0 |
+| P1-T3 | lead (Fable 5.1) | 17 · 0.63M · 113k · 16 · $1.64 | $0.41 | $0.57 | $2.62 | 2.58M | 16 min | 0 | 0 |
+| P2-T1 | direct (session, no lead) | — | $0.36 | $0.69 | $1.05 | 2.50M | 12 min | 0 | 1 |
+| P2-T2 | direct (session, no lead) | — | $0.53 | $0.52 | $1.05 | 2.20M | 10 min | 0 | 0 |
+| P2-T3 | direct (session, no lead) | — | $0.85 | $0.23 | $1.09 | 1.22M | 17 min | 0 | 0 |
+
+Prices are the list prices of 2026-09-24: Fable $10 / $12.5 / $0.25 / $50 per M tokens (input / 5-minute cache write / cache read / output), Opus 5.5 $4 / $5 / $0.20 / $20, Sonnet 5 $2 / $2.5 / $0.20 / $10; output tokens are under-counted by the max-per-id rule, equally in both arms. P2-T1's escaped defect: a tester test pinned the tree against `HEAD`, passed the session's review, failed on the next commit, and was caught by the next coder. Session side, estimated (its windows overlap other work): running a task directly, the session (`claude-fable-5-1`, xhigh) took ≈8 requests per task at 210–250k resident context, ≈$0.7; with a lead, ≈5 requests, ≈$0.45.
+
+Reading: the lead's bill is its own cache writes at Fable rates, not its reads, and a ruling that has to escalate costs a second round outright — `SendMessage` is unavailable at depth 2, so it goes to a fresh tester, not the same one, as in P1-T1. Across three matched tasks the lead arm cost 2–4× the direct arm in dollars and 1.5–3× in wall clock, against one fewer escaped defect and 10–15k less resident context per task carried in the session itself; `omelette-lead` does not ship in 1.2.0 and is not the 1.3.0 default — it earns its place on a cheaper model, or where the session's own context is the binding constraint.
+
+## Coder effort: medium, high, xhigh on one task
+
+Same brief (turn the P0 scratchpad script into `scripts/context-by-source.mjs` with tests), three `omelette-coder` copies on `claude-opus-5-5` at effort medium / high / xhigh, each in its own worktree, N = 1 per level, 2026-09-24.
+
+| Effort | Requests | Peak context | Cache-read Σ | Cache-write Σ | Own output chars | Tool uses | Wall | Own tests | Fixture vs the shipped tool | Defect found by the session | Codex blinded rank |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|
+| medium | 14 | 83 721 | 901 220 | 66 091 | 37 137 | 13 | 6.9 min | 7 | identical numbers | none | 3rd |
+| high | 15 | 96 152 | 1 066 002 | 69 725 | 42 327 | 14 | 8.1 min | 9 | identical numbers | repo root taken from the process cwd, so absolute paths print as `<outside>` | 2nd |
+| xhigh | 24 | 129 821 | 2 326 063 | 101 416 | 61 301 | 24 | 25.0 min | 15 | identical numbers | none | 1st |
+
+Approximate cost at `claude-opus-5-5` list prices: $0.7 (medium) · $0.8 (high) · $1.3 (xhigh). Codex's review (static, blinded, four criteria) called the differences material on robustness and test depth.
+
+Reading: on a plan-driven task all three effort levels built the same behaviour — identical fixture numbers against the shipped tool — and xhigh bought edge-case tests and robustness, largely what the clean-context tester and the review already pay for, at ~2.5× the cache reads and 3.6× the wall clock of medium. N = 1, and the one design defect landing on high rather than medium or xhigh, say this is not yet a ranking. Decision: the coder stays at `effort: xhigh` in 1.2.0; 1.3.0 repeats the trial on a judgement-heavy task and, if xhigh's edge still holds, sets `agents.coder.effort=medium`.
+
 ## Sub-agents by role
 
 Every sub-agent the orchestrating session of releases 0.3.3 → 1.1.0 saw finish: 76 agents.
@@ -154,6 +203,7 @@ Not yet taken: the near-threshold and post-compaction points, which need a worki
 - **Review yield.** The `review yield:` line of each release's ledger (`.omelette/ledger-<release>.md`, kept by the orchestrator, not in the repository).
 - **Contract sizes.** `FLEET_CONTRACT.length` and `SHORT_CONTRACT.length` from `core/rules.mjs`.
 - **Rules file size.** `renderRulesFile('1.2.0', { merge: 'session' })` from `core/rules.mjs` — `.length` for characters, `Buffer.byteLength` for bytes — and, for 1.1.0, the same three substitutions applied to `git show v1.1.0:rules/omelette-fleet.md`.
+- **Per-task cost tables.** Taken from sub-agent transcripts with `scripts/context-by-source.mjs --agents` — roles come from each agent's `.meta.json` `agentType` since commit `1997a71`, guessed from the description only when a run predates it — and that day's list prices. Session-side numbers are estimates: the session's own windows overlap other, concurrent work, so they are not read off a clean transcript the way a sub-agent's are.
 
 ## Not measured yet
 
@@ -161,3 +211,5 @@ Not yet taken: the near-threshold and post-compaction points, which need a worki
 - **Whether the five-section report shortens the orchestrator's reading.** The orchestrator's own tokens per release have not been separated out of its single long session.
 - **What the units cost per release.** `results --stats --since` has the data; it has not been cut by release.
 - **Whether `check` catches wrong evidence in practice.** In 1.1.0 it caught one off-by-one pointer in the orchestrator's own documentation and one weak fragment in the coder's own report. Two is an anecdote.
+- **N0: the near-threshold and post-compaction points.** Flagged as not yet taken under [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) — the probe mod exists in the scratchpad; it needs an operator session with function hooks enabled to run.
+- **A judgement-heavy effort trial, and the two-bucket effort rule.** [Coder effort: medium, high, xhigh on one task](#coder-effort-medium-high-xhigh-on-one-task) was a plan-driven text edit; not measured is whether the same gap holds on a task the coder has to judge rather than follow, and whether the rule that follows — medium when the plan prints the diff, xhigh when the coder decides — holds up.
