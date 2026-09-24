@@ -12,7 +12,8 @@
  * of the reviewer, which reads and writes one report; a settings-level hook is
  * what MAKES that true for git: the stdin event carries `agent_type` for a
  * sub-agent and nothing for the main thread, so the block lands on
- * omelette-coder, omelette-tester and omelette-reviewer and on nothing else.
+ * omelette-coder, omelette-coder-medium, omelette-tester and omelette-reviewer
+ * and on nothing else.
  * Exit 2 is what stops the call, and the reason it hands back names the agent
  * it caught.
  *
@@ -483,8 +484,13 @@ const forbidden = (raw) => {
  *
  * The refusal NAMES the agent it caught. Two roles reading one another's line is
  * how an agent decides the block was meant for somebody else.
+ *
+ * `omelette-coder-medium` (1.3.0) is the coder's own definition at another
+ * effort — the same text under a second name — and is contained exactly as the
+ * coder is. It is one more whole name, not a prefix: `omelette-coder-medium-2`
+ * is somebody else's agent, as `omelette-coder-2` is.
  */
-const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-tester', 'omelette-reviewer']);
+const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer']);
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
 const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
 

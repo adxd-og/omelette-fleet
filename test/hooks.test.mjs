@@ -1062,3 +1062,42 @@ test('PreToolUse: `git tag --sort` swallows the flag behind it — the listing p
     assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
   }
 });
+
+// ── 1.3.0 P2: the medium coder is the coder, contained the same way ─────────
+
+test('PreToolUse: omelette-coder-medium is guarded like the coder, and the refusal names it', () => {
+  const g = guard();
+  for (const command of [
+    'git commit -m "wip"',
+    'git stash',
+    'git branch feat/x',
+    'git checkout -b feat/x',
+    'git switch -c feat/x',
+    'git worktree add ../wt',
+  ]) {
+    const r = fire(g.path, preToolUse({ agent_type: 'omelette-coder-medium', tool_input: { command } }));
+    assert.equal(r.code, 2, `omelette-coder-medium: ${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder-medium'), 'the refusal names the medium coder, not the coder');
+    assert.equal(r.out, '', 'a block says nothing on stdout');
+  }
+  // …and it keeps every read the coder keeps.
+  for (const command of ['git status', 'git diff HEAD', 'git log --oneline -3', 'git branch --list', 'npm test']) {
+    const r = fire(g.path, preToolUse({ agent_type: 'omelette-coder-medium', tool_input: { command } }));
+    assert.equal(r.code, 0, `omelette-coder-medium: ${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+});
+
+test('PreToolUse: omelette-coder-medium is matched WHOLE — a name around it, or a private coder variant, is somebody else\'s agent', () => {
+  const g = guard();
+  for (const agent_type of [
+    'omelette-coder-medium-2', 'my-omelette-coder-medium', 'omelette-coder-mediu', 'omelette-coder-medium ',
+    'OMELETTE-CODER-MEDIUM', 'omelette-coder-high', 'omelette-coder-xhigh',
+    // the 0.3.4 look-alikes, unchanged by a longer name in the set
+    'omelette-coder-2', 'omelette-tester-2', 'my-omelette-coder', 'omelette',
+  ]) {
+    const r = fire(g.path, preToolUse({ agent_type, tool_input: { command: 'git commit -m "x"' } }));
+    assert.equal(r.code, 0, `agent_type ${JSON.stringify(agent_type)} is not guarded: ${r.out}${r.err}`);
+    assert.equal(r.err, '', `agent_type ${JSON.stringify(agent_type)} printed to stderr`);
+  }
+});
