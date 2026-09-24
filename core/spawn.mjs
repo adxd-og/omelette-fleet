@@ -24,7 +24,10 @@
  * to sit in the shell. The child env is built from scratch instead:
  *   1. ALLOWED_ENV — the exact names below: what a CLI needs to find its
  *      binary and home, speak the right language, resolve a proxy and trust
- *      the right CAs. Nothing here is a credential.
+ *      the right CAs. None of them is meant to carry a credential — but a
+ *      proxy URL can (`http://user:pass@proxy`), and it is passed AS IS,
+ *      userinfo included, because the CLI needs that exact URL to reach its
+ *      API (docs/SECURITY.md, "The environment allowlist").
  *   2. the unit's `envPassthrough` (adapter-declared exact names or `PREFIX_*`
  *      patterns, e.g. 'CODEX_*') — the vendor's own knobs.
  *   3. OMELETTE_ENV_PASSTHROUGH — comma-separated names/patterns, the

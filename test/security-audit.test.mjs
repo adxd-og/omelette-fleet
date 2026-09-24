@@ -167,3 +167,20 @@ test('no file in the repository carries a Trail of Bits sentence', { skip: !gitA
   }
   assert.deepEqual(found, []);
 });
+
+test('SECURITY says what the P0 refutations found true: proxy URLs pass as they are, the stdin cap fails open, gemini per tool, the probe\'s environment, the kill\'s limit (Task 13)', () => {
+  const security = read('docs/SECURITY.md');
+  for (const rel of ['docs/SECURITY.md', 'core/spawn.mjs']) {
+    assert.doesNotMatch(read(rel), /Nothing here is a credential/, `${rel} still says the allowlist holds no credential`);
+  }
+  assert.match(security, /forwarded \*\*exactly as they are set, userinfo included\*\*/);
+  assert.match(security, /On a `PreToolUse` event that is a fail-open, by design/);
+  assert.match(security, /`gemini_research` with the ceiling closed passes \*\*no\*\* `--mode` at all/);
+  assert.match(security, /in `doctor`'s own environment/);
+  assert.match(security, /unit-timeouts spec planned for 1\.4\.0/);
+  assert.match(security, /`GOOGLE_APPLICATION_CREDENTIALS` and `GOOGLE_CREDENTIALS` and the Vertex switch `GOOGLE_GENAI_USE_VERTEXAI`/);
+  assert.match(security, /git diff --name-only -z --relative <hash> --/);
+  for (const rel of ['docs/SECURITY.md', 'docs/ORCHESTRATION.md']) {
+    assert.match(read(rel), /alone or inside a cluster like `-qb`/, `${rel} lists the branch-creating flags as Task 4 reads them`);
+  }
+});
