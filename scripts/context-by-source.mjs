@@ -101,6 +101,7 @@ export function analyseTranscript(lines, meta) {
         if (!crossing && request.context > CROSSING) crossing = { at: requests.length, src: zeros(TOOL_SOURCES) };
       }
       for (const b of Array.isArray(m.content) ? m.content : []) {
+        if (!b || typeof b !== 'object') continue; // a null or scalar block is nothing to count, never a throw
         if (b.type === 'tool_use') { tools.set(b.id, { name: b.name, input: b.input || {} }); src.own += JSON.stringify(b.input || {}).length; }
         else if (b.type === 'thinking') src.own += (b.thinking || '').length;
         else if (b.type === 'text') src.own += (b.text || '').length;
@@ -108,7 +109,7 @@ export function analyseTranscript(lines, meta) {
     } else if (e.type === 'user') {
       if (!briefSeen) { briefSeen = true; src.brief += textLength(m.content); continue; }
       for (const b of Array.isArray(m.content) ? m.content : []) {
-        if (b.type !== 'tool_result') continue;
+        if (!b || typeof b !== 'object' || b.type !== 'tool_result') continue;
         const { name, input } = tools.get(b.tool_use_id) || { name: '?', input: {} };
         let source = 'other';
         if (name === 'Read') {

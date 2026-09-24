@@ -261,6 +261,14 @@ test('a transcript line that is valid JSON but not an entry (null, a number, an 
   assert.ok(!out.stderr.includes(root));
 });
 
+test('a null or scalar content block is skipped, never an uncaught throw', () => {
+  const entries = [brief('go'), { type: 'assistant', message: { id: 'r1', model: 'm', usage: { input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 }, content: [null, 7, { type: 'text', text: 'ok' }] } },
+    { type: 'user', message: { role: 'user', content: [null, { type: 'tool_result', tool_use_id: 'none', content: 'x' }] } }];
+  const r = analyseTranscript(entries, { role: 'coder', description: '' });
+  assert.equal(r.requests, 1);
+  assert.equal(r.src.own, 2);
+});
+
 test('a .meta.json with agentType and no description still names the role', () => {
   const agent = jsonl([brief('go')]);
   const root = sessionDir({ 'session.jsonl': '', 'subagents/agent-a1.jsonl': agent, 'subagents/agent-a1.meta.json': JSON.stringify({ agentType: 'omelette-tester' }) });
