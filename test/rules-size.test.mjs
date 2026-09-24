@@ -88,10 +88,12 @@ const DUTIES = [
 // lines and the three count-free lines (13 413 characters under `session`,
 // 13 381 under `pr`) plus about a hundred characters of headroom. The number
 // follows the content; the lines themselves are pinned whole below.
-test('the rendered rules file is at most 13 510 characters under either merge policy', () => {
+// 1.3.0 P2: 13 510 -> 13 620 — the definitions line and the guard sentence
+// name the medium coder (+104: 13 517 / 13 485), plus headroom.
+test('the rendered rules file is at most 13 620 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 13510, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 13620, `${merge}: ${text.length} characters`);
   }
 });
 
@@ -182,7 +184,8 @@ test('ORCHESTRATION "Evidence with pointers" says what each agent is handed, and
  * is pinned beside them: nothing in this package may change it.
  */
 const P1_REVIEWS_LINE = "- **A sub-agent review goes to `omelette-reviewer`.** It writes nothing but `.omelette/reports/<name>-review.md`; run `git status --porcelain` after it and reject the review outright if anything but that report changed.";
-const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs three definitions — **`omelette-coder`** (Opus, `effort: xhigh`), **`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus, `effort: xhigh`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-tester` / `omelette-reviewer`.";
+// 1.3.0 P2: four definitions, the medium coder right after the coder.
+const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus, `effort: xhigh`), **`omelette-coder-medium`** (Opus, `effort: medium`), **`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus, `effort: xhigh`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
 const CODER_LINE = "- **Code changes go to a strong coding sub-agent** (Opus-class, xhigh — the shipped `omelette-coder`), briefed with the approved plan and the constraints. Never to a fleet unit.";
 
 for (const merge of ['session', 'pr']) {
@@ -193,10 +196,10 @@ for (const merge of ['session', 'pr']) {
     assert.equal(lines[plan + 1], P1_REVIEWS_LINE, 'the reviewer line follows it, whole');
   });
 
-  test(`"Spawning sub-agents" says three definitions, naming the reviewer with its model and effort (${merge})`, () => {
+  test(`"Spawning sub-agents" says four definitions, each with its model and effort (${merge})`, () => {
     const lines = section(renderRulesFile('1.2.0', { merge }), '## Spawning sub-agents: model and effort').split('\n');
     assert.ok(lines.includes(P1_DEFINITIONS_LINE), 'the definitions line, whole');
-    assert.ok(!lines.some((l) => l.includes('installs two definitions')), 'the old count is gone');
+    assert.ok(!lines.some((l) => l.includes('installs two definitions') || l.includes('installs three definitions')), 'the old counts are gone');
   });
 }
 
@@ -208,7 +211,8 @@ for (const merge of ['session', 'pr']) {
  */
 const P1_BRANCH_LINE_HEAD = "- **Branch per feature; main is gated.** Work on a `feat/<name>` branch. The session commits each task on that branch once its review passes; no shipped sub-agent role commits — the coder reports its diff, the tester reports what it ran, the reviewer reports its findings, and the guard hook refuses any of their `git commit`. ";
 const P1_NESTING_LINE = "- Sub-agents may nest up to three levels deep, but every shipped definition carries `disallowedTools: Agent`: they cannot spawn anything, so the **orchestrator** spawns the tester, never the coder.";
-const P1_GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard — it contains every shipped role — `omelette-coder`, `omelette-tester` and `omelette-reviewer` — and names the one it caught — and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it — omelette-fleet never edits your settings files itself.";
+// 1.3.0 P2: the fourth name, and only that (the session's ruling).
+const P1_GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard — it contains every shipped role — `omelette-coder`, `omelette-coder-medium`, `omelette-tester` and `omelette-reviewer` — and names the one it caught — and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it — omelette-fleet never edits your settings files itself.";
 
 for (const merge of ['session', 'pr']) {
   test(`the three lines that counted two roles name every shipped role, each whole (${merge})`, () => {

@@ -78,9 +78,9 @@ for (const merge of POLICIES) {
 }
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file stays at or under the 13 510-character ceiling (${merge})`, () => {
+  test(`the rendered rules file stays at or under the 13 620-character ceiling (${merge})`, () => {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 13510, `${merge}: ${text.length} characters, expected <= 13510`);
+    assert.ok(text.length <= 13620, `${merge}: ${text.length} characters, expected <= 13620`);
   });
 }
 
