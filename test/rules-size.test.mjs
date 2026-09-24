@@ -251,8 +251,8 @@ const CONFIG_ROWS = [
 ];
 /** SECURITY "The guard hook": what the guard does, and does not do, for the reviewer. */
 const SECURITY_REVIEWER = "The reviewer is contained the same way, and this guard is all the enforcement it gets: Claude Code cannot scope `Write` to one path or make `Bash` read-only, so its read-only is the definition's text — the only file it writes is `.omelette/reports/<name>-review.md` — and the session's `git status --porcelain` after every review, which rejects the review if anything but that report changed.";
-/** README's `rules` row: the three definitions `--agents` writes. */
-const README_AGENTS = "`--agents` also writes three sub-agent definitions (`omelette-coder`: Opus xhigh; `omelette-tester`: Sonnet xhigh; `omelette-reviewer`: Opus xhigh; all three `disallowedTools: Agent`, the reviewer also `Edit, NotebookEdit`)";
+/** README's `rules` row: the four definitions `--agents` writes. */
+const README_AGENTS = "`--agents` also writes four sub-agent definitions (`omelette-coder`: Opus xhigh; `omelette-coder-medium`: Opus medium; `omelette-tester`: Sonnet xhigh; `omelette-reviewer`: Opus xhigh; all four `disallowedTools: Agent`, the reviewer also `Edit, NotebookEdit`)";
 
 test('ORCHESTRATION "Reviews" describes the shipped reviewer and what keeps it read-only, and the map asks for it', () => {
   const md = read('docs/ORCHESTRATION.md');
@@ -290,11 +290,12 @@ test('SECURITY: the PreToolUse row names the four guarded roles and says what th
   assert.ok(md.includes('`.claude/agents/omelette-coder.md`, `.claude/agents/omelette-coder-medium.md`, `.claude/agents/omelette-tester.md`, `.claude/agents/omelette-reviewer.md` and `.claude/skills/omelette-test/SKILL.md`'), '"What this package never does" lists every file it writes');
 });
 
-test('README counts three sub-agent definitions where it counted two', () => {
+test('README counts four sub-agent definitions where it counted two, then three', () => {
   const md = read('README.md');
-  assert.ok(md.includes('so you get the operating rules, the three sub-agent definitions, the `/omelette-test` skill'));
+  assert.ok(md.includes('so you get the operating rules, the four sub-agent definitions, the `/omelette-test` skill'));
   assert.ok(md.includes(README_AGENTS));
-  assert.ok(!md.includes('two sub-agent definitions') && !md.includes('both sub-agent definitions'));
+  assert.ok(!md.includes('two sub-agent definitions') && !md.includes('both sub-agent definitions') && !md.includes('three sub-agent definitions'));
+  assert.ok(!md.includes('the coder and tester sub-agent definitions') && !md.includes('coder / tester sub-agent definitions'));
 });
 
 // ── 1.3.0 P2: the coder line says which coder to brief ───────────────────────
