@@ -164,7 +164,7 @@ Every sub-agent of the 0.3.3 → 1.1.0 session — 76, those that started before
 | reviewer | 6 | 197 962 | 54 | 1 % · 32 % · 49 % · 4 % · 0 % · 5 % · 9 % | 1 of 31 |
 | docs | 3 | 237 373 | 34 | 1 % · 72 % · 16 % · 2 % · 0 % · 2 % · 8 % | 1 of 18 |
 
-Three things the table says:
+Four things the table says:
 
 - **Reading is two thirds of everything an agent takes in** — 62 % for coders, 67 % for planners, 80 % and more for testers and reviewers — and half of that reading goes through `cat`/`sed -n` rather than `Read`, which a count of `Read` calls alone would miss.
 - **An agent rarely re-reads within itself** (9 % of a planner's `Read` calls overlap an earlier one, 19 % of a coder's). The repetition is *across* agents: `bin/omelette-fleet.mjs` (3 400 lines) was read 89 times by the 16 planners and 255 times by the 27 coders; `test/cli.test.mjs` 61 and 138 times. That is what one scout map per release is aimed at, and it is the right target.
