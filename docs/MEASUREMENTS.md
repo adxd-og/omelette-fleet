@@ -21,6 +21,8 @@ What has actually been measured on this project, how each number was taken, and 
 
 ## Planning cost before the scout map
 
+All five releases' planners ran on the `opus` alias, which resolved to `claude-opus-5` on the Claude Code of the time; the table predates the rule that every row names its model.
+
 Until 1.1.0 every package of a release got its own planner, and every planner read the modules it needed from scratch. These are the planners of five releases, as reported by the harness when each finished (what the number means: [below](#how-the-numbers-are-taken)).
 
 | Release | Planners | Tokens, each | Tokens, total |
@@ -34,7 +36,7 @@ Until 1.1.0 every package of a release got its own planner, and every planner re
 
 Planning is the second largest sub-agent cost of the project ([by role](#sub-agents-by-role)), and in 0.3.3 and 0.3.7 four or five planners each loaded much of the same `core/`. That repetition is what [one scout map per release](ORCHESTRATION.md#evidence-with-pointers) is aimed at.
 
-**After: not measured.** No release has been planned from a scout map yet. The first one that is gets a row here, taken the same way, and the comparison will be whatever it turns out to be.
+**After:** 1.2.0 was the first release planned from a scout map — the rows are under [Planning cost with the scout map](#planning-cost-with-the-scout-map), taken the same way.
 
 ## `check` before and after its reviews
 
@@ -81,25 +83,27 @@ The rendered `.claude/rules/omelette-fleet.md` is loaded at every session start,
 | Rendered rules file | Characters | UTF-8 bytes | Tokens, estimated |
 |---|---:|---:|---:|
 | 1.1.0 | 14 390 | 14 479 | ~3 600 |
-| 1.2.0, after P1 | 12 521 | 12 592 | ~3 100 |
-| **Saved, resident in every session** | 1 869 | 1 887 | **~500** |
+| 1.2.0, after P1 (explanation moved out) | 12 521 | 12 592 | ~3 100 |
+| **Saved by P1** | 1 869 | 1 887 | **~500** |
+| 1.2.0 as shipped (P2 added four rules lines) | 13 069 | 13 140 | ~3 300 |
+| **Net, resident in every session** | 1 321 | 1 339 | **~330** |
 
 Rendered under the default merge policy (`session`; the `pr` sentence is 32 characters shorter). Tokens at four characters per token, as for the contract above: the character counts are exact, the token figures an estimate. The ceiling is 13 100 characters, pinned by `test/rules-size.test.mjs`.
 
 ## Planning cost with the scout map
 
-1.2.0 package P1 was planned twice from the same scout map, then compared against the 1.1.0 baseline that had none (same [Plan P1 row](#where-a-sub-agents-context-goes) above). Arm A is a fresh planner; arm B is a fork of the orchestrating session taken mid-task. Both arms ran with the map in hand; a static rubric (0–3 across 5 criteria, judged blind by Codex `gpt-6-astra`) scored the two plans.
+1.2.0 package P1 was planned twice from the same scout map, then compared against the 1.1.0 baseline that had none (the [Plan P1 row](#where-a-sub-agents-context-goes) further down). Arm A is a fresh planner; arm B is a fork of the orchestrating session taken mid-task. Both arms ran with the map in hand; a static rubric (0–3 across 5 criteria, judged blind by Codex `gpt-6-astra`) scored the two plans.
 
 | Arm | Model | Requests | Peak context | Cache-write Σ | Cache-read Σ | Output | Fresh-read chars | Wall | Input-token equiv. |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Baseline (1.1.0, no map) | claude-opus-5 | 78 | 437 208 | 771 607 | 21 040 175 | 94 187 | 510k | — | ≈ 3.13M |
-| Arm A: fresh planner + map | claude-opus-5-5 | 109 | 390 330 | 374 406 | 26 630 333 | 33 588 | 306k (Read 67k + Bash 239k) | 35 min | ≈ 3.07M |
+| Baseline (1.1.0, no map) | claude-opus-5 | 78 | 437 208 | 771 607 | 21 040 175 | 94 187 | 510k | — | ≈ 3.07M |
+| Arm A: fresh planner + map | claude-opus-5-5 | 109 | 390 330 | 374 406 | 26 630 333 | 33 588 | 306k (Read 67k + Bash 239k) | 35 min | ≈ 3.13M |
 | Arm B: forked session + map | claude-fable-5-1 (inherited from the parent, not chosen) | 29 | 498 728 (≈460k inherited) | 137 442 | 12 633 430 | 8 423 | 106k | 20.5 min | ≈ 1.44M (≈ 2.9M Opus-equivalent at 2× the per-token price) |
 | Scout map itself | claude-opus-5-5 | 34 | — | 137k | 3.15M | — | — | — | ≈ 0.49M, amortised over the release |
 
 Input-token equivalents at 1.25× cache-write / 0.1× cache-read. Blinded rubric: arm A 11/15, arm B 6/15 — B's findings included a test suite left red between two tasks and a protected evidence bullet it had changed; the session built P1 from A, not B. The plan then took three more planner rounds to reach move-only (611 101 tokens, cumulative) against P2 — planned once from the map with P1's rulings already in hand: 202 772 tokens, one round, 12.6 min, 3 review findings (2 accepted, 1 rejected).
 
-Reading: the map halves fresh reading (cache-write 771 607 → 374 406), but arm A's input-equivalent landed within 2 % of the baseline (≈3.07M vs ≈3.13M) because it ran 40 % more requests — it dry-ran its plan on a scratch copy, since forbidden in the planner definition; the cost lever is requests × resident context ("rent"), and a dry run doubles both. The forked arm was cheapest but scored lowest and was not adopted. Planned once from the map with rulings in hand, P2 closed in a third of P1's cumulative cost. One lesson from watching a dry run shorten the rules file: an LLM asked to shorten a rules file loses about ten binding conditions per pass, and a substring pin cannot hold them — move explanation out, never rewrite a rule.
+Reading: the map halves fresh reading (cache-write 771 607 → 374 406), but arm A's input-equivalent landed within 2 % of the baseline (≈3.13M vs ≈3.07M) because it ran 40 % more requests — it dry-ran its plan on a scratch copy, since forbidden in the planner definition; the cost lever is requests × resident context ("rent"), and a dry run doubles both. The forked arm was cheapest but scored lowest and was not adopted. Planned once from the map with rulings in hand, P2 closed in a third of P1's cumulative cost. One lesson from watching a dry run shorten the rules file: an LLM asked to shorten a rules file loses about ten binding conditions per pass, and a substring pin cannot hold them — move explanation out, never rewrite a rule.
 
 ## A task lead between the session and the coder
 
@@ -110,13 +114,13 @@ Matched pair on 1.2.0: P1's three tasks ran through `omelette-lead` (private def
 | P1-T1 | lead (Fable 5.1) | 29 · 1.41M · 252k · 42 · $3.59 | $0.77 | $0.59 + $1.34 (two rounds) | $6.29 | 8.64M | 42 min | 2 | 0 |
 | P1-T2 | lead (Fable 5.1) | 22 · 0.87M · 228k · 39 · $3.17 | $0.57 | $0.97 + $0.44 | $5.14 | 5.69M | 39 min | 1 | 0 |
 | P1-T3 | lead (Fable 5.1) | 17 · 0.63M · 113k · 16 · $1.64 | $0.41 | $0.57 | $2.62 | 2.58M | 16 min | 0 | 0 |
-| P2-T1 | direct (session, no lead) | — | $0.36 | $0.69 | $1.05 | 2.50M | 12 min | 0 | 1 |
-| P2-T2 | direct (session, no lead) | — | $0.53 | $0.52 | $1.05 | 2.20M | 10 min | 0 | 0 |
-| P2-T3 | direct (session, no lead) | — | $0.85 | $0.23 | $1.09 | 1.22M | 17 min | 0 | 0 |
+| P2-T1 | direct (session, claude-fable-5-1) | — | $0.36 | $0.69 | $1.05 | 2.50M | 12 min | 0 | 1 |
+| P2-T2 | direct (session, claude-fable-5-1) | — | $0.53 | $0.52 | $1.05 | 2.20M | 10 min | 0 | 0 |
+| P2-T3 | direct (session, claude-fable-5-1) | — | $0.85 | $0.23 | $1.09 | 1.22M | 17 min | 0 | 0 |
 
-Prices are the list prices of 2026-09-24: Fable $10 / $12.5 / $0.25 / $50 per M tokens (input / 5-minute cache write / cache read / output), Opus 5.5 $4 / $5 / $0.20 / $20, Sonnet 5 $2 / $2.5 / $0.20 / $10; output tokens are under-counted by the max-per-id rule, equally in both arms. P2-T1's escaped defect: a tester test pinned the tree against `HEAD`, passed the session's review, failed on the next commit, and was caught by the next coder. Session side, estimated (its windows overlap other work): running a task directly, the session (`claude-fable-5-1`, xhigh) took ≈8 requests per task at 210–250k resident context, ≈$0.7; with a lead, ≈5 requests, ≈$0.45.
+Prices are the list prices of 2026-09-24: Fable $10 / $12.5 / $0.25 / $50 per M tokens (input / 5-minute cache write / cache read / output), Opus 5.5 $4 / $5 / $0.20 / $20, Sonnet 5 $2 / $2.5 / $0.20 / $10; output tokens are under-counted by the max-per-id rule, equally in both arms; totals are summed from unrounded parts, so a row can differ from the sum of its cells by a cent. P2-T1's escaped defect: a tester test pinned the tree against `HEAD`, passed the session's review, failed on the next commit, and was caught by the next coder. Session side, estimated (its windows overlap other work): running a task directly, the session (`claude-fable-5-1`, xhigh) took ≈8 requests per task at 210–250k resident context, ≈$0.7; with a lead, ≈5 requests, ≈$0.45.
 
-Reading: the lead's bill is its own cache writes at Fable rates, not its reads, and a ruling that has to escalate costs a second round outright — `SendMessage` is unavailable at depth 2, so it goes to a fresh tester, not the same one, as in P1-T1. Across three matched tasks the lead arm cost 2–4× the direct arm in dollars and 1.5–3× in wall clock, against one fewer escaped defect and 10–15k less resident context per task carried in the session itself; `omelette-lead` does not ship in 1.2.0 and is not the 1.3.0 default — it earns its place on a cheaper model, or where the session's own context is the binding constraint.
+Reading: the lead's bill is its own cache writes at Fable rates, not its reads, and a ruling that has to escalate costs a second round outright — `SendMessage` is unavailable at depth 2, so it goes to a fresh tester, not the same one, as in P1-T1. Across three matched tasks the lead arm cost 2.4–6× the direct arm in dollars per task (4.4× in total: $14.05 vs $3.19, before the session's own share) and 1–4× in wall clock, against one fewer escaped defect and 10–15k less resident context per task carried in the session itself; `omelette-lead` does not ship in 1.2.0 and is not the 1.3.0 default — it earns its place on a cheaper model, or where the session's own context is the binding constraint.
 
 ## Coder effort: medium, high, xhigh on one task
 
