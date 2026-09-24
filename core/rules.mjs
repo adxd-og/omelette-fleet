@@ -392,7 +392,11 @@ export function renderAgentFile(name, version, settings = agentSettings()) {
     .replaceAll('{{marker}}', AGENT_MARKER(String(version)))
     .replaceAll('{{version}}', String(version));
   for (const [key, spec] of Object.entries(schema)) {
-    body = body.replaceAll(`{{${key}}}`, String(given[key] === undefined ? spec.default : given[key]));
+    // A FUNCTION replacement: a string one expands `$&`, `$'`, `` $` `` and `$$`,
+    // and a `line` value may hold any of them — `opus$'…` would paste the rest
+    // of the template in after it. What the operator set is what is written.
+    const value = String(given[key] === undefined ? spec.default : given[key]);
+    body = body.replaceAll(`{{${key}}}`, () => value);
   }
   return body.endsWith('\n') ? body : body + '\n';
 }

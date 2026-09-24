@@ -15,6 +15,7 @@ import {
   renderAgentFile, renderHookFile, renderRulesFile, renderSkillFile, rulesTarget, settingsTarget, settingsTargets,
   skillsTarget, unitInstructions,
 } from '../core/rules.mjs';
+import { AGENT_SETTINGS_SCHEMA, coerce } from '../core/config.mjs';
 
 // renderAgentFile() falls back to the machine's fleet config for its settings
 // (read at call time, never at import), so every default-argument render in this
@@ -808,4 +809,14 @@ test('the rendered rules carry the small-change lane and what stays out of it', 
     renderRulesFile('1.2.3', { merge: 'pr' }).includes('The small-change lane'),
     true,
   );
+});
+
+test('an agent setting holding `$\'`, `$&`, `` $` `` or `$$` renders literally — never as a replacement pattern (C2)', () => {
+  const plain = renderAgentFile('omelette-coder.md', '1.2.3');
+  for (const model of ["opus$'INJECTED_INSTRUCTION", 'opus$&x', 'opus$`y', 'opus$$z']) {
+    // The `line` type accepts every one of them, so the renderer is where the line has to hold.
+    assert.deepEqual(coerce(AGENT_SETTINGS_SCHEMA.coder.model, model), { ok: true, value: model });
+    const text = renderAgentFile('omelette-coder.md', '1.2.3', { coder: { model } });
+    assert.equal(text, plain.replace(/^model: opus$/m, () => `model: ${model}`), `${model} was expanded`);
+  }
 });
