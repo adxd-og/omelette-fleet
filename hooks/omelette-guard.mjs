@@ -636,13 +636,16 @@ const triggerOf = (event) => (TRIGGERS.has(event.trigger) ? event.trigger : 'unk
 function preCompact(event) {
   const found = ledgerDir(event);
   if (!found) return; // a `.omelette` that is not ours to write: no marker, and nothing to announce
-  if (!found.exists || ledgerNames(found.dir).length === 0) return; // no ledger: nothing stamped, so nothing to announce — the ledger is the opt-in
   appendToLedgers(found, `\n## Compaction ${new Date().toISOString()} (trigger: ${triggerOf(event)}) — re-read this ledger before continuing\n`);
   // The window this session crossed is about to be replaced. Its crossing
   // described a context that will not exist in a moment — and the sizes it
   // recorded describe a ledger this very handler has just stamped — so it goes
   // with it, and the next window crosses on its own terms.
   resetHandoff(found, event);
+  // No ledger — no `.omelette`, or one without a `ledger-*.md` — means nothing
+  // was stamped, so nothing is announced: the ledger is the opt-in. The reset
+  // above still ran, as it always did.
+  if (!found.exists || ledgerNames(found.dir).length === 0) return;
   say(process.stdout, `${HANDOFF}\n`);
 }
 

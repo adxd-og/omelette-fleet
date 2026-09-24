@@ -340,6 +340,12 @@ test('PreCompact: no ledger — no .omelette at all, or one without a ledger-*.m
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out, '', 'a .omelette without a ledger-*.md is the same as none');
   assert.deepEqual(readdirSync(join(proj, '.omelette')), ['notes.md']);
+  // The moment a ledger appears, the stamp and the line are back.
+  writeFileSync(join(proj, '.omelette', 'ledger-x.md'), '# x\n');
+  r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'auto', cwd: proj });
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /^HANDOFF: /);
+  assert.match(readFileSync(join(proj, '.omelette', 'ledger-x.md'), 'utf8'), /## Compaction /);
 });
 
 test('PreCompact: a ledger that is not a regular file is skipped — a symlink is never followed, a FIFO never blocks', { skip: process.platform === 'win32' && 'POSIX symlinks and FIFOs' }, () => {
