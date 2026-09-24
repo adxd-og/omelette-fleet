@@ -268,3 +268,14 @@ test('CONFIG "Agent settings": agents.coderMedium.* rows, the 1.2.0 trial as the
     'it does not compare what they say with the config',
   ]) assert.ok(agentSection.includes(fact), `the migration paragraph says: ${fact}`);
 });
+
+// ── Task 9: SECURITY names the medium coder ──────────────────────────────────
+
+test('SECURITY: the PreToolUse row names the four guarded roles, and rules --agents writes the medium coder too', () => {
+  const lines = read('docs/SECURITY.md').split('\n');
+  const pre = lines.find((l) => l.startsWith('- **`PreToolUse`, matcher `Bash`.**'));
+  assert.ok(pre, 'the PreToolUse row');
+  assert.ok(pre.includes(`When the caller is one of the four sub-agent roles this package ships — ${FOUR_ROLES} — *and* the command is`), 'four roles, each by name');
+  const writes = lines.find((l) => l.includes('The one command that writes into a project is'));
+  assert.ok(writes && writes.includes('`.claude/agents/omelette-coder.md`, `.claude/agents/omelette-coder-medium.md`, '), 'the medium coder is among the files --agents writes');
+});

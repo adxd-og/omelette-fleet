@@ -282,12 +282,12 @@ test('CONFIG "Agent settings" documents agents.reviewer.model and agents.reviewe
   assert.ok(md.includes('    "reviewer": { "model": "opus", "effort": "xhigh" }'), 'the Shape block shows the reviewer entry');
 });
 
-test('SECURITY: the PreToolUse row names the three guarded roles and says what the guard does not do for the reviewer', () => {
+test('SECURITY: the PreToolUse row names the four guarded roles and says what the guard does not do for the reviewer', () => {
   const md = read('docs/SECURITY.md');
   const guard = section(md, '## The guard hook');
-  assert.ok(guard.includes('When the caller is one of the three sub-agent roles this package ships — `omelette-coder`, `omelette-tester` or `omelette-reviewer` —'));
+  assert.ok(guard.includes('When the caller is one of the four sub-agent roles this package ships — `omelette-coder`, `omelette-coder-medium`, `omelette-tester` or `omelette-reviewer` —'));
   assert.ok(guard.includes(SECURITY_REVIEWER), 'the reviewer sentence, whole');
-  assert.ok(md.includes('`.claude/agents/omelette-coder.md`, `.claude/agents/omelette-tester.md`, `.claude/agents/omelette-reviewer.md` and `.claude/skills/omelette-test/SKILL.md`'), '"What this package never does" lists the file it writes');
+  assert.ok(md.includes('`.claude/agents/omelette-coder.md`, `.claude/agents/omelette-coder-medium.md`, `.claude/agents/omelette-tester.md`, `.claude/agents/omelette-reviewer.md` and `.claude/skills/omelette-test/SKILL.md`'), '"What this package never does" lists every file it writes');
 });
 
 test('README counts three sub-agent definitions where it counted two', () => {

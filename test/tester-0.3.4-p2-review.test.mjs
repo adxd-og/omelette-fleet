@@ -162,6 +162,6 @@ test('docs/ORCHESTRATION.md: the guard section names omelette-tester as a guarde
 
 test('docs/SECURITY.md: the PreToolUse bullet names omelette-tester as a guarded role and explains why', () => {
   const text = readFileSync(join(ROOT, 'docs', 'SECURITY.md'), 'utf8');
-  assert.match(text, /`omelette-coder`, `omelette-tester`\s+or\s+`omelette-reviewer`/, 'the security doc must list every guarded role (the reviewer since 1.3.0)');
+  assert.match(text, /`omelette-coder`, `omelette-coder-medium`, `omelette-tester`\s+or\s+`omelette-reviewer`/, 'the security doc must list every guarded role (the reviewer and the medium coder since 1.3.0)');
   assert.match(text, /neither loses a read/);
 });
