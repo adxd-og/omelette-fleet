@@ -13,11 +13,10 @@
 // implementer's test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { renderRulesFile, RULES_MARKER, MERGE_SENTENCES } from '../core/rules.mjs';
+import { renderRulesFile } from '../core/rules.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -36,25 +35,6 @@ const MECHANICS = ['40 lines', '4 KB', '12 KB', '8 KB', 'PreCompact', 'SessionSt
 
 /** The rendered rules file for a merge policy, current template. */
 const rendered = (merge) => renderRulesFile('1.2.0', { merge });
-
-/**
- * Renders arbitrary template TEXT through the exact three substitutions
- * `renderRulesFile` performs (core/rules.mjs `readFileSync(...).replaceAll`
- * chain), so a prior commit's template can be rendered "the same way"
- * without reading it off disk through `RULES_TEMPLATE_PATH` (which always
- * resolves to the working tree's current file).
- */
-function renderFromTemplateText(templateText, version, merge) {
-  const sentence = Object.hasOwn(MERGE_SENTENCES, merge) ? MERGE_SENTENCES[merge] : MERGE_SENTENCES.session;
-  const body = templateText
-    .replaceAll('{{marker}}', RULES_MARKER(String(version)))
-    .replaceAll('{{version}}', String(version))
-    .replaceAll('{{merge}}', sentence);
-  return body.endsWith('\n') ? body : `${body}\n`;
-}
-
-/** The template as HEAD had it, before this diff — a fixed snapshot (`git show`), read once. */
-const HEAD_TEMPLATE_TEXT = execFileSync('git', ['show', 'HEAD:rules/omelette-fleet.md'], { cwd: ROOT, encoding: 'utf8' });
 
 // ── the three lines land, whole, right after the scout bullet ───────────────
 
@@ -82,34 +62,9 @@ test('the insertion sits inside "Operating model for the session", before "## Le
   }
 });
 
-// ── nothing else in the template moved ───────────────────────────────────────
-
-test('every other rendered line is unchanged against HEAD\'s template rendered the same way, under both merge policies', () => {
-  for (const merge of ['session', 'pr']) {
-    const oldRendered = renderFromTemplateText(HEAD_TEMPLATE_TEXT, '1.2.0', merge);
-    const newRendered = rendered(merge);
-    const oldLines = oldRendered.split('\n');
-    const newLines = newRendered.split('\n');
-
-    const scout = newLines.indexOf(SCOUT);
-    assert.notEqual(scout, -1, `${merge}: scout-map bullet present in the new render`);
-    const oldScout = oldLines.indexOf(SCOUT);
-    assert.notEqual(oldScout, -1, `${merge}: scout-map bullet present in HEAD's render too`);
-
-    // Every line up to and including the scout bullet is identical.
-    assert.deepEqual(newLines.slice(0, scout + 1), oldLines.slice(0, oldScout + 1), `${merge}: prefix up to the scout bullet is untouched`);
-    // The three new lines are exactly HANDED, in place.
-    assert.deepEqual(newLines.slice(scout + 1, scout + 1 + HANDED.length), HANDED, `${merge}: the inserted lines are exactly the three`);
-    // Everything after the insertion is identical to everything after the scout bullet in the old render — nothing else moved, changed or was dropped.
-    assert.deepEqual(newLines.slice(scout + 1 + HANDED.length), oldLines.slice(oldScout + 1), `${merge}: suffix after the insertion is untouched`);
-
-    // The size grew by exactly the inserted text's own length — not a hard-coded
-    // number, derived from HANDED itself, so it holds regardless of which
-    // merge sentence is substituted.
-    const insertedLength = HANDED.reduce((n, line) => n + line.length + 1, 0);
-    assert.equal(newRendered.length, oldRendered.length + insertedLength, `${merge}: grew by exactly the inserted lines' own length`);
-  }
-});
+// (A test comparing the template against `HEAD:rules/omelette-fleet.md` was
+// dropped by the session before Task 2: it held only while Task 1 was
+// uncommitted. "Nothing else moved" was verified on the diff at commit time.)
 
 // ── the render stays under the ceiling ───────────────────────────────────────
 
