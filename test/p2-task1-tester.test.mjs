@@ -1,0 +1,140 @@
+// Clean-context test of 1.2.0 P2 Task 1 (plan
+// docs/superpowers/plans/2026-09-23-1.2.0-P2-briefing.md, "### Task 1"; spec
+// docs/superpowers/specs/2026-09-20-1.2.0-context-design.md "P2 — briefing
+// from the map"). Task 1's own promise, from the plan's Step 1.4 and its
+// Global Constraints: three whole lines are added to the rules template right
+// after the scout-map bullet, under BOTH merge policies (the implementer's
+// own test in test/rules-size.test.mjs only exercises `session`); no other
+// template line changes; the render stays under the 13 100 ceiling.
+//
+// This file writes its own copies of the constants and helpers it needs
+// (never imports test/rules-size.test.mjs, which does not export them, and
+// never edits it) so it tests the rendered file directly, independent of the
+// implementer's test.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { renderRulesFile, RULES_MARKER, MERGE_SENTENCES } from '../core/rules.mjs';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The scout-map bullet, byte for byte as the template (before and after this diff) words it. */
+const SCOUT = "- **One scout map per release, never to a first review.** Before planning several packages, one read-only scout writes `.omelette/map-<plan>.md` — `commit: <hash>`, factual pointer lines, a closing `## Not read` — and the planners get it instead of re-reading. Run `check` on it, open three pointers yourself, re-take stale lines.";
+
+/** The three lines Task 1 adds, in order, byte for byte (plan Step 1.4). */
+const HANDED = [
+  "- A planner gets the map and its spec section: map first, three pointers opened by hand (one false: whole map unverified), then only what the map lacks; the plan header lists map lines relied on and re-taken.",
+  "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open.",
+  "- Pay for judgement, not for repetition: planners do not dry-run plans.",
+];
+
+/** Hook-mechanics strings that P1 moved out of the rules file (test/rules-size.test.mjs MECHANICS); Task 1's new lines must not reintroduce any of them. */
+const MECHANICS = ['40 lines', '4 KB', '12 KB', '8 KB', 'PreCompact', 'SessionStart', 'PostToolUse', 'PostCompact', 'Stop'];
+
+/** The rendered rules file for a merge policy, current template. */
+const rendered = (merge) => renderRulesFile('1.2.0', { merge });
+
+/**
+ * Renders arbitrary template TEXT through the exact three substitutions
+ * `renderRulesFile` performs (core/rules.mjs `readFileSync(...).replaceAll`
+ * chain), so a prior commit's template can be rendered "the same way"
+ * without reading it off disk through `RULES_TEMPLATE_PATH` (which always
+ * resolves to the working tree's current file).
+ */
+function renderFromTemplateText(templateText, version, merge) {
+  const sentence = Object.hasOwn(MERGE_SENTENCES, merge) ? MERGE_SENTENCES[merge] : MERGE_SENTENCES.session;
+  const body = templateText
+    .replaceAll('{{marker}}', RULES_MARKER(String(version)))
+    .replaceAll('{{version}}', String(version))
+    .replaceAll('{{merge}}', sentence);
+  return body.endsWith('\n') ? body : `${body}\n`;
+}
+
+/** The template as HEAD had it, before this diff — a fixed snapshot (`git show`), read once. */
+const HEAD_TEMPLATE_TEXT = execFileSync('git', ['show', 'HEAD:rules/omelette-fleet.md'], { cwd: ROOT, encoding: 'utf8' });
+
+// ── the three lines land, whole, right after the scout bullet ───────────────
+
+test('the three lines are whole lines in the rendered file, immediately after the scout-map bullet, under both merge policies', () => {
+  for (const merge of ['session', 'pr']) {
+    const lines = rendered(merge).split('\n');
+    const scout = lines.indexOf(SCOUT);
+    assert.notEqual(scout, -1, `${merge}: the scout-map bullet is present, unchanged`);
+    assert.deepEqual(
+      lines.slice(scout + 1, scout + 1 + HANDED.length),
+      HANDED,
+      `${merge}: the three lines follow the scout-map bullet, in order`,
+    );
+  }
+});
+
+test('the insertion sits inside "Operating model for the session", before "## Ledger and handoff", under both merge policies', () => {
+  for (const merge of ['session', 'pr']) {
+    const lines = rendered(merge).split('\n');
+    const opModel = lines.indexOf('## Operating model for the session');
+    const ledger = lines.indexOf('## Ledger and handoff');
+    const first = lines.indexOf(HANDED[0]);
+    assert.ok(opModel !== -1 && ledger !== -1 && first !== -1, `${merge}: all three headings/lines present`);
+    assert.ok(opModel < first && first < ledger, `${merge}: the new lines sit between the two headings`);
+  }
+});
+
+// ── nothing else in the template moved ───────────────────────────────────────
+
+test('every other rendered line is unchanged against HEAD\'s template rendered the same way, under both merge policies', () => {
+  for (const merge of ['session', 'pr']) {
+    const oldRendered = renderFromTemplateText(HEAD_TEMPLATE_TEXT, '1.2.0', merge);
+    const newRendered = rendered(merge);
+    const oldLines = oldRendered.split('\n');
+    const newLines = newRendered.split('\n');
+
+    const scout = newLines.indexOf(SCOUT);
+    assert.notEqual(scout, -1, `${merge}: scout-map bullet present in the new render`);
+    const oldScout = oldLines.indexOf(SCOUT);
+    assert.notEqual(oldScout, -1, `${merge}: scout-map bullet present in HEAD's render too`);
+
+    // Every line up to and including the scout bullet is identical.
+    assert.deepEqual(newLines.slice(0, scout + 1), oldLines.slice(0, oldScout + 1), `${merge}: prefix up to the scout bullet is untouched`);
+    // The three new lines are exactly HANDED, in place.
+    assert.deepEqual(newLines.slice(scout + 1, scout + 1 + HANDED.length), HANDED, `${merge}: the inserted lines are exactly the three`);
+    // Everything after the insertion is identical to everything after the scout bullet in the old render — nothing else moved, changed or was dropped.
+    assert.deepEqual(newLines.slice(scout + 1 + HANDED.length), oldLines.slice(oldScout + 1), `${merge}: suffix after the insertion is untouched`);
+
+    // The size grew by exactly the inserted text's own length — not a hard-coded
+    // number, derived from HANDED itself, so it holds regardless of which
+    // merge sentence is substituted.
+    const insertedLength = HANDED.reduce((n, line) => n + line.length + 1, 0);
+    assert.equal(newRendered.length, oldRendered.length + insertedLength, `${merge}: grew by exactly the inserted lines' own length`);
+  }
+});
+
+// ── the render stays under the ceiling ───────────────────────────────────────
+
+test('the rendered rules file stays at most 13 100 characters under both merge policies, after Task 1', () => {
+  for (const merge of ['session', 'pr']) {
+    const text = rendered(merge);
+    assert.ok(text.length <= 13100, `${merge}: ${text.length} characters`);
+  }
+});
+
+// ── the three lines respect the plan's own constraints on their shape ───────
+
+test('the three added lines carry no bold label, no hook-mechanics string, and no unresolved template placeholder', () => {
+  for (const line of HANDED) {
+    assert.ok(line.startsWith('- '), `starts as a plain bullet: ${line}`);
+    assert.ok(!line.includes('**'), `no bold label (Ruling 2 — a precedent for an unlabelled bullet): ${line}`);
+    for (const mechanism of MECHANICS) assert.ok(!line.includes(mechanism), `no hook-mechanics string (${mechanism}): ${line}`);
+    for (const placeholder of ['{{marker}}', '{{version}}', '{{merge}}']) {
+      assert.ok(!line.includes(placeholder), `no unresolved placeholder (${placeholder}): ${line}`);
+    }
+  }
+});
+
+test('the raw template (working tree, as this diff leaves it) keeps exactly one `{{merge}}` placeholder', () => {
+  const templateText = fs.readFileSync(path.join(ROOT, 'rules/omelette-fleet.md'), 'utf8');
+  const count = (templateText.match(/\{\{merge\}\}/g) || []).length;
+  assert.equal(count, 1, 'exactly one `{{merge}}` placeholder remains in the template');
+});

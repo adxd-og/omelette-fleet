@@ -18,6 +18,9 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 - **What stays out of the lane.** Anything that changes behaviour beyond the fix, touches the guard's refusal logic, the env allowlist, the billing scrub, the write gates or a tool's schema, or needs a doc section rewritten: those go through the flow whatever their size.
 - **Evidence travels with pointers.** Coder and tester reports come as `TASK / FINDINGS / DIFF / TEST RESULTS / OPEN QUESTIONS`, each finding a pointer line — `path:line` (relative to the project root, one line) · a verbatim fragment in backticks · the claim. `omelette-fleet check <file>` verifies the pointers: check before you trust.
 - **One scout map per release, never to a first review.** Before planning several packages, one read-only scout writes `.omelette/map-<plan>.md` — `commit: <hash>`, factual pointer lines, a closing `## Not read` — and the planners get it instead of re-reading. Run `check` on it, open three pointers yourself, re-take stale lines.
+- A planner gets the map and its spec section: map first, three pointers opened by hand (one false: whole map unverified), then only what the map lacks; the plan header lists map lines relied on and re-taken.
+- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open.
+- Pay for judgement, not for repetition: planners do not dry-run plans.
 
 ## Ledger and handoff
 

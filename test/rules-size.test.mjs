@@ -107,3 +107,25 @@ test('"Ledger and handoff" states the five hook obligations in full, one line ea
   assert.ok(wiring[0].includes('docs/CONFIG.md'), 'and points at CONFIG');
   for (const mechanism of MECHANICS) assert.ok(!text.includes(mechanism), `mechanism moved out of the rules: ${mechanism}`);
 });
+
+// ── 1.2.0 P2: what each agent is handed ──────────────────────────────────────
+
+/**
+ * P2's rules for the operating model (spec "P2 — briefing from the map", and
+ * the principle the release measured), as the template words them. Each is
+ * pinned as a whole line: a condition dropped from one fails here, where a
+ * substring pin would stay green. They follow the scout-map bullet, whose map
+ * they are about.
+ */
+const HANDED = [
+  "- A planner gets the map and its spec section: map first, three pointers opened by hand (one false: whole map unverified), then only what the map lacks; the plan header lists map lines relied on and re-taken.",
+  "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open.",
+  "- Pay for judgement, not for repetition: planners do not dry-run plans.",
+];
+
+test('the operating model says what a planner and a coder are handed, and what the session pays for, right after the scout map', () => {
+  const lines = section(rules(), '## Operating model for the session').split('\n');
+  const scout = lines.indexOf(SCOUT);
+  assert.notEqual(scout, -1, 'the scout-map bullet is in the operating model');
+  assert.deepEqual(lines.slice(scout + 1, scout + 1 + HANDED.length), HANDED, 'the three lines follow the scout-map bullet');
+});
