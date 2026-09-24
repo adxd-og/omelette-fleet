@@ -156,12 +156,12 @@ test('rules/omelette-fleet.md (rendered): the tester step says the guard refuses
 
 test('docs/ORCHESTRATION.md: the guard section names omelette-tester as a guarded role', () => {
   const text = readFileSync(join(ROOT, 'docs', 'ORCHESTRATION.md'), 'utf8');
-  assert.match(text, /`omelette-coder`\s+or\s+`omelette-tester`/, 'the PreToolUse description must list both roles');
+  assert.match(text, /`omelette-coder`, `omelette-tester`\s+or\s+`omelette-reviewer`/, 'the PreToolUse description must list every guarded role (the reviewer since 1.3.0)');
   assert.match(text, /The refusal names the agent it caught/);
 });
 
 test('docs/SECURITY.md: the PreToolUse bullet names omelette-tester as a guarded role and explains why', () => {
   const text = readFileSync(join(ROOT, 'docs', 'SECURITY.md'), 'utf8');
-  assert.match(text, /`omelette-coder`\s+or\s+`omelette-tester`/, 'the security doc must list both roles');
+  assert.match(text, /`omelette-coder`, `omelette-tester`\s+or\s+`omelette-reviewer`/, 'the security doc must list every guarded role (the reviewer since 1.3.0)');
   assert.match(text, /neither loses a read/);
 });

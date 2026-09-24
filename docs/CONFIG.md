@@ -7,7 +7,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | Where does the config file live? | [Location](#location) |
 | What does the whole config file look like? | [Shape](#shape) |
 | What do `contract` and `updateCheck` control? | [Top-level settings](#top-level-settings) |
-| How do I configure the coder and tester sub-agents? | [Agent settings](#agent-settings) |
+| How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |
 | How do I configure the auto-handoff threshold and window? | [Handoff settings](#handoff-settings) |
 | What do the handoff hooks do to my ledger, and when? | [The handoff hooks](#the-handoff-hooks) |
 | How do I set whether the session merges or opens a PR? | [Workflow settings](#workflow-settings) |
@@ -49,7 +49,8 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
   "defaults": { "status": true },
   "agents": {
     "coder":  { "model": "opus", "effort": "xhigh" },
-    "tester": { "model": "sonnet", "effort": "xhigh", "maxTurns": 80 }
+    "tester": { "model": "sonnet", "effort": "xhigh", "maxTurns": 80 },
+    "reviewer": { "model": "opus", "effort": "xhigh" }
   },
   "handoff": { "enabled": true, "threshold": 90, "contextWindow": 0, "compactSummary": true },
   "workflow": { "merge": "session" },
@@ -93,7 +94,7 @@ Set `contract=full` if you would rather every session carry the whole text — a
 
 ### Agent settings
 
-The `agents` block is the other top-level one, and it configures something different from everything else in this file: the two Claude Code sub-agent definitions `omelette-fleet rules --agents` writes into `.claude/agents/`. No unit reads it, and no vendor CLI ever sees it.
+The `agents` block is the other top-level one, and it configures something different from everything else in this file: the three Claude Code sub-agent definitions `omelette-fleet rules --agents` writes into `.claude/agents/`. No unit reads it, and no vendor CLI ever sees it.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -102,6 +103,8 @@ The `agents` block is the other top-level one, and it configures something diffe
 | `agents.tester.model` | one printable line | `"sonnet"` | The `model:` line of `omelette-tester.md` |
 | `agents.tester.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line |
 | `agents.tester.maxTurns` | positive int | `80` | Its `maxTurns:` line — how many turns the tester gets before the harness stops it. It is honoured: the agent stops at the limit and the orchestrator is told it can continue it (measured 2026-09-06) |
+| `agents.reviewer.model` | one printable line | `"opus"` | The `model:` line of `omelette-reviewer.md` |
+| `agents.reviewer.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line — review is judgement, the thing a release pays for |
 
 The templates carry `{{model}}`, `{{effort}}` and `{{maxTurns}}` where those values go, and **`rules --agents` renders from the config as it is at that moment**. So a change here does not reach a session until you re-render:
 

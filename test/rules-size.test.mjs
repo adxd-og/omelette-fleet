@@ -228,3 +228,65 @@ test('the operating model\'s coder line stays byte for byte, and no 1.3.0 line c
     for (const mechanism of MECHANICS) assert.ok(!line.includes(mechanism), `${mechanism} stays out of: ${line.slice(0, 50)}`);
   }
 });
+
+// ── 1.3.0 P1: the reviewer in the docs ───────────────────────────────────────
+
+/** ORCHESTRATION "Reviews": what the shipped reviewer is and does, and what keeps it read-only — each a whole paragraph line. */
+const REVIEWER_DOC = [
+  "**The shipped reviewer.** `omelette-fleet rules --agents` writes `omelette-reviewer` — the clean-context second reader on our own model, the Opus review 1.2.0 briefed by hand, now a definition (`model: opus` and `effort: xhigh` by default, tools `Read, Grep, Glob, Bash, Write`, `disallowedTools: Agent, Edit, NotebookEdit`). One spawn is one review of one thing: a plan, a task's diff or a branch. Its brief carries the base and head (or the file) and the spec's path, and, for a re-review only, the earlier findings and the rulings on them. It reads what it reviews, runs the suite when the brief says so, and reports findings only, ranked, each `location · scenario · consequence · how to confirm` with the location as a pointer line `omelette-fleet check` can verify, then one verdict line: `ship`, `do not ship` or `needs-check`. The report goes to `.omelette/reports/<name>-review.md`; the reply is the verdict line and the count. The Routing table's code-review row stays Codex: this adds a reader, it replaces none.",
+  "**Read-only by definition and by check, not by enforcement.** Claude Code's tool filtering cannot scope `Write` to one path or make `Bash` read-only, and the guard refuses only the git commands it names. So the definition says the only file the reviewer writes is its report; the guard refuses its `git commit`, `stash`, branch creation and `worktree` by name, as it does the coder's; and the session runs `git status --porcelain` after every review and rejects the review outright if anything but that report changed.",
+];
+/** ORCHESTRATION "Spawning sub-agents": the reviewer's item in the list of shipped definitions. */
+const SPAWN_BULLET = "- **`omelette-reviewer`** — `model: opus`, `effort: xhigh`, `disallowedTools: Agent, Edit, NotebookEdit`, tools `Read, Grep, Glob, Bash, Write`. One review of one thing with a clean context: findings only, ranked, in four parts, then `ship`, `do not ship` or `needs-check`; the one file it writes is its report ([Reviews](#reviews)).";
+/** CONFIG "Agent settings": the reviewer's two keys. */
+const CONFIG_ROWS = [
+  '| `agents.reviewer.model` | one printable line | `"opus"` | The `model:` line of `omelette-reviewer.md` |',
+  '| `agents.reviewer.effort` | `low` \\| `medium` \\| `high` \\| `xhigh` \\| `max` | `"xhigh"` | Its `effort:` line — review is judgement, the thing a release pays for |',
+];
+/** SECURITY "The guard hook": what the guard does, and does not do, for the reviewer. */
+const SECURITY_REVIEWER = "The reviewer is contained the same way, and this guard is all the enforcement it gets: Claude Code cannot scope `Write` to one path or make `Bash` read-only, so its read-only is the definition's text — the only file it writes is `.omelette/reports/<name>-review.md` — and the session's `git status --porcelain` after every review, which rejects the review if anything but that report changed.";
+/** README's `rules` row: the three definitions `--agents` writes. */
+const README_AGENTS = "`--agents` also writes three sub-agent definitions (`omelette-coder`: Opus xhigh; `omelette-tester`: Sonnet xhigh; `omelette-reviewer`: Opus xhigh; all three `disallowedTools: Agent`, the reviewer also `Edit, NotebookEdit`)";
+
+test('ORCHESTRATION "Reviews" describes the shipped reviewer and what keeps it read-only, and the map asks for it', () => {
+  const md = read('docs/ORCHESTRATION.md');
+  const lines = section(md, '## Reviews').split('\n');
+  for (const paragraph of REVIEWER_DOC) assert.ok(lines.includes(paragraph), `a paragraph of its own: ${paragraph.slice(0, 60)}`);
+  const head = md.slice(0, md.indexOf('\n## '));
+  assert.ok(head.split('\n').includes('| Which sub-agent runs a review, and what keeps it read-only? | [Reviews](#reviews) |'), 'the map at the top asks for it');
+});
+
+test('ORCHESTRATION counts three definitions and three guarded roles, and lists the reviewer', () => {
+  const md = read('docs/ORCHESTRATION.md');
+  assert.ok(md.includes('when the caller is one of the three roles this package ships — `omelette-coder`, `omelette-tester` or `omelette-reviewer` —'), 'Layer 3 names the three guarded roles');
+  const spawning = section(md, '## Spawning sub-agents: model and effort');
+  const lines = spawning.split('\n');
+  assert.ok(lines.includes('`omelette-fleet rules --agents` writes three of these next to the rules file:'));
+  assert.ok(lines.includes(SPAWN_BULLET), 'the reviewer item, whole');
+  assert.ok(spawning.includes('Select them with `subagent_type: omelette-coder` / `omelette-tester` / `omelette-reviewer`. All three are refreshed'));
+  assert.ok(!spawning.includes('writes two of these') && !/\b(both|BOTH) shipped\b/.test(spawning), 'no count of two is left');
+});
+
+test('CONFIG "Agent settings" documents agents.reviewer.model and agents.reviewer.effort', () => {
+  const md = read('docs/CONFIG.md');
+  const lines = section(md, '### Agent settings').split('\n');
+  for (const row of CONFIG_ROWS) assert.ok(lines.includes(row), `a key row: ${row.slice(0, 40)}`);
+  assert.ok(lines.some((l) => l.includes('the three Claude Code sub-agent definitions `omelette-fleet rules --agents` writes')), 'the intro counts three');
+  assert.ok(md.split('\n').includes('| How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |'), 'the map row names the reviewer');
+  assert.ok(md.includes('    "reviewer": { "model": "opus", "effort": "xhigh" }'), 'the Shape block shows the reviewer entry');
+});
+
+test('SECURITY: the PreToolUse row names the three guarded roles and says what the guard does not do for the reviewer', () => {
+  const md = read('docs/SECURITY.md');
+  const guard = section(md, '## The guard hook');
+  assert.ok(guard.includes('When the caller is one of the three sub-agent roles this package ships — `omelette-coder`, `omelette-tester` or `omelette-reviewer` —'));
+  assert.ok(guard.includes(SECURITY_REVIEWER), 'the reviewer sentence, whole');
+  assert.ok(md.includes('`.claude/agents/omelette-coder.md`, `.claude/agents/omelette-tester.md`, `.claude/agents/omelette-reviewer.md` and `.claude/skills/omelette-test/SKILL.md`'), '"What this package never does" lists the file it writes');
+});
+
+test('README counts three sub-agent definitions where it counted two', () => {
+  const md = read('README.md');
+  assert.ok(md.includes('so you get the operating rules, the three sub-agent definitions, the `/omelette-test` skill'));
+  assert.ok(md.includes(README_AGENTS));
+  assert.ok(!md.includes('two sub-agent definitions') && !md.includes('both sub-agent definitions'));
+});
