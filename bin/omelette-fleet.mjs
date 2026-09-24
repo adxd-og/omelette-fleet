@@ -2926,10 +2926,15 @@ function cmdSet(argv) {
     // `agents` is a top-level block, not a unit, and it is one level deeper.
     if (parts[0].toLowerCase() === 'agents') {
       if (parts.length !== 3 || parts.some((p) => !p)) { errors.push(`"${a}" is not agents.<agent>.<key>=<value>`); continue; }
-      const role = parts[1].toLowerCase();
+      // The role is matched without regard to case, as it always was, but
+      // against the schema's OWN spelling: `coderMedium` is camelCase, and a
+      // lowercased input alone would never find it. Own keys only, so an
+      // inherited name (`constructor`) is still an unknown agent.
+      const given = parts[1].toLowerCase();
+      const role = Object.keys(AGENT_SETTINGS_SCHEMA).find((r) => r.toLowerCase() === given);
       const key = parts[2];
-      const schema = Object.hasOwn(AGENT_SETTINGS_SCHEMA, role) ? AGENT_SETTINGS_SCHEMA[role] : null;
-      if (!schema) { errors.push(`unknown agent "${role}" — known agents: ${Object.keys(AGENT_SETTINGS_SCHEMA).join(', ')}`); continue; }
+      const schema = role ? AGENT_SETTINGS_SCHEMA[role] : null;
+      if (!schema) { errors.push(`unknown agent "${given}" — known agents: ${Object.keys(AGENT_SETTINGS_SCHEMA).join(', ')}`); continue; }
       if (!Object.hasOwn(schema, key)) { errors.push(`unknown key "${key}" for agent "${role}" — known keys: ${Object.keys(schema).join(', ')}`); continue; }
       const c = coerce(schema[key], raw);
       if (!c.ok) { errors.push(`invalid value for agents.${role}.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(schema[key])}`); continue; }

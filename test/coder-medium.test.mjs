@@ -169,3 +169,40 @@ test('rules --help and install --help count four definitions, the medium coder a
   assert.match(rulesHelp.out, /omelette-coder-medium: Opus medium;/);
   assert.match(cli(['install', '--help'], { dir }).out, /the four sub-agent definitions/);
 });
+
+// ── Task 3: `set` reaches agents.coderMedium ─────────────────────────────────
+
+test('set agents.coderMedium.<key> round-trips: written under the schema\'s spelling, in any case, and read back by show and rules --agents', () => {
+  const dir = home();
+  const s = cli(['set', 'agents.coderMedium.effort=high'], { dir });
+  assert.equal(s.code, 0, s.err);
+  assert.match(s.out, /agents\.coderMedium\.effort\s+medium \[default\] → high \[file\]/);
+  assert.match(s.out, /rules --agents/, 'a changed setting reaches the definition on the next re-render');
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).agents, { coderMedium: { effort: 'high' } });
+  // the role name was always matched without regard to case; a camelCase role keeps that
+  assert.equal(cli(['set', 'agents.CODERMEDIUM.model=sonnet'], { dir }).code, 0);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).agents, { coderMedium: { effort: 'high', model: 'sonnet' } });
+  const shown = cli(['show', 'agents'], { dir });
+  assert.match(shown.out, /^\s+coderMedium\.model\s+sonnet\s+file$/m);
+  assert.match(shown.out, /^\s+coderMedium\.effort\s+high\s+file$/m);
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  assert.equal(cli(['rules', '--agents'], { dir, cwd: proj }).code, 0);
+  const medium = readFileSync(join(proj, '.claude', 'agents', 'omelette-coder-medium.md'), 'utf8');
+  assert.match(medium, /^model: sonnet$/m);
+  assert.match(medium, /^effort: high$/m);
+  assert.match(readFileSync(join(proj, '.claude', 'agents', 'omelette-coder.md'), 'utf8'), /^effort: xhigh$/m, 'the deep coder is untouched');
+});
+
+test('set refuses an invalid agents.coderMedium value and a key the role does not have — exit 1, nothing written', () => {
+  const dir = home();
+  const effort = cli(['set', 'agents.coderMedium.effort=turbo'], { dir });
+  assert.equal(effort.code, 1);
+  assert.match(effort.err, /invalid value for agents\.coderMedium\.effort: "turbo" — expected low \| medium \| high \| xhigh \| max/);
+  const key = cli(['set', 'agents.coderMedium.maxTurns=5'], { dir });
+  assert.equal(key.code, 1);
+  assert.match(key.err, /unknown key "maxTurns" for agent "coderMedium" — known keys: model, effort/);
+  const role = cli(['set', 'agents.coder-medium.effort=high'], { dir });
+  assert.equal(role.code, 1, 'the key is agents.coderMedium, not the file name');
+  assert.match(role.err, /unknown agent "coder-medium" — known agents: coder, coderMedium, tester, reviewer/);
+  assert.equal(existsSync(join(dir, 'fleet.config.json')), false);
+});
