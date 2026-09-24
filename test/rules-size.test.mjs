@@ -129,3 +129,19 @@ test('the operating model says what a planner and a coder are handed, and what t
   assert.notEqual(scout, -1, 'the scout-map bullet is in the operating model');
   assert.deepEqual(lines.slice(scout + 1, scout + 1 + HANDED.length), HANDED, 'the three lines follow the scout-map bullet');
 });
+
+/**
+ * How the session reviews a plan (spec P2, the third rule), a whole line of
+ * "Reviews", after the two rules it rests on: the four-part finding with its
+ * ledger ruling, and the clean first review.
+ */
+const PLAN_REVIEW = "- Review a plan by header, task list and Self-Review; a unit gets the full file (spec, plan, four-part findings); open the findings' pointers, not the file.";
+
+test('"Reviews" says how the session reviews a plan, after the four-part finding and the clean first review', () => {
+  const lines = section(rules(), '## Reviews').split('\n');
+  const at = lines.indexOf(PLAN_REVIEW);
+  assert.notEqual(at, -1, 'Reviews has the plan-review rule as a line of its own');
+  const four = lines.findIndex((l) => l.startsWith('- **A finding has four parts, or it is a question.**'));
+  const clean = lines.findIndex((l) => l.startsWith('- **First review clean, re-review continued.**'));
+  assert.ok(four !== -1 && clean !== -1 && four < at && clean < at, 'it follows the two rules it rests on');
+});
