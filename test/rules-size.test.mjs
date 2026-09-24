@@ -90,10 +90,12 @@ const DUTIES = [
 // follows the content; the lines themselves are pinned whole below.
 // 1.3.0 P2: 13 510 -> 13 620 — the definitions line and the guard sentence
 // name the medium coder (+104: 13 517 / 13 485), plus headroom.
-test('the rendered rules file is at most 13 620 characters under either merge policy', () => {
+// 1.3.0 P2: 13 620 -> 14 030 — the coder line's bucket clause (+405: 13 922 /
+// 13 890), plus headroom.
+test('the rendered rules file is at most 14 030 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 13620, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 14030, `${merge}: ${text.length} characters`);
   }
 });
 
@@ -125,7 +127,7 @@ test('"Ledger and handoff" states the five hook obligations in full, one line ea
  */
 const HANDED = [
   "- A planner gets the map and its spec section: map first, three pointers opened by hand (one false: whole map unverified), then only what the map lacks; the plan header lists map lines relied on and re-taken.",
-  "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open.",
+  "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates); a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.",
   "- Pay for judgement, not for repetition: planners do not dry-run plans.",
 ];
 
@@ -293,4 +295,25 @@ test('README counts three sub-agent definitions where it counted two', () => {
   assert.ok(md.includes('so you get the operating rules, the three sub-agent definitions, the `/omelette-test` skill'));
   assert.ok(md.includes(README_AGENTS));
   assert.ok(!md.includes('two sub-agent definitions') && !md.includes('both sub-agent definitions'));
+});
+
+// ── 1.3.0 P2: the coder line says which coder to brief ───────────────────────
+
+/**
+ * The operating model's coder line with the bucket clause (spec P2, "The rule"):
+ * the 1.2.0 words untouched, the clause after them. Pinned whole, so a bucket
+ * condition dropped from it fails here. `CODER_LINE` (P1) is rules line 9,
+ * which P2 leaves byte for byte.
+ */
+const CODER_1_2_0 = "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open.";
+const CODER_BUCKETS = "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates); a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.";
+
+test('the coder line carries the bucket clause after its 1.2.0 words, whole, under either merge policy — and the "Opus-class, xhigh" line is untouched', () => {
+  assert.ok(CODER_BUCKETS.startsWith(`${CODER_1_2_0} `), 'the clause is appended; the 1.2.0 words are its first words');
+  for (const merge of ['session', 'pr']) {
+    const lines = renderRulesFile('1.2.0', { merge }).split('\n');
+    assert.ok(lines.includes(CODER_BUCKETS), `${merge}: the coder line with its bucket clause, whole`);
+    assert.equal(lines.filter((l) => l.startsWith(CODER_1_2_0)).length, 1, `${merge}: one coder line, not an old one beside the new`);
+    assert.ok(lines.includes(CODER_LINE), `${merge}: "Opus-class, xhigh — the shipped omelette-coder" stays byte for byte`);
+  }
 });

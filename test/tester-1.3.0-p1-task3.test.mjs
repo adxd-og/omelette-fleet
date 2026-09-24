@@ -145,9 +145,9 @@ for (const merge of POLICIES) {
 // ── the ceiling is a ceiling, never an exact size ───────────────────────────
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file is at most 13 620 characters, a ceiling not an exact pin (${merge})`, () => {
+  test(`the rendered rules file is at most 14 030 characters, a ceiling not an exact pin (${merge})`, () => {
     const text = rendered(merge);
-    assert.ok(text.length <= 13620, `${merge}: ${text.length} characters, expected <= 13620`);
+    assert.ok(text.length <= 14030, `${merge}: ${text.length} characters, expected <= 14030`);
     assert.ok(text.length > 0, `${merge}: sanity — the file is not empty`);
   });
 }

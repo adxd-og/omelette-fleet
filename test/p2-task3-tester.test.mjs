@@ -130,7 +130,7 @@ const CORRESPONDENCE = [
     ],
   },
   {
-    rulesLine: "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open.",
+    rulesLine: "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates); a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.",
     docItem: HANDED_DOC[1],
     phrases: [
       "the task's section of the plan and the pointers it needs",

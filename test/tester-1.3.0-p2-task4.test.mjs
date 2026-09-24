@@ -73,9 +73,9 @@ const HEADINGS_IN_ORDER = [
 // ── the ceiling is a ceiling, never an exact pin ─────────────────────────────
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file stays at most 13 620 characters under ${merge}, and is not implausibly small`, () => {
+  test(`the rendered rules file stays at most 14 030 characters under ${merge}, and is not implausibly small`, () => {
     const text = rendered(merge);
-    assert.ok(text.length <= 13620, `${merge}: ${text.length} characters, expected <= 13620`);
+    assert.ok(text.length <= 14030, `${merge}: ${text.length} characters, expected <= 14030`);
     assert.ok(text.length > 10000, `${merge}: ${text.length} characters — sanity floor, catches a truncated render`);
   });
 }
