@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { renderRulesFile } from '../core/rules.mjs';
+import { MERGE_SENTENCES, renderRulesFile } from '../core/rules.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -84,10 +84,14 @@ const DUTIES = [
   'The discipline is unchanged: handoffs at every natural pause, and the hook is the net under it.',
 ];
 
-test('the rendered rules file is at most 13 100 characters under either merge policy', () => {
+// 1.3.0 P1: 13 100 -> 13 510 — the measured render with the reviewer's rules
+// lines and the three count-free lines (13 413 characters under `session`,
+// 13 381 under `pr`) plus about a hundred characters of headroom. The number
+// follows the content; the lines themselves are pinned whole below.
+test('the rendered rules file is at most 13 510 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 13100, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 13510, `${merge}: ${text.length} characters`);
   }
 });
 
@@ -166,4 +170,61 @@ test('ORCHESTRATION "Evidence with pointers" says what each agent is handed, and
   for (const item of HANDED_DOC) assert.ok(lines.includes(item), `a line of its own: ${item.slice(0, 60)}`);
   const head = md.slice(0, md.indexOf('\n## '));
   assert.match(head, /^\| .+ \| \[What each agent is handed\]\(#what-each-agent-is-handed\) \|$/m, 'the map at the top, before the first section, links it');
+});
+
+// ── 1.3.0 P1: the shipped reviewer in the rules ─────────────────────────────
+
+/**
+ * The two rules lines 1.3.0 P1 writes (spec "P1 — `omelette-reviewer`", "Where
+ * it slots in"), each pinned whole: the "Reviews" line naming the reviewer, the
+ * one file it writes and the check after it; and the definitions line, whose
+ * fact moves from two definitions to three. The operating model's coder line
+ * is pinned beside them: nothing in this package may change it.
+ */
+const P1_REVIEWS_LINE = "- **A sub-agent review goes to `omelette-reviewer`.** It writes nothing but `.omelette/reports/<name>-review.md`; run `git status --porcelain` after it and reject the review outright if anything but that report changed.";
+const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs three definitions — **`omelette-coder`** (Opus, `effort: xhigh`), **`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus, `effort: xhigh`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-tester` / `omelette-reviewer`.";
+const CODER_LINE = "- **Code changes go to a strong coding sub-agent** (Opus-class, xhigh — the shipped `omelette-coder`), briefed with the approved plan and the constraints. Never to a fleet unit.";
+
+for (const merge of ['session', 'pr']) {
+  test(`"Reviews" names the shipped reviewer, its one file and the git status check, right after the plan-review line (${merge})`, () => {
+    const lines = section(renderRulesFile('1.2.0', { merge }), '## Reviews').split('\n');
+    const plan = lines.indexOf(PLAN_REVIEW);
+    assert.notEqual(plan, -1, 'the plan-review line is in "Reviews"');
+    assert.equal(lines[plan + 1], P1_REVIEWS_LINE, 'the reviewer line follows it, whole');
+  });
+
+  test(`"Spawning sub-agents" says three definitions, naming the reviewer with its model and effort (${merge})`, () => {
+    const lines = section(renderRulesFile('1.2.0', { merge }), '## Spawning sub-agents: model and effort').split('\n');
+    assert.ok(lines.includes(P1_DEFINITIONS_LINE), 'the definitions line, whole');
+    assert.ok(!lines.some((l) => l.includes('installs two definitions')), 'the old count is gone');
+  });
+}
+
+/**
+ * The three lines that counted two shipped roles (spec amendment, ledger
+ * 2026-09-24): each loses its count and names every role where it named two,
+ * its explanatory words untouched. The branch-per-feature line ends with the
+ * merge sentence, so it is pinned with each policy's own.
+ */
+const P1_BRANCH_LINE_HEAD = "- **Branch per feature; main is gated.** Work on a `feat/<name>` branch. The session commits each task on that branch once its review passes; no shipped sub-agent role commits — the coder reports its diff, the tester reports what it ran, the reviewer reports its findings, and the guard hook refuses any of their `git commit`. ";
+const P1_NESTING_LINE = "- Sub-agents may nest up to three levels deep, but every shipped definition carries `disallowedTools: Agent`: they cannot spawn anything, so the **orchestrator** spawns the tester, never the coder.";
+const P1_GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard — it contains every shipped role — `omelette-coder`, `omelette-tester` and `omelette-reviewer` — and names the one it caught — and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it — omelette-fleet never edits your settings files itself.";
+
+for (const merge of ['session', 'pr']) {
+  test(`the three lines that counted two roles name every shipped role, each whole (${merge})`, () => {
+    const text = renderRulesFile('1.2.0', { merge });
+    assert.ok(section(text, '## Operating model for the session').split('\n').includes(P1_BRANCH_LINE_HEAD + MERGE_SENTENCES[merge]), 'the branch-per-feature line');
+    assert.ok(section(text, '## Spawning sub-agents: model and effort').split('\n').includes(P1_NESTING_LINE), 'the nesting line');
+    assert.ok(section(text, '## Briefing a unit').split('\n').includes(P1_GUARD_LINE), 'the guard line');
+    for (const stale of ['neither shipped sub-agent role', 'either one\'s', 'both shipped definitions', '**both** shipped roles']) {
+      assert.ok(!text.includes(stale), `the count of two is gone: ${stale}`);
+    }
+  });
+}
+
+test('the operating model\'s coder line stays byte for byte, and no 1.3.0 line carries a hook-mechanics string', () => {
+  assert.ok(section(rules(), '## Operating model for the session').split('\n').includes(CODER_LINE), 'the "Opus-class, xhigh" line is unchanged');
+  for (const line of [P1_REVIEWS_LINE, P1_DEFINITIONS_LINE, P1_BRANCH_LINE_HEAD, P1_NESTING_LINE, P1_GUARD_LINE]) {
+    for (const mechanism of MECHANICS) assert.ok(!line.includes(mechanism), `${mechanism} stays out of: ${line.slice(0, 50)}`);
+  }
 });

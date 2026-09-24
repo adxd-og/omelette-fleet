@@ -63,11 +63,12 @@ for (const merge of POLICIES) {
     assert.equal(at, clean + 1, 'the new line immediately follows the clean-first-review bullet, with nothing between');
     assert.equal(clean, four + 1, 'the clean-first-review bullet immediately follows the four-part-finding bullet');
 
-    // "before the next ## heading": everything left in the section after the
-    // new line is blank — no further bullet leaks in, and the section (which
-    // already stops at the next "## " heading) does not contain one either.
+    // "before the next ## heading": what follows the new line in the section is
+    // blank or a bullet of its own (1.3.0 P1 adds the reviewer line there) — no
+    // prose leaks in, and the section (which already stops at the next "## "
+    // heading) does not contain one either.
     const rest = reviews.slice(at + 1);
-    assert.ok(rest.every((l) => l.trim() === ''), 'nothing but blank lines follow the new line before the section ends');
+    assert.ok(rest.every((l) => l.trim() === '' || l.startsWith('- ')), 'only blank lines and bullets follow the new line before the section ends');
 
     // The section itself does not contain a further "## " heading (section()
     // already guarantees this by construction, but pin it against the literal
@@ -77,9 +78,9 @@ for (const merge of POLICIES) {
 }
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file stays at or under the 13 100-character ceiling (${merge})`, () => {
+  test(`the rendered rules file stays at or under the 13 510-character ceiling (${merge})`, () => {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 13100, `${merge}: ${text.length} characters, expected <= 13100`);
+    assert.ok(text.length <= 13510, `${merge}: ${text.length} characters, expected <= 13510`);
   });
 }
 
