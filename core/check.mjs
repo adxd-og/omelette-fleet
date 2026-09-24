@@ -219,7 +219,11 @@ export function changedSince({ hash, root }) {
       // but unchanged file as changed.
       '-c', 'diff.autoRefreshIndex=false',
       '-c', `core.hooksPath=${devNull}`,
-      'diff', '--no-ext-diff', '--no-textconv', `-O${devNull}`, '--name-only', '--relative', hash, '--',
+      // -z: every name unquoted, NUL-terminated. Without it git QUOTES a
+      // name holding a non-ASCII byte, a quote, a backslash or a control
+      // character (`"caf\303\251.js"`), and the quoted spelling never matches
+      // the path a pointer resolves to: the pointer would read `ok`, never `stale`.
+      'diff', '--no-ext-diff', '--no-textconv', `-O${devNull}`, '--name-only', '-z', '--relative', hash, '--',
     ], {
       cwd: root,
       env: gitChildEnv(process.env),
@@ -228,7 +232,11 @@ export function changedSince({ hash, root }) {
       stdio: ['ignore', 'pipe', 'pipe'],
       encoding: 'utf8',
     });
-    const changed = new Set(stdout.split('\n').map((l) => normalisePath(l.trim())).filter(Boolean));
+    // Split on the NUL -z puts after every name, nothing trimmed. normalisePath
+    // still maps a backslash to a slash, as it does for the pointer's own path,
+    // so a POSIX name holding a literal `\` is the one spelling this does not
+    // keep: pointers into such a file can be marked stale wrongly.
+    const changed = new Set(stdout.split('\0').filter(Boolean).map(normalisePath));
     return { changed };
   } catch (e) {
     return { reason: gitReason(e, hash) };

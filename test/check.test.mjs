@@ -759,3 +759,16 @@ test('check: the help lists it next to the other subcommands, and says what the 
   }
   assert.ok(!page.out.includes('Exit 1 on anything but ok'), 'the old, wrong sentence is gone');
 });
+
+test('changedSince: a name git would quote — café.js — is matched as it is on disk, so its pointer goes stale (S16)', { skip: GIT_SKIP }, () => {
+  const { root, run } = gitRepo();
+  writeFileSync(join(root, 'café.js'), 'export const answer = 42;\n');
+  run(['add', '-A']);
+  run(['commit', '-q', '-m', 'third']);
+  const third = run(['rev-parse', 'HEAD']);
+  writeFileSync(join(root, 'café.js'), 'export const answer = 42;\n// edited, never committed\n');
+  const { changed } = changedSince({ hash: third, root });
+  assert.deepEqual([...changed], ['café.js']);
+  const { pointers } = checkPointers({ text: 'café.js:1 · `export const answer = 42;` · the constant', root, changed });
+  assert.equal(pointers[0].status, 'stale');
+});
