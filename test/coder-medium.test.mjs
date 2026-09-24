@@ -46,6 +46,27 @@ function cli(args, { dir, cwd = dir } = {}) {
 /** A rendered definition without its `name:` and `effort:` lines — what the two coders must share. */
 const withoutNameAndEffort = (text) => text.split('\n').filter((l) => !/^(name|effort): /.test(l)).join('\n');
 
+/** A file of the repository, as text. */
+function read(rel) {
+  return readFileSync(join(ROOT, rel), 'utf8');
+}
+
+/** One section of a Markdown text: its heading line up to the next heading of the same or a higher level. */
+function section(md, heading) {
+  const from = md.indexOf(`\n${heading}\n`);
+  assert.notEqual(from, -1, `${heading} present`);
+  const level = heading.match(/^#+/)[0].length;
+  const next = new RegExp(`\\n#{1,${level}} `, 'g');
+  next.lastIndex = from + 1;
+  const m = next.exec(md);
+  return md.slice(from, m ? m.index : undefined);
+}
+
+/** ORCHESTRATION's "Spawning sub-agents" item for the medium coder, whole. */
+const MEDIUM_BULLET = "- **`omelette-coder-medium`** — `model: opus`, `effort: medium`, `disallowedTools: Agent`, otherwise the default tools: the coder's own template rendered under a second name, from its own `agents.coderMedium` block, so its instructions are the coder's word for word and the two cannot drift apart. Which one a brief goes to is the rule under [What each agent is handed](#what-each-agent-is-handed).";
+/** The guarded roles, as ORCHESTRATION's Layer 3 and SECURITY's PreToolUse row list them. */
+const FOUR_ROLES = '`omelette-coder`, `omelette-coder-medium`, `omelette-tester` or `omelette-reviewer`';
+
 // ── Task 2: the fourth definition renders ────────────────────────────────────
 
 test('rules --agents ships four definitions, the medium coder right after the coder, each with the marker on line 2 and its own name', () => {
@@ -205,4 +226,23 @@ test('set refuses an invalid agents.coderMedium value and a key the role does no
   assert.equal(role.code, 1, 'the key is agents.coderMedium, not the file name');
   assert.match(role.err, /unknown agent "coder-medium" — known agents: coder, coderMedium, tester, reviewer/);
   assert.equal(existsSync(join(dir, 'fleet.config.json')), false);
+});
+
+// ── Task 7: ORCHESTRATION lists four definitions ─────────────────────────────
+
+test('ORCHESTRATION: "Spawning sub-agents" lists the four definitions, the medium coder right after the coder, and Layer 3 names the four guarded roles', () => {
+  const md = read('docs/ORCHESTRATION.md');
+  const spawning = section(md, '## Spawning sub-agents: model and effort');
+  const lines = spawning.split('\n');
+  assert.ok(lines.includes('`omelette-fleet rules --agents` writes four of these next to the rules file:'), 'the count sentence says four');
+  const coder = lines.findIndex((l) => l.startsWith('- **`omelette-coder`** — '));
+  assert.notEqual(coder, -1, 'the coder item is there');
+  assert.equal(lines[coder + 1], MEDIUM_BULLET, 'the medium coder follows it, whole');
+  for (const name of ['omelette-tester', 'omelette-reviewer']) assert.ok(lines.some((l) => l.startsWith(`- **\`${name}\`**`)), `${name} is listed`);
+  assert.ok(spawning.includes('Select them with `subagent_type: omelette-coder` / `omelette-coder-medium` / '), 'selected by name');
+  assert.ok(spawning.includes('All four are refreshed by re-running the command'), 'the refresh sentence counts four');
+  assert.ok(spawning.includes('`disallowedTools: Agent` in every shipped definition takes the possibility away'), 'the nesting paragraph does not count');
+  assert.ok(spawning.includes('for EVERY shipped role'), 'nor does its guard sentence');
+  assert.doesNotMatch(spawning, /both shipped|BOTH shipped|Both are refreshed/, 'no sentence still counts two');
+  assert.ok(md.includes(`when the caller is one of the four roles this package ships — ${FOUR_ROLES} — and the command is`), 'Layer 3 names the four guarded roles');
 });

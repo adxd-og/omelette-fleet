@@ -262,14 +262,14 @@ test('ORCHESTRATION "Reviews" describes the shipped reviewer and what keeps it r
   assert.ok(head.split('\n').includes('| Which sub-agent runs a review, and what keeps it read-only? | [Reviews](#reviews) |'), 'the map at the top asks for it');
 });
 
-test('ORCHESTRATION counts three definitions and three guarded roles, and lists the reviewer', () => {
+test('ORCHESTRATION counts four definitions and four guarded roles, and lists the reviewer', () => {
   const md = read('docs/ORCHESTRATION.md');
-  assert.ok(md.includes('when the caller is one of the three roles this package ships — `omelette-coder`, `omelette-tester` or `omelette-reviewer` —'), 'Layer 3 names the three guarded roles');
+  assert.ok(md.includes('when the caller is one of the four roles this package ships — `omelette-coder`, `omelette-coder-medium`, `omelette-tester` or `omelette-reviewer` —'), 'Layer 3 names the four guarded roles');
   const spawning = section(md, '## Spawning sub-agents: model and effort');
   const lines = spawning.split('\n');
-  assert.ok(lines.includes('`omelette-fleet rules --agents` writes three of these next to the rules file:'));
+  assert.ok(lines.includes('`omelette-fleet rules --agents` writes four of these next to the rules file:'));
   assert.ok(lines.includes(SPAWN_BULLET), 'the reviewer item, whole');
-  assert.ok(spawning.includes('Select them with `subagent_type: omelette-coder` / `omelette-tester` / `omelette-reviewer`. All three are refreshed'));
+  assert.ok(spawning.includes('Select them with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`. All four are refreshed'));
   assert.ok(!spawning.includes('writes two of these') && !/\b(both|BOTH) shipped\b/.test(spawning), 'no count of two is left');
 });
 
