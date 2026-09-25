@@ -297,9 +297,9 @@ test('MEASUREMENTS: the vendor CLI matrix carries the 1.5.0 row with 1.2.11 | 1.
   assert.match(section, /\|\s*1\.5\.0 \(2026-09-25\)\s*\|\s*1\.2\.11\s*\|\s*1\.0\.41\s*\|\s*0\.156\.1\s*\|/);
 });
 
-test('MEASUREMENTS: the 1.6.0 matrix row is left for the live gate to fill, honestly (not a promise this diff breaks)', () => {
+test('MEASUREMENTS: the 1.6.0 matrix row is filled at the release (re-pinned from the placeholder, 2026-09-26)', () => {
   const md = readFileSync(join(ROOT, 'docs', 'MEASUREMENTS.md'), 'utf8');
   const from = md.indexOf('## Vendor CLI versions per release');
   const section = md.slice(from, from + 1500);
-  assert.match(section, /\|\s*1\.6\.0\s*\|/);
+  assert.match(section, /\|\s*1\.6\.0 \(2026-09-26\)\s*\|\s*1\.2\.11\s*\|\s*1\.0\.41\s*\|\s*0\.157\.0\s*\|/);
 });

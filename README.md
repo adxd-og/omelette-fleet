@@ -48,16 +48,16 @@ Three peers inside Claude Code, each on a subscription you already pay for, none
 
 ```console
 $ omelette-fleet doctor      # example output — all three units; config tables trimmed
-FLEET DOCTOR · omelette-fleet 1.5.0 · node v20.19.5 · darwin
-version       1.5.0 · latest 1.5.0
+FLEET DOCTOR · omelette-fleet 1.6.0 · node v20.19.5 · darwin
+version       1.6.0 · latest 1.6.0
 fleet home    ~/.omelette
 fleet config  ~/.omelette/fleet.config.json
 claude CLI    ~/.local/bin/claude
 claude config ~/.claude.json
-rules         project: v1.5.0 · global: absent
-agents        project: v1.5.0 (4) · global: absent
-skills        project: v1.5.0 (1) · global: absent
-hooks         project: v1.5.0 (wired: PreToolUse, PreCompact, SessionStart) · global: absent
+rules         project: v1.6.0 · global: absent
+agents        project: v1.6.0 (4) · global: absent
+skills        project: v1.6.0 (1) · global: absent
+hooks         project: v1.6.0 (wired: PreToolUse, PreCompact, SessionStart) · global: absent
 handoff       stamp and print on · ledgers: 1
 contract      short (rules installed here)
 merge policy  session (rules rendered)
@@ -67,7 +67,7 @@ mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1800000 nee
 
 ── gemini (Gemini) ────────────────────────────────────────────
   bin         agy → ~/.local/bin/agy   [AGY_BIN=(unset)]
-  version     1.1.25
+  version     1.2.11
   login       OK — agy models listed 14 line(s)
   config      closed — OMELETTE_ALLOW_WRITE does not list "gemini" · effective mode: read-only
               KEY        VALUE                    SOURCE
@@ -81,14 +81,15 @@ mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1800000 nee
 
 ── grok (Grok) ────────────────────────────────────────────────
   bin         grok → ~/.grok/bin/grok   [GROK_BIN=(unset)]
-  version     grok 1.0.13 (5e9a58528b76) [stable]
-  login       OK — grok models listed 5 line(s)
+  version     grok 1.0.41 (4220f3b224a6) [stable]
+  login       OK — grok models listed 7 line(s)
+  models      CLI default grok-4.7 — in the catalog
   config      closed — OMELETTE_ALLOW_WRITE does not list "grok" · and this unit refuses workspace-write anyway · effective mode: read-only
   mcp         omelette-grok registered (user) → node ~/omelette-fleet/servers/grok.mjs [file exists]
 
 ── codex (Codex) ──────────────────────────────────────────────
   bin         codex → ~/.local/bin/codex   [CODEX_BIN=(unset)]
-  version     codex-cli 0.153.0
+  version     codex-cli 0.157.0
   login       OK — Logged in using ChatGPT
   config      closed — OMELETTE_ALLOW_WRITE does not list "codex" · effective mode: read-only
   mcp         omelette-codex registered (user) → node ~/omelette-fleet/servers/codex.mjs [file exists]

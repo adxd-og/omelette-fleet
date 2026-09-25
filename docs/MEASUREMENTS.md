@@ -331,11 +331,11 @@ The versions the live gate ran on, from the ledgers' live-gate lines and the CHA
 | 1.3.0 (2026-09-25) | — | 1.0.41 | 0.156.1 |
 | 1.4.0 (2026-09-25) | — | 1.0.41 | 0.156.1 |
 | 1.5.0 (2026-09-25) | 1.2.11 | 1.0.41 | 0.156.1 |
-| 1.6.0 | (Task 8 fills in: `agy --version`, `grok --version`, `codex --version` at the live gate) | | |
+| 1.6.0 (2026-09-26) | 1.2.11 | 1.0.41 | 0.157.0 |
 
 The release checklist (CLAUDE.md) adds the row at the live gate.
 
-**Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since <branch date>` (calls, wall-clock, spool per unit); 1.6.0's row: (Task 8).
+**Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since <branch date>` (calls, wall-clock, spool per unit). 1.6.0, from the branch date to the merge (the U1 measurement's runs, the live gate and the release reviews included): gemini 16 calls / 42 min 54 s / 83 KB; grok 12 / 18 min 57 s / 25 KB; codex 50 / 4 h 56 min 38 s / 517 KB — 78 calls, 5 h 58 min of vendor wall-clock.
 
 ## How the numbers are taken
 

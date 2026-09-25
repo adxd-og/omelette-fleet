@@ -21,7 +21,7 @@ const section = (md, heading) => {
 
 test('README: the doctor sample names the three events and the stamp-and-print handoff line', () => {
   const md = read('README.md');
-  assert.match(md, /^hooks {9}project: v1\.5\.0 \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m);
+  assert.match(md, /^hooks {9}project: v1\.6\.0 \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m);
   assert.match(md, /^handoff {7}stamp and print on · ledgers: 1$/m);
   assert.doesNotMatch(md, /wired: PreToolUse, PreCompact, SessionStart, PostToolUse/);
   assert.doesNotMatch(md, /nudge at 90%|Stop gate on|summary on/);
