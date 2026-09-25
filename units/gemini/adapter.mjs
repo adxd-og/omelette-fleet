@@ -557,7 +557,7 @@ export default defineUnit({
         "server's own process cwd. " +
         'MULTIMODAL: Gemini can read local files INCLUDING IMAGES and PDFs — give the ' +
         'ABSOLUTE path in the prompt and say "view the file directly, no terminal ' +
-        'commands" (verified 2026-08-02: screenshots, UI mocks, docs). ' +
+        'commands" (works on screenshots, UI mocks and docs). ' +
         'Optionally choose a model with `model` (omit for the default). ' + GUIDE,
       inputSchema: {
         type: 'object',
