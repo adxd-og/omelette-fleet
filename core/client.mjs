@@ -71,16 +71,29 @@ export function callUnitServer({
     let toolNames = [];
     let timer = null;
 
-    const finish = (fn) => (v) => {
+    const finish = (fn) => (v, opts) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      fn(v);
+      fn(v, opts);
     };
     const ok = finish(resolve);
-    const fail = finish((e) => { try { child.kill('SIGKILL'); } catch { /* gone */ } reject(e); });
+    // Every failure SIGKILLs the server at once, except the timeout's
+    // `gently`, which has already staged its own goodbye.
+    const fail = finish((e, { gently = false } = {}) => {
+      if (!gently) { try { child.kill('SIGKILL'); } catch { /* gone */ } }
+      reject(e);
+    });
 
-    timer = setTimeout(() => fail(new Error(`no answer after ${seconds}s — server killed`)), seconds * 1000);
+    timer = setTimeout(() => {
+      // Cancel first: the server's own cancel path kills the vendor process
+      // group. Then SIGTERM (the server meets it since 1.6.0), then SIGKILL.
+      send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 3, reason: `client timeout after ${seconds}s` } });
+      const term = setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* gone */ } }, 2000);
+      const kill = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 3000);
+      child.on('exit', () => { clearTimeout(term); clearTimeout(kill); });
+      fail(new Error(`no answer after ${seconds}s — server cancelled and killed`), { gently: true });
+    }, seconds * 1000);
 
     const send = (m) => { try { child.stdin.write(JSON.stringify(m) + '\n'); } catch { /* the handlers below report it */ } };
     // A pipe that breaks under an unanswered request is a dead call, not a
