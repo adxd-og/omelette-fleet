@@ -1512,7 +1512,7 @@ async function cmdUpdate(argv) {
     remote = await cachedCheck({ home: fleetHome(), current, ttlMs: 0 });
     out(remote.latest
       ? `latest        ${remote.latest} — ${remote.behind ? 'NEWER than this install' : 'this install is current'}`
-      : `latest        unknown (${remote.error})`);
+      : `latest        unknown (${visible(remote.error)})`);
   }
   out();
 
@@ -2907,7 +2907,7 @@ const describeSpec = (spec) => {
     : spec.type === 'posint' ? `a positive integer${range} (a whole number — 0.5 and 1.9 are refused, not rounded)`
       : spec.type === 'nonneg' ? `a whole number 0 or above${range}`
         : spec.type === 'boolean' ? 'true | false'
-          : spec.type === 'line' ? 'a single printable line (no newline, tab or other control character)'
+          : spec.type === 'line' ? 'a single printable line (no newline, tab, control, zero-width or bidi format character)'
             : 'a string';
 };
 
@@ -2967,7 +2967,7 @@ function cmdSet(argv) {
       if (!schema) { errors.push(`unknown agent "${given}" — known agents: ${Object.keys(AGENT_SETTINGS_SCHEMA).join(', ')}`); continue; }
       if (!Object.hasOwn(schema, key)) { errors.push(`unknown key "${key}" for agent "${role}" — known keys: ${Object.keys(schema).join(', ')}`); continue; }
       const c = coerce(schema[key], raw);
-      if (!c.ok) { errors.push(`invalid value for agents.${role}.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(schema[key])}`); continue; }
+      if (!c.ok) { errors.push(`invalid value for agents.${role}.${key}: ${visible(JSON.stringify(raw))} — expected ${describeSpec(schema[key])}`); continue; }
       agentAssignments.push({ role, key, value: c.value });
       continue;
     }

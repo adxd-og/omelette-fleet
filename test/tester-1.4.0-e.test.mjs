@@ -260,3 +260,22 @@ test('codex_research without cwd: a fresh empty temp dir as -C and spawn cwd, go
 test('codex header: the exec-server claim says where it comes from', () => {
   assert.match(readFileSync(new URL('../units/codex/adapter.mjs', import.meta.url), 'utf8'), /even under --ignore-user-config \(upstream source, not measured here\)/);
 });
+
+// r3: `set` refuses an agents.*.model with an invisible character and shows the operator what it saw, escaped.
+import { spawnSync as spawnSyncR3 } from 'node:child_process';
+import { mkdtempSync as mkdtempR3 } from 'node:fs';
+import { tmpdir as tmpdirR3 } from 'node:os';
+import { join as joinR3, dirname as dirnameR3 } from 'node:path';
+import { fileURLToPath as fileURLToPathR3 } from 'node:url';
+test('set: a refused agents.*.model with a C1 control is echoed as its escape, never the byte', () => {
+  const root = dirnameR3(dirnameR3(fileURLToPathR3(import.meta.url)));
+  const home = mkdtempR3(joinR3(tmpdirR3(), 'omelette-set-r3-'));
+  const r = spawnSyncR3(process.execPath, [joinR3(root, 'bin', 'omelette-fleet.mjs'), 'set', 'agents.coder.model=op\u009bus'], {
+    encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home, OMELETTE_HOME: home, OMELETTE_UPDATE_CHECK: '0' },
+  });
+  const out = r.stdout + r.stderr;
+  assert.notEqual(r.status, 0, out);
+  assert.ok(!out.includes('\u009b'), `raw C1 in: ${JSON.stringify(out)}`);
+  assert.match(out, /\\u009b/);
+  assert.match(out, /zero-width or bidi format character/);
+});
