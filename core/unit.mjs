@@ -76,7 +76,7 @@
  * record, and an adapter helper shared with a spawn tool must not have to ask.
  */
 import { accessSync, constants, statSync } from 'node:fs';
-import { delimiter, isAbsolute, join, resolve as resolvePath } from 'node:path';
+import { delimiter, isAbsolute, resolve as resolvePath } from 'node:path';
 import { serve } from './jsonrpc.mjs';
 import { contractFor, unitInstructions } from './rules.mjs';
 import { runProcess } from './spawn.mjs';
@@ -179,7 +179,10 @@ export function locateBin(bin, env = process.env) {
   if (bin.includes('/') || bin.includes('\\') || process.platform === 'win32') return bin;
   for (const dir of String(env.PATH || '').split(delimiter)) {
     if (!dir || !isAbsolute(dir)) continue;
-    const p = join(dir, bin);
+    // Joined as the OS joins it, NOT with path.join: join() folds `..` away as
+    // text before any symlink is resolved, so an entry `/opt/link/../bin` would
+    // be looked up somewhere the OS itself would never look.
+    const p = dir.endsWith('/') ? `${dir}${bin}` : `${dir}/${bin}`;
     try {
       if (!statSync(p).isFile()) continue;
       accessSync(p, constants.X_OK);

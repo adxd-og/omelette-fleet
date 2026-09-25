@@ -14,7 +14,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { createUnitRuntime, locateBin } from '../core/unit.mjs';
@@ -140,4 +140,20 @@ test('locateBin: a bare name becomes the first executable FILE in an absolute PA
     assert.equal(locateBin('missing', env), null);
     assert.equal(locateBin('/abs/tool', env), '/abs/tool', 'a path is not searched for');
     assert.equal(locateBin('tool', {}), null, 'no PATH, nothing found');
+  });
+
+test('locateBin: a PATH entry is searched as the OS reads it — `..` after a symlink climbs from where the link POINTS, not from the link\'s own directory',
+  { skip: process.platform === 'win32' && 'POSIX symlinks and PATH search' }, (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'omelette-locate-dotdot-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    // root/a/link -> root/x/y, so the OS reads root/a/link/../bin as root/x/bin;
+    // spelled out textually it would be root/a/bin, which holds nothing.
+    mkdirSync(join(root, 'a'));
+    mkdirSync(join(root, 'x', 'y'), { recursive: true });
+    mkdirSync(join(root, 'x', 'bin'));
+    symlinkSync(join(root, 'x', 'y'), join(root, 'a', 'link'));
+    writeFileSync(join(root, 'x', 'bin', 'tool'), '#!/bin/sh\n');
+    chmodSync(join(root, 'x', 'bin', 'tool'), 0o755);
+    const entry = `${root}/a/link/../bin`;
+    assert.equal(locateBin('tool', { PATH: entry }), `${entry}/tool`);
   });
