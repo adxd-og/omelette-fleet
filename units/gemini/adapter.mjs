@@ -455,6 +455,8 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
   let degraded = false;
   if (!subs || !subs.length) { subs = [question]; degraded = true; }
 
+  // Indexed by sub-question, so the header names them in the order they were
+  // asked, not the order their failures landed (a retried gather fails later).
   const failedGathers = [];
   const findings = await Promise.all(subs.map(async (sq, i) => {
     if (cancelled()) return { text: `### Sub-question ${i + 1}: ${sq}\n\n_(cancelled before this sub-question ran)_`, partial: false };
@@ -470,7 +472,7 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
       return { text: `### Sub-question ${i + 1}: ${sq}\n\n${r.text}`, partial: !!r.partial };
     } catch (e) {
       // Brackets become parentheses: a sub-question can never close the marker early, nor open a fake one.
-      failedGathers.push(sq.slice(0, 80).replace(/[\[\]]/g, (c) => (c === '[' ? '(' : ')')));
+      failedGathers[i] = sq.slice(0, 80).replace(/[\[\]]/g, (c) => (c === '[' ? '(' : ')'));
       return { text: `### Sub-question ${i + 1}: ${sq}\n\n_(gather failed: ${(e && e.message) || e})_`, partial: false };
     }
   }));
@@ -530,7 +532,8 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
   // The headers go ABOVE the synthesis, so withPartial (which appends) is not
   // used here: the flag is set by hand, from the markers the head carries.
   const stagesMarked = partialCount ? partialMark('gemini', 'stages', { n: partialCount, m: stages.length }) : null;
-  const gathersMarked = failedGathers.length ? partialMark('gemini', 'gathers', { n: failedGathers.length, m: subs.length, subs: failedGathers.join('; ') }) : null;
+  const failedNamed = failedGathers.filter(Boolean);
+  const gathersMarked = failedNamed.length ? partialMark('gemini', 'gathers', { n: failedNamed.length, m: subs.length, subs: failedNamed.join('; ') }) : null;
   const head = [];
   if (degraded) head.push(DEGRADED_BANNER);
   if (stagesMarked) head.push(stagesMarked);
