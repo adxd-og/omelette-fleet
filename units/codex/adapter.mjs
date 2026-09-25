@@ -17,6 +17,13 @@
  *   `codex_image` in a throwaway temp directory (see IMAGE below); research
  *   runs are read-only regardless of the fleet config.
  *
+ * EMPTY RESEARCH DIRECTORY — codex_research with no `cwd` runs in a fresh
+ * empty temp directory created for the call (passed as -C and used as the
+ * spawn cwd) and removed after it, never in the MCP server's own cwd (the
+ * operator's project): the read-only sandbox bounds writes, not reads, and a
+ * run pointed at a project reads it. A caller's `cwd` opts the run into that
+ * directory. Review is unchanged: it needs the tree.
+ *
  * OUTPUT — `--json` emits JSONL and it is honest: the answer is the LAST
  * `item.completed` of type `agent_message`; a failure is a `turn.failed`
  * event plus exit 1 (verified: an unknown model gives HTTP 400 in
@@ -88,6 +95,11 @@
  * BILLING — `OPENAI_API_KEY` / `CODEX_API_KEY` are deleted from the child env:
  * with an API key present Codex bills the metered API instead of the ChatGPT
  * plan. Real money. The `--oss` local-provider path is never used.
+ * `CODEX_EXEC_SERVER_URL` is deleted too — a reach knob, not a billing one: it
+ * selects a remote exec server
+ * even under --ignore-user-config (upstream source, not measured here), so
+ * execution would happen somewhere the fleet did not choose.
+ * CODEX_HOME (where the login lives) passes.
  *
  * IMAGE — `codex_image` drives the CLI's BUILT-IN image generation tool
  * (gpt-image-2). Verified live (codex-cli 0.153.0, ChatGPT plan, 2026-09-03):
@@ -129,7 +141,7 @@
  * signed-out run fails with a login hint on stderr and nothing on stdout,
  * which the runtime turns into an actionable message (never a retry).
  */
-import { mkdtempSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
@@ -394,9 +406,10 @@ export default defineUnit({
   label: 'Codex',
   instructions: 'This unit: Codex via the codex CLI, inside a kernel-enforced read-only sandbox. The fleet\'s strongest code review and agentic terminal analysis (codex_code_review needs an absolute cwd), research that depends on running things (codex_research), image generation (codex_image). Reports real token usage per call. Route the final pre-release security audit here on gpt-6-astra.',
   bin: { env: 'CODEX_BIN', default: 'codex' },
-  billingRiskEnv: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
+  billingRiskEnv: ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL'],
   // CODEX_HOME (where auth lives, still read under --ignore-user-config) and the
-  // CLI's other knobs; CODEX_API_KEY matches the pattern and the scrub deletes it after.
+  // CLI's other knobs; CODEX_API_KEY and CODEX_EXEC_SERVER_URL match the pattern
+  // and the scrub deletes them after.
   envPassthrough: ['CODEX_*'],
   envMap: { model: 'CODEX_DEFAULT_MODEL', effort: 'CODEX_EFFORT', timeoutS: 'CODEX_TIMEOUT_S', webSearch: 'CODEX_WEB_SEARCH' },
   builtin: { timeoutS: 600, effort: 'high', webSearch: true, outputCap: CODEX_OUTPUT_CAP },
@@ -413,7 +426,7 @@ export default defineUnit({
         'codex CLI, ChatGPT subscription) WITH live web search. READ-ONLY at the ' +
         'OS-sandbox level — Codex can read and search but physically cannot write, ' +
         'regardless of fleet config or of `cwd`. The run happens where `cwd` ' +
-        'points when you give one, else in the MCP server\'s own process cwd. ' +
+        'points when you give one, else in a fresh empty directory. ' +
         'Returns the final answer as plain text and ' +
         'reports real token usage to the fleet status feed. ' + GUIDE,
       inputSchema: {
@@ -425,7 +438,8 @@ export default defineUnit({
             description:
               'Optional ABSOLUTE path to the directory the run happens in (must exist; ' +
               'passed as -C and used as the spawn cwd). The sandbox stays read-only ' +
-              'either way. Defaults to the MCP server\'s process cwd.',
+              'either way. Defaults to a fresh empty directory: pass a path only when ' +
+              'the run should see a workspace.',
           },
           effort: EFFORT_PROP,
           model: MODEL_PROP,
@@ -437,10 +451,17 @@ export default defineUnit({
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         const c = checkCwd(args.cwd);
         if (c.error) return { text: c.error, isError: true };
-        // Research is read-only no matter what the config says, and a directory to
-        // point at is not a reason to widen it: `-C` says WHERE the run happens,
-        // `-s read-only` says what it may do there.
-        return ctx.retry(() => runOnce(ctx, { prompt: RESEARCH_PREFIX + prompt, cwd: c.cwd, mode: 'read-only' }), { skipIf: isDeterministic });
+        // No `cwd`: a fresh empty directory for this call, never the MCP
+        // server's own cwd (the operator's project) — see the header.
+        const cwd = c.cwd || mkdtempSync(join(tmpdir(), 'omelette-codex-research-'));
+        try {
+          // Research is read-only no matter what the config says, and a directory to
+          // point at is not a reason to widen it: `-C` says WHERE the run happens,
+          // `-s read-only` says what it may do there.
+          return await ctx.retry(() => runOnce(ctx, { prompt: RESEARCH_PREFIX + prompt, cwd, mode: 'read-only' }), { skipIf: isDeterministic });
+        } finally {
+          if (!c.cwd) rmSync(cwd, { recursive: true, force: true });
+        }
       },
     },
     {
@@ -449,7 +470,8 @@ export default defineUnit({
       description:
         'Ask OpenAI Codex (local codex CLI) for a code analysis / review / second ' +
         'opinion over a directory. Codex reads files, greps, runs read-only shell ' +
-        'commands; no web search — the run reads the tree and reaches nothing outside it. ' +
+        'commands; no web search. The sandbox bounds writes, not reads: the run can read ' +
+        'what the operator\'s user can read, and nothing it reads can leave except in its answer. ' +
         'It runs inside an OS-level read-only sandbox and cannot ' +
         'edit unless the operator has opened the fleet write ceiling for codex AND ' +
         'set mode=workspace-write, in which case writes are kernel-scoped to `cwd`. ' +

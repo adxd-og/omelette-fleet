@@ -175,7 +175,7 @@ test('unit contract: four tools, catalog non-empty, efforts fixed, tools/list is
   // The API's own list (its rejection message names them); 'minimal' was dropped 2026-09-03.
   assert.deepEqual(catalog.effortEnum(), ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
   assert.ok(!catalog.isAllowedEffort('minimal'));
-  assert.deepEqual(unit.billingRiskEnv, ['OPENAI_API_KEY', 'CODEX_API_KEY']);
+  assert.deepEqual(unit.billingRiskEnv, ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL']);
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': true });
   // Codex's JSONL prints a line per item — every reasoning step, every
   // sandboxed command, every file read — and the answer is the LAST
@@ -526,7 +526,8 @@ test('codex_research: an absolute `cwd` is passed as -C and is where the run hap
   const env = { ...process.env, OMELETTE_HOME: dir, OMELETTE_ALLOW_WRITE: 'codex', CODEX_BIN: process.execPath };
   const rt = wrapCodex(env, fake);
   assert.equal((await rt.callTool('codex_research', { prompt: 'q', cwd: where })).text, `CWD ${realpathSync(where)} C=${where} SANDBOX=read-only`);
-  assert.equal((await rt.callTool('codex_research', { prompt: 'q' })).text, `CWD ${realpathSync(process.cwd())} C=none SANDBOX=read-only`);
+  // Omitted (1.4.0 round E): a fresh empty temp dir, passed as -C — never the server's own cwd.
+  assert.match((await rt.callTool('codex_research', { prompt: 'q' })).text, /^CWD \S*omelette-codex-research-\S* C=\S*omelette-codex-research-\S* SANDBOX=read-only$/);
   const rel = await rt.callTool('codex_research', { prompt: 'q', cwd: 'relative/path' });
   assert.equal(rel.isError, true);
   assert.match(rel.text, /"cwd" must be an absolute path \(got "relative\/path"\)/);
@@ -698,6 +699,6 @@ test('the review prompt says it has no web search; the research prompt says it h
 
 test('codex_code_review description says it has no web search', () => {
   const d = unit.tools.find((t) => t.name === 'codex_code_review').description;
-  assert.match(d, /runs read-only shell commands; no web search — the run reads the tree and reaches nothing outside it/);
+  assert.match(d, /runs read-only shell commands; no web search\. The sandbox bounds writes, not reads/);
   assert.doesNotMatch(d, /and web search/);
 });
