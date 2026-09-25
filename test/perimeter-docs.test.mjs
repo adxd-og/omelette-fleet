@@ -11,7 +11,7 @@ test('SECURITY states the perimeter rule and the two Grok profiles', () => {
   assert.doesNotMatch(md, /no run reads local files and reaches the web at once/);
   assert.match(md, /a Codex review run reads inside a kernel sandbox and has no web/);
   assert.doesNotMatch(md, /the one run that holds local reads and the web at once/);
-  assert.match(md, /the runs that hold local reads and the web at once are `codex_research`, by design \(research that depends on running things\), and `gemini_research` under the opt-in agy rule set, by the operator's choice/);
+  assert.match(md, /the runs that hold local reads and the web at once are `codex_research`, by design \(research that depends on running things\), and `gemini_research` \(with `gemini_deep_research`\) under the opt-in agy rule set, by the operator's choice/);
   assert.match(md, /L1 {2}research: --tools web_search,web_fetch/);
   assert.match(md, /^ {4}review: {3}--tools read_file,grep,list_dir/m);
   assert.doesNotMatch(md, /--tools read_file,grep,list_dir,web_search,web_fetch/);

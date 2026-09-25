@@ -729,7 +729,7 @@ export default defineUnit({
         'This is a LONG call (commonly 3-10 minutes). QUOTA COST: one run is ~5 agy ' +
         'one-shots (decompose + up to 3 gathers + synthesize) — a modest multiplier; ' +
         'use deliberately rather than as the default research mode. ' +
-        'Every stage runs in a fresh empty directory; it reads no local files. ' +
+        'Every stage runs in a fresh empty directory; under the web-research agy rule set it reads no local files (under the opt-in read_file(*) set it can read what gemini_research can). ' +
         'Optionally choose a model with `model` (omit for the per-stage defaults). ' + GUIDE,
       inputSchema: {
         type: 'object',

@@ -234,7 +234,7 @@ test('gemini_deep_research: every stage runs in one per-call empty dir, gone aft
   assert.equal(new Set(cwds).size, 1, cwds.join('\n'));
   assert.match(cwds[0], /omelette-gemini-research-/);
   assert.ok(!existsSync(cwds[0]), `${cwds[0]} was not removed`);
-  assert.match(gemini.tools.find((t) => t.name === 'gemini_deep_research').description, /runs in a fresh empty directory; it reads no local files/);
+  assert.match(gemini.tools.find((t) => t.name === 'gemini_deep_research').description, /runs in a fresh empty directory; under the web-research agy rule set it reads no local files/);
 });
 
 test('codex_research without cwd: a fresh empty temp dir as -C and spawn cwd, gone after the call; with cwd: that dir', async () => {
