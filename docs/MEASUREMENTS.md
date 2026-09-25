@@ -21,6 +21,7 @@ What has actually been measured on this project, how each number was taken, and 
 | Does the guard's context estimate match the engine's? | [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) |
 | What did the handoff hooks do across every compaction the project has had? | [The handoff hooks over five compactions](#the-handoff-hooks-over-five-compactions) |
 | Which web mode does a Codex research run get when none is set? | [The Codex web default mode](#the-codex-web-default-mode) |
+| What outlives a killed unit server, per vendor CLI? | [Unit processes after the server is gone](#unit-processes-after-the-server-is-gone) |
 | How do I repeat these on my own sessions? | [How the numbers are taken](#how-the-numbers-are-taken) |
 | Which claims has nobody measured? | [Not measured yet](#not-measured-yet) |
 
@@ -288,6 +289,26 @@ Taken 2026-09-25 on codex-cli 0.156.1 with `gpt-6-astra`, one run per setting, o
 | `web_search="live"` | 2 (the same two) | the same |
 
 Measured 2026-09-25 on codex-cli 0.156.1: with no `web_search` setting, with `"cached"` and with `"live"`, a page-fetch prompt produced the same two `web_search` items (a query and an `open_page`) and the same answer marked `Crawled: today`; the default is indistinguishable from either on the exec output, and the only mode with an observable difference is `"disabled"` (zero items, 1.4.0).
+
+## Unit processes after the server is gone
+
+Measured 2026-09-25 on agy 1.2.11, grok 1.0.41 and codex-cli 0.157.0, before the 1.6.0 changes (the numbers this release's unit-timeout work answers). Two questions, four runs.
+
+**(a) The MCP server is killed from outside.** `omelette-fleet call <unit> <unit>_research '{"prompt":"<a long research prompt>"}' --timeout 15` — the client SIGKILLs the server at 15 s, below every unit's `timeoutS` — then `ps -eo pid,pgid,ppid,etime,stat,comm` every 12 s.
+
+| CLI | After the server died | Bound |
+|---|---|---|
+| agy | orphaned (ppid 1, its own process group), still running at 95 s, killed by hand | none — the server's hard-kill timer died with the server |
+| grok | orphaned, still running at 3 min 06 s (state S), killed by hand | none |
+| codex | orphaned, gone on its own between 12 s and 24 s | the closed stdout pipe: codex writes JSONL as it goes and exits on the broken pipe |
+
+**(b) A normal run ends.** `<unit>_research` on "Reply with exactly the word OK", the vendor child's process group sampled every second during the run and at 0, 2 and 5 s after the call returned: one member (the child itself) during the run, none after, for all three CLIs. Nothing to reap at the end of a run.
+
+**(c), (d) Codex with tool use.** `codex_code_review` on a prompt that runs shell commands: codex starts each command's `/bin/zsh` and its `codex-code-mode-host` **in their own process groups** (`setsid`), outside the group `core/spawn.mjs` kills. With the server killed while codex was *writing* (c), codex and its helper were gone within 5 s. With the server killed while codex was *waiting on* `sleep 120` (d), codex, the shell, the `sleep` and the helper were all alive 30 s later and were killed by hand: codex lives until its current command ends, and that command is out of reach of a group kill on any path.
+
+**What 1.6.0 does with this.** `call --timeout` cancels the request before it signals the server, and the server meets SIGTERM/SIGHUP by killing its live process groups — the (a) case for a server that is *told* to stop. What remains, and SECURITY says so: a SIGKILLed server (agy and grok run to their own end; codex until its current command ends), and a shell command Codex is running, which sits in its own group. No reaper at the end of a run, per (b).
+
+**How it was taken.** Four zsh scripts (in the session's scratchpad, not the repository): (a) the `call` above, then `ps` filtered to `agy|grok|codex` with `ppid == 1` or an `etime` under a minute, five samples; (b) the call in the background, `pgrep -P` from the call's pid to the server to the vendor child, `ps -o pgid=` on it, then `ps -eo pid,pgid,comm | awk '$2==pgid'` every second and after the return; (c) and (d) the same walk on `codex_code_review`, listing every process whose pid or ppid is the vendor child's, every second for the call's length and every 5 s for 40 s after.
 
 ## How the numbers are taken
 
