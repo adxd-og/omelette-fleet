@@ -240,20 +240,18 @@ export function modelEnum() {
 export const GUIDE =
   'Pick by task, not by name. ' +
   'Gemini 3.8 Flash (High)=the FLEET DEFAULT for all research/agentic delegation ' +
-  '(GA 2026-09-02) — same-harness gains over 3.7 Flash (DeepSWE v1.1 73.8 vs 65.3, ' +
-  'Terminal-Bench 2.1 89.4 vs 85.8, OSWorld 2.0 59.0 vs 47.9, LAB-Bench2 86.2 vs 82.1, ' +
-  'HLE-Verified 54.9 vs 53.6), and — the part that matters most for this fleet — a significant ' +
-  'Gray Swan prompt-injection robustness leap, since every unit here reads untrusted web content. ' +
-  'Price per token is unchanged from 3.7, but 3.8 deliberately spends MORE thinking tokens, so ' +
-  'drop the effort level instead of paying High for routine work: ' +
+  '(DeepSWE v1.1 73.8, Terminal-Bench 2.1 89.4, OSWorld 2.0 59.0, LAB-Bench2 86.2, ' +
+  'HLE-Verified 54.9) with strong Gray Swan prompt-injection robustness, which matters here ' +
+  'because every unit reads untrusted web content. It spends many thinking tokens at High, so ' +
+  'drop the effort level for routine work: ' +
   '3.8 Flash (Low)=quick facts, lookups & short summaries (fastest, cheapest — ' +
   '$0.75/$3.75 per Mtok in/out through 2026-12-31, then $1.50/$7.50); ' +
   '3.8 Flash (Medium)=when High-effort latency or token overhead is unwanted (the fleet default ' +
   'is High); ' +
   'Gemini 3.1 Pro (Low)=the same two niches at balanced cost, on the 2M context window; ' +
   'Pro (High)=ONLY for >1M-token inputs, formal/scientific reasoning where Flash has no numbers ' +
-  '(GPQA 94.3, ARC-AGI-2 77.1), and as the tie-breaker when Grok and Flash disagree — NOT a code ' +
-  'or agentic model any more (3.8 Flash 68.1 vs 46.2 coding, 67.6 vs 40.1 agentic); ' +
+  '(GPQA 94.3, ARC-AGI-2 77.1), and as the tie-breaker when Grok and Flash disagree — not a code ' +
+  'or agentic model (3.8 Flash 68.1 vs 46.2 coding, 67.6 vs 40.1 agentic); ' +
   'Claude Opus 4.6 (Thinking)=heavy-reasoning delegation on Antigravity\'s SEPARATE Claude quota ' +
   'bucket — deep analysis and Opus-grade second opinions without touching the Gemini pool or the ' +
   'native session; the bucket is restrictive, spend it on hard problems, and prefer Gemini for ' +
