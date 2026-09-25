@@ -63,7 +63,7 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 |---|---|
 | Grounded web research, fact synthesis | Gemini `gemini_research` |
 | Multi-source deep research (~5 CLI runs, minutes) | Gemini `gemini_deep_research`, deliberately |
-| Reading local images / PDFs / screenshots | Gemini `gemini_research`, absolute path, "view the file directly, no terminal commands" |
+| Reading local images / PDFs / screenshots | Gemini `gemini_research`, absolute path, "view the file directly, no terminal commands", needs the opt-in agy rule set (SECURITY, Recommended agy allow-rules) |
 | Cheap second opinion, mechanical review, volume sweeps | Grok `grok_research` / `grok_code_review`, then verify |
 | Strongest code review, sandboxed terminal analysis | Codex `codex_code_review`, absolute `cwd` |
 | Research that depends on running things | Codex `codex_research` |

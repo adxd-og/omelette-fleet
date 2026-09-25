@@ -25,7 +25,7 @@ The short version: units read, the manager writes. Everything below explains wha
 
 ## Threat model
 
-**Prompt injection through content a unit ingests.** Every unit is pointed at untrusted material by design — fetched web pages during research, and repository contents during review. A page or a file can contain instructions aimed at the model. The mitigation is not detection; it is that a unit has nothing to act with, because no run reads local files and reaches the web at once: a Grok research run has the web and no local files, a Grok review run has local files and no web, Codex reads inside a kernel sandbox, and for Gemini the same holds only under the web-research rule set below ([Recommended agy allow-rules](#recommended-agy-allow-rules)). A compromised unit can return misleading *text*, and that text is what you have to distrust — never execute instructions a unit reports finding, and verify facts it brings back from the web.
+**Prompt injection through content a unit ingests.** Every unit is pointed at untrusted material by design — fetched web pages during research, and repository contents during review. A page or a file can contain instructions aimed at the model. The mitigation is not detection; it is that a unit has as little as possible to act with: a Grok research run has the web and no local files, a Grok review run has local files and no web, a Codex review run reads inside a kernel sandbox and has no web, and for Gemini the same holds under the web-research rule set below ([Recommended agy allow-rules](#recommended-agy-allow-rules)); the one run that holds local reads and the web at once is `codex_research`, by design (research that depends on running things), so what it reads can leave in a `web_search` query — route it only at material you would paste into a search box. A compromised unit can return misleading *text*, and that text is what you have to distrust — never execute instructions a unit reports finding, and verify facts it brings back from the web.
 
 **Secrets reachable by a model that can run shell commands.** A vendor CLI is not a library call: it runs a model that reads files and executes read-only commands. Anything in that process's environment is therefore readable by the model and can end up in an answer, in a log, or in a web request. Inheriting the MCP server's environment would hand a review run your `GH_TOKEN`, your cloud credentials and everything else exported in your shell. Hence the env allowlist below.
 
@@ -153,7 +153,7 @@ These are not equivalent mechanisms. Be honest with yourself about which unit yo
 
 ### Codex — one real layer, plus isolation
 
-`codex exec -s read-only` is an operating-system sandbox, not a policy. `codex_research` is spawned read-only **regardless of the fleet config**, because a research call has no directory to scope a write to. `codex_code_review` uses `workspace-write` only when the ceiling is open, the config sets the mode, *and* the caller passed an existing absolute `cwd`; without a `cwd` it logs and runs read-only. `--dangerously-bypass-approvals-and-sandbox` and `--dangerously-bypass-hook-trust` are never passed. Verified live on codex-cli 0.146.0 (2026-09-02) and re-checked on 0.153.0 (2026-09-03): the run header prints `approval: never` / `sandbox: read-only`, and `codex exec` never prompts.
+`codex exec -s read-only` is an operating-system sandbox, not a policy. It bounds writes and shell network, not file reads and not the hosted `web_search` tool, so `codex_code_review` always runs with `tools.web_search=false`, whatever `webSearch` says, and `codex_research` keeps web search beside its sandboxed reads (the residual named in the [threat model](#threat-model)). `codex_research` is spawned read-only **regardless of the fleet config**, because a research call has no directory to scope a write to. `codex_code_review` uses `workspace-write` only when the ceiling is open, the config sets the mode, *and* the caller passed an existing absolute `cwd`; without a `cwd` it logs and runs read-only. `--dangerously-bypass-approvals-and-sandbox` and `--dangerously-bypass-hook-trust` are never passed. Verified live on codex-cli 0.146.0 (2026-09-02) and re-checked on 0.153.0 (2026-09-03): the run header prints `approval: never` / `sandbox: read-only`, and `codex exec` never prompts.
 
 **Isolation.** Every spawn also passes `--ignore-user-config --ignore-rules`. Without them a fleet run inherits the whole of your `~/.codex/config.toml` — MCP servers, plugins, hooks, the `notify` command — and the filesystem sandbox does not bound a configured MCP tool, so a "read-only" research call could reach an MCP server that mutates an external system. `--ignore-rules` drops user and project execpolicy `.rules` files for the same reason. Auth is unaffected: it resolves through `CODEX_HOME`, verified live with ChatGPT auth on 0.153.0. `-c notify=[]` stays as a belt-and-braces silencer in case a future version reads `notify` from somewhere else.
 
@@ -383,14 +383,13 @@ A prompt-injected run under this set can send only what is in its prompt and wha
       "read_file(~/.aws/credentials)",
       "read_file(~/.codex/auth.json)",
       "read_file(~/.grok/credentials.json)",
-      "read_file(~/.gemini/antigravity-cli/oauth_creds.json)",
-      "read_file(~/.omelette/results)"
+      "read_file(~/.gemini/antigravity-cli/oauth_creds.json)"
     ]
   }
 }
 ```
 
-The list is illustrative: the rule is every file that authenticates something, plus the fleet's own result spool. Check the real names your CLIs write (`ls -a ~/.grok ~/.gemini/antigravity-cli ~/.codex`) and list those.
+The list is illustrative: the rule is every file that authenticates something. The fleet's result spool (`<home>/results/<unit>/*.md`, one file per answer) cannot be named by an exact-path deny, so under the opt-in set past unit answers are readable by an injected page — one more reason the opt-in set is opt-in. Check the real names your CLIs write (`ls -a ~/.grok ~/.gemini/antigravity-cli ~/.codex`) and list those.
 
 Do **not** reach for `--dangerously-skip-permissions` to fix a headless auto-deny: it auto-approves every tool and removes the only permission layer this unit has.
 
