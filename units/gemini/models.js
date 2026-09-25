@@ -1,20 +1,7 @@
 /**
- * ORION :: gemini/gemini-models.js
- * SINGLE SOURCE OF TRUTH for the agy (Antigravity CLI) model catalog + the
- * agy-spawn ALLOWLIST + a compact "which model for what" cheat-sheet.
- *
- * Consumed by three places in-tree so the picker, the allowlist, and the MCP
- * guidance can never drift:
- *   1. server/usage/models.js  — the /api/models picker (re-exports the ids/labels).
- *   2. server/routes/providers.js — server-side allowlist gate BEFORE spawning agy.
- *   3. server/mcp/orion-gemini-mcp.mjs — enriches the tool descriptions, the
- *      `model` enum, and the new `gemini_models` tool. The .mjs imports this as
- *      '../gemini/gemini-models.js' (module-relative — resolves from the .mjs
- *      file URL, NOT the spawning agent's cwd, which is arbitrary).
- * A FOURTH consumer lives outside the repo: the omelette-fleet package keeps its
- * own COPY of this file as units/gemini/models.js so the Gemini unit runs without
- * ORION. Propagate every edit with `npm run sync:catalog` — test/gemini-catalog-
- * sync.test.mjs fails `npm test` on drift.
+ * omelette-fleet :: units/gemini/models.js — the Gemini catalog: model ids and
+ * labels, the agy-spawn allowlist and the routing guide the unit appends to its
+ * tool descriptions. Edited here; nothing syncs it.
  *
  * The ids are the display-name form agy lists under "Available models" when it
  * rejects an unknown --model, written verbatim as `agy --model "<id>"`. Spawn
