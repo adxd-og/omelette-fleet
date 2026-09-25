@@ -174,7 +174,7 @@ The one exception, and it runs the other way: **the tester may fix or drop its O
 Delegation multiplies reading: four planners re-read the same modules, and a report in free prose has to be taken on faith or re-derived. The answer is a funnel — explore once, pass compact evidence up — with one guard against the funnel's own failure: a digest that cannot be checked turns one agent's mistake into everyone's premise. So evidence is written as **pointer lines**, and a command verifies them.
 
 ```
-- `core/unit.mjs:477` · `const finish = (text, isError` · finish() closes the status entry and spools the record
+- `core/unit.mjs:491` · `const finish = (text, isError` · finish() closes the status entry and spools the record
 ```
 
 `path:line` — relative to the project root, never absolute, one line and not a range · a **verbatim fragment** of that line in backticks — at least 8 characters, no backtick inside it · the claim, which is not optional. Quote, never paraphrase: paraphrase is where mistakes enter. A line that opens like a pointer and does not parse is `malformed`, and a fragment too short to prove anything is `weak` — both fail, because evidence that silently stops counting is the failure this shape exists to prevent. Everything else is prose and is ignored.
