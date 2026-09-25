@@ -82,14 +82,18 @@ for (const merge of POLICIES) {
     const payAt = lines.indexOf(PAY_LINE);
     assert.notEqual(plannerAt, -1, 'the planner line is present, unchanged');
     assert.notEqual(payAt, -1, 'the pay-for-judgement line is present, unchanged');
-    assert.equal(payAt, plannerAt + 2, 'exactly one line — the coder-handed line — sits between them');
-    const coderAt = plannerAt + 1;
-    assert.ok(lines[coderAt].startsWith(CODER_1_2_0), 'that one line is the coder-handed line');
+    // Found by content, ordered — never by position, which any added line moves.
+    const coderAt = lines.findIndex((l) => l.startsWith(CODER_1_2_0));
+    assert.notEqual(coderAt, -1, 'the coder-handed line is present');
+    assert.equal(lines.filter((l) => l.startsWith(CODER_1_2_0)).length, 1, 'and only once');
+    assert.ok(plannerAt < coderAt && coderAt < payAt, `planner (${plannerAt}) < coder-handed (${coderAt}) < pay (${payAt})`);
   });
 
-  test(`rules line 9 — "Opus-class, xhigh — the shipped omelette-coder" — is unchanged (${merge})`, () => {
+  test(`the "Opus-class, xhigh — the shipped omelette-coder" line is unchanged (${merge})`, () => {
     const lines = rendered(merge).split('\n');
-    assert.equal(lines[8], CODE_CHANGES_LINE, 'line 9 (1-indexed) is the untouched "Code changes go to..." line');
+    const codeAt = lines.indexOf(CODE_CHANGES_LINE);
+    assert.notEqual(codeAt, -1, 'the untouched "Code changes go to..." line is present');
+    assert.ok(codeAt < lines.indexOf(PLANNER_LINE), 'and it comes before the planner line');
   });
 
   test(`the rendered rules file stays within its ceiling — 14 030 characters, never an exact pin (${merge})`, () => {
