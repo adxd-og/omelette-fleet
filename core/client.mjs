@@ -86,8 +86,9 @@ export function callUnitServer({
     });
 
     timer = setTimeout(() => {
-      // Cancel first: the server's own cancel path kills the vendor process
-      // group. Then SIGTERM (the server meets it since 1.6.0), then SIGKILL.
+      // Cancel first: under `cancel: kill` the server kills the vendor group at
+      // once; under the default `cancel: finish` the SIGTERM below does (the
+      // server meets it since 1.6.0). Then SIGKILL for a server that ignores both.
       send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 3, reason: `client timeout after ${seconds}s` } });
       const term = setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* gone */ } }, 2000);
       const kill = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 3000);
