@@ -11,7 +11,18 @@
  * (id, progress token, abort signal, notify) and drops the response of a
  * request the client cancelled. `serve` drains that table before it exits.
  */
-export const DEFAULT_PROTOCOL = '2024-11-05';
+/**
+ * The MCP revisions this server implements, newest first. Handshake era only
+ * (`initialize`): 2025-03-26 is left out because it made receiving JSON-RPC
+ * batches mandatory and this handler does not; 2026-07-28 is a different
+ * protocol (no initialize, per-request _meta version, server/discover) and is
+ * not claimed. Negotiation rule (2025-11-25 lifecycle): a listed version is
+ * answered with itself, anything else with the newest listed. Measured
+ * 2026-09-25: Claude Code 2.1.282 asks 2025-11-25 (docs/MEASUREMENTS.md).
+ */
+export const SUPPORTED_PROTOCOLS = Object.freeze(['2025-11-25', '2025-06-18', '2024-11-05']);
+export const DEFAULT_PROTOCOL = SUPPORTED_PROTOCOLS[0];
+export const negotiateProtocol = (requested) => (SUPPORTED_PROTOCOLS.includes(requested) ? requested : DEFAULT_PROTOCOL);
 
 /**
  * SPIKE 1a (2026-09-08), kept as a debugging aid: MCP progress can only be sent
@@ -68,7 +79,7 @@ export function createHandler({
           jsonrpc: '2.0',
           id,
           result: {
-            protocolVersion: (params && params.protocolVersion) || DEFAULT_PROTOCOL,
+            protocolVersion: negotiateProtocol(params && params.protocolVersion),
             capabilities: { tools: {} },
             serverInfo,
             ...(ins ? { instructions: ins } : {}),

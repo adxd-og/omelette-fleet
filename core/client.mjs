@@ -26,7 +26,7 @@
  * callers map it to their own exit code.
  */
 import { spawn } from 'node:child_process';
-import { createLineSplitter } from './jsonrpc.mjs';
+import { createLineSplitter, DEFAULT_PROTOCOL } from './jsonrpc.mjs';
 
 /**
  * Node's timers are int32 milliseconds: anything past ~24.8 days silently
@@ -139,7 +139,7 @@ export function callUnitServer({
 
     send({
       jsonrpc: '2.0', id: 1, method: 'initialize',
-      params: { protocolVersion: '2024-11-05', clientInfo: { name: 'omelette-fleet', version: '0' } },
+      params: { protocolVersion: DEFAULT_PROTOCOL, clientInfo: { name: 'omelette-fleet', version: '0' } },
     });
   });
 }

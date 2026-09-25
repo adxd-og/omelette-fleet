@@ -17,9 +17,11 @@ const handler = createHandler({
   },
 });
 
-test('initialize echoes the client protocol version and advertises tools', async () => {
+test('initialize answers a supported version with itself and an unknown one with the default', async () => {
   const r = await handler({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-01-01' } });
-  assert.equal(r.result.protocolVersion, '2025-01-01');
+  assert.equal(r.result.protocolVersion, DEFAULT_PROTOCOL);
+  const old = await handler({ jsonrpc: '2.0', id: 3, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
+  assert.equal(old.result.protocolVersion, '2024-11-05');
   assert.deepEqual(r.result.capabilities, { tools: {} });
   assert.equal(r.result.serverInfo.name, 'test');
   const d = await handler({ jsonrpc: '2.0', id: 2, method: 'initialize', params: {} });

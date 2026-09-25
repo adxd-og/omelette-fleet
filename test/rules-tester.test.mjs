@@ -61,7 +61,7 @@ test('initialize still reports serverInfo, capabilities and protocolVersion alon
     instructions: unitInstructions({ name: 'fake', instructions: 'This unit: Fake.' }, { mode: 'full' }),
   });
   const r = await handler({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-01-01' } });
-  assert.equal(r.result.protocolVersion, '2025-01-01');
+  assert.equal(r.result.protocolVersion, '2025-11-25');
   assert.deepEqual(r.result.capabilities, { tools: {} });
   assert.deepEqual(r.result.serverInfo, { name: 'omelette-fake', version: '1.2.3' });
   assert.match(r.result.instructions, /^omelette-fleet: this server is one read-only unit/);
