@@ -39,6 +39,14 @@
  * empty strings are NOT synthesized, because "set but empty" means something
  * different from "unset" to several CLIs.
  *
+ * PATH GOES OVER WITH ITS ABSOLUTE ENTRIES ONLY, in their order. A vendor CLI
+ * that is a script (`#!/usr/bin/env node`) has its interpreter looked up in the
+ * CHILD's PATH, from the directory the call runs in — where an empty, `.` or
+ * relative entry finds whatever a caller planted (the premise of S17, which
+ * core/unit.mjs's locateBin answers for the CLI itself). With no absolute entry
+ * left the child gets no PATH at all, never an empty one: an empty PATH is
+ * itself a search of the current directory.
+ *
  * `inheritEnv: true` OPTS OUT of all of the above: the child gets the parent
  * environment untouched — no allowlist, no passthrough, no billing scrub (only
  * `extraEnv` still applies on top). FOR THE OPERATOR'S OWN TOOLS ONLY — that
@@ -49,6 +57,7 @@
  * one in `codex exec`.
  */
 import { spawn } from 'node:child_process';
+import { delimiter, isAbsolute } from 'node:path';
 
 export const OUTPUT_CAP = 400000;
 export const STDERR_CAP = 8192;
@@ -89,6 +98,11 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
       if (out[name] !== undefined) continue;
       if (patterns.some((p) => matches(p, name))) out[name] = env[name];
     }
+  }
+  if (out.PATH !== undefined) {
+    const absolute = String(out.PATH).split(delimiter).filter((dir) => dir && isAbsolute(dir));
+    if (absolute.length) out.PATH = absolute.join(delimiter);
+    else delete out.PATH;
   }
   for (const name of scrub) delete out[name];
   return extra ? { ...out, ...extra } : out;

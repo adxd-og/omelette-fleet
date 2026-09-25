@@ -277,3 +277,15 @@ test('a signal that is already aborted kills at once; one that never fires chang
   const plain = await runProcess({ bin: node, args: ['-e', 'process.stdout.write("x")'] });
   assert.equal(plain.cancelled, false);
 });
+
+test('buildChildEnv: PATH reaches the child with its ABSOLUTE entries only, in order — an empty or relative one would be searched in the call\'s cwd',
+  { skip: process.platform === 'win32' && 'POSIX PATH' }, () => {
+    // `#!/usr/bin/env node` in a vendor script searches the child's PATH from
+    // the directory the call runs in: `.`, `bin` and an empty entry all mean
+    // somewhere in that directory (S17's premise).
+    assert.equal(buildChildEnv({ env: { PATH: '.:/abs:' } }).PATH, '/abs');
+    assert.equal(buildChildEnv({ env: { PATH: '/a::bin:/b:./x' } }).PATH, '/a:/b');
+    // Nothing absolute left: no PATH at all, never an empty one (an empty PATH
+    // is itself a search of the cwd).
+    assert.equal('PATH' in buildChildEnv({ env: { PATH: '.:rel' } }), false);
+  });
