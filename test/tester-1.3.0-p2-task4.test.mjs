@@ -50,7 +50,7 @@ const CODER_LINE = "- **Code changes go to a strong coding sub-agent** (Opus-cla
 const DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus, `effort: xhigh`), **`omelette-coder-medium`** (Opus, `effort: medium`), **`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus, `effort: xhigh`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
 
 /** "Briefing a unit": the closing paragraph, whose last clause is the guard sentence naming every shipped role. */
-const GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard — it contains every shipped role — `omelette-coder`, `omelette-coder-medium`, `omelette-tester` and `omelette-reviewer` — and names the one it caught — and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it — omelette-fleet never edits your settings files itself.";
+const GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it, and omelette-fleet never edits your settings files itself. The guard covers `omelette-coder`, `omelette-coder-medium`, `omelette-tester` and `omelette-reviewer` and names the one it caught.";
 
 /**
  * Every heading of the rendered file, in order, taken from the file itself

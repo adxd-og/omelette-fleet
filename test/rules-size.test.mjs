@@ -78,10 +78,7 @@ const SCOUT = '- **One scout map per release, never to a first review.** Before 
  */
 const DUTIES = [
   '**After a compaction, re-read the ledger before doing anything else.**',
-  '**A ledger kept in another repository gets neither the stamp nor the print.**',
-  'The handoff block is still yours to write.',
-  'A manual `/compact` below the threshold gets no reminder.',
-  'The discipline is unchanged: handoffs at every natural pause, and the hook is the net under it.',
+  "The hooks reach only a ledger in this session's own repository and stay silent on some compactions, so the handoff blocks above are yours to write; the hook is a net under that practice, not a replacement for it.",
 ];
 
 // 1.3.0 P1: 13 100 -> 13 510 — the measured render with the reviewer's rules
@@ -215,7 +212,7 @@ for (const merge of ['session', 'pr']) {
 const P1_BRANCH_LINE_HEAD = "- **Branch per feature; main is gated.** Work on a `feat/<name>` branch. The session commits each task on that branch once its review passes; no shipped sub-agent role commits — the coder reports its diff, the tester reports what it ran, the reviewer reports its findings, and the guard hook refuses any of their `git commit`. ";
 const P1_NESTING_LINE = "- Sub-agents may nest up to three levels deep, but every shipped definition carries `disallowedTools: Agent`: they cannot spawn anything, so the **orchestrator** spawns the tester, never the coder.";
 // 1.3.0 P2: the fourth name, and only that (the session's ruling).
-const P1_GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard — it contains every shipped role — `omelette-coder`, `omelette-coder-medium`, `omelette-tester` and `omelette-reviewer` — and names the one it caught — and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it — omelette-fleet never edits your settings files itself.";
+const P1_GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it, and omelette-fleet never edits your settings files itself. The guard covers `omelette-coder`, `omelette-coder-medium`, `omelette-tester` and `omelette-reviewer` and names the one it caught.";
 
 for (const merge of ['session', 'pr']) {
   test(`the three lines that counted two roles name every shipped role, each whole (${merge})`, () => {

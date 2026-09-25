@@ -36,10 +36,7 @@ const MECHANICS = ['40 lines', '4 KB', '12 KB', '8 KB', 'PreCompact', 'SessionSt
 
 const DUTIES = [
   '**After a compaction, re-read the ledger before doing anything else.**',
-  '**A ledger kept in another repository gets neither the stamp nor the print.**',
-  'The handoff block is still yours to write.',
-  'A manual `/compact` below the threshold gets no reminder.',
-  'The discipline is unchanged: handoffs at every natural pause, and the hook is the net under it.',
+  "The hooks reach only a ledger in this session's own repository and stay silent on some compactions, so the handoff blocks above are yours to write; the hook is a net under that practice, not a replacement for it.",
 ];
 
 /** The wiring sentence text the plan's ruling 2 gives verbatim. */
