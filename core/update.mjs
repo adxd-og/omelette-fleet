@@ -37,6 +37,14 @@ export const CHECK_FILE = 'update-check.json';
 export const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_TIMEOUT_MS = 2500;
 
+/**
+ * What a `latest` must look like to be believed — from GitHub or from the
+ * cache file. Anything else is unknown: doctor prints `latest` as it is, and a
+ * cache or a tag carrying `\u001b[2K` would otherwise reach the terminal
+ * (1.4.0 D-2).
+ */
+export const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?$/;
+
 /** This file lives in <root>/core, so the package root is one level up. */
 const OWN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -126,7 +134,7 @@ export async function checkLatest({
     const body = await withDeadline(res.json(), controller.signal, timeoutMs);
     const tag = body && typeof body === 'object' ? (body.tag_name || body.name) : null;
     const latest = String(tag == null ? '' : tag).trim().replace(/^v/i, '');
-    if (!/^\d+\.\d+\.\d+/.test(latest)) throw new Error(`update check: unusable release tag ${JSON.stringify(tag == null ? null : String(tag))}`);
+    if (!VERSION_RE.test(latest)) throw new Error(`update check: unusable release tag ${JSON.stringify(tag == null ? null : String(tag))}`);
     const url = body && typeof body.html_url === 'string' && body.html_url ? body.html_url : RELEASES_PAGE;
     return { current, latest, behind: compareSemver(current, latest) < 0, url };
   } finally {
@@ -141,7 +149,9 @@ function readCache(file) {
     const checkedAt = Number(raw.checkedAt);
     const latest = typeof raw.latest === 'string' ? raw.latest.trim() : '';
     if (!Number.isFinite(checkedAt) || !latest) return null;
-    return { checkedAt, latest, url: typeof raw.url === 'string' && raw.url ? raw.url : RELEASES_PAGE };
+    // A fresh cache whose `latest` is not a version stays a cache — no request
+    // until it expires — but its answer is unknown, never the string.
+    return { checkedAt, latest: VERSION_RE.test(latest) ? latest : null, url: typeof raw.url === 'string' && raw.url ? raw.url : RELEASES_PAGE };
   } catch {
     return null; // absent, unreadable or garbage — all mean "no cache"
   }
@@ -187,7 +197,7 @@ export async function cachedCheck({
       return {
         current,
         latest: cached.latest,
-        behind: compareSemver(current, cached.latest) < 0,
+        behind: cached.latest ? compareSemver(current, cached.latest) < 0 : false,
         url: cached.url,
         cached: true,
       };

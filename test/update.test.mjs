@@ -231,3 +231,24 @@ test('announceUpdate is skipped ENTIRELY when the check is switched off', async 
   assert.equal(f2.calls.length, 0);
   assert.deepEqual(log.lines, []);
 });
+
+test('a cached latest that is not a version is unknown, never printed; a version is accepted', async () => {
+  const dir = home();
+  writeFileSync(cacheFile(dir), JSON.stringify({ checkedAt: 1000, latest: '9.9.9\u001b[2K', url: 'https://example.test' }));
+  const f = fakeFetch();
+  const r = await cachedCheck({ home: dir, current: '0.1.0', fetchImpl: f, now: 2000 });
+  assert.equal(r.latest, null);
+  assert.equal(r.behind, false);
+  assert.equal(f.calls.length, 0, 'a fresh cache is still a cache — no request');
+
+  writeFileSync(cacheFile(dir), JSON.stringify({ checkedAt: 1000, latest: '1.4.1', url: 'https://example.test' }));
+  const ok = await cachedCheck({ home: dir, current: '0.1.0', fetchImpl: fakeFetch(), now: 2000 });
+  assert.equal(ok.latest, '1.4.1');
+  assert.equal(ok.behind, true);
+});
+
+test('a release tag with anything after the version is unusable', async () => {
+  await assert.rejects(checkLatest({ current: '0.1.0', fetchImpl: fakeFetch({ tag_name: 'v9.9.9\u001b[2K' }) }), /unusable release tag/);
+  const r = await checkLatest({ current: '0.1.0', fetchImpl: fakeFetch({ tag_name: 'v1.4.1-rc.1' }) });
+  assert.equal(r.latest, '1.4.1-rc.1');
+});
