@@ -57,8 +57,8 @@ test('`rules --help` names four sub-agent definitions and the reviewer by name, 
   assert.equal(help.code, 0, help.err);
   assert.match(help.out, /^\s*--agents also writes four sub-agent definitions \(omelette-coder:\s*$/m);
   assert.match(help.out, /^\s*Opus xhigh; omelette-coder-medium: Opus medium; omelette-tester:\s*$/m);
-  assert.match(help.out, /^\s*Sonnet xhigh; omelette-reviewer: Opus xhigh; all four\s*$/m);
-  assert.match(help.out, /^\s*disallowedTools: Agent\) into \.claude\/agents, where their effort is\s*$/m);
+  assert.match(help.out, /^\s*Sonnet xhigh; omelette-reviewer: Opus xhigh; all four disallow\s*$/m);
+  assert.match(help.out, /^\s*Agent, the reviewer also Edit and NotebookEdit\) into \.claude\/agents,\s*$/m);
 });
 
 test('`install --help` says --rules writes the four sub-agent definitions', () => {
