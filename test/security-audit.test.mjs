@@ -186,13 +186,13 @@ test('SECURITY says what the P0 refutations found true: proxy URLs pass as they 
 });
 
 // ── Task 3: the row, and the line SECURITY carries from it ───────────────────
-// Two runs, plain and brief: the plugin run needs the operator's own
-// `/claude-security` invocation, which has not happened, so its column reads
-// `not run` in every cell and stays out of the arithmetic (1.3.0 ledger ruling).
+// Three runs: plain and brief over d7180b2, and the plugin, which the operator
+// invoked on 2026-09-25 over 3b01e32; its four defects exist at d7180b2 too, so
+// its column counts and its overlap with the Codex runs is read (ledger 2026-09-25).
 
 const ROW = '## Security audit: plain, brief and plugin over one revision';
 const ROW_ANCHOR = 'security-audit-plain-brief-and-plugin-over-one-revision';
-const SUMMARY = /^\*\*In one line\.\*\* (Over `d7180b2`: plain (\d+) found, (\d+) verified; brief (\d+) found, (\d+) verified; plugin not run; (\d+) verified by the brief only\.)$/;
+const SUMMARY = /^\*\*In one line\.\*\* (Over `d7180b2`: plain (\d+) found, (\d+) verified; brief (\d+) found, (\d+) verified; plugin \(over `3b01e32`\) (\d+) found, (\d+) verified; (\d+) verified by the brief only, (\d+) by the plugin only\.)$/;
 const COUNTS = ['Calls', 'Found', 'Verified', 'Refuted'];
 
 /** The row's table, by run: one column per run, one line per measure. */
@@ -212,10 +212,6 @@ function runs(row) {
   for (const [run, at] of Object.entries(index)) {
     const model = byMeasure.Model[at];
     const counts = COUNTS.map((m) => byMeasure[m][at]);
-    if (run === 'Plugin') {
-      out[run] = { model, counts };
-      continue;
-    }
     for (const n of counts) assert.match(n, /^\d+$/, `${run}: ${n} is a count`);
     const [calls, found, verified, refuted] = counts.map(Number);
     out[run] = { model, calls, found, verified, refuted };
@@ -223,7 +219,7 @@ function runs(row) {
   return out;
 }
 
-test('MEASUREMENTS has the security-audit row: plain and brief over d7180b2, each with its model, every finding verified or refuted, the plugin not run, the lines agreeing', () => {
+test('MEASUREMENTS has the security-audit row: plain and brief over d7180b2 and the plugin over 3b01e32, each with its model, every finding verified or refuted, the lines agreeing', () => {
   const md = read('docs/MEASUREMENTS.md');
   const row = section(md, ROW);
   assert.doesNotMatch(row, /\[\[[^\]\n]+\]\]/, 'every slot filled from the ledger');
@@ -231,10 +227,10 @@ test('MEASUREMENTS has the security-audit row: plain and brief over d7180b2, eac
   const t = runs(row);
   assert.equal(t.Plain.model, '`gpt-6-astra`');
   assert.equal(t.Brief.model, '`gpt-6-astra`');
-  assert.equal(t.Plugin.model, 'not run', 'the plugin column says it did not run');
-  assert.deepEqual(t.Plugin.counts, COUNTS.map(() => 'not run'), 'in every cell');
-  assert.ok(row.includes('`/claude-security`'), "the row says the plugin waits for the operator's own invocation");
-  for (const run of ['Plain', 'Brief']) {
+  assert.equal(t.Plugin.model, '`claude-opus-5-5`');
+  assert.ok(row.includes('`/claude-security`'), "the row says the plugin ran on the operator's own invocation");
+  assert.ok(row.includes('`3b01e32`'), 'and names the revision the plugin read');
+  for (const run of ['Plain', 'Brief', 'Plugin']) {
     const r = t[run];
     assert.ok(r.calls >= 1, `${run}: at least one call`);
     assert.equal(r.verified + r.refuted, r.found, `${run}: every finding ends verified or refuted`);
@@ -243,7 +239,7 @@ test('MEASUREMENTS has the security-audit row: plain and brief over d7180b2, eac
   const refutation = lines.find((l) => l.startsWith('**Refutation.** '));
   assert.ok(refutation && /`[^`]+`/.test(refutation), "the refuting agents' model is named");
   assert.match(refutation, /[Cc]onfound/, 'and the shared-context confound');
-  const overlap = (lines.find((l) => l.startsWith('**Overlap.** ')) || '').match(/plain and brief (\d+)\.$/);
+  const overlap = (lines.find((l) => l.startsWith('**Overlap.** ')) || '').match(/plain and brief (\d+); plugin and either Codex run (\d+)\.$/);
   assert.ok(overlap, 'the overlap line, in its one count');
   const both = Number(overlap[1]);
   const [P, B] = [t.Plain.verified, t.Brief.verified];
@@ -255,10 +251,14 @@ test('MEASUREMENTS has the security-audit row: plain and brief over d7180b2, eac
   assert.ok(only, 'the brief-only line: a count, then the findings');
   const briefOnly = Number(only[1]);
   assert.equal(briefOnly, regions['brief only'], 'brief-only = what the brief verified less what plain verified too');
+  const pluginOnlyLine = (lines.find((l) => l.startsWith('**Verified by the plugin only.** ')) || '').match(/^\*\*Verified by the plugin only\.\*\* (\d+)(\.| — .+)$/);
+  assert.ok(pluginOnlyLine, 'the plugin-only line: a count, then the findings');
+  const pluginOnly = Number(pluginOnlyLine[1]);
+  assert.equal(pluginOnly, t.Plugin.verified - Number(overlap[2]), 'plugin-only = what the plugin verified less what a Codex run verified too');
   const summary = lines.find((l) => SUMMARY.test(l));
   assert.ok(summary, 'the one-line summary');
-  const [pf, pv, bf, bv, bo] = summary.match(SUMMARY).slice(2).map(Number);
-  assert.deepEqual([pf, pv, bf, bv, bo], [t.Plain.found, t.Plain.verified, t.Brief.found, t.Brief.verified, briefOnly], 'the summary says what the table says');
+  const [pf, pv, bf, bv, gf, gv, bo, go] = summary.match(SUMMARY).slice(2).map(Number);
+  assert.deepEqual([pf, pv, bf, bv, gf, gv, bo, go], [t.Plain.found, t.Plain.verified, t.Brief.found, t.Brief.verified, t.Plugin.found, t.Plugin.verified, briefOnly, pluginOnly], 'the summary says what the table says');
   const reading = lines.find((l) => l.startsWith('Reading: '));
   assert.ok(reading, 'the reading');
   assert.equal(reading.startsWith('Reading: the brief verified nothing that'), briefOnly === 0, 'the reading follows the brief-only count');

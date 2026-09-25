@@ -334,17 +334,17 @@ SOFTWARE.
 - [`differential-review`](https://github.com/trailofbits/skills/blob/32e34f8173796e3566a51aee877dc96bc5191f64/plugins/differential-review/skills/differential-review/SKILL.md) — review the change rather than the tree: rank what a diff touches by risk, and size each change by its blast radius, everything that calls into it.
 - [`fp-check`](https://github.com/trailofbits/skills/blob/32e34f8173796e3566a51aee877dc96bc5191f64/plugins/fp-check/skills/fp-check/SKILL.md) — treat each finding as a claim to disprove: a reader with a clean context restates it, traces it through the code, and keeps it only when the refutation fails.
 
-**Three runs over one revision, two of them run.** Two read `d7180b2` (v1.2.0); the plugin's column waits for the operator's own `/claude-security` invocation:
+**Three runs.** Two read `d7180b2` (v1.2.0); the plugin, invoked by the operator (`/claude-security`), read `3b01e32` (v1.3.0), where its four defects also stand:
 
 1. **Plain** — Codex on `gpt-6-astra`, asked to review this package for security defects, with no method; one call per group — the unit servers with `units/` and `core/`, the guard, the CLI and what it renders. The control.
 2. **Brief** — the same three calls with the whole brief above: the trust table, the attacker model, the refutation gate with the Trail of Bits links, and Cloudflare's core discipline, trust-class section and validation rules.
-3. **Plugin** — one run of the `claude-security` plugin over the same tree.
+3. **Plugin** — one run of the `claude-security` plugin over the tree, whole repository at effort medium.
 
 Every finding from every run goes to a fresh agent with a clean context, told to disprove it against the code at that revision — `fp-check`'s gate: `verified` if the attempt fails, `refuted` if it succeeds. For these runs that was seven agents, one per cluster of files (guard-io, guard-git, core-fs, adapters, spawn-rpc, cli-text, cli-fs), so the findings of one cluster shared one agent's context. A verified finding becomes a task of the release, a fix and its test in one commit. Nothing is acted on because a tool said so, nothing an auditor read off the web is executed, and the runs stay on the read-only units and read-only sub-agents.
 
 **What the result decides.** A dedicated auditor definition is built only if the brief verifies findings that the plain review and the plugin both missed. Otherwise this section is the security brief, and a release's security review is a review run with it.
 
-**Result.** Over `d7180b2`: plain 34 found, 18 verified; brief 16 found, 9 verified; plugin not run; 3 verified by the brief only. The brief found three real defects the plain review missed and carried 12 of the plain review's 34 candidates and dropped 22 (two in three) before refutation; `omelette-auditor` is not built. The row, with the overlap and what only the brief found: [MEASUREMENTS](MEASUREMENTS.md#security-audit-plain-brief-and-plugin-over-one-revision).
+**Result.** Over `d7180b2`: plain 34 found, 18 verified; brief 16 found, 9 verified; plugin (over `3b01e32`) 4 found, 4 verified; 3 verified by the brief only, 4 by the plugin only. The plugin found four defects neither Codex run had (the grok `--allow WebFetch` next to `read_file`, the agy rules this page recommends, `doctor`'s unsanitised `.mcp.json` print), all in the units' perimeter. The brief found three real defects the plain review missed and carried 12 of the plain review's 34 candidates and dropped 22 (two in three) before refutation; `omelette-auditor` is not built. The row, with the overlap and what only the brief found: [MEASUREMENTS](MEASUREMENTS.md#security-audit-plain-brief-and-plugin-over-one-revision).
 
 ## Recommended agy allow-rules
 
