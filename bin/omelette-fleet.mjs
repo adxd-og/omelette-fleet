@@ -647,7 +647,7 @@ function adoptPrefix(asked, found) {
   if (prefixes.length === 1) {
     return prefixes[0] === DEFAULT_PREFIX
       ? { prefix: DEFAULT_PREFIX, line: null }
-      : { prefix: prefixes[0], line: `${prefixes[0]} (found on the registrations)` };
+      : { prefix: prefixes[0], line: `${visible(prefixes[0])} (found on the registrations)` };
   }
   // More than one prefix is more than one install, and that is ambiguous
   // whether or not `omelette` is among them: a machine carrying `orion-codex`
@@ -655,7 +655,7 @@ function adoptPrefix(asked, found) {
   // default hides the other half. The default is kept; the others are named.
   return {
     prefix: DEFAULT_PREFIX,
-    line: `${DEFAULT_PREFIX} — our servers are also registered as ${prefixes.filter((p) => p !== DEFAULT_PREFIX).map((p) => `${p}-*`).join(', ')}; pass --prefix <name> to look at one`,
+    line: `${DEFAULT_PREFIX} — our servers are also registered as ${prefixes.filter((p) => p !== DEFAULT_PREFIX).map((p) => `${visible(p)}-*`).join(', ')}; pass --prefix <name> to look at one`,
   };
 }
 
@@ -981,12 +981,12 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
     const need = needFor(u);
     if (own === null) {
       servers.push({ unit: u.unit, name: reg.name, ms: null, ok: true });
-      lines.push(`${reg.name} "timeout": ${JSON.stringify(raw)} is not an integer ≥ ${MIN_SERVER_TIMEOUT_MS} ms — the client ignores it`);
+      lines.push(`${visible(reg.name)} "timeout": ${visible(JSON.stringify(raw))} is not an integer ≥ ${MIN_SERVER_TIMEOUT_MS} ms — the client ignores it`);
       continue;
     }
     const fits = own >= need;
     servers.push({ unit: u.unit, name: reg.name, ms: own, ok: fits });
-    lines.push(`${reg.name} "timeout": ${own} ms (${reg.scope}) overrides it for that server ${fits ? '≥' : '<'} ${need} needed${fits ? '' : ` (${because(u)})`} · ${fits ? 'ok' : 'TOO LOW'}`);
+    lines.push(`${visible(reg.name)} "timeout": ${own} ms (${visible(reg.scope)}) overrides it for that server ${fits ? '≥' : '<'} ${need} needed${fits ? '' : ` (${because(u)})`} · ${fits ? 'ok' : 'TOO LOW'}`);
   }
 
   const gemini = enabled.find((u) => u.unit === 'gemini');
@@ -1011,7 +1011,7 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
   const next = !ok
     ? `raise ${WALL_ENV} to ${needed} ms — merge ${snippet} into your settings file (omelette-fleet never writes it)`
     : low
-      ? `the ${low.name} registration caps its own calls at ${low.ms} ms — raise its "timeout" to ${needFor(enabled.find((u) => u.unit === low.unit))} ms or drop the field (omelette-fleet never writes .claude.json or .mcp.json)`
+      ? `the ${visible(low.name)} registration caps its own calls at ${low.ms} ms — raise its "timeout" to ${needFor(enabled.find((u) => u.unit === low.unit))} ms or drop the field (omelette-fleet never writes .claude.json or .mcp.json)`
       : null;
 
   return {
@@ -2267,7 +2267,7 @@ function nextStep(prefix, registeredHere) {
   // The prefix doctor REPORTS ON is the one the suggested command has to
   // register: plain `install` would create `omelette-*` and leave the names
   // this run went looking for exactly as missing as it found them.
-  if (!registeredHere) return `omelette-fleet install${prefix === DEFAULT_PREFIX ? '' : ` --prefix ${prefix}`}`;
+  if (!registeredHere) return `omelette-fleet install${prefix === DEFAULT_PREFIX ? '' : ` --prefix ${visible(prefix)}`}`;
   // A path `rules` would REFUSE outright is not a step that command can take:
   // it lstats the target and every directory down to the scope's `.claude`
   // before it reads anything, and `--force` refuses a link too. So this is the
@@ -2591,6 +2591,15 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
 }
 
 /**
+ * A value read from project or user JSON, made safe to print: every C0/C1
+ * control character and DEL becomes its `\uXXXX` escape, so the operator sees
+ * exactly what the file holds and the terminal does nothing with it
+ * (`.mcp.json` is project content — a clone can carry `\u001b[2K` in a
+ * `command` and erase doctor's own lines; 1.4.0 P3).
+ */
+const visible = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+
+/**
  * What the registry says about this unit — and whether it is even ours (see
  * findRegistration). A registration is called by the name it actually WEARS:
  * `<prefix>-<unit>` is what doctor went looking for, but a server of ours found
@@ -2598,13 +2607,13 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
  * would send an operator looking for an entry that is not in the file.
  */
 function mcpLine(name, prefix, reg, expected) {
-  const server = reg ? reg.name : `${prefix}-${name}`;
+  const server = visible(reg ? reg.name : `${prefix}-${name}`);
   if (!reg) return `${server} not registered — run: omelette-fleet install --units ${name}`;
   const file = reg.exists ? '[file exists]' : '[FILE MISSING]';
-  const cmd = reg.command ? `${reg.command} ` : '';
+  const cmd = reg.command ? `${visible(reg.command)} ` : '';
   return reg.ours
-    ? `${server} registered (${reg.scope}) → ${cmd}${reg.target} ${file}`
-    : `${server} registered elsewhere (${reg.scope}) → ${cmd}${reg.target || '(no args)'} ${file}\n              not this clone — install here would point it at ${expected}`;
+    ? `${server} registered (${visible(reg.scope)}) → ${cmd}${visible(reg.target)} ${file}`
+    : `${server} registered elsewhere (${visible(reg.scope)}) → ${cmd}${visible(reg.target || '(no args)')} ${file}\n              not this clone — install here would point it at ${expected}`;
 }
 
 async function cmdDoctor(argv) {
@@ -2660,10 +2669,10 @@ async function cmdDoctor(argv) {
   out(`fleet home    ${home.dir}`);
   out(`fleet config  ${configPath()}${existsSync(configPath()) ? '' : ' (absent — built-in defaults in force)'}`);
   out(`claude CLI    ${claudePath || 'not found in PATH'}`);
-  out(`claude config ${claude.path}${claude.error ? ` (${claude.error})` : ''}${claude.source === 'CLAUDE_CONFIG_DIR' ? '   [via CLAUDE_CONFIG_DIR]' : ''}`);
+  out(`claude config ${claude.path}${claude.error ? ` (${visible(claude.error)})` : ''}${claude.source === 'CLAUDE_CONFIG_DIR' ? '   [via CLAUDE_CONFIG_DIR]' : ''}`);
   // Named because it is READ: "not registered" against a file doctor never
   // opened is exactly the lie the claude config line exists to prevent.
-  if (mcpJson.exists) out(`mcp.json      ${mcpJson.path}${mcpJson.error ? ` (${mcpJson.error})` : ''}`);
+  if (mcpJson.exists) out(`mcp.json      ${mcpJson.path}${mcpJson.error ? ` (${visible(mcpJson.error)})` : ''}`);
   if (adopted.line) out(`prefix        ${adopted.line}`);
   // The managed files, both scopes, read-only and never a fault: a project
   // without them is a perfectly healthy project.
@@ -2749,7 +2758,7 @@ async function cmdDoctor(argv) {
     for (const w of cfg.warnings) out(`  warning     ${w}`);
     // A registration whose server file is gone cannot start at all — that is a
     // fault in its own right, however healthy the vendor CLI looks.
-    if (reg && !reg.exists) problems.push(`the registered server file is missing (${reg.target || 'no args'})`);
+    if (reg && !reg.exists) problems.push(`the registered server file is missing (${visible(reg.target || 'no args')})`);
     out(`  mcp         ${mcpLine(name, effective, reg, server)}`);
     out(`  status feed ${cfg.values.status ? '' : '(disabled in config) '}${home.writable ? `${home.dir} is writable` : `${home.dir} is NOT writable — ${home.error}`}`);
     out(`  results     ${cfg.values.results

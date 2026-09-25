@@ -302,3 +302,24 @@ test('doctor: a scope\'s settings files are read as a UNION — one event here, 
   doctor(s);
   assert.deepEqual([readFileSync(settings, 'utf8'), readFileSync(local, 'utf8')], before);
 });
+
+test('doctor prints a control character it read from .mcp.json as its escape, never as the byte', () => {
+  const s = sandbox();
+  // The entry must wear the prefix doctor reports on — here the default, since
+  // nothing else is registered — or doctor never prints it (live check, 2026-09-25).
+  const servers = ours('omelette');
+  servers['omelette-codex'] = { type: 'stdio', command: '\u001b[2K\u001b[1AINJECTED node', args: ['/x/servers/\u009bcodex.mjs', '\u007f'] };
+  writeFileSync(join(s.proj, '.mcp.json'), JSON.stringify({ mcpServers: servers }, null, 2));
+  const r = doctor(s);
+  assert.equal(r.code, 0, r.out);
+  for (const ch of r.out) {
+    const code = ch.charCodeAt(0);
+    assert.ok(code === 10 || code === 9 || code >= 32 && !(code >= 0x7f && code <= 0x9f), `raw control byte ${code} on stdout`);
+  }
+  assert.match(r.out, /omelette-codex registered elsewhere \(\.mcp\.json\) → \\u001b\[2K\\u001b\[1AINJECTED node/);
+  assert.match(r.out, /\\u009bcodex\.mjs/);
+  // A parse error message can carry the file's bytes too.
+  writeFileSync(join(s.proj, '.mcp.json'), '{ "a": "\u001b[2K" ');
+  const broken = doctor(s);
+  assert.ok(!broken.out.includes('\u001b'), 'no ESC through the parse-error line');
+});
