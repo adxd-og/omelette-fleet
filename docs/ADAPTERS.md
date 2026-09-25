@@ -23,7 +23,7 @@ A unit is one vendor CLI exposed as one MCP server. Adding one is three files an
 | Model / effort validation against the catalog | The catalog itself, and the routing advice in it |
 | The git/deploy intent gate (per tool, via `mutateGate`) | Which tools deserve that gate |
 | Status feed start/end, and the spooled record's `usage:` line, from the `usage` you return | Returning `usage` when the CLI reports it |
-| Bounded spawn: process group, hard kill, output caps, the env allowlist + billing scrub, ENOENT help | The argv, the sandbox/permission flags, the prompt wrapping, and which env names the CLI needs (`envPassthrough`, `billingRiskEnv`) |
+| Bounded spawn: process group, hard kill, output caps, the env allowlist + billing scrub, ENOENT help | The argv, the sandbox/permission flags, the prompt wrapping, and which env names the CLI needs (`envPassthrough`, `riskEnv`) |
 | The auth check on empty-stdout runs | The `auth.detect` regex and the `help` text |
 | JSON-RPC, `tools/list`, stderr logging | Nothing — never touch stdin/stdout |
 | One bounded retry, when the adapter asks for it | Deciding whether re-issuing this call is safe |
@@ -98,8 +98,8 @@ export default defineUnit({
   name: 'acme',
   label: 'Acme',
   bin: { env: 'ACME_BIN', default: 'acme' },
-  billingRiskEnv: ['ACME_API_KEY'],
-  envPassthrough: ['ACME_*'],   // the vendor's own knobs; the scrub above runs after this
+  riskEnv: ['ACME_API_KEY'],
+  envPassthrough: ['ACME_HOME'],   // exact names the CLI needs; never a pattern — defineUnit refuses one
   envMap: { model: 'ACME_DEFAULT_MODEL', timeoutS: 'ACME_TIMEOUT_S' },
   builtin: { timeoutS: 300 },
   supportedModes: { 'read-only': true, 'workspace-write': null },
@@ -258,14 +258,14 @@ assert.match(r.text, /--read-only/);
 
 Three things that pattern buys you: `OMELETTE_HOME` in a temp dir means the test writes its own config and reads its own status feed; `createUnitRuntime` runs the full call path (config → ceiling → validation → gate → spawn → status) without stdin/stdout; and the fake CLI can assert on the exact flags it received — which is how the read-only posture stays tested rather than asserted. Set `OMELETTE_ALLOW_WRITE` in the test env to exercise the open-ceiling path, and leave it out to prove the closed one.
 
-Remember that the *child* env is an allowlist, not the test's env: a variable you set in `env` reaches the fake CLI only if it is in `ALLOWED_ENV` or matches the unit's `envPassthrough`. That is exactly what makes "this key never reaches the child" testable — have the fake print `process.env.ACME_API_KEY` and assert `undefined`.
+Remember that the *child* env is an allowlist, not the test's env: a variable you set in `env` reaches the fake CLI only if it is in `ALLOWED_ENV` or named in the unit's `envPassthrough`. That is exactly what makes "this key never reaches the child" testable — have the fake print `process.env.ACME_API_KEY` and assert `undefined`.
 
 Also worth a test each: an unknown model is rejected before any spawn, a disabled unit refuses spawning tools but still serves its catalog, a missing binary produces the actionable message, the auth regex fires only on an empty-stdout run, and a refusal comes back with `isError`.
 
 ## Checklist
 
-- [ ] **`billingRiskEnv`** — list every environment variable that could switch this CLI from the subscription to metered API billing, and every one that would widen the CLI's reach past what the toolset says (the grok unit scrubs `GROK_WEB_FETCH_ALLOW_LOCAL` here). Check the vendor's precedence rules; the billing failure mode is silent and costs real money.
-- [ ] **`envPassthrough` as narrow as the CLI allows.** Start from nothing and add only what a real run needs; the child gets `ALLOWED_ENV` and your patterns and nothing else. A `PREFIX_*` pattern is safe against its own API key (the scrub runs after it) but not against anything else that shares the prefix.
+- [ ] **`riskEnv`** — list every environment variable that could switch this CLI from the subscription to metered API billing, and every one that would widen the CLI's reach past what the toolset says (the grok unit scrubs `GROK_WEB_FETCH_ALLOW_LOCAL` here). Check the vendor's precedence rules; the billing failure mode is silent and costs real money.
+- [ ] **`envPassthrough` is exact names.** Start from nothing and add only what a real run needs, one name at a time, each classified from the vendor's documentation: the login needs it, or it is a preference that changes no reach. A name that selects an endpoint, a config file, a credential helper, a hook or an execution path does not go in; the operator has `OMELETTE_ENV_PASSTHROUGH` for it. `defineUnit` refuses a `PREFIX_*` pattern.
 - [ ] **Decide about the vendor's config file.** If it can carry executable behaviour — MCP servers, hooks, plugins, a notify command — a filesystem sandbox does not bound it. Ignore it if the CLI has a flag for that (Codex: `--ignore-user-config --ignore-rules`), and then pin the model explicitly, because "the vendor default" now lives in a file you are ignoring.
 - [ ] **Auth detection** — a regex on stderr plus a `help` string that names the exact command to run. The runtime only checks it on runs with **empty stdout**, so a real answer that mentions signing in cannot false-positive. Make sure `isDeterministic` treats an auth failure as unretryable.
 - [ ] **`supportedModes` honesty** — declare `workspace-write: null` unless the unit actually implements a mode you would defend in [SECURITY.md](SECURITY.md). A unit that declares it and then relies on a prompt to stay read-only is worse than one that refuses. If you do implement it, say precisely what scopes the write, and prefer granting it to one tool with an explicit `cwd`.

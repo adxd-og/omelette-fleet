@@ -45,11 +45,10 @@ defineUnit({
   name: 'codex',                       // [a-z][a-z0-9-]*; also the config key and status unit
   label: 'Codex',                      // human name in error messages
   bin: { env: 'CODEX_BIN', default: 'codex' },
-  billingRiskEnv: ['OPENAI_API_KEY'],  // deleted from every child env
-  envPassthrough: ['CODEX_*'],         // added to core/spawn.mjs's ALLOWED_ENV for this unit's
-                                       // children only (exact names or PREFIX_* patterns); the
-                                       // billing scrub runs AFTER it, so a pattern cannot
-                                       // re-admit an API key. Everything else is NOT inherited.
+  riskEnv: ['OPENAI_API_KEY'],         // deleted from every child env (billingRiskEnv: alias until 1.6.0)
+  envPassthrough: ['CODEX_HOME'],      // exact names added to core/spawn.mjs's ALLOWED_ENV for this unit's
+                                       // children only; defineUnit refuses a PREFIX_* pattern. Everything
+                                       // else is NOT inherited.
   envMap: { model: 'CODEX_DEFAULT_MODEL', timeoutS: 'CODEX_TIMEOUT_S' },   // env overrides
   builtin: { timeoutS: 600 },          // unit defaults for config keys
   extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },          // unit-only config keys
@@ -60,7 +59,7 @@ defineUnit({
 })
 ```
 
-Defaults filled in by `defineUnit`: `version: '0.1.0'`, `serverName: 'omelette-<name>'`, `label: <name>`, empty `billingRiskEnv` / `envPassthrough` / `envMap` / `builtin` / `extraSchema`, `supportedModes: { 'read-only': true, 'workspace-write': null }`, `auth: null`. A string `bin` is normalised to `{ env: null, default: bin }`.
+Defaults filled in by `defineUnit`: `version: '0.1.0'`, `serverName: 'omelette-<name>'`, `label: <name>`, empty `riskEnv` / `envPassthrough` / `envMap` / `builtin` / `extraSchema`, `supportedModes: { 'read-only': true, 'workspace-write': null }`, `auth: null`. A string `bin` is normalised to `{ env: null, default: bin }`.
 
 **Tool kinds** — `research | review | image | pipeline | catalog`. A `catalog` tool never spawns: the runtime answers it locally with `catalog.render()`. Every other kind must supply `run(args, ctx)` returning a string or `{ text, usage?, isError? }`. `isError: true` is how an adapter reports a refusal it handled itself — a missing prompt, a bad `cwd` — so that MCP is told it is an error and the status feed records one, instead of an `Error: …` string being reported as a successful answer.
 
