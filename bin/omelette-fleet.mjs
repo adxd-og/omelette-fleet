@@ -2109,13 +2109,15 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
  *
  * An entry that still calls the guard on a RETIRED event is named in either
  * case, inside the same parentheses: it does no harm, and it is not a reason
- * the guard is unwired — it is one line of settings.json to delete.
+ * the guard is unwired — it is one line of a settings file to delete. A scope
+ * with no guard of its own names it too: its settings may call another scope's
+ * guard, and the entry is just as dead.
  */
 const hooksLabel = (r, { wired, retired = [], unreadable, matcherProblem }) => {
-  if (r.state === 'absent') return 'absent';
+  if (r.state === 'absent') return retired.length ? `absent (${retired.join(', ')} wired but no longer used — remove them from your settings files)` : 'absent';
   if (r.state === 'foreign') return 'foreign (no marker)';
   const stale = r.behind ? ` [run: ${refreshCommand('hooks', r.scope)}]` : '';
-  const leftover = retired.length ? ` · ${retired.join(', ')} wired but no longer used — remove them from settings.json` : '';
+  const leftover = retired.length ? ` · ${retired.join(', ')} wired but no longer used — remove them from your settings files` : '';
   if (wired.length === HOOK_EVENTS.length) return `v${r.version} (wired: ${wired.join(', ')}${leftover})${stale}`;
   const reasons = [];
   if (unreadable.length) reasons.push(`${unreadable.join(' and ')} unreadable`);
@@ -2167,7 +2169,13 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
     if (st.isDirectory() && !st.isSymbolicLink()) ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).length;
   } catch { /* absent is the normal case */ }
   const found = ledgers ? `ledgers: ${ledgers}` : 'ledgers: none (hook silent — start .omelette/ledger-<plan>.md)';
-  return { line: `stamp and print ${rendered.enabled ? 'on' : 'off (handoff.enabled=false)'} · ${found}${scope}` };
+  // A guard rendered before 1.5.0 still nudges, gates and summarises: its
+  // `enabled` is not the 1.5.0 switch, and reading it as one would say "off"
+  // about a script that is doing all three.
+  const what = rendered.legacy
+    ? 'pre-1.5.0 guard — run rules --hooks; until then it nudges, gates and summarises as 1.4.0 did'
+    : `stamp and print ${rendered.enabled ? 'on' : 'off (handoff.enabled=false)'}`;
+  return { line: `${what} · ${found}${scope}` };
 }
 
 /**
@@ -3210,13 +3218,13 @@ function cmdResults(argv) {
   // ambiguous. Without a unit the spool of each unit is asked in turn.
   const idOnly = positional.length === 1 && isValidResultId(positional[0]);
   const [name, id] = idOnly ? [undefined, positional[0]] : positional;
-  if (positional.length > 2) errors.push(`unexpected argument: ${positional[2]}`);
+  if (positional.length > 2) errors.push(`unexpected argument: ${visible(positional[2])}`);
   if (name !== undefined && !UNITS[name]) {
-    errors.push(`unknown unit "${name}" — known units: ${UNIT_ORDER.join(', ')} (usage: omelette-fleet results [<unit>] [<id>] [--path] [--stats [--since <when>]])`);
+    errors.push(`unknown unit "${visible(name)}" — known units: ${UNIT_ORDER.join(', ')} (usage: omelette-fleet results [<unit>] [<id>] [--path] [--stats [--since <when>]])`);
   }
   // The id is validated before any path is built, here as in the tool.
   if (id !== undefined && !isValidResultId(id)) {
-    errors.push(`"${id}" is not a result id — they look like 20260908T142501Z-19312-1`);
+    errors.push(`"${visible(id)}" is not a result id — they look like 20260908T142501Z-19312-1`);
   }
   // `--stats` reports on a spool; the other two answer about one file in it.
   if (flags.stats) {
@@ -3230,7 +3238,7 @@ function cmdResults(argv) {
     else {
       sinceMs = parseSince(flags.since);
       if (sinceMs === null) {
-        errors.push(`--since "${flags.since}" is neither a window (24h, 7d — at most ${SINCE_MAX.h}h / ${SINCE_MAX.d}d) nor a date (2026-09-09, or a whole ISO timestamp, spelling a day that exists)`);
+        errors.push(`--since "${visible(flags.since)}" is neither a window (24h, 7d — at most ${SINCE_MAX.h}h / ${SINCE_MAX.d}d) nor a date (2026-09-09, or a whole ISO timestamp, spelling a day that exists)`);
       }
     }
   }
@@ -3246,8 +3254,8 @@ function cmdResults(argv) {
     }
     if (!found) {
       err(name === undefined
-        ? `omelette-fleet results: no spooled result "${id}" in any unit`
-        : `omelette-fleet results: no spooled result "${id}" for ${name} in ${join(fleetHome(), 'results', name)}`);
+        ? `omelette-fleet results: no spooled result "${visible(id)}" in any unit`
+        : `omelette-fleet results: no spooled result "${visible(id)}" for ${visible(name)} in ${visible(join(fleetHome(), 'results', name))}`);
       return 1;
     }
     // The header is escaped line by line (`visible` would escape the newlines
@@ -3262,7 +3270,7 @@ function cmdResults(argv) {
   for (const u of name ? [name] : UNIT_ORDER) for (const e of storeFor(u).list(10)) rows.push({ ...e, unit: u });
   rows.sort((a, b) => (a.endedAt === b.endedAt ? 0 : a.endedAt < b.endedAt ? 1 : -1));
   const top = rows.slice(0, 10);
-  if (!top.length) { out(`(no results spooled yet — ${join(fleetHome(), 'results')})`); return 0; }
+  if (!top.length) { out(`(no results spooled yet — ${visible(join(fleetHome(), 'results'))})`); return 0; }
   for (const e of top) out(flags.path ? e.path : visible(formatEntry(e, { unit: e.unit })));
   return 0;
 }
@@ -3294,22 +3302,22 @@ function cmdCheck(argv) {
   const { flags, positional, errors } = parseArgv(argv, { booleans: ['strict'], options: ['require', 'root'] });
   const [file] = positional;
   if (!file) errors.push(`usage: omelette-fleet check ${COMMANDS.check.args}`);
-  if (positional.length > 1) errors.push(`unexpected argument: ${positional[1]}`);
+  if (positional.length > 1) errors.push(`unexpected argument: ${visible(positional[1])}`);
 
   let need = 1;
   if (flags.require !== undefined) {
-    if (!/^\d+$/.test(String(flags.require))) errors.push(`--require needs a non-negative integer, not "${flags.require}"`);
+    if (!/^\d+$/.test(String(flags.require))) errors.push(`--require needs a non-negative integer, not "${visible(flags.require)}"`);
     else need = Number(flags.require);
   }
   const root = flags.root === undefined ? process.cwd() : resolvePath(String(flags.root));
   let rootIsDir = false;
   let realRoot = null;
   try { rootIsDir = statSync(root).isDirectory(); } catch { /* not there at all */ }
-  if (!rootIsDir) errors.push(`--root ${root} is not a directory`);
+  if (!rootIsDir) errors.push(`--root ${visible(root)} is not a directory`);
   // It is a directory — but every path is resolved against its REAL path, so
   // that resolution happens ONCE, here, where a failure is still a usage error
   // and not a stack trace out of the middle of a run.
-  else { try { realRoot = realpathSync(root); } catch { errors.push(`--root ${root} cannot be resolved`); } }
+  else { try { realRoot = realpathSync(root); } catch { errors.push(`--root ${visible(root)} cannot be resolved`); } }
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet check: ${e}`)); return 2; }
 
   // The checked file may live anywhere — a report sits in a scratchpad — but it
@@ -3317,12 +3325,12 @@ function cmdCheck(argv) {
   const path = resolvePath(file);
   let size = null;
   try { const st = lstatSync(path); if (st.isFile()) size = st.size; } catch { /* absent */ }
-  if (size === null) { err(`omelette-fleet check: ${file} is not a readable file`); return 2; }
-  if (size > CHECK_READ_MAX) { err(`omelette-fleet check: ${file} is ${size} bytes — a checked file may be at most 1 MiB`); return 2; }
+  if (size === null) { err(`omelette-fleet check: ${visible(file)} is not a readable file`); return 2; }
+  if (size > CHECK_READ_MAX) { err(`omelette-fleet check: ${visible(file)} is ${size} bytes — a checked file may be at most 1 MiB`); return 2; }
   const text = readBoundedFile(path, CHECK_READ_MAX);
-  if (text === null) { err(`omelette-fleet check: ${file} is not a readable file`); return 2; }
+  if (text === null) { err(`omelette-fleet check: ${visible(file)} is not a readable file`); return 2; }
   // The cap is a usage error, so it is ruled on BEFORE anything is spawned.
-  try { parsePointers(text); } catch (e) { err(`omelette-fleet check: ${e.message}`); return 2; }
+  try { parsePointers(text); } catch (e) { err(`omelette-fleet check: ${visible(e.message)}`); return 2; }
 
   // THE REPORT IS BUILT BEFORE ANY OF IT IS PRINTED, so that a failure half way
   // through — the root taken away under us is the one that is real — is still a

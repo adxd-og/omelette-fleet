@@ -147,7 +147,7 @@ test('HANDOFF_SCHEMA is one key; the rendered literal is {"enabled":true}; retir
   assert.deepEqual(Object.keys(HANDOFF_SCHEMA), ['enabled']);
   assert.match(renderHookFile(HOOK_FILES[0], '1.5.0', { enabled: true, threshold: 85, contextWindow: 500000, compactSummary: false }),
     /^const HANDOFF_CONFIG = \{"enabled":true\};$/m);
-  assert.deepEqual(parseHookHandoff('const HANDOFF_CONFIG = {"enabled":false,"threshold":85};'), { enabled: false });
+  assert.deepEqual(parseHookHandoff('const HANDOFF_CONFIG = {"enabled":false,"threshold":85};'), { enabled: false, legacy: true });
 
   // A fleet.config.json written by 1.4.0 still carries the three retired keys.
   const home = mkdtempSync(join(tmpdir(), 'omelette-1.5.0-home-'));
@@ -211,7 +211,7 @@ test('doctor: a settings.json that still wires the six events reads as wired, an
   const settings = join(proj, '.claude', 'settings.json');
   writeFileSync(settings, JSON.stringify(six, null, 2));
   const r = cli(['doctor'], { dir, cwd: proj, env });
-  assert.match(r.out, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart · PostToolUse, Stop, PostCompact wired but no longer used — remove them from settings\.json\)/m, r.out);
+  assert.match(r.out, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart · PostToolUse, Stop, PostCompact wired but no longer used — remove them from your settings files\)/m, r.out);
   assert.doesNotMatch(r.out, /^next /m, r.out);
   assert.equal(readFileSync(settings, 'utf8'), JSON.stringify(six, null, 2), 'settings.json is READ, never written');
 
@@ -223,7 +223,7 @@ test('doctor: a settings.json that still wires the six events reads as wired, an
   // A stale entry on a guard that is NOT fully wired rides inside the same parentheses.
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: six.hooks.PreToolUse, Stop: six.hooks.Stop } }));
   const half = cli(['doctor'], { dir, cwd: proj, env });
-  assert.match(half.out, /^hooks {9}project: v\S+ \(NOT wired \(missing PreCompact, SessionStart\) — paste the snippet from rules --hooks · Stop wired but no longer used — remove them from settings\.json\)/m, half.out);
+  assert.match(half.out, /^hooks {9}project: v\S+ \(NOT wired \(missing PreCompact, SessionStart\) — paste the snippet from rules --hooks · Stop wired but no longer used — remove them from your settings files\)/m, half.out);
 });
 
 test('doctor: the handoff line says stamp and print, and counts ledgers', () => {

@@ -620,10 +620,10 @@ test('renderHookFile substitutes the handoff block as a JSON literal, and fills 
 
 test('parseHookHandoff reads back exactly what renderHookFile wrote, and refuses anything that is not it', () => {
   const settings = { enabled: false };
-  assert.deepEqual(parseHookHandoff(renderHookFile(HOOK_FILES[0], '1.2.3', settings)), settings);
+  assert.deepEqual(parseHookHandoff(renderHookFile(HOOK_FILES[0], '1.2.3', settings)), { ...settings, legacy: false });
   // No settings argument reads the live fleet config — which this file points at
   // an empty throwaway home on line 20, so it is the built-in defaults.
-  assert.deepEqual(parseHookHandoff(renderHookFile(HOOK_FILES[0], '1.2.3')), { enabled: true });
+  assert.deepEqual(parseHookHandoff(renderHookFile(HOOK_FILES[0], '1.2.3')), { enabled: true, legacy: false });
   // A 0.3.3 guard, a file that is not a guard, and a hand-edited literal.
   assert.equal(parseHookHandoff(''), null);
   assert.equal(parseHookHandoff('// omelette-fleet hook v0.3.3 …\nconst HANDOFF = "x";\n'), null);
@@ -631,11 +631,11 @@ test('parseHookHandoff reads back exactly what renderHookFile wrote, and refuses
   assert.equal(parseHookHandoff('const HANDOFF_CONFIG = [1,2];\n'), null);
   // …and an invalid value in a literal somebody edited by hand reads as the
   // default, exactly as the guard itself treats it. The keys a 1.4.0 literal
-  // carried beside `enabled` are read by nothing.
+  // carried beside `enabled` mark it legacy and are read for nothing else.
   assert.deepEqual(parseHookHandoff('const HANDOFF_CONFIG = {"enabled":"yes","threshold":900,"contextWindow":-5};\n'),
-    { enabled: true });
+    { enabled: true, legacy: true });
   assert.deepEqual(parseHookHandoff('const HANDOFF_CONFIG = {"enabled":false,"threshold":90,"contextWindow":0,"compactSummary":true};\n'),
-    { enabled: false });
+    { enabled: false, legacy: true });
 });
 
 test('hookSettingsSnippet: a path holding `$1`, a space and a single quote survives the quoting on both platforms', () => {

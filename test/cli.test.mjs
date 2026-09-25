@@ -2198,7 +2198,7 @@ test('doctor: a 0.3.6 settings.json (the five events that existed then) reads as
   writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ hooks: { ...snippet.hooks, PostToolUse: retired, Stop: retired } }, null, 2));
   assert.match(
     doctor(),
-    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart · PostToolUse, Stop wired but no longer used — remove them from settings\.json\) · global: absent$/m,
+    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart · PostToolUse, Stop wired but no longer used — remove them from your settings files\) · global: absent$/m,
     doctor(),
   );
 

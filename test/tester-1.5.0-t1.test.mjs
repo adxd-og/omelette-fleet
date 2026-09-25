@@ -187,7 +187,7 @@ test('doctor: three fully wired events plus a settings entry that STILL calls th
   const r = cli(['doctor'], { dir, cwd: proj });
   assert.match(
     r.out,
-    /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart · Stop wired but no longer used — remove them from settings\.json\)/m,
+    /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart · Stop wired but no longer used — remove them from your settings files\)/m,
     r.out,
   );
   assert.doesNotMatch(r.out, /PostToolUse|PostCompact/, 'only the entry actually present is named');

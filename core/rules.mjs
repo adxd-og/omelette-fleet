@@ -524,12 +524,19 @@ export function parseHookMarker(text) {
  *
  * A guard that predates the block (0.3.3 and earlier) and a file that is not a
  * guard both answer null; a value that is invalid answers with the schema's
- * default, which is exactly what the script itself would do with it. A key a
- * guard rendered before 1.5.0 carried and the schema no longer has is ignored.
+ * default, which is exactly what the script itself would do with it.
  *
- * @returns {{enabled:boolean}|null}
+ * A guard rendered before 1.5.0 is told apart by its literal: it carries
+ * `threshold`, `contextWindow` or `compactSummary`, and that script still
+ * nudges, gates and summarises whatever `enabled` says — so it answers
+ * `legacy: true`, and `doctor` reports it as the old guard it is rather than
+ * reading its `enabled` as the 1.5.0 switch.
+ *
+ * @returns {{enabled:boolean, legacy:boolean}|null}
  */
 const HANDOFF_LITERAL = /^const HANDOFF_CONFIG = (\{[^\n]*\});$/m;
+/** The handoff keys a guard rendered before 1.5.0 carried in its literal. */
+const RETIRED_HANDOFF_KEYS = ['threshold', 'contextWindow', 'compactSummary'];
 
 export function parseHookHandoff(text) {
   const m = HANDOFF_LITERAL.exec(String(text || ''));
@@ -542,6 +549,7 @@ export function parseHookHandoff(text) {
     const c = coerce(spec, parsed[key]);
     values[key] = c.ok ? c.value : spec.default;
   }
+  values.legacy = RETIRED_HANDOFF_KEYS.some((key) => Object.hasOwn(parsed, key));
   return values;
 }
 
