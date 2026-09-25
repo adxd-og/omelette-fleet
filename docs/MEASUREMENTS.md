@@ -333,9 +333,9 @@ The versions the live gate ran on, from the ledgers' live-gate lines and the CHA
 | 1.5.0 (2026-09-25) | 1.2.11 | 1.0.41 | 0.156.1 |
 | 1.6.0 (2026-09-26) | 1.2.11 | 1.0.41 | 0.157.0 |
 
-The release checklist (CLAUDE.md) adds the row at the live gate.
+Each release adds its row at the live gate (a step of the release procedure the ledger records; this repository's own checklist is the operator's, not a published file).
 
-**Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since <branch date>` (calls, wall-clock, spool per unit). 1.6.0, from the branch date to the merge (the U1 measurement's runs, the live gate and the release reviews included): gemini 16 calls / 42 min 54 s / 83 KB; grok 12 / 18 min 57 s / 25 KB; codex 50 / 4 h 56 min 38 s / 517 KB — 78 calls, 5 h 58 min of vendor wall-clock.
+**Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since <ISO time of the branch's first commit, with milliseconds: 2026-09-25T18:47:00.000Z>` (calls, wall-clock, spool per unit); a unit whose call count equals `resultsKeep` (50) is a floor, not a count, because the spool prunes as it fills. 1.6.0, from the branch's first commit (2026-09-25T18:47Z) to the merge — the U1 measurement's runs, the live gate and the release reviews included: gemini 5 calls / 10 min 20 s / 10 KB; grok 4 / 3 min 7 s / 11 KB (one of them the live gate's hard kill: `status: error`, nothing salvaged; another the 60 s kill with text, `partial: true`); codex 14 / 1 h 5 min 7 s / 54 KB — 23 calls, 1 h 18 min of vendor wall-clock, none at the cap. The row taken with `--since 2026-09-25` (the whole day) read 78 calls and 5 h 58 min, most of it 1.5.0's release day and codex's 50 the cap — the wrong window, kept here as the reason the rule names the commit time.
 
 ## How the numbers are taken
 
