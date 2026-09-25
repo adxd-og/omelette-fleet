@@ -339,7 +339,7 @@ Only deliberately, and only where it is actually enforceable. Write mode takes t
 
 - **Codex** does. Writes are kernel-scoped to the `cwd` you pass, and the adapter grants it only to `codex_code_review` with an explicit absolute `cwd` — `codex_research` is read-only whatever the config says. (`codex_image` also runs `workspace-write`, and is the one call that does **not** consult the ceiling: the kernel scopes it to a throwaway temp directory the adapter just created, because an image tool that cannot save a file is not a tool. Details in [docs/SECURITY.md](docs/SECURITY.md).)
 - **Grok** does not. `workspace-write` is declared unsupported and refused even with the ceiling open.
-- **Gemini** maps it to agy's `--mode accept-edits`, which is agy's own permission layer inside the process cwd — real, but not kernel-enforced. `ORION_ALLOW_GEMINI_MUTATE=1` is honoured as a legacy alias for opening the ceiling for `gemini` only.
+- **Gemini** maps it to agy's `--mode accept-edits`, which is agy's own permission layer inside the run's cwd — real, but not kernel-enforced, and used only when the call passes a `cwd` (without one, research runs read-only in a fresh empty directory). `ORION_ALLOW_GEMINI_MUTATE=1` is honoured as a legacy alias for opening the ceiling for `gemini` only.
 
 **What if my ChatGPT plan rejects `gpt-5.6-sol`?**
 The Codex catalog lists what exists in the current generation, not what one account happens to accept. `gpt-5.6-sol` is plan-gated to ChatGPT Pro/Enterprise; on a Plus or Team plan the call fails fast, before any work, with `The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account`.

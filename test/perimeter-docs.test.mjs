@@ -65,3 +65,11 @@ test('CONFIG: codex webSearch affects research only', () => {
   const config = read('docs/CONFIG.md');
   assert.match(config, /\| `webSearch` \| boolean \|[^\n]*codex: affects research only; review is always without/);
 });
+
+test('SECURITY: --no-memory in the Grok layers, the empty research directory, the reach knobs in the scrub', () => {
+  const md = read('docs/SECURITY.md');
+  assert.match(md, /^ {4}--no-memory \(research, review\) — cross-session memory off/m);
+  assert.match(md, /The three research tools — `grok_research`, `gemini_research` and `codex_research` — start in a fresh empty directory, removed after the run, unless the caller passes `cwd`, which opts the run into whatever the CLI reads from a workspace/);
+  assert.match(md, /The list also holds reach knobs the patterns would admit/);
+  assert.match(md, /`CODEX_EXEC_SERVER_URL` for codex and `GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES` for gemini; `GROK_HOME`, `GROK_MODELS_BASE_URL` and `AGY_ADC_AUTH` pass, as your choices/);
+});

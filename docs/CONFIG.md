@@ -233,7 +233,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 | Key | gemini | grok | codex |
 |---|---|---|---|
 | `enabled`, `status`, `model`, `results`, `resultsKeep`, `resultsMaxBytes` | yes | yes | yes |
-| `mode` | `workspace-write` → `--mode accept-edits` | declared unsupported; always read-only | `workspace-write` → OS sandbox, review-with-`cwd` only |
+| `mode` | `workspace-write` → `--mode accept-edits`, only when the call passes `cwd` | declared unsupported; always read-only | `workspace-write` → OS sandbox, review-with-`cwd` only |
 | `effort` | **ignored** — the catalog bakes effort into the model id and declares no effort levels | `--reasoning-effort` (`low`/`medium`/`high`/`xhigh`) | `model_reasoning_effort` (`none`/`low`/`medium`/`high`/`xhigh`/`max`) |
 | `timeoutS` | yes (see below) | yes | yes |
 | `maxTurns` | — | `--max-turns` | — |

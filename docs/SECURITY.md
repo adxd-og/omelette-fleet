@@ -88,7 +88,7 @@ A vendor CLI's environment is **built from scratch**, never inherited. In order:
 
 3. **`OMELETTE_ENV_PASSTHROUGH`** — your fleet-wide escape hatch: a comma-separated list of exact names or `PREFIX_*` patterns, for when a CLI needs one more variable. It applies to every unit, so add narrowly.
 
-4. **The billing scrub** — the unit's `billingRiskEnv` names are deleted *after* steps 2 and 3, which is why `CODEX_*` can be passed through without re-admitting `CODEX_API_KEY`.
+4. **The billing scrub** — the unit's `billingRiskEnv` names are deleted *after* steps 2 and 3, which is why `CODEX_*` can be passed through without re-admitting `CODEX_API_KEY`. The list also holds reach knobs the patterns would admit, names that redirect execution, egress or trust rather than billing: `GROK_WEB_FETCH_ALLOW_LOCAL`, `GROK_MEMORY`, `GROK_FOLDER_TRUST`, `GROK_AUTH_PROVIDER_COMMAND`, `GROK_WEB_FETCH_PROXY`, `GROK_TRACE_UPLOAD_URL`, `GROK_TRACE_UPLOAD_BUCKET`, `GROK_TRACE_UPLOAD_ENDPOINT_URL`, `GROK_TRACE_UPLOAD_CREDENTIALS_FILE`, `GROK_CLAUDE_HOOKS_ENABLED` and `GROK_CURSOR_HOOKS_ENABLED` for grok, `CODEX_EXEC_SERVER_URL` for codex and `GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES` for gemini; `GROK_HOME`, `GROK_MODELS_BASE_URL` and `AGY_ADC_AUTH` pass, as your choices.
 
 5. **The adapter's own additions**, applied last and unconditionally — for example `GROK_WEB_FETCH=1`.
 
@@ -149,7 +149,7 @@ These are not equivalent mechanisms. Be honest with yourself about which unit yo
 |---|---|---|---|
 | **codex** | `-s read-only` — Codex's own OS-level sandbox (Seatbelt on macOS, Landlock/seccomp on Linux) — plus `--ignore-user-config --ignore-rules` | **Kernel-enforced.** The model's shell commands physically cannot write | Implemented. Kernel-scoped to the `-C <dir>` passed. Granted to `codex_code_review` with an explicit absolute `cwd` (ceiling required), and to `codex_image` in a throwaway temp dir the adapter creates (ceiling **not** consulted — see below) |
 | **grok** | Six layers on the spawn argv (below) | **Toolset-level.** The write/shell tools do not exist in the process's toolset | **Declared unsupported** — refused even with the ceiling open |
-| **gemini** | your agy `settings.json` permission policy (headless auto-deny) plus a prompt preamble | **Weakest.** No kernel sandbox; `--mode` is a permission policy | Maps to `--mode accept-edits`: edits auto-approved by agy's own permission layer inside the process cwd |
+| **gemini** | your agy `settings.json` permission policy (headless auto-deny) plus a prompt preamble | **Weakest.** No kernel sandbox; `--mode` is a permission policy | Maps to `--mode accept-edits` when the call passes `cwd`: edits auto-approved by agy's own permission layer inside it; without `cwd` the run stays read-only |
 
 ### Codex — one real layer, plus isolation
 
@@ -184,6 +184,8 @@ L2  --disallowed-tools search_tool,use_tool,Agent
     strips the meta-tools; `Agent` blocks ALL subagent spawning at the
     toolset level.
 L3  --no-subagents — belt-and-suspenders duplicate of the Agent entry.
+    --no-memory (research, review) — cross-session memory off, so no memory
+    index from your config.toml or GROK_MEMORY reaches the first turn.
 L4  --deny Bash --deny Edit --deny Write
     Permission-layer deny rules (deny > ask > allow, enforced in every
     mode). BEST-EFFORT redundancy: if a future CLI version ever injects a
@@ -198,7 +200,7 @@ L6  Prompt level, two separate things. (a) Each profile has its own
     they do for research.
 ```
 
-Image runs swap L1 for an image-**only** toolset (`--tools image_gen` or `image_edit`): no read, web or shell tools at all. `--allow WebFetch --allow WebSearch` is added to research runs only — review has no web tool to un-prompt — because a headless tool call that would prompt cancels the whole run (see the adapter header). **Residual.** A research run can still put prompt text into a `web_search` query or a `web_fetch` URL; what it can no longer put there is the contents of any file. A review run can still write anything it read into its answer, which the session reads as untrusted text. Research prompts have every `@` replaced by `＠`, because the CLI attaches any existing file a prompt names as `@path` before the model runs (measured 2026-09-25, grok 1.0.41; `--verbatim` does not stop it). `GROK_WEB_FETCH_ALLOW_LOCAL` is scrubbed from the child environment, so web_fetch's own block on loopback and private addresses stays in force; the same switch in `~/.grok/config.toml` is your file (see "Configuration the fleet did not choose"). The CLI connects to the MCP servers of your own user-level Claude config and loads your `~/.grok` rules into context, and does not start a project's `.mcp.json` (measured the same day); L2 removes the tools that would call those servers.
+Image runs swap L1 for an image-**only** toolset (`--tools image_gen` or `image_edit`): no read, web or shell tools at all. `--allow WebFetch --allow WebSearch` is added to research runs only — review has no web tool to un-prompt — because a headless tool call that would prompt cancels the whole run (see the adapter header). **Residual.** A research run can still put prompt text into a `web_search` query or a `web_fetch` URL; what it can no longer put there is the contents of any file. A review run can still write anything it read into its answer, which the session reads as untrusted text. Research prompts have every `@` replaced by `＠`, because the CLI attaches any existing file a prompt names as `@path` before the model runs (measured 2026-09-25, grok 1.0.41; `--verbatim` does not stop it). `GROK_WEB_FETCH_ALLOW_LOCAL` is scrubbed from the child environment, so web_fetch's own block on loopback and private addresses stays in force; the same switch in `~/.grok/config.toml` is your file (see "Configuration the fleet did not choose"). The CLI connects to the MCP servers of your own user-level Claude config and loads your `~/.grok` rules into context, and does not start a project's `.mcp.json` (measured the same day); L2 removes the tools that would call those servers. The three research tools — `grok_research`, `gemini_research` and `codex_research` — start in a fresh empty directory, removed after the run, unless the caller passes `cwd`, which opts the run into whatever the CLI reads from a workspace; `gemini_deep_research` takes no `cwd` and always runs in one.
 
 ### Gemini — the weakest posture, documented as such
 
