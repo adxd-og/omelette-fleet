@@ -1,4 +1,4 @@
-import { test, mock } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildChildEnv } from '../core/spawn.mjs';
 import { defineUnit } from '../core/unit.mjs';
@@ -73,15 +73,8 @@ test('defineUnit refuses a pattern in envPassthrough', () => {
   assert.deepEqual(defineUnit(spec({ envPassthrough: ['ACME_HOME'] })).envPassthrough, ['ACME_HOME']);
 });
 
-test('billingRiskEnv is an alias for riskEnv with one warning; both at once is refused', () => {
-  const warn = mock.method(console, 'error', () => {});
-  try {
-    const u = defineUnit(spec({ billingRiskEnv: ['ACME_API_KEY'] }));
-    assert.deepEqual(u.riskEnv, ['ACME_API_KEY']);
-    assert.equal(u.billingRiskEnv, undefined);
-    assert.equal(warn.mock.calls.length, 1);
-    assert.match(warn.mock.calls[0].arguments[0], /defineUnit\(acme\): billingRiskEnv is deprecated since 1\.5\.0 — rename it riskEnv \(the alias goes in 1\.6\.0\)/);
-    assert.throws(() => defineUnit(spec({ riskEnv: ['A'], billingRiskEnv: ['B'] })), /both riskEnv and billingRiskEnv — keep riskEnv/);
-    assert.deepEqual(defineUnit(spec({})).riskEnv, []);
-  } finally { warn.mock.restore(); }
+test('billingRiskEnv is refused since 1.6.0 (the 1.5.0 alias is gone); riskEnv defaults to []', () => {
+  assert.throws(() => defineUnit(spec({ billingRiskEnv: ['ACME_API_KEY'] })), /defineUnit\(acme\): billingRiskEnv was renamed riskEnv in 1\.5\.0/);
+  assert.throws(() => defineUnit(spec({ riskEnv: ['A'], billingRiskEnv: ['B'] })), /billingRiskEnv was renamed riskEnv in 1\.5\.0/);
+  assert.deepEqual(defineUnit(spec({})).riskEnv, []);
 });

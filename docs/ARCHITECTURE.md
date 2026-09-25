@@ -45,7 +45,7 @@ defineUnit({
   name: 'codex',                       // [a-z][a-z0-9-]*; also the config key and status unit
   label: 'Codex',                      // human name in error messages
   bin: { env: 'CODEX_BIN', default: 'codex' },
-  riskEnv: ['OPENAI_API_KEY'],         // deleted from every child env (billingRiskEnv: alias until 1.6.0)
+  riskEnv: ['OPENAI_API_KEY'],         // deleted from every child env
   envPassthrough: ['CODEX_HOME'],      // exact names added to core/spawn.mjs's ALLOWED_ENV for this unit's
                                        // children only; defineUnit refuses a PREFIX_* pattern. Everything
                                        // else is NOT inherited.

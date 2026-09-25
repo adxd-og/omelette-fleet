@@ -8,7 +8,7 @@
  * table-driven per-unit A/B/C/D class test, the exact-list/no-duplicate-
  * pattern assertion (with the corrected 58 grok names), OMELETTE_ENV_PASSTHROUGH
  * still admitting a pattern, defineUnit's pattern refusal, and the
- * billingRiskEnv alias/warning/both-keys-throws behaviour. This file targets
+ * billingRiskEnv rename (an alias in 1.5.0, a throw since 1.6.0). This file targets
  * what is uncovered or only implicitly covered:
  *   - the exact names called out in the tester brief (GROK_MODELS_BASE_URL,
  *     GROK_CODE_XAI_API_KEY, XAI_API_KEY, AGY_ADC_AUTH,
@@ -166,20 +166,17 @@ test('defineUnit: riskEnv alone is used as is, with no warning and no billingRis
   } finally { warn.mock.restore(); }
 });
 
-test('defineUnit: billingRiskEnv alone logs exactly one console.error and the returned unit carries no billingRiskEnv key', () => {
-  const warn = mock.method(console, 'error', () => {});
-  try {
-    const u = defineUnit(baseSpec({ billingRiskEnv: ['ACME_API_KEY', 'ACME_OTHER'] }));
-    assert.deepEqual(u.riskEnv, ['ACME_API_KEY', 'ACME_OTHER']);
-    assert.equal(warn.mock.calls.length, 1);
-    assert.equal(Object.prototype.hasOwnProperty.call(u, 'billingRiskEnv'), false);
-  } finally { warn.mock.restore(); }
+test('defineUnit: billingRiskEnv alone throws since 1.6.0 (re-pinned from the 1.5.0 alias warning)', () => {
+  assert.throws(
+    () => defineUnit(baseSpec({ billingRiskEnv: ['ACME_API_KEY', 'ACME_OTHER'] })),
+    /defineUnit\(acme\): billingRiskEnv was renamed riskEnv in 1\.5\.0/,
+  );
 });
 
-test('defineUnit: both riskEnv and billingRiskEnv throws, naming both keys', () => {
+test('defineUnit: both riskEnv and billingRiskEnv throws, naming the rename', () => {
   assert.throws(
     () => defineUnit(baseSpec({ riskEnv: ['A'], billingRiskEnv: ['B'] })),
-    /defineUnit\(acme\): both riskEnv and billingRiskEnv — keep riskEnv/,
+    /defineUnit\(acme\): billingRiskEnv was renamed riskEnv in 1\.5\.0/,
   );
 });
 
@@ -285,12 +282,13 @@ test('SECURITY step 2: no PREFIX_* pattern is named for a unit, and defineUnit\'
   assert.match(step2, /grok 58 names in `units\/grok\/adapter\.mjs`/);
 });
 
-test('SECURITY step 4: the billing scrub is named riskEnv, with billingRiskEnv called out as the one-release alias', () => {
+test('SECURITY step 4: the billing scrub is named riskEnv, and the retired billingRiskEnv alias is no longer mentioned', () => {
   const md = readDoc('docs/SECURITY.md');
   const from = md.indexOf('4. **The billing scrub**');
   assert.ok(from !== -1, 'step 4 heading not found');
   const step4 = md.slice(from, from + 400);
-  assert.match(step4, /the unit's `riskEnv` names \(`billingRiskEnv` is read as an alias for one release\)/);
+  assert.match(step4, /the unit's `riskEnv` names are deleted/);
+  assert.doesNotMatch(step4, /billingRiskEnv/);
 });
 
 test('SECURITY: "Configuration the fleet did not choose" names ~/.codex/hooks.json and the agy config/hooks/mcp files', () => {

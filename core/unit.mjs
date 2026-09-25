@@ -135,13 +135,9 @@ export function defineUnit(spec) {
       }
     }
   }
-  // riskEnv was billingRiskEnv through 1.4.0; the old key is read for one release.
-  const { billingRiskEnv, ...rest } = spec;
-  if (rest.riskEnv !== undefined && billingRiskEnv !== undefined) throw new Error(`${where}: both riskEnv and billingRiskEnv — keep riskEnv`);
-  if (billingRiskEnv !== undefined) {
-    console.error(`${where}: billingRiskEnv is deprecated since 1.5.0 — rename it riskEnv (the alias goes in 1.6.0)`);
-    rest.riskEnv = billingRiskEnv;
-  }
+  // riskEnv was billingRiskEnv through 1.4.0 and an alias through 1.5.0.
+  if (spec.billingRiskEnv !== undefined) throw new Error(`${where}: billingRiskEnv was renamed riskEnv in 1.5.0`);
+  const rest = spec;
   return {
     // The package's own version (core/update.mjs reads package.json once at
     // load): `initialize` must not keep reporting a number that was frozen into
