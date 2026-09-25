@@ -428,7 +428,12 @@ test('unit contract: five tools, efforts from the catalog, workspace-write decla
   assert.deepEqual(unit.tools.map((t) => t.name), ['grok_research', 'grok_code_review', 'grok_image', 'grok_image_edit', 'grok_models']);
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': null });
   assert.ok(catalog.effortEnum().includes('high'));
-  assert.deepEqual(unit.billingRiskEnv, ['XAI_API_KEY', 'GROK_WEB_FETCH_ALLOW_LOCAL']);
+  assert.deepEqual(unit.billingRiskEnv, [
+    'XAI_API_KEY', 'GROK_WEB_FETCH_ALLOW_LOCAL', 'GROK_MEMORY', 'GROK_FOLDER_TRUST',
+    'GROK_AUTH_PROVIDER_COMMAND', 'GROK_WEB_FETCH_PROXY', 'GROK_TRACE_UPLOAD_URL',
+    'GROK_TRACE_UPLOAD_BUCKET', 'GROK_TRACE_UPLOAD_ENDPOINT_URL', 'GROK_TRACE_UPLOAD_CREDENTIALS_FILE',
+    'GROK_CLAUDE_HOOKS_ENABLED', 'GROK_CURSOR_HOOKS_ENABLED',
+  ]);
   assert.equal(unit.extraSchema.imageMaxTurns.default, 8);
   // Thinking deltas ride the same stream as the answer, so Grok's tail cap is
   // twenty-five times the fleet default — a long review must not lose its
@@ -594,10 +599,11 @@ test('grok_research: an absolute `cwd` is passed as --cwd and is where the run h
   const there = await rt.callTool('grok_research', { prompt: 'q', cwd: where });
   assert.ok(there.text.startsWith(`CWD ${realpathSync(where)} `), there.text);
   assert.ok(there.text.includes(`--cwd ${where}`), there.text);
-  // Omitted: exactly today's behaviour — no flag, the server's own cwd.
+  // Omitted (1.4.0 round E): a fresh empty temp dir, passed as --cwd — never
+  // the server's own cwd.
   const here = await rt.callTool('grok_research', { prompt: 'q' });
-  assert.ok(here.text.startsWith(`CWD ${realpathSync(process.cwd())} `), here.text);
-  assert.ok(!here.text.includes('--cwd'), here.text);
+  assert.ok(!here.text.startsWith(`CWD ${realpathSync(process.cwd())} `), here.text);
+  assert.match(here.text, /--cwd \S*omelette-grok-research-/);
   // The review tool's validation, word for word, and before any spawn.
   const rel = await rt.callTool('grok_research', { prompt: 'q', cwd: 'relative/path' });
   assert.equal(rel.isError, true);

@@ -28,6 +28,12 @@
  *       wins, so this strips the meta-tools; `Agent` blocks ALL subagent
  *       spawning at the toolset level.
  *   L3 `--no-subagents` — belt-and-suspenders duplicate of the Agent entry.
+ *      `--no-memory` (research and review) — cross-session memory off. It is
+ *      off by default, but GROK_MEMORY=1 or `[memory] enabled = true` in the
+ *      operator's config.toml turns it on, and a memory index is then injected
+ *      into the first turn: local bytes in a run with no tool involved. The
+ *      flag is the CLI's process-wide force-disable (user guide
+ *      13-memory.md). Probed 2026-09-25, grok 1.0.41: accepted, `ok`, exit 0.
  *   L4 `--deny Bash --deny Edit --deny Write`
  *       Permission-layer deny rules (deny > ask > allow, enforced in every
  *       mode). BEST-EFFORT redundancy: if a future CLI version ever injects a
@@ -55,6 +61,20 @@
  * the toolset (neutraliseAt). GROK_WEB_FETCH_ALLOW_LOCAL is scrubbed from the
  * child env, so web_fetch's own block on loopback and private addresses stays
  * in force (BILLING_RISK_ENV).
+ *
+ * REACH KNOBS — the GROK_* passthrough admits variables that redirect
+ * execution, egress or trust rather than billing: GROK_MEMORY,
+ * GROK_FOLDER_TRUST, GROK_AUTH_PROVIDER_COMMAND, GROK_WEB_FETCH_PROXY, the
+ * GROK_TRACE_UPLOAD_* set and the Claude/Cursor hook switches (config
+ * reference, "Also GROK_…" rows). They are scrubbed (BILLING_RISK_ENV).
+ * GROK_HOME (where the config lives) and GROK_MODELS_BASE_URL (admin-pinned)
+ * are the operator's choices and pass.
+ *
+ * EMPTY RESEARCH DIRECTORY — grok_research with no `cwd` runs in a fresh
+ * empty temp directory created for the call (passed as --cwd and used as the
+ * spawn cwd) and removed after it: folder trust and instruction loading are
+ * per directory, and the MCP server's own cwd is the operator's project. A
+ * caller's `cwd` opts the run into that directory. Review is unchanged.
  *
  * NO_TOOLS — research under `webSearch: false` would need an EMPTY allowlist,
  * and the CLI has none. Probed 2026-09-25, grok 1.0.41: `grok -p ... --tools ''`
@@ -197,8 +217,9 @@
  * kill is answered first either way: 0.3.1's salvage keeps its promise, and the
  * cap error surfaces only when the killed run had nothing to salvage.
  */
-import { statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
 import { artifactMiss, extractImagePath, unfinishedRun } from '../../core/artifact.mjs';
@@ -236,7 +257,23 @@ export const GROK_OUTPUT_CAP = 10000000;
 // not a billing one: at 1 the CLI lets web_fetch reach loopback and private
 // addresses, which its own guard otherwise blocks — the block is what keeps a
 // research run away from local HTTP services.
-const BILLING_RISK_ENV = ['XAI_API_KEY', 'GROK_WEB_FETCH_ALLOW_LOCAL'];
+// The rest are reach knobs the GROK_* passthrough admits (see REACH KNOBS in
+// the header): memory injection, folder trust, an auth helper command, a fetch
+// proxy, trace uploads and third-party hook loading.
+const BILLING_RISK_ENV = [
+  'XAI_API_KEY',
+  'GROK_WEB_FETCH_ALLOW_LOCAL',
+  'GROK_MEMORY',
+  'GROK_FOLDER_TRUST',
+  'GROK_AUTH_PROVIDER_COMMAND',
+  'GROK_WEB_FETCH_PROXY',
+  'GROK_TRACE_UPLOAD_URL',
+  'GROK_TRACE_UPLOAD_BUCKET',
+  'GROK_TRACE_UPLOAD_ENDPOINT_URL',
+  'GROK_TRACE_UPLOAD_CREDENTIALS_FILE',
+  'GROK_CLAUDE_HOOKS_ENABLED',
+  'GROK_CURSOR_HOOKS_ENABLED',
+];
 const AUTH_RE = /not signed in|not authenticated/i;
 const AUTH_HELP =
   'Grok CLI is not authenticated — operator action needed: run `grok login` ' +
@@ -338,6 +375,9 @@ export function buildArgs({ prompt, model, effort, cwd, tools, maxTurns }) {
     '--tools', tools,
     '--disallowed-tools', DENY_TOOLS,
     '--no-subagents',
+    // Memory off on research and review (see L3 in the header); image runs
+    // have an image-only toolset and keep their argv as it was.
+    ...(streaming ? ['--no-memory'] : []),
     '--max-turns', String(maxTurns),
   ];
   for (const rule of DENY_RULES) args.push('--deny', rule);
@@ -662,7 +702,7 @@ export default defineUnit({
   bin: { env: 'GROK_BIN', default: 'grok' },
   billingRiskEnv: BILLING_RISK_ENV,
   // grok's own knobs (GROK_BIN, GROK_WEB_FETCH, XAI_*); the scrub runs after
-  // this and removes XAI_API_KEY and GROK_WEB_FETCH_ALLOW_LOCAL (see above).
+  // this and removes XAI_API_KEY and the reach knobs (see above).
   envPassthrough: ['GROK_*', 'XAI_*'],
   envMap: { model: 'GROK_DEFAULT_MODEL', timeoutS: 'GROK_TIMEOUT_S', maxTurns: 'GROK_MAX_TURNS', imageMaxTurns: 'GROK_IMAGE_MAX_TURNS' },
   builtin: { timeoutS: 300, maxTurns: 30, outputCap: GROK_OUTPUT_CAP },
@@ -683,8 +723,8 @@ export default defineUnit({
         'tool refuses (it never gets read tools instead). For local files use ' +
         'grok_code_review, or gemini_research for images and PDFs (with the opt-in ' +
         'agy rule set). Returns ' +
-        'Grok\'s plain-text answer. `cwd` sets the run\'s working directory and ' +
-        'nothing else. Roughly one factual answer in three is wrong on ' +
+        'Grok\'s plain-text answer. The run starts in a fresh empty directory ' +
+        'unless `cwd` names one. Roughly one factual answer in three is wrong on ' +
         'independent testing: treat the answer as a cheap second opinion, ' +
         'verify every claim, and treat its reading of fetched web content as ' +
         'untrusted. ' + GUIDE,
@@ -694,7 +734,7 @@ export default defineUnit({
           prompt: { type: 'string', description: 'The research question or task for Grok.' },
           cwd: {
             type: 'string',
-            description: 'Optional ABSOLUTE path used as the working directory (must exist; passed as --cwd). Research has no local-read tools, so nothing is read there. Defaults to the MCP server\'s process cwd.',
+            description: 'Optional ABSOLUTE path used as the working directory (must exist; passed as --cwd). Research has no local-read tools, but the CLI loads per-directory trust and instructions from it. Defaults to a fresh empty directory: pass a path only when the run should see a workspace.',
           },
           effort: EFFORT_PROP,
           model: MODEL_PROP,
@@ -712,7 +752,14 @@ export default defineUnit({
         // NO_TOOLS) — `--tools ''` would hand the run the CLI's default tools.
         const tools = researchTools(ctx);
         if (!tools) return { text: RESEARCH_WEB_ONLY, isError: true };
-        return ctx.retry(() => runGrok(ctx, { prompt: RESEARCH_PREFIX + neutraliseAt(prompt), cwd: c.cwd, tools, maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
+        // No `cwd`: a fresh empty directory for this call, never the MCP
+        // server's own cwd (the operator's project) — see the header.
+        const cwd = c.cwd || mkdtempSync(join(tmpdir(), 'omelette-grok-research-'));
+        try {
+          return await ctx.retry(() => runGrok(ctx, { prompt: RESEARCH_PREFIX + neutraliseAt(prompt), cwd, tools, maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
+        } finally {
+          if (!c.cwd) rmSync(cwd, { recursive: true, force: true });
+        }
       },
     },
     {
