@@ -681,7 +681,8 @@ export default defineUnit({
         'and web_fetch and NO local file tools, no shell, no edits, no ' +
         'subagents, no MCP (enforced at spawn). Under `webSearch: false` this ' +
         'tool refuses (it never gets read tools instead). For local files use ' +
-        'grok_code_review, or gemini_research for images and PDFs. Returns ' +
+        'grok_code_review, or gemini_research for images and PDFs (with the opt-in ' +
+        'agy rule set). Returns ' +
         'Grok\'s plain-text answer. `cwd` sets the run\'s working directory and ' +
         'nothing else. Roughly one factual answer in three is wrong on ' +
         'independent testing: treat the answer as a cheap second opinion, ' +

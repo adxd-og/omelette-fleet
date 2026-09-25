@@ -238,7 +238,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 | `timeoutS` | yes (see below) | yes | yes |
 | `maxTurns` | — | `--max-turns` | — |
 | `outputCap` | bounds stdout; a capped run is marked partial or refused — see below | bounds stdout (built-in `10000000`); same — see below | bounds stdout (built-in `4000000`); same — see below |
-| `webSearch` | — | research: `web_search,web_fetch`, or refused when `false`; review: never web | research: `-c tools.web_search=<bool>`; review: always `false` |
+| `webSearch` | — | research: `web_search,web_fetch`, or refused when `false`; review: never web | research: `-c web_search="live"`, or `"disabled"` when `false`; review: always `"disabled"` |
 | `cancel` | yes — the runtime honours it for every unit | yes | yes |
 | `imageMaxTurns` | — | image runs only | — |
 

@@ -531,7 +531,7 @@ const MODEL_PROP = {
 export default defineUnit({
   name: 'gemini',
   label: 'Gemini',
-  instructions: 'This unit: Gemini via the Antigravity CLI (agy). Web-grounded research (gemini_research), multi-source deep research (gemini_deep_research — about 5 CLI runs and minutes per call, use deliberately), multimodal reads of local images and PDFs (absolute path, and say "view the file directly, no terminal commands" — shell tools are auto-denied), image generation. The weakest sandbox in the fleet: its read-only posture is a permission policy, not a kernel.',
+  instructions: 'This unit: Gemini via the Antigravity CLI (agy). Web-grounded research (gemini_research), multi-source deep research (gemini_deep_research — about 5 CLI runs and minutes per call, use deliberately), multimodal reads of local images and PDFs (absolute path, and say "view the file directly, no terminal commands" — shell tools are auto-denied — needs `read_file(*)` in the agy allow-rules, the opt-in set in SECURITY), image generation. The weakest sandbox in the fleet: its read-only posture is a permission policy, not a kernel.',
   bin: { env: 'AGY_BIN', default: 'agy' },
   billingRiskEnv: BILLING_RISK_ENV,
   // agy's own knobs (AGY_BIN/AGY_*), plus the GEMINI_*/GOOGLE_* namespaces the

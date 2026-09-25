@@ -10,7 +10,8 @@ test('SECURITY states the perimeter rule and the two Grok profiles', () => {
   const md = read('docs/SECURITY.md');
   assert.doesNotMatch(md, /no run reads local files and reaches the web at once/);
   assert.match(md, /a Codex review run reads inside a kernel sandbox and has no web/);
-  assert.match(md, /the one run that holds local reads and the web at once is `codex_research`, by design/);
+  assert.doesNotMatch(md, /the one run that holds local reads and the web at once/);
+  assert.match(md, /the runs that hold local reads and the web at once are `codex_research`, by design \(research that depends on running things\), and `gemini_research` under the opt-in agy rule set, by the operator's choice/);
   assert.match(md, /L1 {2}research: --tools web_search,web_fetch/);
   assert.match(md, /^ {4}review: {3}--tools read_file,grep,list_dir/m);
   assert.doesNotMatch(md, /--tools read_file,grep,list_dir,web_search,web_fetch/);
@@ -37,7 +38,8 @@ test('ORCHESTRATION and CONFIG say what grok_research reads and what webSearch d
 
 test('SECURITY: the Codex section states the review/research web split', () => {
   const md = read('docs/SECURITY.md');
-  assert.match(md, /`codex_code_review` always runs with `tools\.web_search=false`/);
+  assert.match(md, /`codex_code_review` always runs with the `web_search` setting `"disabled"`/);
+  assert.doesNotMatch(md, /tools\.web_search/);
 });
 
 test('the opt-in agy set does not pretend an exact-path deny covers the result spool', () => {
@@ -46,11 +48,17 @@ test('the opt-in agy set does not pretend an exact-path deny covers the result s
   assert.match(md, /cannot be named by an exact-path deny, so under the opt-in set past unit answers are readable by an injected page/);
 });
 
-test('the Gemini local-file route points at the opt-in agy rule set', () => {
+test('the Gemini local-file route points at the opt-in agy rule set', async () => {
   const opt = /needs the opt-in agy rule set \(SECURITY, Recommended agy allow-rules\)/;
   assert.match(read('rules/omelette-fleet.md').split('\n').find((l) => l.startsWith('| Reading local images')), opt);
   assert.match(read('docs/ORCHESTRATION.md').split('\n').find((l) => l.startsWith('| Reading local images')), opt);
   assert.match(read('units/gemini/adapter.mjs'), /needs `read_file\(\*\)` in the operator's agy allow-rules — the opt-in set in SECURITY/);
+  const pointer = /needs `read_file\(\*\)` in the agy allow-rules, the opt-in set in (SECURITY|\[SECURITY\]\(docs\/SECURITY\.md#recommended-agy-allow-rules\))/;
+  assert.match(read('README.md').split('\n').find((l) => l.startsWith('| **gemini** |')), pointer);
+  const gemini = (await import('../units/gemini/adapter.mjs')).default;
+  assert.match(gemini.instructions, pointer);
+  const grok = (await import('../units/grok/adapter.mjs')).default;
+  assert.match(grok.tools.find((t) => t.name === 'grok_research').description, /gemini_research for images and PDFs \(with the opt-in agy rule set\)/);
 });
 
 test('CONFIG: codex webSearch affects research only', () => {
