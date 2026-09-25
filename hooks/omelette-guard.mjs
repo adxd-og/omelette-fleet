@@ -87,9 +87,9 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  * `git` invocation that writes history, a ref, a stash or a worktree. Matched
  * against real git syntax rather than its tidiest form, and read the way the
  * shell reads the command — the comments come off (withoutComments), the rest
- * becomes words, separators and redirections in one pass (tokenize), and every
- * `git … <subcommand>` in those words is found with its own arguments
- * (invocations). Then:
+ * becomes words, separators, redirections and command substitutions in one pass
+ * (tokenize), and every `git … <subcommand>` in those words is found with its
+ * own arguments (invocations). Then:
  *   - a subcommand in WRITES_HISTORY writes, whatever follows it;
  *   - `branch`, `checkout`, `switch`, `tag` and `rebase` are read by their
  *     ARGUMENTS, because a flag anywhere among them decides what they do — see
@@ -159,6 +159,32 @@ function withoutComments(command) {
 const SEPARATORS = new Set([';', '&', '|', '\n', '\r']);
 
 /**
+ * Where the command substitution opened at `start` — `$(` or a backquote — ends:
+ * the index of its closing `)` or backquote, or the command's length when it
+ * never closes. `$(…)` nests, so its parentheses are counted, outside quotes;
+ * a backquoted one ends at the next backquote that no backslash escapes.
+ */
+function substitutionEnd(command, start) {
+  if (command[start] === '`') {
+    for (let j = start + 1; j < command.length; j++) {
+      if (command[j] === '\\') j++;
+      else if (command[j] === '`') return j;
+    }
+    return command.length;
+  }
+  let depth = 0;
+  let quote = '';
+  for (let j = start + 1; j < command.length; j++) {
+    const c = command[j];
+    if (quote) { if (c === quote) quote = ''; continue; }
+    if (c === '"' || c === "'") quote = c;
+    else if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return j;
+  }
+  return command.length;
+}
+
+/**
  * The whole command as WORDS and SEPARATORS, in one left-to-right pass. A quoted
  * span is opaque — the whitespace, the `;` and the `>` inside it belong to the
  * value, and a word that OPENS with a quote is a value rather than a flag, so
@@ -168,16 +194,26 @@ const SEPARATORS = new Set([';', '&', '|', '\n', '\r']);
  * one word `git tag v1` — because `sh -c 'git commit'` runs that word, and
  * forbidden reads it again as a command.
  *
+ * A COMMAND SUBSTITUTION IS A COMMAND OF ITS OWN. An unquoted `$(…)` or
+ * backquoted one is part of ONE word of the command around it — in the word it
+ * stands as its bare delimiters, `$()` — and what it runs is handed back to be
+ * read as a command. So `git checkout $(git tag -l v1) -b new` is a checkout
+ * whose start point comes from a listing, and `-b new` is the checkout's; `git
+ * -C $(git rev-parse --show-toplevel) commit` commits. What a substitution
+ * PRINTS is not known here and is not guessed at: it is one word, no flag.
+ *
  * A REDIRECTION IS THE SHELL'S. An unquoted `<`, `>`, `>>`, `>|`, `<>`, `&>`,
  * `&>>`, `>&`, `<&`, `<<`, `<<-` or `<<<` ends the word before it, takes a
  * leading fd number with it (`2>`, `2>&1`), and makes the next word — attached
  * (`>--abort`) or after a space — its TARGET. git sees neither, so a target is
- * nobody's argument: `git tag t > --list` creates `t`, and `git tag > tags.txt`
- * lists. A target stays in the list, flagged, because a command substitution can
- * start there (`> $(git tag v1)`); a `<(` or `>(` is a process substitution and
- * no redirection at all.
+ * no word at all: `git tag t > --list` creates `t`, and `git tag > tags.txt`
+ * lists. A substitution or a quoted word inside a target is still handed back
+ * (`> $(git tag v1)`); a `<(` or `>(` is a process substitution and no
+ * redirection at all.
  *
- * @returns {object} `{ tokens, spans }`: each token `{ text, quoted, separator, redirect }`, each span one quoted word with its quotes off
+ * @returns {object} `{ tokens, spans }`: each token `{ text, quoted, separator }`,
+ *   each span a text to read again as a command — a quoted word with its quotes
+ *   off, or what a command substitution runs
  */
 function tokenize(command) {
   const tokens = [];
@@ -188,7 +224,7 @@ function tokenize(command) {
   let redirect = false; // the next word is a redirection's target
   const push = () => {
     if (!text) return;
-    tokens.push({ text, quoted, separator: false, redirect });
+    if (!redirect) tokens.push({ text, quoted, separator: false });
     const plain = unquote(text); // only a word that held a quote loses a character here
     if (plain !== text) spans.push(plain);
     text = '';
@@ -204,6 +240,16 @@ function tokenize(command) {
     }
     if (c === '"' || c === "'") { quoted = quoted || !text; text += c; quote = c; continue; }
     const next = command[i + 1] ?? '';
+    if ((c === '$' && next === '(') || c === '`') {
+      const end = substitutionEnd(command, i);
+      const open = c === '`' ? '`' : '$(';
+      spans.push(command.slice(i + open.length, end));
+      // Its bare delimiters, never longer than what they stand for, so a word
+      // read again is never longer than the one it came from.
+      text += end < command.length ? `${open}${c === '`' ? '`' : ')'}` : open;
+      i = end;
+      continue;
+    }
     if (((c === '<' || c === '>') && next !== '(') || (c === '&' && next === '>')) {
       if (/^\d+$/.test(text)) text = ''; else push(); // `2>`: the fd number is part of the operator
       if (c === '&') i++; //                             `&>`, `&>>`: the `>` comes next
@@ -217,7 +263,7 @@ function tokenize(command) {
     if (SEPARATORS.has(c)) {
       push();
       redirect = false;
-      tokens.push({ text: c, quoted: false, separator: true, redirect: false });
+      tokens.push({ text: c, quoted: false, separator: true });
       continue;
     }
     if (/\s/.test(c)) { push(); continue; }
@@ -227,13 +273,15 @@ function tokenize(command) {
   return { tokens, spans };
 }
 
-/** A word that ends in `git` where a word begins — `git`, `/usr/bin/git`, `$(git` — which is where an invocation can start. */
+/** A word that ends in `git` where a word begins — `git`, `/usr/bin/git`, `(git` — which is where an invocation can start. */
 const isGitWord = ({ text, separator }) => !separator && text.endsWith('git') && !/\w/.test(text.charAt(text.length - 4));
+
+/** A word that runs `xargs`, which hands the command after it arguments this command does not show. */
+const isXargsWord = ({ text, separator }) => !separator && /(?:^|\/)xargs$/.test(unquote(text));
 
 /**
  * The subcommand of the `git` word at `at`, as `{ name, from }` — `from` is the
- * index its arguments start at — or null when the words after it name none. A
- * redirection's target inside the option run is stepped over.
+ * index its arguments start at — or null when the words after it name none.
  *
  * A SPACED VALUE MAY BE THE SUBCOMMAND INSTEAD, behind a value-less option this
  * guard has not heard of (`git --no-newflag commit`). So when the run ends on a
@@ -250,13 +298,11 @@ const isGitWord = ({ text, separator }) => !separator && text.endsWith('git') &&
 function subcommandAt(tokens, at) {
   let j = at + 1;
   let fallback = -1;
-  const skipTargets = () => { while (j < tokens.length && tokens[j].redirect && !isGitWord(tokens[j])) j++; };
   const isWord = () => j < tokens.length && !tokens[j].separator && !isGitWord(tokens[j]);
-  for (skipTargets(); isWord(); skipTargets()) {
+  while (isWord()) {
     const { text } = tokens[j];
     if (GLOBAL_VALUED.test(text) && !GLOBAL_NO_VALUE.has(text)) {
       j++;
-      skipTargets();
       if (isWord() && !tokens[j].text.startsWith('-')) {
         if (SUBCOMMAND.test(tokens[j].text)) fallback = j;
         j++;
@@ -271,13 +317,15 @@ function subcommandAt(tokens, at) {
 
 /**
  * Every `git … <subcommand>` in the words, each with its ARGUMENTS: the words
- * after the subcommand, up to the next separator, and no redirection's target
- * among them. A `git` word with no subcommand behind it (`git tag x-git`) is an
- * argument like any other. One that starts an invocation of its own is too, and
- * so is everything up to and including ITS subcommand — git hands those words
- * to the first invocation (`git checkout git -b tag` creates `tag` from a ref
- * called `git`) — but the words after that subcommand are the new invocation's
- * alone.
+ * after the subcommand, up to the next separator. A `git` word with no
+ * subcommand behind it (`git tag x-git`) is an argument like any other. One that
+ * starts an invocation of its own is too, and so is everything up to and
+ * including ITS subcommand — git hands those words to the first invocation
+ * (`git checkout git -b tag` creates `tag` from a ref called `git`) — but the
+ * words after that subcommand are the new invocation's alone.
+ *
+ * An invocation behind an `xargs` word in the same command is marked `xargs`:
+ * the arguments that decide it arrive on xargs' input, not in the command.
  *
  * That cut is what keeps the whole scan linear in the command's length however
  * many invocations it holds: every word is read at most twice, once by a
@@ -288,16 +336,17 @@ function subcommandAt(tokens, at) {
  */
 function invocations(tokens) {
   const calls = [];
-  let call = null; // the invocation whose arguments are being collected
+  let call = null; //    the invocation whose arguments are being collected
+  let xargs = false; //  an `xargs` word earlier in this command
   const collect = (from, to) => {
-    for (let k = from; k < to; k++) if (call && !tokens[k].redirect) call.args.push(tokens[k]);
+    for (let k = from; k < to; k++) if (call) call.args.push(tokens[k]);
   };
   for (let i = 0; i < tokens.length;) {
-    if (tokens[i].separator) { call = null; i++; continue; }
+    if (tokens[i].separator) { call = null; xargs = false; i++; continue; }
     const found = isGitWord(tokens[i]) ? subcommandAt(tokens, i) : null;
-    if (!found) { collect(i, i + 1); i++; continue; }
+    if (!found) { xargs = xargs || isXargsWord(tokens[i]); collect(i, i + 1); i++; continue; }
     collect(i, found.from); // the `git` word, its options and its subcommand
-    call = { name: found.name, args: [] };
+    call = { name: found.name, args: [], xargs };
     calls.push(call);
     i = found.from;
   }
@@ -628,36 +677,50 @@ const WRITES_BY_ARGUMENTS = new Map([
  * A word that OPENS with a subcommand the guard answers for, and which one —
  * built from the two tables above, so a subcommand the guard can find is always
  * one it can answer. Whatever follows the name inside the same word is no
- * argument of it (`$(git tag)` ends in `tag)`); a name followed by `-` or a word
+ * argument of it (`(git tag)` ends in `tag)`); a name followed by `-` or a word
  * character is another subcommand altogether.
  */
 const SUBCOMMAND = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUMENTS.keys()].join('|')})(?![\\w-])`);
 
 /**
- * How deep a quoted word is read again inside another. `sh -c "bash -c 'git
- * push'"` is two levels, and joined pieces (`'"'"'`) let the shell nest deeper
- * — without end, which the scan must not follow. A level is never longer than
- * the one it came from, so each adds at most one more reading of the command;
- * past the last, a quoted word that still names `git` is refused unread.
+ * The subcommands that WRITE when xargs feeds them: what decides each one is in
+ * its arguments — a name for `tag` and `branch`, a flag anywhere for all four —
+ * and under xargs those arguments are lines of input the command never shows:
+ * `xargs git tag < names.txt` creates a tag per line. `rebase` needs no entry:
+ * its own reading refuses every rebase but an undo or explain word, and git
+ * takes that word only as the whole argument list, so anything xargs appends
+ * turns it into a usage error.
+ */
+const FED_BY_XARGS_WRITES = new Set(['branch', 'checkout', 'switch', 'tag']);
+
+/**
+ * How deep a quoted word or a command substitution is read again inside
+ * another. `sh -c "bash -c 'git push'"` is two levels, and joined pieces
+ * (`'"'"'`) or nested `$(…)` let the shell go deeper — without end, which the
+ * scan must not follow. A level is never longer than the one it came from, so
+ * each adds at most one more reading of the command; past the last, a text that
+ * still names `git` is refused unread.
  */
 const QUOTE_DEPTH = 4;
 
 /**
  * Everything a guarded role may not run, in one question: the comments come off,
  * the command is tokenized once, and each invocation is answered — a history
- * writer always, the other five by their arguments. Then every quoted word is
- * asked the same question, because `sh -c 'git commit'` runs it. Each step is a
- * single pass and there are at most QUOTE_DEPTH + 1 levels, so a 10 KB command
- * costs milliseconds and is never tiled.
+ * writer always, one fed by xargs when FED_BY_XARGS_WRITES names it, the other
+ * five by their arguments. Then every quoted word and every command substitution
+ * is asked the same question, because `sh -c 'git commit'` and `$(git commit)`
+ * run it. Each step is a single pass and there are at most QUOTE_DEPTH + 1
+ * levels, so a 10 KB command costs milliseconds and is never tiled.
  */
 const forbidden = (raw, depth = 0) => {
   const { tokens, spans } = tokenize(withoutComments(raw));
-  return invocations(tokens).some(({ name, args }) => WRITES_HISTORY.has(name) || WRITES_BY_ARGUMENTS.get(name)(args))
+  return invocations(tokens).some(({ name, args, xargs }) => WRITES_HISTORY.has(name)
+    || (xargs && FED_BY_XARGS_WRITES.has(name)) || WRITES_BY_ARGUMENTS.get(name)(args))
     || spans.some((span) => (depth < QUOTE_DEPTH ? forbidden(span, depth + 1) : /\bgit\b/.test(span)));
 };
 /**
- * THE ROLES THIS GUARD CONTAINS. Both shipped definitions run the same Bash
- * tool and the operating model asks the same thing of both — the coder reports
+ * THE ROLES THIS GUARD CONTAINS. Every shipped definition runs the same Bash
+ * tool and the operating model asks the same thing of each — the coder reports
  * instead of committing, the tester runs the suite and reports what it saw —
  * but until 0.3.4 only the coder's half was ENFORCED and the tester's was prose.
  * A tester that stashed the tree to get a clean run was hiding the very diff the
@@ -939,23 +1002,29 @@ function lastHandoffBlock(text, { maxLines = 40, maxBytes = 4096 } = {}) {
 }
 
 /**
+ * The fence a line leaves open, given the one open before it: ``` or ~~~ opens
+ * one, and only the same character at least as long closes it.
+ */
+function fenceAfter(fence, line) {
+  const f = FENCE.exec(line);
+  if (!f) return fence;
+  if (!fence) return f[1];
+  return f[1][0] === fence[0] && f[1].length >= fence.length ? '' : fence;
+}
+
+/**
  * THE FRESHNESS GATE'S QUESTION, asked the way lastHandoffBlock reads: is there
  * a handoff heading on a line of its own OUTSIDE a fenced block? Fences are
  * counted and lines split exactly as above (HANDOFF_LINE_BREAK) — the four
  * breaks a JavaScript `m` regex ends a line at, so every unfenced heading the
- * gate counted before still counts. Only the bytes
- * appended since the crossing are read, so a fence opened BEFORE the crossing
- * and still open is not seen: the limit TAIL_NOTE names for the print.
+ * gate counted before still counts. `fence` is the fence still open where the
+ * text begins: freshHandoff reads only what was appended since the crossing,
+ * and a fence the ledger opened before it is seeded here, so the append's
+ * closing fence closes it rather than opening one.
  */
-function freshHeading(text) {
-  let fence = '';
+function freshHeading(text, fence = '') {
   for (const line of String(text || '').split(HANDOFF_LINE_BREAK)) {
-    const f = FENCE.exec(line);
-    if (f) {
-      if (!fence) fence = f[1];
-      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = '';
-      continue;
-    }
+    if (FENCE.test(line)) { fence = fenceAfter(fence, line); continue; }
     if (!fence && HANDOFF_HEADING.test(line)) return true;
   }
   return false;
@@ -1430,23 +1499,41 @@ function writeState(dir, change) {
  * of their own, and anything else means the first line of the read is the tail
  * of an older one and is dropped. Offset 0 is exempt — a file's first byte
  * begins a line by definition.
+ *
+ * A FENCE OPENED BEFORE THE CROSSING is still open in the appended bytes, so the
+ * lines before them are read too — at most LEDGER_READ_MAX, as the print reads —
+ * and the fence they leave open seeds freshHeading. The line the offset cuts
+ * belongs to them, whole. A fence opened further back than that is not seen:
+ * the limit TAIL_NOTE names for the print.
  */
 function freshHandoff(dir, names, entry) {
   const recorded = isObject(entry) && isObject(entry.ledgers) ? entry.ledgers : {};
   for (const name of names) {
+    const path = join(dir, name);
     const size = recorded[name];
     const offset = Number.isInteger(size) && size > 0 ? size : 0;
     const from = offset > 0 ? offset - 1 : 0;
-    let text = readBounded(join(dir, name), APPEND_READ_MAX, { from });
+    let text = readBounded(path, APPEND_READ_MAX, { from });
     if (!text) continue;
-    if (offset > 0 && text[0] !== '\n') {
-      // The read opened mid-line: everything up to the first newline belongs to
-      // a line that started before the crossing, and the newline itself is kept
-      // so the line after it is still a line start.
-      const nl = text.indexOf('\n');
-      text = nl < 0 ? '' : text.slice(nl);
+    let fence = '';
+    if (offset > 0) {
+      // Everything before the byte the read opened on, bounded; a read that
+      // starts mid-file drops its first, partial, line.
+      const seedFrom = Math.max(0, from - LEDGER_READ_MAX);
+      let before = readBounded(path, from - seedFrom, { from: seedFrom }) || '';
+      if (seedFrom > 0) { const nl = before.indexOf('\n'); before = nl < 0 ? '' : before.slice(nl + 1); }
+      if (text[0] !== '\n') {
+        // The read opened mid-line: everything up to the first newline belongs to
+        // a line that started before the crossing — counted with the lines before
+        // it, and dropped here — and the newline itself is kept so the line after
+        // it is still a line start.
+        const nl = text.indexOf('\n');
+        before += nl < 0 ? text : text.slice(0, nl);
+        text = nl < 0 ? '' : text.slice(nl);
+      }
+      for (const line of before.split(HANDOFF_LINE_BREAK)) fence = fenceAfter(fence, line);
     }
-    if (text && freshHeading(text)) return true;
+    if (text && freshHeading(text, fence)) return true;
   }
   return false;
 }

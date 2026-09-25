@@ -1176,3 +1176,46 @@ test('PreToolUse: a git write inside nested quoting is refused at every depth; a
     }
   }
 });
+
+/*
+ * 1.3.0 release fix round: two writes the 1.2.0 guard refused and the token
+ * classifier let through.
+ */
+test('PreToolUse: a command substitution is ONE word of the command around it, and what it runs is read as a command of its own', () => {
+  const g = guard();
+  for (const command of [
+    // The substitution is the start point; `-b new` belongs to the checkout,
+    // not to the `tag` listing inside the substitution.
+    'git checkout $(git tag -l v1) -b new',
+    'git switch $(git tag -l v1) -c new',
+    'git checkout `git tag -l v1` -b new',
+    'git switch `git tag -l v1` -c new',
+    // The substitution is `-C`'s value, and `commit` is the subcommand.
+    'git -C $(git rev-parse --show-toplevel) commit -m x',
+    'git -C $(mktemp -d) commit -m x',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+  for (const command of ['git tag -l $(git rev-parse HEAD)', 'echo $(git tag -l)']) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+});
+
+test('PreToolUse: a tag, branch, checkout or switch fed its arguments by xargs is a write — the names never appear in the command', () => {
+  const g = guard();
+  for (const command of ['xargs git tag < names.txt', 'xargs git branch < names.txt']) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+  // Without xargs, a redirection still adds nothing: these list.
+  for (const command of ['git tag > tags.txt', 'git tag 2>/dev/null']) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+});

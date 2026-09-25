@@ -1347,3 +1347,13 @@ test('Stop: a `## Handoff` inside a fenced block is an example, not the block â€
   appendFileSync(real.ledger(), '\n~~~md\n## Handoff\nexample only\n~~~\n\n## Handoff 2026-09-24T12:05Z\nWhere it stands: T5 in review.\n');
   silent(fire(g, stopEvent(real)), 'a heading outside the fence is the handoff');
 });
+
+test('Stop: a fence the ledger opened BEFORE the crossing is still open in the appended text â€” its closing fence closes it, and the heading after it is the block', () => {
+  const g = guard();
+  // The fence opens before the recorded offset and is still open when the
+  // threshold is crossed; the append closes it and then writes the handoff.
+  const p = project(g, 'fence-before-offset', { ledgers: { 'ledger-0.3.4.md': '# ledger\n\n```md\nan example, still open\n' } });
+  cross(g, p);
+  appendFileSync(p.ledger(), '```\n## Handoff\nready\n');
+  silent(fire(g, stopEvent(p)), 'the heading after the closing fence is the handoff');
+});
