@@ -216,7 +216,8 @@ function substitutionEnd(command, start) {
  * (`>--abort`) or after a space — its TARGET. git sees neither, so a target is
  * no word at all: `git tag t > --list` creates `t`, and `git tag > tags.txt`
  * lists. A substitution or a quoted word inside a target is still handed back
- * (`> $(git tag v1)`, `< <(git commit)`): the word goes, what it runs does not.
+ * (`> $(git tag v1)`, `< <(git commit)`, and a `(` right behind the operator,
+ * `>>(git push)`): the word goes, what it runs does not.
  *
  * @returns {object} `{ tokens, spans }`: each token `{ text, quoted, separator }`,
  *   each span a text to read again as a command — a quoted word with its quotes
@@ -265,6 +266,16 @@ function tokenize(command) {
       else if (command[i] === '<' && follows('<')) { i++; if (follows('<-')) i++; } // `<<`, `<<<`, `<<-`
       else if (command[i] === '<' && follows('>&')) i++; //                 `<>`, `<&`
       redirect = true;
+      if (follows('(')) {
+        // A `(` right behind the operator — `>>(…)`, `2>>(…)`, `<<(…)`, `&>>(…)`,
+        // `>|(…)` — is a process substitution as the target: zsh runs what is
+        // inside it. Read as `>(…)` is above: the target word goes (its bare
+        // `()`), what it runs is handed back.
+        const end = substitutionEnd(command, i);
+        spans.push(command.slice(i + 2, end));
+        text += end < command.length ? '()' : '(';
+        i = end;
+      }
       continue;
     }
     if (SEPARATORS.has(c)) {

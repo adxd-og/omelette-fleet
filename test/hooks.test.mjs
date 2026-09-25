@@ -1280,3 +1280,26 @@ test('PreToolUse: a reset that rewrites the tree, update-ref and a writing symbo
     }
   }
 });
+
+test('PreToolUse: a `(` right behind any redirection operator opens a process substitution — zsh runs what is inside it', () => {
+  const g = guard();
+  for (const command of [
+    // zsh reads each as a redirection into a process substitution and runs the
+    // command inside; the operator must not swallow the `(` behind it.
+    'echo x >>(git commit -m y)',
+    'echo x 2>>(git push)',
+    'cat <<(git push)',
+    'echo x &>>(git push)',
+    'echo x >|(git commit -m y)',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+  // An ordinary target, a heredoc marker and an appending listing stay what they are.
+  for (const command of ['echo x >> out.txt', 'cat << EOF', 'git tag >> tags.txt']) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+});
