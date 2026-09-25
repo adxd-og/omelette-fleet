@@ -211,7 +211,7 @@ Every unit understands these. Adapters may add their own (below).
 | `timeoutS` | positive int | `300` | Wall-clock bound for one vendor run. See the per-unit note below |
 | `maxTurns` | positive int | `30` | Tool-loop cap. Consumed by Grok only |
 | `outputCap` | positive int | `400000` | Characters of a run's stdout kept. The **last** ones — see the note below |
-| `webSearch` | boolean | `true` | Whether the unit's web tools are available |
+| `webSearch` | boolean | `true` | Whether the unit's web tools are available. grok: affects research only (review is local-only and never has web tools); `false` makes `grok_research` refuse (it is web-only and never gets read tools instead) |
 | `status` | boolean | `true` | Write the status feed for this unit |
 | `results` | boolean | `true` | Spool every answer of this unit to `<home>/results/<unit>/` before the response is sent |
 | `resultsKeep` | positive int | `50` | How many spooled results this unit keeps. The oldest by `endedAt` go first |
@@ -238,7 +238,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 | `timeoutS` | yes (see below) | yes | yes |
 | `maxTurns` | — | `--max-turns` | — |
 | `outputCap` | bounds stdout; a capped run is marked partial or refused — see below | bounds stdout (built-in `10000000`); same — see below | bounds stdout (built-in `4000000`); same — see below |
-| `webSearch` | — | drops `web_search`/`web_fetch` from the toolset | `-c tools.web_search=<bool>` |
+| `webSearch` | — | research: `web_search,web_fetch`, or refused when `false`; review: never web | `-c tools.web_search=<bool>` |
 | `cancel` | yes — the runtime honours it for every unit | yes | yes |
 | `imageMaxTurns` | — | image runs only | — |
 

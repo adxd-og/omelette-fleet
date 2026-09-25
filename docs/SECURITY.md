@@ -21,11 +21,11 @@ The short version: units read, the manager writes. Everything below explains wha
 | Which protections here are only best-effort, not guarantees? | [What is best-effort](#what-is-best-effort) |
 | What's the underlying design principle here? | [Units propose, the manager applies](#units-propose-the-manager-applies) |
 | How is this package itself audited for security, and what did the audit find? | [How this package is audited](#how-this-package-is-audited) |
-| What agy permission rules does Gemini research actually need? | [Recommended agy allow-rules](#recommended-agy-allow-rules) |
+| Which agy permission rules does Gemini research need, and what does each set allow? | [Recommended agy allow-rules](#recommended-agy-allow-rules) |
 
 ## Threat model
 
-**Prompt injection through content a unit ingests.** Every unit is pointed at untrusted material by design — fetched web pages during research, and repository contents during review. A page or a file can contain instructions aimed at the model. The mitigation is not detection; it is that a unit has nothing to act with. A compromised unit can return misleading *text*, and that text is what you have to distrust — never execute instructions a unit reports finding, and verify facts it brings back from the web.
+**Prompt injection through content a unit ingests.** Every unit is pointed at untrusted material by design — fetched web pages during research, and repository contents during review. A page or a file can contain instructions aimed at the model. The mitigation is not detection; it is that a unit has nothing to act with, because no run reads local files and reaches the web at once: a Grok research run has the web and no local files, a Grok review run has local files and no web, Codex reads inside a kernel sandbox, and for Gemini the same holds only under the web-research rule set below ([Recommended agy allow-rules](#recommended-agy-allow-rules)). A compromised unit can return misleading *text*, and that text is what you have to distrust — never execute instructions a unit reports finding, and verify facts it brings back from the web.
 
 **Secrets reachable by a model that can run shell commands.** A vendor CLI is not a library call: it runs a model that reads files and executes read-only commands. Anything in that process's environment is therefore readable by the model and can end up in an answer, in a log, or in a web request. Inheriting the MCP server's environment would hand a review run your `GH_TOKEN`, your cloud credentials and everything else exported in your shell. Hence the env allowlist below.
 
@@ -166,11 +166,17 @@ One smaller hardening: the prompt is fed on **stdin** (`codex exec -`), so a pro
 ### Grok — layers L1–L6
 
 ```
-L1  --tools read_file,grep,list_dir,web_search,web_fetch
-    THE GUARANTEE. Headless allowlist of builtin tools. With --tools set,
-    default tool injection is DISABLED — bash (run_terminal_cmd),
-    search_replace (edit), todo_write, task, image/video gen, deploy_app
-    etc. simply do not exist in the toolset.
+L1  research: --tools web_search,web_fetch
+    review:   --tools read_file,grep,list_dir
+    THE GUARANTEE, and the perimeter rule: two profiles, never both. With
+    --tools set, default tool injection is DISABLED — bash
+    (run_terminal_cmd), search_replace (edit), todo_write, task,
+    image/video gen, deploy_app etc. simply do not exist in the toolset —
+    and no argv holds a read_* tool next to a web_* tool, so injected
+    content can neither read a file into a URL nor reach the network
+    with what it read. `webSearch: false` makes research refuse: the CLI
+    has no empty allowlist (`--tools ''` means no allowlist at all, the
+    full default toolset), so a research run without the web is not run.
 L2  --disallowed-tools search_tool,use_tool,Agent
     The final toolset otherwise retains always-on MCP meta-tools;
     search_tool/use_tool could reach your own MCP servers (which DO
@@ -183,8 +189,8 @@ L4  --deny Bash --deny Edit --deny Write
     mode). BEST-EFFORT redundancy: if a future CLI version ever injects a
     shell/edit tool past L1/L2, the permission engine still denies it.
 L5  --max-turns <N> — runaway-loop cap (config maxTurns, default 30).
-L6  Prompt level, two separate things. (a) The read-only preamble is on
-    BOTH research and review prompts. (b) The fleet's MUTATE_RE intent
+L6  Prompt level, two separate things. (a) Each profile has its own
+    preamble (web-only / local-only). (b) The fleet's MUTATE_RE intent
     gate runs on grok_research prompts only — it is deliberately skipped
     for grok_code_review, where "review the last git commit" is a
     legitimate read-only ask. Weakest layer either way; L1/L2 are what
@@ -192,7 +198,7 @@ L6  Prompt level, two separate things. (a) The read-only preamble is on
     they do for research.
 ```
 
-Image runs swap L1 for an image-**only** toolset (`--tools image_gen` or `image_edit`): no read, web or shell tools at all. `--allow WebFetch --allow WebSearch` is added to research/review runs only, because a headless tool call that would prompt (web_fetch's domain approval) does not fail closed — it *cancels the entire run*, exit 0 with no answer. Those allow rules can only un-prompt the two web tools; L1 already bounds the toolset and deny still beats allow. Setting `webSearch: false` drops `web_search`/`web_fetch` from L1 and the allow rules with them.
+Image runs swap L1 for an image-**only** toolset (`--tools image_gen` or `image_edit`): no read, web or shell tools at all. `--allow WebFetch --allow WebSearch` is added to research runs only — review has no web tool to un-prompt — because a headless tool call that would prompt cancels the whole run (see the adapter header). **Residual.** A research run can still put prompt text into a `web_search` query or a `web_fetch` URL; what it can no longer put there is the contents of any file. A review run can still write anything it read into its answer, which the session reads as untrusted text.
 
 ### Gemini — the weakest posture, documented as such
 
