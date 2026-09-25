@@ -308,7 +308,7 @@ test('SECURITY: "Configuration the fleet did not choose" names ~/.codex/hooks.js
 
 test('SECURITY: the environment allowlist is stated as policy, not configuration isolation, and points at the config paragraph', () => {
   const md = readDoc('docs/SECURITY.md');
-  assert.match(md, /This is an environment policy, not configuration isolation: the files a CLI reads on its own are under \[Configuration the fleet did not choose\]\(#configuration-the-fleet-did-not-choose\)\./);
+  assert.match(md, /This is an environment policy, not configuration isolation: the files a CLI reads on its own are under "Configuration the fleet did not choose" in the \[Threat model\]\(#threat-model\)\./);
 });
 
 test('ADAPTERS checklist: envPassthrough is exact names, and defineUnit refuses a PREFIX_* pattern', () => {

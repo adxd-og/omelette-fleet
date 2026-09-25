@@ -86,7 +86,7 @@ A vendor CLI's environment is **built from scratch**, never inherited. In order:
 
 5. **The adapter's own additions**, applied last and unconditionally — for example `GROK_WEB_FETCH=1`.
 
-This is an environment policy, not configuration isolation: the files a CLI reads on its own are under [Configuration the fleet did not choose](#configuration-the-fleet-did-not-choose).
+This is an environment policy, not configuration isolation: the files a CLI reads on its own are under "Configuration the fleet did not choose" in the [Threat model](#threat-model).
 
 A variable absent from the parent environment is absent from the child; empty strings are never synthesised, because "set but empty" means something different from "unset" to several CLIs.
 
