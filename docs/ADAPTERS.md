@@ -264,7 +264,7 @@ Also worth a test each: an unknown model is rejected before any spawn, a disable
 
 ## Checklist
 
-- [ ] **`billingRiskEnv`** — list every environment variable that could switch this CLI from the subscription to metered API billing. Check the vendor's precedence rules; the failure mode is silent and costs real money.
+- [ ] **`billingRiskEnv`** — list every environment variable that could switch this CLI from the subscription to metered API billing, and every one that would widen the CLI's reach past what the toolset says (the grok unit scrubs `GROK_WEB_FETCH_ALLOW_LOCAL` here). Check the vendor's precedence rules; the billing failure mode is silent and costs real money.
 - [ ] **`envPassthrough` as narrow as the CLI allows.** Start from nothing and add only what a real run needs; the child gets `ALLOWED_ENV` and your patterns and nothing else. A `PREFIX_*` pattern is safe against its own API key (the scrub runs after it) but not against anything else that shares the prefix.
 - [ ] **Decide about the vendor's config file.** If it can carry executable behaviour — MCP servers, hooks, plugins, a notify command — a filesystem sandbox does not bound it. Ignore it if the CLI has a flag for that (Codex: `--ignore-user-config --ignore-rules`), and then pin the model explicitly, because "the vendor default" now lives in a file you are ignoring.
 - [ ] **Auth detection** — a regex on stderr plus a `help` string that names the exact command to run. The runtime only checks it on runs with **empty stdout**, so a real answer that mentions signing in cannot false-positive. Make sure `isDeterministic` treats an auth failure as unretryable.

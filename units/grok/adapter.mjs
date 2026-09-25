@@ -50,6 +50,11 @@
  * allow rules ride on the research profile only. web_fetch is off by default
  * in the CLI — opted in via GROK_WEB_FETCH=1 in the child env, kept on review
  * spawns too (harmless with no web_fetch in L1, simpler than branching).
+ * Research prompts have every `@` replaced by `＠`, because the CLI attaches
+ * any existing file a prompt names as `@path` before the model runs, whatever
+ * the toolset (neutraliseAt). GROK_WEB_FETCH_ALLOW_LOCAL is scrubbed from the
+ * child env, so web_fetch's own block on loopback and private addresses stays
+ * in force (BILLING_RISK_ENV).
  *
  * NO_TOOLS — research under `webSearch: false` would need an EMPTY allowlist,
  * and the CLI has none. Probed 2026-09-25, grok 1.0.41: `grok -p ... --tools ''`
@@ -226,11 +231,29 @@ export const catalog = makeCatalog({
  */
 export const GROK_OUTPUT_CAP = 10000000;
 
-const BILLING_RISK_ENV = ['XAI_API_KEY'];
+// Deleted from every child env, after the GROK_*/XAI_* passthrough. XAI_API_KEY
+// would flip billing to metered. GROK_WEB_FETCH_ALLOW_LOCAL is a reach risk,
+// not a billing one: at 1 the CLI lets web_fetch reach loopback and private
+// addresses, which its own guard otherwise blocks — the block is what keeps a
+// research run away from local HTTP services.
+const BILLING_RISK_ENV = ['XAI_API_KEY', 'GROK_WEB_FETCH_ALLOW_LOCAL'];
 const AUTH_RE = /not signed in|not authenticated/i;
 const AUTH_HELP =
   'Grok CLI is not authenticated — operator action needed: run `grok login` ' +
   '(or `grok login --device-code` without a browser), then retry this call.';
+
+/**
+ * The grok CLI attaches the contents of any EXISTING file a prompt names as
+ * `@<path>` before the model runs, whatever the toolset. Measured 2026-09-25,
+ * grok 1.0.41: `@/abs`, `@ /abs` (a space does not stop it), `\@/abs`,
+ * `@rel`, `@sub/deep` and `@../outside` all attach, `--verbatim` does not stop
+ * it, a missing file is not attached; the fullwidth `＠` (U+FF20) is not
+ * expanded. Research prompts get every `@` replaced by `＠` so a web-only run
+ * never carries local bytes. Residual: an e-mail or a handle in a research
+ * prompt reads `a＠b` to the model. Review prompts keep `@` — review is
+ * local-only, and `@path` there is the same as read_file.
+ */
+const neutraliseAt = (s) => s.replace(/@/g, '＠');
 
 /** L6b: the read-only preambles, one per profile (weakest layer; see header). */
 const RESEARCH_PREFIX =
@@ -638,8 +661,8 @@ export default defineUnit({
   instructions: 'This unit: Grok via the grok CLI. Inexpensive per token — volume sweeps, mechanical review, second opinions, math/STEM cross-checks, image generation and the fleet\'s only image editing (grok_image_edit). Two profiles, never both: grok_research is web-only (no local files), grok_code_review is local-only (no web). Roughly one factual answer in three is wrong on independent testing: never a sole source, verify every claim. Write mode is unsupported by design.',
   bin: { env: 'GROK_BIN', default: 'grok' },
   billingRiskEnv: BILLING_RISK_ENV,
-  // grok's own knobs (GROK_BIN, GROK_WEB_FETCH, XAI_*); the billing scrub runs
-  // after this and removes XAI_API_KEY, which would flip billing to metered.
+  // grok's own knobs (GROK_BIN, GROK_WEB_FETCH, XAI_*); the scrub runs after
+  // this and removes XAI_API_KEY and GROK_WEB_FETCH_ALLOW_LOCAL (see above).
   envPassthrough: ['GROK_*', 'XAI_*'],
   envMap: { model: 'GROK_DEFAULT_MODEL', timeoutS: 'GROK_TIMEOUT_S', maxTurns: 'GROK_MAX_TURNS', imageMaxTurns: 'GROK_IMAGE_MAX_TURNS' },
   builtin: { timeoutS: 300, maxTurns: 30, outputCap: GROK_OUTPUT_CAP },
@@ -688,7 +711,7 @@ export default defineUnit({
         // NO_TOOLS) — `--tools ''` would hand the run the CLI's default tools.
         const tools = researchTools(ctx);
         if (!tools) return { text: RESEARCH_WEB_ONLY, isError: true };
-        return ctx.retry(() => runGrok(ctx, { prompt: RESEARCH_PREFIX + prompt, cwd: c.cwd, tools, maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
+        return ctx.retry(() => runGrok(ctx, { prompt: RESEARCH_PREFIX + neutraliseAt(prompt), cwd: c.cwd, tools, maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
       },
     },
     {

@@ -428,7 +428,7 @@ test('unit contract: five tools, efforts from the catalog, workspace-write decla
   assert.deepEqual(unit.tools.map((t) => t.name), ['grok_research', 'grok_code_review', 'grok_image', 'grok_image_edit', 'grok_models']);
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': null });
   assert.ok(catalog.effortEnum().includes('high'));
-  assert.deepEqual(unit.billingRiskEnv, ['XAI_API_KEY']);
+  assert.deepEqual(unit.billingRiskEnv, ['XAI_API_KEY', 'GROK_WEB_FETCH_ALLOW_LOCAL']);
   assert.equal(unit.extraSchema.imageMaxTurns.default, 8);
   // Thinking deltas ride the same stream as the answer, so Grok's tail cap is
   // twenty-five times the fleet default — a long review must not lose its
