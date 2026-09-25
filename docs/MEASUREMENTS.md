@@ -22,6 +22,7 @@ What has actually been measured on this project, how each number was taken, and 
 | What did the handoff hooks do across every compaction the project has had? | [The handoff hooks over five compactions](#the-handoff-hooks-over-five-compactions) |
 | Which web mode does a Codex research run get when none is set? | [The Codex web default mode](#the-codex-web-default-mode) |
 | What outlives a killed unit server, per vendor CLI? | [Unit processes after the server is gone](#unit-processes-after-the-server-is-gone) |
+| Which MCP protocol version does Claude Code ask for, and which does the server claim? | [What Claude Code sends at `initialize`](#what-claude-code-sends-at-initialize) |
 | How do I repeat these on my own sessions? | [How the numbers are taken](#how-the-numbers-are-taken) |
 | Which claims has nobody measured? | [Not measured yet](#not-measured-yet) |
 
@@ -309,6 +310,12 @@ Measured 2026-09-25 on agy 1.2.11, grok 1.0.41 and codex-cli 0.157.0, before the
 **What 1.6.0 does with this.** `call --timeout` cancels the request before it signals the server, and the server meets SIGTERM/SIGHUP by killing its live process groups — the (a) case for a server that is *told* to stop. What remains, and SECURITY says so: a SIGKILLed server (agy and grok run to their own end; codex until its current command ends), and a shell command Codex is running, which sits in its own group. No reaper at the end of a run, per (b).
 
 **How it was taken.** Four zsh scripts (in the session's scratchpad, not the repository): (a) the `call` above, then `ps` filtered to `agy|grok|codex` with `ppid == 1` or an `etime` under a minute, five samples; (b) the call in the background, `pgrep -P` from the call's pid to the server to the vendor child, `ps -o pgid=` on it, then `ps -eo pid,pgid,comm | awk '$2==pgid'` every second and after the return; (c) and (d) the same walk on `codex_code_review`, listing every process whose pid or ppid is the vendor child's, every second for the call's length and every 5 s for 40 s after.
+
+## What Claude Code sends at `initialize`
+
+Measured 2026-09-25 on Claude Code 2.1.282: every `initialize` request carries `protocolVersion: "2025-11-25"` — 299 of 299 server starts logged since 2026-09-05 under `~/Library/Caches/claude-cli-nodejs/*/mcp-logs-<server>/`, where Claude Code records `negotiatedProtocolVersion` and `protocolEra: "legacy"` (its word for the `initialize` handshake; the stateless 2026-07-28 revision is "modern"). No `server/discover` probe appears in any log. Through 1.5.0 the server echoed the requested version, so it claimed 2025-11-25 without having checked what that revision requires; 1.6.0 answers from `SUPPORTED_PROTOCOLS` (`core/jsonrpc.mjs`), whose entries were checked against the specification's changelogs: every 2025-06-18 and 2025-11-25 addition is optional for a tools-only stdio server, 2025-03-26 is excluded for its mandatory batch receipt, 2026-07-28 is a different protocol and is not claimed.
+
+**How it was taken.** `grep -h -o 'rotocolVersion[^0-9]*[0-9-]*' ~/Library/Caches/claude-cli-nodejs/*/mcp-logs-orion-*/*.jsonl | sort | uniq -c` on the operator's machine; the changelogs at `modelcontextprotocol.io/specification/<revision>/changelog`.
 
 ## How the numbers are taken
 
