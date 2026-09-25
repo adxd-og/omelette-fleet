@@ -38,7 +38,7 @@ Until 1.1.0 every package of a release got its own planner, and every planner re
 | 0.3.7 | 4 | 343 286 · 221 426 · 310 616 · 365 127 | 1 240 455 |
 | **All** | **16** | mean 285 236 | **4 563 773** |
 
-Planning is the second largest sub-agent cost of the project ([by role](#sub-agents-by-role)), and in 0.3.3 and 0.3.7 four or five planners each loaded much of the same `core/`. That repetition is what [one scout map per release](ORCHESTRATION.md#evidence-with-pointers) is aimed at.
+Planning is the second largest sub-agent cost of the project ([by role](#sub-agents-by-role)), and in 0.3.3 and 0.3.7 four or five planners each loaded much of the same `core/`. That repetition is what [the scout map](ORCHESTRATION.md#the-scout-map-when-a-fresh-planner-needs-one) is aimed at.
 
 **After:** 1.2.0 was the first release planned from a scout map — the rows are under [Planning cost with the scout map](#planning-cost-with-the-scout-map), taken the same way.
 
