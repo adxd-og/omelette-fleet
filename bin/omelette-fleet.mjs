@@ -905,7 +905,7 @@ function idleWall({ longest, cwd = process.cwd(), env = process.env, read = read
     : disabled
       ? `${IDLE_ENV}=0 (${envSource(source)}) → disabled`
       : parsed === null
-        ? `${IDLE_ENV}=${value} (${envSource(source)}) is not a whole number of ms — ignored, 30 min default`
+        ? `${IDLE_ENV}=${visible(value)} (${envSource(source)}) is not a whole number of ms — ignored, 30 min default`
         : `${IDLE_ENV}=${parsed} ms (${envSource(source)}) → ${fmtWindow(parsed)}`;
   const reaches = !disabled && longest.timeoutS * 1000 >= ms;
   const tail = disabled
@@ -963,7 +963,7 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
   const clause = value === null
     ? `${WALL_ENV} unset (${WALL_DEFAULT_NOTE})`
     : parsed === null
-      ? `${WALL_ENV}=${value} (${envSource(source)}) is not a whole number of ms — ignored, ${WALL_DEFAULT_NOTE}`
+      ? `${WALL_ENV}=${visible(value)} (${envSource(source)}) is not a whole number of ms — ignored, ${WALL_DEFAULT_NOTE}`
       : `${WALL_ENV}=${parsed} ms (${envSource(source)})`;
   const lines = [`wall-clock: ${clause} ${ok ? '≥' : '<'} ${needed} needed${ok ? '' : ` (${because(worst)})`} · ${ok ? 'ok' : 'TOO LOW'}`];
 
@@ -1024,7 +1024,7 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
 
 // ─── shared rendering ────────────────────────────────────────────────────────
 
-const fmtValue = (v) => (v === '' ? '(unset)' : String(v));
+const fmtValue = (v) => (v === '' ? '(unset)' : visible(v));
 
 /**
  * One aligned `key value source` block, shared by `show` and `doctor`.
@@ -1036,7 +1036,7 @@ function configRows(name, cfg, indent = '  ') {
   const keys = Object.keys(schemaFor(name));
   const shown = (k) => (k !== 'mode' || cfg.values.requestedMode === cfg.values.mode
     ? fmtValue(cfg.values[k])
-    : `${cfg.values.requestedMode} (clamped to ${cfg.values.mode})`);
+    : `${visible(cfg.values.requestedMode)} (clamped to ${visible(cfg.values.mode)})`);
   const w = Math.max(...keys.map((k) => k.length), 5);
   const vw = Math.max(...keys.map((k) => shown(k).length), 5);
   const lines = [`${indent}${pad('KEY', w)}  ${pad('VALUE', vw)}  SOURCE`];
@@ -1111,8 +1111,8 @@ function ceilingLine(name, cfg) {
     ? `OPEN — OMELETTE_ALLOW_WRITE lists "${name}"`
     : `closed — OMELETTE_ALLOW_WRITE does not list "${name}"`];
   if (!supportsWrite) parts.push('and this unit refuses workspace-write anyway');
-  parts.push(`effective mode: ${cfg.values.mode}`);
-  if (cfg.values.requestedMode !== cfg.values.mode) parts.push(`requested: ${cfg.values.requestedMode}`);
+  parts.push(`effective mode: ${visible(cfg.values.mode)}`);
+  if (cfg.values.requestedMode !== cfg.values.mode) parts.push(`requested: ${visible(cfg.values.requestedMode)}`);
   return parts.join(' · ');
 }
 
@@ -1830,18 +1830,18 @@ async function cmdRules(argv) {
   // written — but it is said out loud, or the operator reads the default back
   // as their own value.
   const settings = flags.agents ? agentSettings() : undefined;
-  if (settings && !flags.remove) settings.warnings.forEach((w) => err(`omelette-fleet rules: ${w}`));
+  if (settings && !flags.remove) settings.warnings.forEach((w) => err(`omelette-fleet rules: ${visible(w)}`));
   // The guard's three handoff values are substituted into the script the same
   // way, and for the same reason a bad one is said out loud rather than read
   // back later as the operator's own number.
   const handoff = flags.hooks ? handoffSettings() : undefined;
-  if (handoff && !flags.remove) handoff.warnings.forEach((w) => err(`omelette-fleet rules: ${w}`));
+  if (handoff && !flags.remove) handoff.warnings.forEach((w) => err(`omelette-fleet rules: ${visible(w)}`));
   // The rules file is written on EVERY run, and its merge sentence renders from
   // the same config the other two kinds render from — so a value the operator
   // mistyped is said out loud here instead of being read back later as the
   // policy they thought they chose. (`KINDS.rules.render` resolves it again;
   // the config is stat-cached, so the second read re-parses nothing.)
-  if (!flags.remove) workflowSettings().warnings.forEach((w) => err(`omelette-fleet rules: ${w}`));
+  if (!flags.remove) workflowSettings().warnings.forEach((w) => err(`omelette-fleet rules: ${visible(w)}`));
   const files = managedFiles({ global: !!flags.global, agents: !!flags.agents, hooks: !!flags.hooks, version: PKG.version, settings, handoff });
 
   // --print touches nothing at all. Each rendered file already ends in a
@@ -2045,7 +2045,7 @@ const matcherProblemFor = (m, event, name) => {
   }
   let re;
   try { re = new RegExp(m); }
-  catch { return `${event} matcher ${JSON.stringify(m)} is not a valid regex`; }
+  catch { return `${event} matcher ${visible(JSON.stringify(m))} is not a valid regex`; }
   return re.test(name) ? null : `${event} matcher is not ${name}`;
 };
 
@@ -2591,13 +2591,17 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
 }
 
 /**
- * A value read from project or user JSON, made safe to print: every C0/C1
- * control character and DEL becomes its `\uXXXX` escape, so the operator sees
- * exactly what the file holds and the terminal does nothing with it
- * (`.mcp.json` is project content — a clone can carry `\u001b[2K` in a
- * `command` and erase doctor's own lines; 1.4.0 P3).
+ * A value read from project or user JSON, made safe to print: the goal is that
+ * the terminal does nothing with doctor's output. Every C0/C1 control
+ * character and DEL becomes its `\uXXXX` escape, and so do the line and
+ * paragraph separators and the zero-width and bidi format characters, which
+ * can hide or reorder what the operator reads (`.mcp.json` is project content
+ * — a clone can carry `\u001b[2K` in a `command` and erase doctor's own
+ * lines, or U+202E to turn a path around; 1.4.0 P3). It is not injective: a
+ * value holding the six characters `\u001b` and a value holding a real ESC
+ * print alike, and that is accepted — the output is for reading, not parsing.
  */
-const visible = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+const visible = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
 /**
  * What the registry says about this unit — and whether it is even ours (see
@@ -2755,7 +2759,7 @@ async function cmdDoctor(argv) {
     }
     out(`  config      ${ceilingLine(name, cfg)}`);
     for (const line of configRows(name, cfg, '              ')) out(line);
-    for (const w of cfg.warnings) out(`  warning     ${w}`);
+    for (const w of cfg.warnings) out(`  warning     ${visible(w)}`);
     // A registration whose server file is gone cannot start at all — that is a
     // fault in its own right, however healthy the vendor CLI looks.
     if (reg && !reg.exists) problems.push(`the registered server file is missing (${visible(reg.target || 'no args')})`);
@@ -2848,7 +2852,7 @@ function cmdShow(argv) {
     const settings = fleetSettings();
     out('fleet');
     for (const line of fleetRows(settings, '  ')) out(line);
-    for (const w of settings.warnings) out(`  warning  ${w}`);
+    for (const w of settings.warnings) out(`  warning  ${visible(w)}`);
     // The env switch can only turn the update check OFF, and it wins: a table
     // saying `true` while the machine says otherwise is the one thing this
     // block must not do.
@@ -2864,7 +2868,7 @@ function cmdShow(argv) {
       out(`${name}`);
       for (const line of configRows(name, cfg, '  ')) out(line);
       out(`  ceiling  ${ceilingLine(name, cfg)}`);
-      for (const w of cfg.warnings) out(`  warning  ${w}`);
+      for (const w of cfg.warnings) out(`  warning  ${visible(w)}`);
       out();
     }
   }
@@ -2875,7 +2879,7 @@ function cmdShow(argv) {
     const settings = agentSettings();
     out('agents');
     for (const line of agentRows(settings, '  ')) out(line);
-    for (const w of settings.warnings) out(`  warning  ${w}`);
+    for (const w of settings.warnings) out(`  warning  ${visible(w)}`);
     out('  note     `omelette-fleet rules --agents` renders these into .claude/agents/.');
     out();
   }
@@ -2885,7 +2889,7 @@ function cmdShow(argv) {
     const settings = handoffSettings();
     out('handoff');
     for (const line of handoffRows(settings, '  ')) out(line);
-    for (const w of settings.warnings) out(`  warning  ${w}`);
+    for (const w of settings.warnings) out(`  warning  ${visible(w)}`);
     out('  note     `omelette-fleet rules --hooks` renders these into .claude/hooks/omelette-guard.mjs.');
     out();
   }
@@ -2895,7 +2899,7 @@ function cmdShow(argv) {
     const settings = workflowSettings();
     out('workflow');
     for (const line of workflowRows(settings, '  ')) out(line);
-    for (const w of settings.warnings) out(`  warning  ${w}`);
+    for (const w of settings.warnings) out(`  warning  ${visible(w)}`);
     out('  note     `omelette-fleet rules` renders this into .claude/rules/omelette-fleet.md.');
     out();
   }

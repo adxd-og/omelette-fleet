@@ -323,3 +323,74 @@ test('doctor prints a control character it read from .mcp.json as its escape, ne
   const broken = doctor(s);
   assert.ok(!broken.out.includes('\u001b'), 'no ESC through the parse-error line');
 });
+
+/** No raw C0/C1/DEL byte anywhere in a run's output, bar newline and tab. */
+const assertNoControl = (text, where) => {
+  for (const ch of text) {
+    const code = ch.charCodeAt(0);
+    assert.ok(code === 10 || code === 9 || code >= 32 && !(code >= 0x7f && code <= 0x9f), `raw control byte ${code} on ${where}`);
+  }
+};
+
+test('doctor prints a settings env value that is not a number as its escape, in both timeout lines', () => {
+  const s = sandbox();
+  // codex enabled with a binary that answers: the timeout lines are printed for enabled units only.
+  writeFileSync(join(s.dir, 'fleet.config.json'), JSON.stringify({
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 } },
+  }));
+  mkdirSync(join(s.proj, '.claude'), { recursive: true });
+  writeFileSync(join(s.proj, '.claude', 'settings.json'), JSON.stringify({
+    env: { MCP_TOOL_TIMEOUT: '\u001b[2K', CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: '\u001b[1A' },
+  }));
+  const r = run(s, ['doctor'], { CODEX_BIN: fakeBin(s.dir, 'fake-codex') });
+  assertNoControl(r.out, 'stdout');
+  assert.match(r.out, /MCP_TOOL_TIMEOUT=\\u001b\[2K \(/, r.out);
+  assert.match(r.out, /CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=\\u001b\[1A \(/, r.out);
+});
+
+test('doctor prints a hook matcher that is not a regex as its escape, DEL included', () => {
+  const s = sandbox();
+  const rules = run(s, ['rules', '--hooks']);
+  assert.equal(rules.code, 0, rules.err);
+  const lines = rules.out.split('\n');
+  const start = lines.indexOf('{ "hooks": {');
+  let snippet = null;
+  for (let end = start + 1; end <= lines.length && !snippet; end++) {
+    try { snippet = JSON.parse(lines.slice(start, end).join('\n')); } catch { /* keep growing */ }
+  }
+  assert.ok(snippet, rules.out);
+  // Every event wired, except that the matched-on ones carry a matcher that is not a regex.
+  const hooks = Object.fromEntries(Object.entries(snippet.hooks).map(([event, groups]) => [event,
+    groups.map((g) => ('matcher' in g ? { ...g, matcher: '\u007f[' } : g))]));
+  mkdirSync(join(s.proj, '.claude'), { recursive: true });
+  writeFileSync(join(s.proj, '.claude', 'settings.json'), JSON.stringify({ hooks }, null, 2));
+  const r = doctor(s);
+  assertNoControl(r.out, 'stdout');
+  const hooksLine = line(r.out, 'hooks');
+  assert.ok(hooksLine.includes('matcher "\\u007f[" is not a valid regex'), hooksLine);
+});
+
+test('doctor and show print a fleet.config.json string as its escape, never as the byte', () => {
+  const s = sandbox();
+  writeFileSync(join(s.dir, 'fleet.config.json'), JSON.stringify({
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false, model: '\u001b[2Kgpt' } },
+  }));
+  const d = doctor(s);
+  assertNoControl(d.out, 'doctor stdout');
+  assert.ok(d.out.includes('\\u001b[2Kgpt'), d.out);
+  const sh = run(s, ['show']);
+  assert.equal(sh.code, 0, sh.err);
+  assertNoControl(sh.out, 'show stdout');
+  assert.ok(sh.out.includes('\\u001b[2Kgpt'), sh.out);
+});
+
+test('doctor prints a bidi override and a line separator from .mcp.json as their escapes', () => {
+  const s = sandbox();
+  const servers = ours('omelette');
+  servers['omelette-codex'] = { type: 'stdio', command: 'no\u202Ede\u2028x', args: ['/x/servers/codex.mjs'] };
+  writeFileSync(join(s.proj, '.mcp.json'), JSON.stringify({ mcpServers: servers }, null, 2));
+  const r = doctor(s);
+  assert.equal(r.code, 0, r.out);
+  assert.ok(!/[\u202E\u2028]/.test(r.out), 'no raw RLO or line separator on stdout');
+  assert.ok(r.out.includes('no\\u202ede\\u2028x'), r.out);
+});
