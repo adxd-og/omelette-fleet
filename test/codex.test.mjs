@@ -646,3 +646,32 @@ test('codex_image: its sandbox is the run\'s own directory — /tmp and $TMPDIR 
   assert.ok(!buildArgs({ mode: 'workspace-write', cwd: '/x', webSearch: false }).some((x) => /sandbox_workspace_write/.test(x)));
   assert.ok(!buildArgs({ mode: 'read-only', webSearch: true }).some((x) => /sandbox_workspace_write/.test(x)));
 });
+
+// --- web search per tool: review never, research by config ---------------------
+
+test('codex_code_review argv always holds tools.web_search=false; codex_research follows webSearch (default true)', async () => {
+  for (const [cfg, researchWeb] of [[{}, 'true'], [{ webSearch: true }, 'true'], [{ webSearch: false }, 'false']]) {
+    const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-web-'));
+    const argvLog = join(dir, 'argv.json');
+    const fake = fakeImageCodex({ dir, name: 'fake-web.mjs', argvLog, writeImage: false, answer: 'ok' });
+    writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 30, ...cfg } } }));
+    const rt = wrapCodex({ ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake);
+
+    const review = await rt.callTool('codex_code_review', { prompt: 'look', cwd: dir });
+    assert.ok(!review.isError, review.text);
+    const reviewArgv = JSON.parse(readFileSync(argvLog, 'utf8'));
+    assert.ok(reviewArgv.includes('tools.web_search=false'), `review under ${JSON.stringify(cfg)}: ${reviewArgv.join(' ')}`);
+    assert.ok(!reviewArgv.includes('tools.web_search=true'));
+
+    const research = await rt.callTool('codex_research', { prompt: 'what is new' });
+    assert.ok(!research.isError, research.text);
+    const researchArgv = JSON.parse(readFileSync(argvLog, 'utf8'));
+    assert.ok(researchArgv.includes(`tools.web_search=${researchWeb}`), `research under ${JSON.stringify(cfg)}: ${researchArgv.join(' ')}`);
+  }
+});
+
+test('codex_code_review description says it has no web search', () => {
+  const d = unit.tools.find((t) => t.name === 'codex_code_review').description;
+  assert.match(d, /runs read-only shell commands; no web search — the run reads the tree and reaches nothing outside it/);
+  assert.doesNotMatch(d, /and web search/);
+});

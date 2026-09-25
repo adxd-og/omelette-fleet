@@ -49,8 +49,12 @@
  * "raise codex.timeoutS" would send the operator after a limit that held.
  *
  * WEB SEARCH — `-c tools.web_search=true` (verified live: emits `web_search`
- * items and grounds the answer). Toggle per unit with `webSearch` in the
- * fleet config.
+ * items and grounds the answer). `-s read-only` bounds writes and shell
+ * network, not file reads and not this hosted tool, so a run with it reads
+ * files and reaches the web at once. Review: never — `codex_code_review`
+ * passes `tools.web_search=false` whatever the config says. Research: on
+ * unless `webSearch: false` in the fleet config — research that depends on
+ * running things needs both, and SECURITY names that residual.
  *
  * PROMPT ON STDIN — `codex exec -` reads the instructions from stdin, so a
  * prompt beginning with `-` can never be mistaken for a flag and argv stays
@@ -327,8 +331,8 @@ const isDeterministic = (e) => /not authenticated|turn failed|hard-killed|not fo
  * answer: `codex_image` answers with a bare path, so when there is no artifact
  * it has to explain the RUN — and `killed` / `capped` / `cancelled` live on
  * the spawn result, never on the text. `webSearch` / `effort` default to the
- * resolved config and may be overridden per tool (image runs pass web=false,
- * no effort and `excludeTmp`).
+ * resolved config and may be overridden per tool (review passes web=false;
+ * image runs pass web=false, no effort and `excludeTmp`).
  * @returns {Promise<{out:object, res:object}>}
  */
 async function runOnceRaw(ctx, { prompt, cwd, mode, webSearch, effort, excludeTmp = false }) {
@@ -432,7 +436,8 @@ export default defineUnit({
       description:
         'Ask OpenAI Codex (local codex CLI) for a code analysis / review / second ' +
         'opinion over a directory. Codex reads files, greps, runs read-only shell ' +
-        'commands and web search inside an OS-level read-only sandbox; it cannot ' +
+        'commands; no web search — the run reads the tree and reaches nothing outside it. ' +
+        'It runs inside an OS-level read-only sandbox and cannot ' +
         'edit unless the operator has opened the fleet write ceiling for codex AND ' +
         'set mode=workspace-write, in which case writes are kernel-scoped to `cwd`. ' +
         'Strong at mechanical review and agentic terminal work (Terminal-Bench class); ' +
@@ -461,7 +466,9 @@ export default defineUnit({
         const mode = ctx.mode === 'workspace-write' && c.cwd ? 'workspace-write' : 'read-only';
         if (ctx.mode === 'workspace-write' && !c.cwd) ctx.log('workspace-write requested without cwd — running read-only');
         const prefix = mode === 'workspace-write' ? WORKSPACE_WRITE_PREFIX : READONLY_PREFIX;
-        const run = () => runOnce(ctx, { prompt: prefix + prompt, cwd: c.cwd, mode });
+        // No web whatever `webSearch` says: a review reads the tree, and a run
+        // that also held web_search could send what it read out in a query.
+        const run = () => runOnce(ctx, { prompt: prefix + prompt, cwd: c.cwd, mode, webSearch: false });
         // Never re-issue a run that may have written something.
         return mode === 'workspace-write' ? run() : ctx.retry(run, { skipIf: isDeterministic });
       },
