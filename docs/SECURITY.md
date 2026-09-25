@@ -356,19 +356,42 @@ Every finding from every run goes to a fresh agent with a clean context, told to
 
 agy in headless mode (`agy -p`) cannot prompt, so **any tool that would ask for permission is auto-denied** — and the run still exits 0 with `status: SUCCESS` and an empty response, with the reason on stderr. Without allow rules, web research fails with something like `a tool required the "read_url" permission that headless mode cannot prompt for`, which this unit surfaces as an error instead of a silent blank.
 
-In `~/.gemini/antigravity-cli/settings.json`, under `permissions.allow`:
+Two rule sets, named for what they allow. In `~/.gemini/antigravity-cli/settings.json`:
+
+**Web research** — what `gemini_research` and `gemini_deep_research` need for grounded research, and nothing more:
 
 ```json
 {
   "permissions": {
-    "allow": ["read_file(*)", "read_url(*)"]
+    "allow": ["read_url(*)"]
   }
 }
 ```
 
-- **`read_file`** — lets Gemini read local files you name, including images and PDFs. Give an **absolute path** in the prompt and say "view the file directly, no terminal commands", because `command` is auto-denied headless.
-- **`read_url`** — required for grounded web research. Without it, research prompts that fetch anything come back empty.
+A prompt-injected run under this set can send only what is in its prompt and what it fetched. This is the set the threat model above assumes.
+
+**Local files, opt-in** — add `read_file(*)` only when you want `gemini_research` to read local images, PDFs and documents (give an **absolute path** in the prompt and say "view the file directly, no terminal commands", because `command` is auto-denied headless). What it buys an injected page: any file your user can read, sent anywhere `read_url` reaches. If you take it, deny the files that authenticate something, by exact path — the only deny form these docs have seen work:
+
+```json
+{
+  "permissions": {
+    "allow": ["read_file(*)", "read_url(*)"],
+    "deny": [
+      "read_file(~/.ssh/id_ed25519)",
+      "read_file(~/.ssh/id_rsa)",
+      "read_file(~/.config/gcloud/application_default_credentials.json)",
+      "read_file(~/.aws/credentials)",
+      "read_file(~/.codex/auth.json)",
+      "read_file(~/.grok/credentials.json)",
+      "read_file(~/.gemini/antigravity-cli/oauth_creds.json)",
+      "read_file(~/.omelette/results)"
+    ]
+  }
+}
+```
+
+The list is illustrative: the rule is every file that authenticates something, plus the fleet's own result spool. Check the real names your CLIs write (`ls -a ~/.grok ~/.gemini/antigravity-cli ~/.codex`) and list those.
 
 Do **not** reach for `--dangerously-skip-permissions` to fix a headless auto-deny: it auto-approves every tool and removes the only permission layer this unit has.
 
-Two caveats. The only rule forms we have seen working are the `*` target (`read_file(*)`, `read_url(*)`) and deny rules naming an exact path; anything glob-shaped is **unverified** — test a rule before relying on it, and until you have, assume a deny rule covers only the exact paths you listed. And `read_file(*)` is broad by construction: it accepts that any file the CLI's user can read may end up in an answer, and therefore in local fleet logs. If that is not acceptable on your machine, list literal paths instead and expect more auto-denies.
+Two caveats. The only rule forms we have seen working are the `*` target and deny rules naming an exact path; anything glob-shaped is **unverified** — test a rule before relying on it, and until you have, assume a deny rule covers only the exact paths you listed. And a deny list is a list: a credential file it does not name is readable.
