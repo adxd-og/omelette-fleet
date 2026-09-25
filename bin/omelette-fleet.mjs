@@ -380,7 +380,7 @@ function whichBin(bin, env = process.env) {
  * the server actually uses is how doctor would say "OK" about a unit whose
  * tool calls then fail (and how a probe could quietly bill a metered API key).
  */
-const probeEnv = (unit) => ({ envPassthrough: unit.envPassthrough, scrubEnv: unit.billingRiskEnv });
+const probeEnv = (unit) => ({ envPassthrough: unit.envPassthrough, scrubEnv: unit.riskEnv });
 
 /** `<bin> --version`, hard-killed at 10s — a hung version probe must not hang doctor. */
 async function probeVersion(unit, binPath) {

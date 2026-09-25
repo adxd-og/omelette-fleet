@@ -28,8 +28,8 @@
  *      proxy URL can (`http://user:pass@proxy`), and it is passed AS IS,
  *      userinfo included, because the CLI needs that exact URL to reach its
  *      API (docs/SECURITY.md, "The environment allowlist").
- *   2. the unit's `envPassthrough` (adapter-declared exact names or `PREFIX_*`
- *      patterns, e.g. 'CODEX_*') — the vendor's own knobs.
+ *   2. the unit's `envPassthrough` (adapter-declared exact names; `PREFIX_*`
+ *      patterns are accepted from `OMELETTE_ENV_PASSTHROUGH` alone) — the vendor's own knobs.
  *   3. OMELETTE_ENV_PASSTHROUGH — comma-separated names/patterns, the
  *      operator's fleet-wide escape hatch when a CLI needs one more variable.
  *   4. THEN the billing scrub (a vendor prefix pattern can otherwise re-admit

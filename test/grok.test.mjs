@@ -428,8 +428,8 @@ test('unit contract: five tools, efforts from the catalog, workspace-write decla
   assert.deepEqual(unit.tools.map((t) => t.name), ['grok_research', 'grok_code_review', 'grok_image', 'grok_image_edit', 'grok_models']);
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': null });
   assert.ok(catalog.effortEnum().includes('high'));
-  assert.deepEqual(unit.billingRiskEnv, [
-    'XAI_API_KEY', 'GROK_WEB_FETCH_ALLOW_LOCAL', 'GROK_MEMORY', 'GROK_FOLDER_TRUST',
+  assert.deepEqual(unit.riskEnv, [
+    'XAI_API_KEY', 'GROK_CODE_XAI_API_KEY', 'GROK_WEB_FETCH_ALLOW_LOCAL', 'GROK_MEMORY', 'GROK_FOLDER_TRUST',
     'GROK_AUTH_PROVIDER_COMMAND', 'GROK_WEB_FETCH_PROXY', 'GROK_TRACE_UPLOAD_URL',
     'GROK_TRACE_UPLOAD_BUCKET', 'GROK_TRACE_UPLOAD_ENDPOINT_URL', 'GROK_TRACE_UPLOAD_CREDENTIALS_FILE',
     'GROK_CLAUDE_HOOKS_ENABLED', 'GROK_CURSOR_HOOKS_ENABLED',

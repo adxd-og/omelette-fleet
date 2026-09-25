@@ -16,11 +16,8 @@
  *   label: 'Codex',                      // human name in error messages
  *   instructions: 'This unit: Codex …',  // one line appended to the fleet contract in initialize.instructions
  *   bin: { env: 'CODEX_BIN', default: 'codex' },
- *   billingRiskEnv: ['OPENAI_API_KEY'],  // deleted from every child env
- *   envPassthrough: ['CODEX_*'],         // added to core/spawn.mjs's ALLOWED_ENV for this unit's
- *                                        // children only (exact names or PREFIX_* patterns); the
- *                                        // billing scrub runs AFTER it, so a pattern cannot
- *                                        // re-admit an API key. Everything else is NOT inherited.
+ *   riskEnv: ['OPENAI_API_KEY'],  // deleted from every child env
+ *   envPassthrough: ['CODEX_HOME'], // exact names added to core/spawn.mjs's ALLOWED_ENV for this unit's children; no patterns
  *   envMap: { model: 'CODEX_DEFAULT_MODEL', timeoutS: 'CODEX_TIMEOUT_S' },   // legacy env overrides
  *   builtin: { timeoutS: 600 },          // unit defaults for config keys
  *   extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },        // unit-only config keys
@@ -126,6 +123,23 @@ export function defineUnit(spec) {
     if (t.kind !== 'catalog' && typeof t.run !== 'function') throw new Error(`${where}: tool "${t.name}" needs run()`);
   }
   if (typeof spec.catalog.isAllowedModel !== 'function') throw new Error(`${where}: catalog must come from makeCatalog()`);
+  // envPassthrough is exact names (1.5.0): a pattern admits whatever the vendor
+  // adds next, so patterns are the operator's, through OMELETTE_ENV_PASSTHROUGH.
+  if (spec.envPassthrough !== undefined) {
+    if (!Array.isArray(spec.envPassthrough)) throw new Error(`${where}: envPassthrough must be an array`);
+    for (const n of spec.envPassthrough) {
+      if (typeof n !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) {
+        throw new Error(`${where}: envPassthrough holds a pattern "${n}" — exact names only; a pattern belongs in OMELETTE_ENV_PASSTHROUGH`);
+      }
+    }
+  }
+  // riskEnv was billingRiskEnv through 1.4.0; the old key is read for one release.
+  const { billingRiskEnv, ...rest } = spec;
+  if (rest.riskEnv !== undefined && billingRiskEnv !== undefined) throw new Error(`${where}: both riskEnv and billingRiskEnv — keep riskEnv`);
+  if (billingRiskEnv !== undefined) {
+    console.error(`${where}: billingRiskEnv is deprecated since 1.5.0 — rename it riskEnv (the alias goes in 1.6.0)`);
+    rest.riskEnv = billingRiskEnv;
+  }
   return {
     // The package's own version (core/update.mjs reads package.json once at
     // load): `initialize` must not keep reporting a number that was frozen into
@@ -134,14 +148,14 @@ export function defineUnit(spec) {
     label: spec.name,
     instructions: '',
     serverName: `omelette-${spec.name}`,
-    billingRiskEnv: [],
+    riskEnv: [],
     envPassthrough: [],
     envMap: {},
     builtin: {},
     extraSchema: {},
     supportedModes: { 'read-only': true, 'workspace-write': null },
     auth: null,
-    ...spec,
+    ...rest,
     bin: typeof spec.bin === 'string' ? { env: null, default: spec.bin } : spec.bin,
   };
 }
@@ -347,7 +361,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       // env is the PARENT env to select from: core/spawn.mjs builds the child
       // from the allowlist + this unit's passthrough, never by inheritance.
       bin: exe, args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
-      scrubEnv: unit.billingRiskEnv,
+      scrubEnv: unit.riskEnv,
       hardKillMs: timeoutMs, signal, stdinText, outputCap: cap, log,
       notFoundHelp,
     }).then((res) => {

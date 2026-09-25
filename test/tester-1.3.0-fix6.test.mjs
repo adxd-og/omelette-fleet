@@ -24,32 +24,38 @@ const deepRt = (env, stub) => createUnitRuntime(
   { env },
 );
 
-// --- S18: GOOGLE_* passthrough vs. the billing scrub --------------------------
+// --- S18: the passthrough vs. the billing scrub --------------------------
 
-test('S18: GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION pass, GOOGLE_CREDENTIALS/GOOGLE_APPLICATION_CREDENTIALS/GOOGLE_GENAI_USE_VERTEXAI never reach the child, alongside a decoy legitimate var and a decoy unlisted GOOGLE_* var', () => {
+test('S18: a listed AGY_* name passes; GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION and an unlisted GOOGLE_* var no longer do (1.5.0, exact names); GOOGLE_CREDENTIALS/GOOGLE_APPLICATION_CREDENTIALS/GOOGLE_GENAI_USE_VERTEXAI never reach the child, even under an operator GOOGLE_* pattern', () => {
   const parent = {
-    PATH: '/usr/bin', HOME: '/nonexistent',
+    PATH: '/usr/bin', HOME: '/nonexistent', AGY_ADC_AUTH: '1',
     GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CLOUD_LOCATION: 'us-central1',
     GOOGLE_CREDENTIALS: 'SYNTHETIC_SA_SECRET',
     GOOGLE_APPLICATION_CREDENTIALS: '/fake/sa.json',
     GOOGLE_GENAI_USE_VERTEXAI: 'true',
     GOOGLE_SOMETHING_ELSE: 'decoy-unlisted-google-var',
   };
-  const child = buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.billingRiskEnv });
+  const child = buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.riskEnv });
 
   // The three credential/switch vars from S18 are gone.
   assert.equal(child.GOOGLE_CREDENTIALS, undefined);
   assert.equal(child.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(child.GOOGLE_GENAI_USE_VERTEXAI, undefined);
-  // agy still gets what it needs for project + region.
-  assert.equal(child.GOOGLE_CLOUD_PROJECT, 'p');
-  assert.equal(child.GOOGLE_CLOUD_LOCATION, 'us-central1');
-  // CURRENT BEHAVIOUR (documented in the adapter's BILLING_RISK_ENV comment:
-  // "a denylist under a wildcard is never complete"): an unnamed GOOGLE_* var
-  // still passes through the wildcard untouched — the fix scrubs the three
-  // named vars, not the whole namespace. Asserting the actual behaviour here;
-  // see OPEN QUESTIONS on whether the spec would want this narrower.
-  assert.equal(child.GOOGLE_SOMETHING_ELSE, 'decoy-unlisted-google-var');
+  // The adapter's list is exact names since 1.5.0: a listed name passes, and
+  // no GOOGLE_* name is on it.
+  assert.equal(child.AGY_ADC_AUTH, '1');
+  assert.equal(child.GOOGLE_CLOUD_PROJECT, undefined);
+  assert.equal(child.GOOGLE_CLOUD_LOCATION, undefined);
+  assert.equal(child.GOOGLE_SOMETHING_ELSE, undefined);
+
+  // The scrub still runs after a pattern: the operator's GOOGLE_* admits the
+  // namespace, and the three named vars are removed after it.
+  const hatch = buildChildEnv({ env: { ...parent, OMELETTE_ENV_PASSTHROUGH: 'GOOGLE_*' }, passthrough: unit.envPassthrough, scrub: unit.riskEnv });
+  assert.equal(hatch.GOOGLE_CLOUD_PROJECT, 'p');
+  assert.equal(hatch.GOOGLE_SOMETHING_ELSE, 'decoy-unlisted-google-var');
+  assert.equal(hatch.GOOGLE_CREDENTIALS, undefined);
+  assert.equal(hatch.GOOGLE_APPLICATION_CREDENTIALS, undefined);
+  assert.equal(hatch.GOOGLE_GENAI_USE_VERTEXAI, undefined);
 });
 
 test('S18: the operator escape hatch naming GOOGLE_CREDENTIALS explicitly does not re-admit it — the scrub runs after OMELETTE_ENV_PASSTHROUGH too', () => {
@@ -59,7 +65,7 @@ test('S18: the operator escape hatch naming GOOGLE_CREDENTIALS explicitly does n
     GOOGLE_APPLICATION_CREDENTIALS: '/fake/sa.json',
     OMELETTE_ENV_PASSTHROUGH: 'GOOGLE_CREDENTIALS,GOOGLE_APPLICATION_CREDENTIALS',
   };
-  const child = buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.billingRiskEnv });
+  const child = buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.riskEnv });
   // ACTUAL behaviour: still scrubbed. This is what the spec wants — S18's
   // "how to confirm" and the fix's own comment ("naming a credential there
   // does not re-admit it, exactly as it does not re-admit an API key")
@@ -75,14 +81,14 @@ test('S18: the other billing-risk API keys are still scrubbed alongside the new 
     ANTHROPIC_API_KEY: 'a1', ANTHROPIC_AUTH_TOKEN: 'a2',
     GH_TOKEN: 'gh',
   };
-  const child = buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.billingRiskEnv });
+  const child = buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.riskEnv });
   assert.equal(child.GEMINI_API_KEY, undefined);
   assert.equal(child.GOOGLE_API_KEY, undefined);
   assert.equal(child.GOOGLE_GENERATIVE_AI_API_KEY, undefined);
   assert.equal(child.ANTHROPIC_API_KEY, undefined);
   assert.equal(child.ANTHROPIC_AUTH_TOKEN, undefined);
   assert.equal(child.GH_TOKEN, undefined); // not in envPassthrough at all
-  assert.deepEqual(unit.billingRiskEnv, [
+  assert.deepEqual(unit.riskEnv, [
     'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY',
     'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CREDENTIALS', 'GOOGLE_GENAI_USE_VERTEXAI',
     'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES',

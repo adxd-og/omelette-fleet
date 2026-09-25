@@ -216,9 +216,11 @@ test("doctor --probe-sandbox: the probe's 120s cap overrides a larger configured
   const fake = probeFake(dir, { recordEnvTo: envMarker, envVarName: 'GROK_TIMEOUT_S' });
   registerOurs(dir, ['grok']);
   // No GROK_TIMEOUT_S override: grok's builtin timeoutS is 300s, well above
-  // the probe's 120s ceiling. GROK_* passthrough carries the env the runtime
-  // built (with the cap already applied) into the fake CLI's own process.env.
-  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  // the probe's 120s ceiling. OMELETTE_ENV_PASSTHROUGH names GROK_TIMEOUT_S
+  // (the adapter lists exact names since 1.5.0 and this is not one of them), so
+  // the env the runtime built (with the cap already applied) reaches the fake
+  // CLI's own process.env.
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, OMELETTE_ENV_PASSTHROUGH: 'GROK_TIMEOUT_S' } });
   assert.match(r.out, /sandbox\s+held/, r.out + r.err);
   const seen = readFileSync(envMarker, 'utf8').trim().split('\n').filter(Boolean);
   assert.equal(seen.length, 1, seen.join(','));

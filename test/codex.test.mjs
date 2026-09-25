@@ -175,7 +175,7 @@ test('unit contract: four tools, catalog non-empty, efforts fixed, tools/list is
   // The API's own list (its rejection message names them); 'minimal' was dropped 2026-09-03.
   assert.deepEqual(catalog.effortEnum(), ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
   assert.ok(!catalog.isAllowedEffort('minimal'));
-  assert.deepEqual(unit.billingRiskEnv, ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL']);
+  assert.deepEqual(unit.riskEnv, ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL']);
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': true });
   // Codex's JSONL prints a line per item — every reasoning step, every
   // sandboxed command, every file read — and the answer is the LAST
@@ -243,7 +243,7 @@ test('runtime: the child env is an allowlist — a secret in the parent env neve
   const r = await rt.callTool('codex_research', { prompt: 'who am i' });
   assert.match(r.text, /GH_TOKEN=undefined/);        // not on the allowlist
   assert.match(r.text, /OPENAI_API_KEY=undefined/);  // never allowlisted, and on the billing scrub list
-  assert.match(r.text, new RegExp(`CODEX_HOME=${join(dir, 'codex-home')}`)); // envPassthrough: ['CODEX_*']
+  assert.match(r.text, new RegExp(`CODEX_HOME=${join(dir, 'codex-home')}`)); // envPassthrough: CODEX_HOME by name
   assert.match(r.text, /PATH=set/);
   // --ignore-user-config killed the operator's configured default, so an
   // unconfigured run pins the catalog head explicitly instead of drifting.

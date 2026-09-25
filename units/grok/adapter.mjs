@@ -60,15 +60,16 @@
  * any existing file a prompt names as `@path` before the model runs, whatever
  * the toolset (neutraliseAt). GROK_WEB_FETCH_ALLOW_LOCAL is scrubbed from the
  * child env, so web_fetch's own block on loopback and private addresses stays
- * in force (BILLING_RISK_ENV).
+ * in force (RISK_ENV).
  *
- * REACH KNOBS — the GROK_* passthrough admits variables that redirect
- * execution, egress or trust rather than billing: GROK_MEMORY,
- * GROK_FOLDER_TRUST, GROK_AUTH_PROVIDER_COMMAND, GROK_WEB_FETCH_PROXY, the
- * GROK_TRACE_UPLOAD_* set and the Claude/Cursor hook switches (config
- * reference, "Also GROK_…" rows). They are scrubbed (BILLING_RISK_ENV).
- * GROK_HOME (where the config lives) and GROK_MODELS_BASE_URL (admin-pinned)
- * are the operator's choices and pass.
+ * REACH KNOBS — variables that redirect execution, egress or trust rather
+ * than billing: GROK_MEMORY, GROK_FOLDER_TRUST, GROK_AUTH_PROVIDER_COMMAND,
+ * GROK_WEB_FETCH_PROXY, the GROK_TRACE_UPLOAD_* set and the Claude/Cursor hook
+ * switches (config reference, "Also GROK_…" rows). The passthrough is exact
+ * names since 1.5.0 (PASSTHROUGH) and none of them is on it; they stay
+ * scrubbed (RISK_ENV) in case the operator's OMELETTE_ENV_PASSTHROUGH pattern
+ * admits them. GROK_HOME (where the config lives) is the operator's choice and
+ * passes; GROK_MODELS_BASE_URL redirects inference and no longer does.
  *
  * EMPTY RESEARCH DIRECTORY — grok_research with no `cwd` runs in a fresh
  * empty temp directory created for the call (passed as --cwd and used as the
@@ -252,16 +253,19 @@ export const catalog = makeCatalog({
  */
 export const GROK_OUTPUT_CAP = 10000000;
 
-// Deleted from every child env, after the GROK_*/XAI_* passthrough. XAI_API_KEY
-// would flip billing to metered. GROK_WEB_FETCH_ALLOW_LOCAL is a reach risk,
+// Deleted from every child env, after the passthrough (the adapter's exact names
+// and the operator's OMELETTE_ENV_PASSTHROUGH). XAI_API_KEY would flip billing
+// to metered. GROK_WEB_FETCH_ALLOW_LOCAL is a reach risk,
 // not a billing one: at 1 the CLI lets web_fetch reach loopback and private
 // addresses, which its own guard otherwise blocks — the block is what keeps a
 // research run away from local HTTP services.
-// The rest are reach knobs the GROK_* passthrough admits (see REACH KNOBS in
-// the header): memory injection, folder trust, an auth helper command, a fetch
+// The rest are reach knobs an operator's GROK_* pattern would admit (see REACH
+// KNOBS in the header): memory injection, folder trust, an auth helper command, a fetch
 // proxy, trace uploads and third-party hook loading.
-const BILLING_RISK_ENV = [
+const RISK_ENV = [
   'XAI_API_KEY',
+  // the API-key alias 11-custom-models.md documents; subscription-only stays
+  'GROK_CODE_XAI_API_KEY',
   'GROK_WEB_FETCH_ALLOW_LOCAL',
   'GROK_MEMORY',
   'GROK_FOLDER_TRUST',
@@ -695,15 +699,48 @@ const EFFORT_PROP = {
     'hardest math/proofs only). OMIT for the CLI default.',
 };
 
+/**
+ * EXACT NAMES THE CHILD MAY SEE (1.5.0). Classified from the grok 1.0.41 user
+ * guide (02-authentication, 05-configuration, 14-headless-mode,
+ * 26-config-reference): A = the login needs it, B = a preference that changes
+ * no reach. Names that select an auth endpoint, a proxy, a config file, an
+ * agent, a hook, an upload target or an execution path (class C) are not
+ * here on purpose; `GROK_MODELS_BASE_URL` left with them. The operator adds
+ * one through OMELETTE_ENV_PASSTHROUGH, by name.
+ */
+const PASSTHROUGH = [
+  // A — login and state
+  'GROK_HOME',
+  // B — auth presentation and refresh timing
+  'GROK_AUTH_PROVIDER_LABEL', 'GROK_AUTH_TOKEN_TTL', 'GROK_AUTH_EARLY_INVALIDATION_SECS', 'GROK_OAUTH2_REFERRER',
+  // B — updater, version pins, crash handler
+  'GROK_DISABLE_AUTOUPDATER', 'GROK_MINIMUM_VERSION', 'GROK_MAXIMUM_VERSION', 'GROK_REQUIRED_MINIMUM_VERSION', 'GROK_REQUIRED_MAXIMUM_VERSION', 'GROK_CRASH_HANDLER',
+  // B — headless behaviour
+  'GROK_ASK_USER_QUESTION', 'GROK_ASK_USER_QUESTION_TIMEOUT_ENABLED', 'GROK_ASK_USER_QUESTION_TIMEOUT_SECS',
+  'GROK_COMPACTION_DETAIL', 'GROK_COMPACTION_MODE', 'GROK_COMPACTION_VERBATIM_INPUT', 'GROK_TWO_PASS_COMPACTION',
+  'GROK_FEEDBACK_TRACE_CARD', 'GROK_TURN_SUMMARY', 'GROK_LONG_REASONING_REMINDER', 'GROK_MARKETPLACE_REQUIRE_SHA',
+  'GROK_SUBAGENT_SAMPLING_LIMIT', 'GROK_MAX_PARALLEL_IMAGE_GEN_CALLS', 'GROK_MAX_PARALLEL_VIDEO_GEN_CALLS',
+  // B — display
+  'GROK_TERMINAL_THEME', 'GROK_TITLE_REFRESH', 'GROK_COLLAPSED_EDIT_BLOCKS', 'GROK_DISPLAY_REFRESH_AUTO_CADENCE', 'GROK_GROUP_TOOL_VERBS',
+  'GROK_INVERT_SCROLL', 'GROK_MOUSE_REPORTING_TOGGLE', 'GROK_PROMPT_SUGGESTIONS', 'GROK_SCROLL_LINES', 'GROK_SCROLL_MODE', 'GROK_SCROLL_SPEED',
+  'GROK_SHOW_THINKING_BLOCKS', 'GROK_THEME', 'LC_GROK_THEME', 'GROK_APPEARANCE', 'LC_GROK_APPEARANCE', 'COLORFGBG', 'NO_COLOR',
+  'GROK_SCREEN_MODE_SWITCH', 'GROK_CLIPBOARD_NO_DATA_CONTROL', 'GROK_CLIPBOARD_NO_OSC52',
+  // B — logging and timeouts
+  'RUST_LOG', 'GROK_EXIT_TIMEOUT_SECS', 'GROK_SESSION_END_HOOKS_TIMEOUT_MS', 'GROK_MCP_STARTUP_TIMEOUT_SECS', 'MCP_TIMEOUT', 'GROK_MAX_WAIT_BLOCK_MS',
+  // B — OTEL export cadence (the exporter's endpoint names are class C and absent)
+  'OTEL_EXPORTER_OTLP_TIMEOUT', 'OTEL_METRIC_EXPORT_INTERVAL', 'OTEL_BLRP_SCHEDULE_DELAY', 'OTEL_LOGS_EXPORT_INTERVAL',
+  'OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE', 'OTEL_METRICS_INCLUDE_VERSION',
+];
+
 export default defineUnit({
   name: 'grok',
   label: 'Grok',
   instructions: 'This unit: Grok via the grok CLI. Inexpensive per token — volume sweeps, mechanical review, second opinions, math/STEM cross-checks, image generation and the fleet\'s only image editing (grok_image_edit). Two profiles, never both: grok_research is web-only (no local files), grok_code_review is local-only (no web). Roughly one factual answer in three is wrong on independent testing: never a sole source, verify every claim. Write mode is unsupported by design.',
   bin: { env: 'GROK_BIN', default: 'grok' },
-  billingRiskEnv: BILLING_RISK_ENV,
-  // grok's own knobs (GROK_BIN, GROK_WEB_FETCH, XAI_*); the scrub runs after
-  // this and removes XAI_API_KEY and the reach knobs (see above).
-  envPassthrough: ['GROK_*', 'XAI_*'],
+  riskEnv: RISK_ENV,
+  // exact names (PASSTHROUGH above); the scrub runs after the passthrough and
+  // removes XAI_API_KEY and the reach knobs (see above).
+  envPassthrough: PASSTHROUGH,
   envMap: { model: 'GROK_DEFAULT_MODEL', timeoutS: 'GROK_TIMEOUT_S', maxTurns: 'GROK_MAX_TURNS', imageMaxTurns: 'GROK_IMAGE_MAX_TURNS' },
   builtin: { timeoutS: 300, maxTurns: 30, outputCap: GROK_OUTPUT_CAP },
   extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },

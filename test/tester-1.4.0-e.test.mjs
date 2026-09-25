@@ -63,11 +63,11 @@ test('scrub lists hold the reach knobs, and leave the operator\'s choices alone'
     'GROK_MEMORY', 'GROK_FOLDER_TRUST', 'GROK_AUTH_PROVIDER_COMMAND', 'GROK_WEB_FETCH_PROXY',
     'GROK_TRACE_UPLOAD_URL', 'GROK_TRACE_UPLOAD_BUCKET', 'GROK_TRACE_UPLOAD_ENDPOINT_URL',
     'GROK_TRACE_UPLOAD_CREDENTIALS_FILE', 'GROK_CLAUDE_HOOKS_ENABLED', 'GROK_CURSOR_HOOKS_ENABLED',
-  ]) assert.ok(grok.billingRiskEnv.includes(name), name);
-  assert.ok(codex.billingRiskEnv.includes('CODEX_EXEC_SERVER_URL'));
-  assert.ok(gemini.billingRiskEnv.includes('GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES'));
-  for (const name of ['GROK_HOME', 'GROK_MODELS_BASE_URL']) assert.ok(!grok.billingRiskEnv.includes(name), name);
-  assert.ok(!gemini.billingRiskEnv.includes('AGY_ADC_AUTH'));
+  ]) assert.ok(grok.riskEnv.includes(name), name);
+  assert.ok(codex.riskEnv.includes('CODEX_EXEC_SERVER_URL'));
+  assert.ok(gemini.riskEnv.includes('GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES'));
+  for (const name of ['GROK_HOME', 'GROK_MODELS_BASE_URL']) assert.ok(!grok.riskEnv.includes(name), name);
+  assert.ok(!gemini.riskEnv.includes('AGY_ADC_AUTH'));
 });
 
 test('grok child env: GROK_MEMORY and GROK_AUTH_PROVIDER_COMMAND never arrive; GROK_HOME does', async () => {
@@ -76,6 +76,9 @@ test('grok child env: GROK_MEMORY and GROK_AUTH_PROVIDER_COMMAND never arrive; G
   const env = {
     ...process.env, OMELETTE_HOME: dir, GROK_BIN: process.execPath,
     GROK_MEMORY: '1', GROK_AUTH_PROVIDER_COMMAND: '/bin/true', GROK_HOME: join(dir, 'grok-home'),
+    // 1.5.0: the adapter lists exact names, so the operator's pattern is what
+    // admits the namespace here — and the scrub still runs after it.
+    OMELETTE_ENV_PASSTHROUGH: 'GROK_*',
   };
   const rt = wrap(grok, env, fakeGrok(dir));
   for (const tool of ['grok_research', 'grok_code_review']) {
@@ -94,6 +97,7 @@ test('codex child env: CODEX_EXEC_SERVER_URL never arrives; CODEX_HOME does', as
   const env = {
     ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath,
     CODEX_EXEC_SERVER_URL: 'http://127.0.0.1:9', CODEX_HOME: join(dir, 'codex-home'),
+    OMELETTE_ENV_PASSTHROUGH: 'CODEX_*', // the scrub runs after the operator's pattern (1.5.0)
   };
   const r = await wrap(codex, env, fakeCodex(dir)).callTool('codex_research', { prompt: 'q' });
   assert.equal(r.isError, undefined, r.text);
@@ -102,19 +106,22 @@ test('codex child env: CODEX_EXEC_SERVER_URL never arrives; CODEX_HOME does', as
   assert.equal(seen.CODEX_HOME, join(dir, 'codex-home'));
 });
 
-test('gemini child env: GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES never arrives; AGY_DEFAULT_MODEL does', async () => {
+test('gemini child env: GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES never arrives; a listed AGY_CLI_HIDE_LOGO does', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-e-gemini-env-'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { timeoutS: 30 } } }));
   const model = geminiCatalog.ids[0];
   const env = {
     ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath,
-    GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: '1', AGY_DEFAULT_MODEL: model,
+    GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: '1', AGY_DEFAULT_MODEL: model, AGY_CLI_HIDE_LOGO: '1',
+    OMELETTE_ENV_PASSTHROUGH: 'GOOGLE_*', // the scrub runs after the operator's pattern (1.5.0)
   };
   const r = await wrap(gemini, env, fakeAgy(dir)).callTool('gemini_research', { prompt: 'q' });
   assert.equal(r.isError, undefined, r.text);
   const seen = JSON.parse(r.text).env;
   assert.equal(seen.GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES, undefined);
-  assert.equal(seen.AGY_DEFAULT_MODEL, model);
+  // AGY_DEFAULT_MODEL is read by the unit (envMap), not passed to the child (1.5.0).
+  assert.equal(seen.AGY_DEFAULT_MODEL, undefined);
+  assert.equal(seen.AGY_CLI_HIDE_LOGO, '1');
 });
 
 // --- (3) research starts in an empty directory -------------------------------

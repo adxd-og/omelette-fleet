@@ -22,10 +22,10 @@ function fakeUnit(overrides = {}) {
     name: 'fake',
     label: 'Fake',
     bin: { env: 'FAKE_BIN', default: node },
-    billingRiskEnv: ['FAKE_API_KEY'],
+    riskEnv: ['FAKE_API_KEY'],
     // The child env is an ALLOWLIST (core/spawn.mjs), so a unit that wants to see
     // its own vars must declare them — and the billing scrub still runs after.
-    envPassthrough: ['FAKE_*'],
+    envPassthrough: ['FAKE_API_KEY'], // exact names only (1.5.0); the scrub below still wins
     envMap: { timeoutS: 'FAKE_TIMEOUT_S', model: 'FAKE_DEFAULT_MODEL' },
     supportedModes: { 'read-only': true, 'workspace-write': true },
     auth: { detect: (stderr) => /not signed in/i.test(stderr), help: 'run `fake login`' },

@@ -92,7 +92,7 @@
  * BILLING — the OAuth subscription is the only billing path this unit accepts;
  * every env var that could flip agy to metered billing is deleted from the
  * child env: the API keys, and the Google Cloud credentials and Vertex switch
- * the GOOGLE_* passthrough would otherwise admit (BILLING_RISK_ENV). The same
+ * (RISK_ENV), belt and braces under the exact-name passthrough. The same
  * list holds one reach knob: GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES, which
  * lets the Google auth libraries launch a credential helper executable.
  * AGY_ADC_AUTH (a login mode) is the operator's choice and passes.
@@ -147,13 +147,12 @@ export const catalog = makeCatalog({
  * Billing-risk env vars — any of these reaching agy can take it off the OAuth
  * subscription: an API key to metered API-key billing, and a Google Cloud
  * credential (a service-account key, the path of an ADC file) with the Vertex
- * switch to metered Vertex billing. The last three are here because GOOGLE_*
- * is passed through for project and region, and a wildcard admits every
- * secret that shares its prefix: the ones this unit knows to be credentials
- * are named and removed after it. Another GOOGLE_* secret still passes — a
- * denylist under a wildcard is never complete.
+ * switch to metered Vertex billing. Since 1.5.0 the passthrough is exact names
+ * (PASSTHROUGH) and admits none of them; they stay named here because the
+ * operator's OMELETTE_ENV_PASSTHROUGH may still carry a GOOGLE_* pattern, and
+ * the scrub runs after it.
  */
-const BILLING_RISK_ENV = [
+const RISK_ENV = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'GEMINI_API_KEY',
@@ -547,17 +546,29 @@ const MODEL_PROP = {
     'Must be an exact id (call gemini_models for the full guide). ' + GUIDE,
 };
 
+/**
+ * EXACT NAMES THE CHILD MAY SEE (1.5.0), from agy 1.2.11's documentation:
+ * AGY_ADC_AUTH is the operator's choice to sign in with application-default
+ * credentials from the default credential file; the six AGY_CLI_* names are
+ * display and update preferences. GOOGLE_APPLICATION_CREDENTIALS (an arbitrary
+ * credential path) and GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES (a credential
+ * helper) stay scrubbed; GOOGLE_GEMINI_BASE_URL and every other endpoint name
+ * is class C and absent.
+ */
+const PASSTHROUGH = [
+  'AGY_ADC_AUTH',
+  'AGY_CLI_DISABLE_AUTO_UPDATE', 'AGY_CLI_HIDE_LOGO', 'AGY_CLI_HIDE_ACCOUNT_INFO',
+  'AGY_CLI_DISABLE_LATEX', 'AGY_CLI_DISABLE_ESCAPE_SEQUENCE_OPTIMIZATIONS', 'AGY_CLI_CMD_OUTPUT_PERCENTAGE',
+];
+
 export default defineUnit({
   name: 'gemini',
   label: 'Gemini',
   instructions: 'This unit: Gemini via the Antigravity CLI (agy). Web-grounded research (gemini_research), multi-source deep research (gemini_deep_research — about 5 CLI runs and minutes per call, use deliberately), multimodal reads of local images and PDFs (absolute path, and say "view the file directly, no terminal commands" — shell tools are auto-denied — needs `read_file(*)` in the agy allow-rules, the opt-in set in SECURITY), image generation. The weakest sandbox in the fleet: its read-only posture is a permission policy, not a kernel.',
   bin: { env: 'AGY_BIN', default: 'agy' },
-  billingRiskEnv: BILLING_RISK_ENV,
-  // agy's own knobs (AGY_BIN/AGY_*), plus the GEMINI_*/GOOGLE_* namespaces the
-  // CLI reads for project + region; the billing scrub runs after this and
-  // removes the API keys, the Google Cloud credentials and the Vertex switch
-  // the wildcard would otherwise admit (BILLING_RISK_ENV).
-  envPassthrough: ['AGY_*', 'GEMINI_*', 'GOOGLE_*'],
+  riskEnv: RISK_ENV,
+  // exact names (PASSTHROUGH above); the scrub runs after the passthrough.
+  envPassthrough: PASSTHROUGH,
   envMap: { model: 'AGY_DEFAULT_MODEL', timeoutS: 'AGY_TIMEOUT_S' },
   builtin: { timeoutS: 300 },
   supportedModes: { 'read-only': true, 'workspace-write': true },

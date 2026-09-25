@@ -407,16 +407,23 @@ const EFFORT_PROP = {
     'for routine work). OMIT for the fleet default.',
 };
 
+/**
+ * EXACT NAMES THE CHILD MAY SEE (1.5.0), from codex-cli 0.156.1's environment
+ * reference and login code: CODEX_HOME is where the ChatGPT login lives (read
+ * under --ignore-user-config too), CODEX_ACCESS_TOKEN the documented explicit
+ * token, RUST_LOG the log filter, and the exec-server stdin switch. Every
+ * CODEX_* name that selects a state directory, a trust bundle, a token URL or an
+ * OAuth client is class C and absent; CODEX_API_KEY is scrubbed below.
+ */
+const PASSTHROUGH = ['CODEX_HOME', 'CODEX_ACCESS_TOKEN', 'RUST_LOG', 'CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE'];
+
 export default defineUnit({
   name: 'codex',
   label: 'Codex',
   instructions: 'This unit: Codex via the codex CLI, inside a kernel-enforced read-only sandbox. The fleet\'s strongest code review and agentic terminal analysis (codex_code_review needs an absolute cwd), research that depends on running things (codex_research), image generation (codex_image). Reports real token usage per call. Route the final pre-release security audit here on gpt-6-astra.',
   bin: { env: 'CODEX_BIN', default: 'codex' },
-  billingRiskEnv: ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL'],
-  // CODEX_HOME (where auth lives, still read under --ignore-user-config) and the
-  // CLI's other knobs; CODEX_API_KEY and CODEX_EXEC_SERVER_URL match the pattern
-  // and the scrub deletes them after.
-  envPassthrough: ['CODEX_*'],
+  riskEnv: ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL'],
+  envPassthrough: PASSTHROUGH,
   envMap: { model: 'CODEX_DEFAULT_MODEL', effort: 'CODEX_EFFORT', timeoutS: 'CODEX_TIMEOUT_S', webSearch: 'CODEX_WEB_SEARCH' },
   builtin: { timeoutS: 600, effort: 'high', webSearch: true, outputCap: CODEX_OUTPUT_CAP },
   supportedModes: { 'read-only': true, 'workspace-write': true },

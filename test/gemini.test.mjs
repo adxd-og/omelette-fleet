@@ -172,8 +172,8 @@ test('deepResearchModel: the stage ids the run asked for, collapsed when every s
 
 test('unit contract: four tools, billing scrub list, both modes declared', () => {
   assert.deepEqual(unit.tools.map((t) => t.name), ['gemini_research', 'gemini_image', 'gemini_models', 'gemini_deep_research']);
-  assert.ok(unit.billingRiskEnv.includes('GEMINI_API_KEY') && unit.billingRiskEnv.includes('ANTHROPIC_API_KEY'));
-  assert.ok(unit.billingRiskEnv.includes('GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES'));
+  assert.ok(unit.riskEnv.includes('GEMINI_API_KEY') && unit.riskEnv.includes('ANTHROPIC_API_KEY'));
+  assert.ok(unit.riskEnv.includes('GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES'));
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': true });
   assert.equal(catalog.efforts.length, 0);
 });
@@ -891,9 +891,9 @@ test('gemini_image: a hard-killed run whose file is already on disk answers with
   assert.equal(snap.lastEvent.partial, true);
 });
 
-test('the gemini child env: GOOGLE_* still carries project and region, never a Google Cloud credential or the Vertex switch (S18)', () => {
+test('the gemini child env: a listed name passes, GOOGLE_* no longer does (1.5.0), never a Google Cloud credential or the Vertex switch (S18)', () => {
   const parent = {
-    PATH: '/usr/bin', HOME: '/nonexistent',
+    PATH: '/usr/bin', HOME: '/nonexistent', AGY_ADC_AUTH: '1',
     GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CLOUD_LOCATION: 'us-central1',
     GOOGLE_CREDENTIALS: 'SYNTHETIC_SA_SECRET',
     GOOGLE_APPLICATION_CREDENTIALS: '/fake/sa.json',
@@ -901,14 +901,14 @@ test('the gemini child env: GOOGLE_* still carries project and region, never a G
     GOOGLE_API_KEY: 'k1', GEMINI_API_KEY: 'k2', GH_TOKEN: 'gh',
   };
   assert.deepEqual(
-    buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.billingRiskEnv }),
-    { PATH: '/usr/bin', HOME: '/nonexistent', GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CLOUD_LOCATION: 'us-central1' },
+    buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.riskEnv }),
+    { PATH: '/usr/bin', HOME: '/nonexistent', AGY_ADC_AUTH: '1' },
   );
   // The scrub runs after the operator's escape hatch too: naming a credential
   // there does not re-admit it, exactly as it does not re-admit an API key.
   const hatch = buildChildEnv({
     env: { ...parent, OMELETTE_ENV_PASSTHROUGH: 'GOOGLE_APPLICATION_CREDENTIALS,GOOGLE_CREDENTIALS' },
-    passthrough: unit.envPassthrough, scrub: unit.billingRiskEnv,
+    passthrough: unit.envPassthrough, scrub: unit.riskEnv,
   });
   assert.equal(hatch.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(hatch.GOOGLE_CREDENTIALS, undefined);
