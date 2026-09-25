@@ -25,7 +25,7 @@ const CLEAN_REVIEW_PREFIX = '- **First review clean, re-review continued.**';
  * line added by P2 must not reintroduce any of these (Global Constraints:
  * "no added line contains any MECHANICS string").
  */
-const MECHANICS = ['40 lines', '4 KB', '12 KB', '8 KB', 'PreCompact', 'SessionStart', 'PostToolUse', 'PostCompact', 'Stop'];
+const MECHANICS = ['40 lines', '4 KB', '12 KB', 'PreCompact', 'SessionStart'];
 
 /** One section of a Markdown text: its heading line up to the next heading of the same or a higher level. */
 function section(md, heading) {

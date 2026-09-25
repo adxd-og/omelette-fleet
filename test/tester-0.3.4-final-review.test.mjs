@@ -17,7 +17,8 @@
  *     only PreToolUse, or wires everything but PreCompact — none of them
  *     pins the exact upgrade scenario the spec names: an operator's 0.3.3
  *     settings.json (PreToolUse + PreCompact + SessionStart, the three
- *     events that existed before 0.3.4) read by the 0.3.4 CLI.
+ *     events that existed before 0.3.4) read by the 0.3.4 CLI. Since 1.5.0
+ *     those three are the whole set again, so the same file reads as wired.
  *   - doctor's `mergeUnreadable`: its own docstring says two readers open the
  *     same settings files and an operator with ONE broken file wants ONE
  *     line, not one per reader. The shipped tests exercise the case where a
@@ -41,7 +42,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hookSettingsSnippet } from '../core/rules.mjs';
+import { HOOK_EVENTS, hookSettingsSnippet } from '../core/rules.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -65,15 +66,14 @@ function snippetFrom(stdout) {
   const lines = stdout.split('\n');
   const at = lines.indexOf('{ "hooks": {');
   assert.ok(at >= 0, `no snippet in:\n${stdout}`);
-  // The opener line, 6 event lines, and the closer is on the same line as the
-  // last event — 7 lines total, exactly as SNIPPET() in test/cli.test.mjs
-  // builds it.
-  return JSON.parse(lines.slice(at, at + 7).join('\n'));
+  // The opener line and one line per event, the closer on the same line as the
+  // last event — exactly as SNIPPET() in test/cli.test.mjs builds it.
+  return JSON.parse(lines.slice(at, at + HOOK_EVENTS.length + 1).join('\n'));
 }
 
 // ─── §1e: the exact upgrade scenario the spec names ───────────────────────────
 
-test('doctor: an operator\'s 0.3.3 settings.json (PreToolUse + PreCompact + SessionStart only) reports "missing PostToolUse, Stop, PostCompact" — the exact wording the spec fixes', () => {
+test('doctor: an operator\'s 0.3.3 settings.json (PreToolUse + PreCompact + SessionStart only) reads as fully wired — the three events 1.5.0 serves', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);
   const written = rulesIn(proj, dir, ['--hooks']);
@@ -81,8 +81,8 @@ test('doctor: an operator\'s 0.3.3 settings.json (PreToolUse + PreCompact + Sess
   const snippet = snippetFrom(written.stdout);
 
   // The three events wired by 0.3.3, before PostToolUse and Stop existed at
-  // all: an operator who has not re-pasted the snippet since upgrading has
-  // exactly this settings.json.
+  // all — and, since 1.5.0 retired those again, the whole set: nothing is
+  // missing and nothing is left over.
   const settingsPath = join(proj, '.claude', 'settings.json');
   writeFileSync(settingsPath, JSON.stringify({
     hooks: {
@@ -95,9 +95,10 @@ test('doctor: an operator\'s 0.3.3 settings.json (PreToolUse + PreCompact + Sess
   const out = doctorIn(proj, dir).stdout;
   assert.match(
     out,
-    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PostToolUse, Stop, PostCompact\) — paste the snippet from rules --hooks\)/m,
+    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m,
     out,
   );
+  assert.doesNotMatch(out, /missing|no longer used/, out);
 });
 
 // ─── doctor's mergeUnreadable: the SAME broken file must be named once ────────

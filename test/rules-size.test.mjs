@@ -27,28 +27,29 @@ function section(md, heading) {
 }
 
 /** How the handoff hooks work, in the words that carry it: CONFIG's to say, never the rules'. */
-const MECHANICS = ['40 lines', '4 KB', '12 KB', '8 KB', 'PreCompact', 'SessionStart', 'PostToolUse', 'PostCompact', 'Stop'];
+const MECHANICS = ['40 lines', '4 KB', '12 KB', 'PreCompact', 'SessionStart'];
 
 test('CONFIG carries the handoff hooks the rules file used to explain', () => {
   const md = read('docs/CONFIG.md');
   const hooks = section(md, '## The handoff hooks');
   for (const mechanism of MECHANICS) assert.ok(hooks.includes(mechanism), `CONFIG "The handoff hooks" carries: ${mechanism}`);
-  for (const event of ['PreCompact', 'SessionStart', 'PostToolUse', 'Stop', 'PostCompact']) {
+  for (const event of ['PreCompact', 'SessionStart']) {
     assert.ok(hooks.includes(`\`${event}\``), `${event} named`);
   }
   for (const fact of [
     '<session cwd>/.omelette/ledger-*.md',
     'a ledger kept in another repository gets neither the stamp nor the print',
     '40 lines / 4 KB per ledger, 12 KB in all',
-    '## Compaction summary <ISO> (trigger: …)',
-    'Bounded to 8 KB',
-    '`handoff.compactSummary=false`',
-    '`handoff.enabled=false`',
-    'remind **once** and gate **once** per crossing',
-    'the handoff block is still yours to write',
-    'A manual `/compact` below the threshold gets no reminder',
-    'handoffs at every natural pause, and the hook is the net under it',
+    '`handoff.enabled=false` turns it off',
+    'They stamp and they print the block you wrote',
+    'Nothing measures the context and nothing holds a turn',
+    'MEASUREMENTS.md#the-handoff-hooks-over-five-compactions',
   ]) assert.ok(hooks.includes(fact), `CONFIG "The handoff hooks" says: ${fact}`);
+  // The three retired events are named only as what an old settings file may
+  // still wire, never as rows of the table.
+  for (const retired of ['PostToolUse', 'Stop', 'PostCompact']) {
+    assert.doesNotMatch(hooks, new RegExp(`^\\| \`${retired}\``, 'm'), `no table row for the retired ${retired}`);
+  }
   assert.match(md, /^\| .+ \| \[The handoff hooks\]\(#the-handoff-hooks\) \|$/m, 'the map at the top links it');
 });
 

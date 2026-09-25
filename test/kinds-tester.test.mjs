@@ -194,13 +194,10 @@ test('rules --global --hooks writes under CLAUDE_CONFIG_DIR, prints an absolute 
       PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: `node ${guard}` }] }],
       PreCompact: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
       SessionStart: [{ matcher: 'compact', hooks: [{ type: 'command', command: `node ${guard}` }] }],
-      PostToolUse: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
-      Stop: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
-      PostCompact: [{ hooks: [{ type: 'command', command: `node ${guard}` }] }],
     },
   }, null, 2));
   const after = doctorIn(proj, dir, env);
-  assert.match(after, /^hooks {9}project: absent · global: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)$/m, after);
+  assert.match(after, /^hooks {9}project: absent · global: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)$/m, after);
 });
 
 test('rules --global --agents writes the skill (and every agent definition) under CLAUDE_CONFIG_DIR, and doctor counts them at global scope', () => {
@@ -265,8 +262,8 @@ function guard(version = '1.2.3') {
   // `{{handoff}}` JSON literal — and it is not runnable until every one of them
   // is filled in. The block is spelled out rather than defaulted: the default
   // is the OPERATOR's live fleet config, and a test that read it would pass or
-  // fail on a threshold somebody set this morning.
-  writeFileSync(path, renderHookFile(HOOK_FILES[0], version, { enabled: true, threshold: 90, contextWindow: 0 }));
+  // fail on a switch somebody flipped this morning.
+  writeFileSync(path, renderHookFile(HOOK_FILES[0], version, { enabled: true }));
   return path;
 }
 

@@ -528,9 +528,7 @@ test('SessionStart(compact): a ledger with no handoff block prints nothing at al
     'Ruling: X — because Y — costs Z',
     // The vocabulary is `## Handoff`: a level-3 heading and a `#` with no space
     // after it are not level-2 headings at all, a heading ABOUT handoffs is not
-    // one either, and `##` and `Handoff` on two lines is two things — the same
-    // grammar the Stop gate reads, since a block the gate refuses must not be
-    // the block the next context is handed.
+    // one either, and `##` and `Handoff` on two lines is two things.
     '### Handoff notes',
     '##Handoff',
     '## Handoffs, and why we write them',

@@ -1868,10 +1868,7 @@ const SNIPPET = (script) => [
   '{ "hooks": {',
   `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
   `  "PreCompact": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
-  `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
-  `  "PostToolUse": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
-  `  "Stop": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
-  `  "PostCompact": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
+  `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
 ].join('\n');
 
 /** The pasteable snippet out of a `rules --hooks` run's stdout: the opener line plus one per event. */
@@ -1947,7 +1944,7 @@ test('the snippet is absolute and shell-quoted: a path with spaces, and a RELATI
   const snippet = JSON.parse(snippetFrom(spaced.stdout));
   writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify(snippet, null, 2));
   const doc = spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
-  assert.match(doc, /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, doc);
+  assert.match(doc, /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, doc);
 
   // A relative CLAUDE_CONFIG_DIR still has to yield an absolute hook command: a
   // hook runs from wherever the session is, not from where this command ran.
@@ -1971,11 +1968,11 @@ test('doctor sees the guard wired in settings.local.json too, and names a settin
   // project that gitignores it keeps this wiring. It counts.
   const local = join(proj, '.claude', 'settings.local.json');
   writeFileSync(local, JSON.stringify(snippet, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) · global: absent$/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m);
 
   // A broken settings.json beside a working local one does not un-wire it.
   writeFileSync(join(proj, '.claude', 'settings.json'), '{ not json');
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m);
 
   // With nothing wired anywhere, both unreadable files are named — "not wired"
   // about a file nobody could parse would send the operator to re-paste it.
@@ -2037,7 +2034,7 @@ test('doctor reports the guard hook and whether settings.json wires it — readi
   // and doctor names WHICH event nobody calls, since that is what the operator
   // has to paste.
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: snippet.hooks.PreToolUse } }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) — paste the snippet from rules --hooks\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PreCompact, SessionStart\) — paste the snippet from rules --hooks\)/m, doctor());
   writeFileSync(settings, JSON.stringify({ hooks: { ...snippet.hooks, PreCompact: [{ hooks: [{ type: 'command', command: 'node /elsewhere/other-hook.mjs' }] }] } }, null, 2));
   assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PreCompact\) — paste the snippet from rules --hooks\)/m, doctor());
 
@@ -2051,20 +2048,20 @@ test('doctor reports the guard hook and whether settings.json wires it — readi
   assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(PreToolUse matcher is not Bash\) — paste the snippet from rules --hooks\)/m, doctor());
   // `*` and an absent matcher cover Bash as surely as "Bash" does.
   writeFileSync(settings, withMatcher('*'));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m);
   writeFileSync(settings, JSON.stringify({
     hooks: { ...snippet.hooks, PreToolUse: [{ hooks: snippet.hooks.PreToolUse[0].hooks }] },
   }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m);
 
   const pasted = JSON.stringify(snippet, null, 2);
   writeFileSync(settings, pasted);
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) · global: absent$/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m);
   assert.equal(readFileSync(settings, 'utf8'), pasted, 'settings.json is READ, never written');
 
   // A stale guard beside a working wiring still asks to be refreshed…
   writeFileSync(guard, MARKED_HOOK('0.0.1'));
-  assert.match(doctor(), /^hooks {9}project: v0\.0\.1 \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) \[run: omelette-fleet rules --hooks\]/m);
+  assert.match(doctor(), /^hooks {9}project: v0\.0\.1 \(wired: PreToolUse, PreCompact, SessionStart\) \[run: omelette-fleet rules --hooks\]/m);
   // …and a script that is not ours is reported, never claimed.
   writeFileSync(guard, '// my own hook\n');
   assert.match(doctor(), /^hooks {9}project: foreign \(no marker\) · global: absent$/m);
@@ -2094,7 +2091,7 @@ test('doctor: a PreToolUse matcher is a REGEX — "Bash|Edit" and ".*" wire the 
   // is what makes "Ba.", "^Ba" and "ash$" cover a Bash call.
   for (const matcher of ['Bash|Edit', 'Edit|Bash', 'Bash, Write', '.*', 'Bash.*', '(Bash|Task)', 'Ba(sh)', 'Ba.', '^Ba', 'ash$']) {
     writeFileSync(settings, withMatcher(matcher));
-    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, `matcher ${matcher} covers Bash`);
+    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, `matcher ${matcher} covers Bash`);
   }
   // …and one that cannot match "Bash" is still named rather than counted. In an
   // exact list a name is a whole name: "Bas" and "ash" are items of their own,
@@ -2143,11 +2140,11 @@ test('doctor: a guard wired at 0.3.2 — PreToolUse and PreCompact only — is N
 
   const { PreToolUse, PreCompact } = snippet.hooks;
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse, PreCompact } }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing SessionStart, PostToolUse, Stop, PostCompact\) — paste the snippet from rules --hooks\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing SessionStart\) — paste the snippet from rules --hooks\)/m, doctor());
 
   // The third group is what finishes it — and the label lists all three.
   writeFileSync(settings, JSON.stringify(snippet, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\) · global: absent$/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m, doctor());
 });
 
 test('doctor: a SessionStart matcher is read like any other — `compact` wires the handoff print, `startup` does not', () => {
@@ -2167,14 +2164,14 @@ test('doctor: a SessionStart matcher is read like any other — `compact` wires 
   // an unanchored regex, and `""` / `"*"` everything.
   for (const matcher of ['compact', 'startup|compact', 'compact, resume', '*', '', '.*', 'com.', '^comp', 'act$']) {
     writeFileSync(settings, withMatcher(matcher));
-    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, `matcher ${JSON.stringify(matcher)} covers compact`);
+    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, `matcher ${JSON.stringify(matcher)} covers compact`);
   }
   // An ABSENT matcher fires on every source, which is wired: the guard's own
   // `source === 'compact'` check is what keeps a startup silent.
   writeFileSync(settings, JSON.stringify({
     hooks: { ...snippet.hooks, SessionStart: [{ hooks: snippet.hooks.SessionStart[0].hooks }] },
   }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, doctor());
 
   for (const matcher of ['startup', 'resume|clear', 'compac', 'compaction']) {
     writeFileSync(settings, withMatcher(matcher));
@@ -2186,7 +2183,7 @@ test('doctor: a SessionStart matcher is read like any other — `compact` wires 
   assert.ok(doctor().includes('(NOT wired (SessionStart matcher is not a string) — paste the snippet from rules --hooks)'), doctor());
 });
 
-test('doctor: a 0.3.6 settings.json (the five events that existed then) reports "missing PostCompact"', () => {
+test('doctor: a 0.3.6 settings.json (the five events that existed then) reads as wired and names the two retired ones', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);
   const doctor = () => spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
@@ -2195,20 +2192,19 @@ test('doctor: a 0.3.6 settings.json (the five events that existed then) reports 
   const snippet = JSON.parse(snippetFrom(written.stdout));
 
   // An operator who pasted the snippet at 0.3.6 and has not re-pasted it since
-  // has exactly this: five groups, and the sixth event nobody calls. The event
-  // that is missing is NAMED, because that is what has to be pasted.
-  const { PostCompact, ...before } = snippet.hooks;
-  assert.ok(PostCompact, 'sanity: the 0.3.7 snippet carries the group this test removes');
-  writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ hooks: before }, null, 2));
+  // has the three groups 1.5.0 prints plus `PostToolUse` and `Stop`, which the
+  // guard no longer serves: wired, with the two leftovers named for removal.
+  const retired = [{ hooks: snippet.hooks.PreCompact[0].hooks }];
+  writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ hooks: { ...snippet.hooks, PostToolUse: retired, Stop: retired } }, null, 2));
   assert.match(
     doctor(),
-    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PostCompact\) — paste the snippet from rules --hooks\)/m,
+    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart · PostToolUse, Stop wired but no longer used — remove them from settings\.json\) · global: absent$/m,
     doctor(),
   );
 
-  // Pasting the whole snippet closes it.
+  // Pasting the three-event snippet over it closes it.
   writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify(snippet, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, PostToolUse, Stop, PostCompact\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m, doctor());
 });
 
 test('doctor reports the skill on its own line: absent, ours with a count, foreign', () => {
@@ -2743,41 +2739,27 @@ const doctorIn2 = (proj, dir, env = {}) => spawnSync(process.execPath, [BIN, 'do
   env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', ...env },
 }).stdout;
 
-test('set handoff.<key> edits the top-level block, show prints it, and the bounds are refused', () => {
+test('set handoff.<key> edits the top-level block, show prints it, and a bad value is refused', () => {
   const dir = home();
-  const s = cli(['set', 'handoff.threshold=85'], { dir });
+  const s = cli(['set', 'handoff.enabled=off'], { dir });
   assert.equal(s.code, 0, s.err);
-  assert.match(s.out, /handoff\.threshold\s+90 \[default\] → 85 \[file\]/);
+  assert.match(s.out, /handoff\.enabled\s+true \[default\] → false \[file\]/);
   assert.match(s.out, /rules --hooks/, 'a changed setting is only in the guard after a re-render');
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).handoff, { threshold: 85 });
-
-  // `contextWindow: 0` is a VALUE, not a refusal: it means "resolve at run time".
-  assert.equal(cli(['set', 'handoff.contextWindow=0'], { dir }).code, 0);
-  assert.equal(cli(['set', 'handoff.enabled=off'], { dir }).code, 0);
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).handoff,
-    { threshold: 85, contextWindow: 0, enabled: false });
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).handoff, { enabled: false });
 
   const shown = cli(['show', 'handoff'], { dir });
   assert.equal(shown.code, 0, shown.err);
   assert.match(shown.out, /^handoff$/m);
-  assert.match(shown.out, /^\s+threshold\s+85\s+file$/m);
   assert.match(shown.out, /^\s+enabled\s+false\s+file$/m);
-  assert.match(shown.out, /^\s+contextWindow\s+0\s+file$/m);
-  assert.match(shown.out, /^\s+compactSummary\s+true\s+default$/m);
   assert.doesNotMatch(shown.out, /^codex$/m, 'show handoff shows the block and nothing else');
   assert.match(cli(['show'], { dir }).out, /^handoff$/m, 'a bare show lists it after the agents');
   assert.doesNotMatch(cli(['show', 'codex'], { dir }).out, /^handoff$/m);
 
-  // The bounds and the shape are refused, and nothing is written.
+  // A bad value and the shape are refused, and nothing is written.
   const before = readFileSync(join(dir, 'fleet.config.json'), 'utf8');
   for (const [assignment, message] of [
-    ['handoff.threshold=49', /invalid value for handoff\.threshold: "49" — expected a positive integer from 50 to 99/],
-    ['handoff.threshold=100', /invalid value for handoff\.threshold: "100"/],
-    ['handoff.threshold=0.5', /invalid value for handoff\.threshold: "0\.5"/],
-    ['handoff.contextWindow=-1', /invalid value for handoff\.contextWindow: "-1" — expected a whole number 0 or above/],
-    ['handoff.contextWindow=9007199254740992', /invalid value for handoff\.contextWindow: "9007199254740992"/],
     ['handoff.enabled=maybe', /invalid value for handoff\.enabled: "maybe" — expected true \| false/],
-    ['handoff.nudgeAt=80', /unknown key "nudgeAt" for the handoff block — known keys: enabled, threshold, contextWindow, compactSummary/],
+    ['handoff.nudgeAt=80', /unknown key "nudgeAt" for the handoff block — known keys: enabled$/m],
     ['handoff=90', /"handoff=90" is not handoff\.<key>=<value>/],
     ['handoff.a.b=1', /"handoff\.a\.b=1" is not handoff\.<key>=<value>/],
   ]) {
@@ -2788,32 +2770,6 @@ test('set handoff.<key> edits the top-level block, show prints it, and the bound
   assert.equal(readFileSync(join(dir, 'fleet.config.json'), 'utf8'), before, 'a refusal writes nothing');
   const bad = cli(['show', 'nope'], { dir });
   assert.match(bad.err, /unknown unit "nope"/);
-});
-
-test('set handoff.compactSummary=false round-trips through the config file and the rendered guard', () => {
-  const dir = home();
-  const s = cli(['set', 'handoff.compactSummary=false'], { dir });
-  assert.equal(s.code, 0, s.err);
-  assert.match(s.out, /handoff\.compactSummary\s+true \[default\] → false \[file\]/);
-  assert.match(s.out, /rules --hooks/, 'a changed setting is only in the guard after a re-render');
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).handoff, { compactSummary: false });
-
-  const shown = cli(['show', 'handoff'], { dir });
-  assert.equal(shown.code, 0, shown.err);
-  assert.match(shown.out, /^\s+compactSummary\s+false\s+file$/m);
-
-  // …and it reaches the guard the only way anything reaches it: the rendered
-  // literal, which is what `doctor` reads back.
-  const proj = join(dir, 'proj'); mkdirSync(proj);
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  const guard = readFileSync(join(proj, '.claude', 'hooks', 'omelette-guard.mjs'), 'utf8');
-  assert.match(guard, /^const HANDOFF_CONFIG = \{.*"compactSummary":false\};$/m);
-
-  // The value is a boolean, and `set` refuses anything that is not one.
-  const bad = cli(['set', 'handoff.compactSummary=sometimes'], { dir });
-  assert.equal(bad.code, 1);
-  assert.match(bad.err, /invalid value for handoff\.compactSummary: "sometimes" — expected true \| false/);
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).handoff, { compactSummary: false });
 });
 
 test('set contract=short round-trips, show lists the fleet block, and a bad value is refused', () => {
@@ -2865,41 +2821,28 @@ test('set contract=short round-trips, show lists the fleet block, and a bad valu
   assert.match(cli(['show', 'nope'], { dir }).err, /unknown unit "nope"/);
 });
 
-test('doctor prints the handoff line from the RENDERED guard, and names where the ceiling came from', () => {
+test('doctor prints the handoff line from the RENDERED guard, not from the config', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);
   assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
   // No ledger yet: the hook is installed and deliberately silent.
   assert.match(doctorIn2(proj, dir),
-    /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m,
+    /^handoff {7}stamp and print on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m,
     doctorIn2(proj, dir));
   // One ledger, and it is counted.
   mkdirSync(join(proj, '.omelette'));
   writeFileSync(join(proj, '.omelette', 'ledger-0.3.4.md'), '# ledger\n');
-  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: 1$/m);
+  assert.match(doctorIn2(proj, dir), /^handoff {7}stamp and print on · ledgers: 1$/m);
 
   // The line reads the RENDERED value: a `set` that was never re-rendered is
-  // visible as the old number, which is the whole point of reading it back.
-  assert.equal(cli(['set', 'handoff.threshold=75'], { dir }).code, 0);
-  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 90% of 200000 \(default\)/m, 'still the rendered 90');
+  // visible as the old value, which is the whole point of reading it back.
+  assert.equal(cli(['set', 'handoff.enabled=false'], { dir }).code, 0);
+  assert.match(doctorIn2(proj, dir), /^handoff {7}stamp and print on · ledgers: 1$/m, 'still the rendered switch');
   assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 75% of 200000 \(default\)/m, 'and 75 after the re-render');
-
-  // The ceiling, in precedence order.
-  assert.match(doctorIn2(proj, dir, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '500k' }),
-    /^handoff {7}nudge at 75% of 500000 \(CLAUDE_CODE_AUTO_COMPACT_WINDOW\)/m);
-  mkdirSync(join(dir, '.claude'), { recursive: true });
-  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: '1m' }, null, 2));
-  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 75% of 1000000 \(autoCompactWindow\)/m);
-  assert.match(doctorIn2(proj, dir, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: 'lots' }),
-    /^handoff {7}nudge at 75% of 1000000 \(autoCompactWindow\)/m, 'garbage falls through to the file');
-  assert.equal(cli(['set', 'handoff.contextWindow=400000'], { dir }).code, 0);
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  assert.match(doctorIn2(proj, dir, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '500k' }),
-    /^handoff {7}nudge at 75% of 400000 \(handoff\.contextWindow\)/m);
+  assert.match(doctorIn2(proj, dir), /^handoff {7}stamp and print off \(handoff\.enabled=false\) · ledgers: 1$/m, 'and off after the re-render');
 });
 
-test('doctor: handoff.enabled=false says the gate is off, and the line sits above the mcp timeout block', () => {
+test('doctor: handoff.enabled=false says stamp and print are off, and the line sits above the mcp timeout block', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);
   mkdirSync(join(proj, '.omelette'));
@@ -2908,35 +2851,10 @@ test('doctor: handoff.enabled=false says the gate is off, and the line sits abov
   assert.equal(cli(['set', 'handoff.enabled=false'], { dir }).code, 0);
   assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
   const out = doctorIn2(proj, dir);
-  assert.match(out, /^handoff {7}nudge off \(handoff\.enabled=false\) · Stop gate off · summary on · ledgers: 2$/m, out);
+  assert.match(out, /^handoff {7}stamp and print off \(handoff\.enabled=false\) · ledgers: 2$/m, out);
   const lines = out.split('\n');
   assert.ok(lines.findIndex((l) => l.startsWith('handoff ')) > lines.findIndex((l) => l.startsWith('hooks ')), out);
   assert.ok(lines.findIndex((l) => l.startsWith('handoff ')) < lines.findIndex((l) => l.startsWith('mcp timeout')), out);
-});
-
-test('doctor: the handoff line reports the summary switch out of the RENDERED guard, independently of the nudge', () => {
-  const dir = home();
-  const proj = join(dir, 'proj'); mkdirSync(proj);
-  mkdirSync(join(proj, '.omelette'));
-  writeFileSync(join(proj, '.omelette', 'ledger-a.md'), '# a\n');
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: 1$/m);
-
-  // Like every other value on this line, it is read back out of the script: a
-  // `set` that was never re-rendered is visible as the value in force.
-  assert.equal(cli(['set', 'handoff.compactSummary=false'], { dir }).code, 0);
-  assert.match(doctorIn2(proj, dir), /· summary on · ledgers: 1$/m, 'still the rendered value');
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary off · ledgers: 1$/m, doctorIn2(proj, dir));
-
-  // The two switches are independent: `enabled` is the nudge and the gate,
-  // `compactSummary` is the record a compaction leaves behind.
-  assert.equal(cli(['set', 'handoff.enabled=false'], { dir }).code, 0);
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge off \(handoff\.enabled=false\) · Stop gate off · summary off · ledgers: 1$/m, doctorIn2(proj, dir));
-  assert.equal(cli(['set', 'handoff.compactSummary=true'], { dir }).code, 0);
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  assert.match(doctorIn2(proj, dir), /^handoff {7}nudge off \(handoff\.enabled=false\) · Stop gate off · summary on · ledgers: 1$/m, doctorIn2(proj, dir));
 });
 
 test('doctor prints no handoff line when no guard of ours carries the block', () => {
@@ -2962,14 +2880,14 @@ test('doctor says so when the handoff line came from the GLOBAL guard rather tha
   const proj = join(dir, 'proj'); mkdirSync(proj);
   // A 0.3.3-era project guard: ours by its marker, and carrying no rendered
   // handoff block. handoffReport falls through to the global guard — and a
-  // threshold the operator reads here is one they would have to change with
+  // switch the operator reads here is one they would have to change with
   // `rules --global --hooks`, so the line has to name whose value it is.
   mkdirSync(join(proj, '.claude', 'hooks'), { recursive: true });
   writeFileSync(join(proj, '.claude', 'hooks', 'omelette-guard.mjs'), MARKED_HOOK('0.3.3'));
   assert.equal(rulesIn(proj, dir, ['--global', '--hooks']).status, 0);
   assert.match(
     doctorIn2(proj, dir),
-    /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\) · the project guard carries no handoff block — showing the global guard's values$/m,
+    /^handoff {7}stamp and print on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\) · the project guard carries no handoff block — showing the global guard's values$/m,
     doctorIn2(proj, dir),
   );
 
@@ -2977,7 +2895,7 @@ test('doctor says so when the handoff line came from the GLOBAL guard rather tha
   // project's and the suffix goes away.
   assert.equal(rulesIn(proj, dir, ['--hooks', '--force']).status, 0);
   const own = doctorIn2(proj, dir);
-  assert.match(own, /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on · summary on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m, own);
+  assert.match(own, /^handoff {7}stamp and print on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m, own);
   assert.doesNotMatch(own, /showing the global guard/, own);
 });
 
@@ -3021,27 +2939,6 @@ test('doctor says which contract a unit server started here would send', () => {
   assert.match(help.out, /`contract` line/);
 });
 
-test('doctor: an autoCompactWindow that is not a window is skipped and the next file is read — the hook reads them the same way', () => {
-  const dir = home();
-  const proj = join(dir, 'proj'); mkdirSync(proj);
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  mkdirSync(join(dir, '.claude'), { recursive: true });
-  // The client reads settings.local.json first, and the guard keeps looking
-  // past a value it cannot parse. A doctor that stopped at the garbage would
-  // report the 200 000 default for a hook measuring against half a million —
-  // the one thing this line exists to prevent.
-  writeFileSync(join(dir, '.claude', 'settings.local.json'), JSON.stringify({ autoCompactWindow: 'garbage' }));
-  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: '500k' }));
-  const out = doctorIn2(proj, dir);
-  assert.match(out, /^handoff {7}nudge at 90% of 500000 \(autoCompactWindow\) · Stop gate on/m, out);
-
-  // …and with nothing readable in either file it is Claude Code's documented
-  // 200 000, named as the default rather than as a setting.
-  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: '1.5m' }));
-  const fallback = doctorIn2(proj, dir);
-  assert.match(fallback, /^handoff {7}nudge at 90% of 200000 \(default\) · Stop gate on/m, fallback);
-});
-
 test('doctor --help names the handoff line, because it is a line an operator has to be able to look up', () => {
   const help = spawnSync(process.execPath, [BIN, 'help', 'doctor'], {
     encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home(), OMELETTE_UPDATE_CHECK: '0' },
@@ -3052,56 +2949,30 @@ test('doctor --help names the handoff line, because it is a line an operator has
 /** Every `settings: … unreadable` line doctor printed, in order, label column stripped. */
 const settingsLines = (out) => out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('settings: '));
 
-test('doctor: one unparseable user settings file is named exactly ONCE, whichever of the three readers tripped over it', () => {
+test('doctor: one unparseable user settings file is named exactly ONCE, whichever of the two readers tripped over it', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);
   assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
   assert.equal(rulesIn(proj, dir, ['--global', '--hooks']).status, 0);
   mkdirSync(join(dir, '.claude'), { recursive: true });
-  // A trailing comma in the file the client reads FIRST. Three readers open it:
-  // the env lookup behind the mcp timeout lines, the hook-wiring report behind
-  // the hooks line, and the ceiling lookup behind the handoff line.
+  // A trailing comma in the file the client reads FIRST. Two readers open it:
+  // the env lookup behind the mcp timeout lines, and the hook-wiring report
+  // behind the hooks line.
   writeFileSync(
     join(dir, '.claude', 'settings.local.json'),
-    '{ "env": { "MCP_TOOL_TIMEOUT": "1800000", }, "autoCompactWindow": "1m" }',
+    '{ "env": { "MCP_TOOL_TIMEOUT": "1800000", }, "hooks": {} }',
   );
-  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: '500k' }));
+  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ env: {} }));
   const out = doctorIn2(proj, dir);
 
   // 1. The wall fell back to the client's default: the value in the broken file
   // was never read…
   assert.match(out, /wall-clock: MCP_TOOL_TIMEOUT unset \(default ~28 h\)/, out);
-  // 2. …the wiring reader names it as the reason the GLOBAL guard is not wired…
+  // 2. …and the wiring reader names it as the reason the GLOBAL guard is not wired.
   assert.match(out, /global: v[\d.]+ \(NOT wired \(settings\.local\.json unreadable\)/, out);
-  // 3. …and the ceiling came from the file that DOES parse, not from the `1m`
-  // in the one that does not.
-  assert.match(out, /^handoff {7}nudge at 90% of 500000 \(autoCompactWindow\)/m, out);
 
-  // One line, not three — and the wording no longer claims only `env` values
-  // were lost, because two of those three readers were never after one.
-  assert.deepEqual(
-    settingsLines(out),
-    [`settings: ${join(dir, '.claude', 'settings.local.json')} unreadable — its values were not consulted`],
-    out,
-  );
-});
-
-test('doctor: the ceiling reader names a settings file it ALONE could not read', () => {
-  const dir = home();
-  const proj = join(dir, 'proj'); mkdirSync(proj);
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  mkdirSync(join(dir, '.claude'), { recursive: true });
-  // A DIRECTORY where the client expects a file: readFileSync throws EISDIR,
-  // which `hookWiringAt` treats as absent, and with both timeout variables in
-  // the process environment `readClientEnv` returns before it opens anything at
-  // all. The ceiling lookup behind the `handoff` line is the only reader left —
-  // and the operator still gets the line, because the window it resolved may be
-  // the one that directory was meant to change.
-  mkdirSync(join(dir, '.claude', 'settings.local.json'));
-  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: '500k' }));
-  const out = doctorIn2(proj, dir, { MCP_TOOL_TIMEOUT: '2000000', CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: '0' });
-
-  assert.match(out, /^handoff {7}nudge at 90% of 500000 \(autoCompactWindow\)/m, out);
+  // One line, not two — and the wording does not claim only `env` values were
+  // lost, because one of those two readers was never after one.
   assert.deepEqual(
     settingsLines(out),
     [`settings: ${join(dir, '.claude', 'settings.local.json')} unreadable — its values were not consulted`],
@@ -3155,112 +3026,20 @@ test('doctor: a rules file that would BLOCK the read is reported absent, and doc
   assert.match(r.out, /^merge policy {2}session \(config; no rules file\)$/m, r.out);
 });
 
-test('doctor: a settings file past the read cap is unreadable, exactly as the guard treats it', () => {
+test('doctor: a settings file past the read cap is unreadable, never half-read', () => {
   const dir = home();
   mkdirSync(join(dir, '.claude'), { recursive: true });
   const big = join(dir, '.claude', 'settings.json');
-  // Valid JSON, and 2 MiB of it. The guard reads at most 1 MiB of a settings
-  // file; what comes back is half an object, and half an object is not a value
-  // anybody may act on. Doctor has to say the same thing about the same file.
-  writeFileSync(big, `{"env":{"NOISE":"${'A'.repeat(2 * 1024 * 1024)}"},"autoCompactWindow":"500k"}`);
+  // Valid JSON, and 2 MiB of it. Doctor reads at most 1 MiB of a settings file;
+  // what comes back is half an object, and half an object is not a value anybody
+  // may act on, so the file is named instead.
+  writeFileSync(big, `{"env":{"NOISE":"${'A'.repeat(2 * 1024 * 1024)}"},"hooks":{}}`);
   const r = doctorFromProject(dir);
   assert.deepEqual(
     settingsLines(r.out),
     [`settings: ${big} unreadable — its values were not consulted`],
     r.out + r.err,
   );
-});
-
-/**
- * One assistant record, the shape Claude Code writes into a transcript: the
- * three input counters are the prompt that was just sent, and `output_tokens`
- * is deliberately outside that sum.
- */
-const transcriptLine = (fill) => JSON.stringify({
-  type: 'assistant',
-  message: {
-    role: 'assistant',
-    model: 'claude-opus-5',
-    usage: { input_tokens: 32, cache_creation_input_tokens: 1208, cache_read_input_tokens: fill - 1240, output_tokens: 485 },
-  },
-  timestamp: '2026-09-09T12:00:00.000Z',
-});
-
-let guardRun = 0;
-/** The INSTALLED guard, fired with one PostToolUse event: `<window> (<source>)` off its nudge. */
-function guardCeiling(proj, dir, env = {}) {
-  const r = spawnSync(process.execPath, [join(proj, '.claude', 'hooks', 'omelette-guard.mjs')], {
-    input: JSON.stringify({
-      hook_event_name: 'PostToolUse',
-      session_id: `parity-${guardRun++}`, // a fresh crossing every time: the guard nudges once per session
-      transcript_path: join(proj, 'transcript.jsonl'),
-      cwd: proj,
-      tool_name: 'Bash',
-      tool_input: { command: 'npm test' },
-      tool_response: { stdout: 'ok' },
-    }),
-    cwd: proj, encoding: 'utf8', timeout: 20000,
-    env: { PATH: process.env.PATH, HOME: dir, ...env },
-  });
-  const m = /context at \d+% of (\d+) tokens \(([^)]+)\)\./.exec(r.stdout || '');
-  return m ? `${m[1]} (${m[2]})` : `no nudge: ${JSON.stringify(r.stdout)}${r.stderr}`;
-}
-
-/** …and the same two values off doctor's `handoff` line. */
-function doctorCeiling(proj, dir, env = {}) {
-  const out = doctorIn2(proj, dir, env);
-  const m = /^handoff {7}nudge at \d+% of (\d+) \(([^)]+)\)/m.exec(out);
-  return m ? `${m[1]} (${m[2]})` : `no handoff line:\n${out}`;
-}
-
-test('doctor and the INSTALLED guard resolve the same ceiling from the same machine, source for source', () => {
-  const dir = home();
-  const proj = join(dir, 'proj'); mkdirSync(proj);
-  // The guard is silent without a ledger, and measures nothing without a
-  // transcript: 990000 tokens is past 90 % of every window tested below.
-  mkdirSync(join(proj, '.omelette'), { recursive: true });
-  writeFileSync(join(proj, '.omelette', 'ledger-0.3.5.md'), '# ledger 0.3.5\n');
-  writeFileSync(join(proj, 'transcript.jsonl'), `${transcriptLine(990000)}\n`);
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  const claude = join(dir, '.claude');
-  mkdirSync(claude, { recursive: true });
-
-  const agree = (expected, env = {}) => {
-    assert.equal(guardCeiling(proj, dir, env), expected, 'the guard');
-    assert.equal(doctorCeiling(proj, dir, env), expected, 'doctor');
-  };
-
-  // 5. Nothing set anywhere: Claude Code's documented default.
-  agree('200000 (default)');
-
-  // …and the PROJECT's own settings are not the user's, on either side.
-  mkdirSync(join(proj, '.claude'), { recursive: true });
-  writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ model: 'claude-opus-5[1m]' }));
-  agree('200000 (default)');
-
-  // 4. A `[1m]` model id — the environment first…
-  agree('1000000 (model[1m])', { ANTHROPIC_MODEL: 'claude-fable-5-1[1m]' });
-
-  // …then the `model` key of the user's pair, the local file read first, with a
-  // value that is not a 1M id falling through to the next file rather than
-  // ending the scan.
-  writeFileSync(join(claude, 'settings.local.json'), JSON.stringify({ model: 'claude-opus-5' }));
-  writeFileSync(join(claude, 'settings.json'), JSON.stringify({ model: 'claude-opus-5[1M]' }));
-  agree('1000000 (model[1m])');
-
-  // 3. `autoCompactWindow` beats the suffix — by SOURCE and not by file: it is
-  // in the local file here, and it would win from the shared one too.
-  writeFileSync(join(claude, 'settings.local.json'), JSON.stringify({ autoCompactWindow: '500k', model: 'claude-opus-5[1m]' }));
-  agree('500000 (autoCompactWindow)');
-
-  // 2. The environment variable beats both files…
-  agree('250000 (CLAUDE_CODE_AUTO_COMPACT_WINDOW)', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '250k' });
-
-  // 1. …and the rendered `handoff.contextWindow` beats everything, once it has
-  // actually been rendered into the script.
-  assert.equal(cli(['set', 'handoff.contextWindow=400000'], { dir }).code, 0);
-  assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  agree('400000 (handoff.contextWindow)', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '250k', ANTHROPIC_MODEL: 'claude-opus-5[1m]' });
 });
 
 test('set workflow.merge edits the top-level block, show prints it, and a bad value is refused', () => {

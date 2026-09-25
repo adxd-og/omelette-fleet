@@ -32,7 +32,7 @@ function section(md, heading) {
   return md.slice(from, m ? m.index : undefined);
 }
 
-const MECHANICS = ['40 lines', '4 KB', '12 KB', '8 KB', 'PreCompact', 'SessionStart', 'PostToolUse', 'PostCompact', 'Stop'];
+const MECHANICS = ['40 lines', '4 KB', '12 KB', 'PreCompact', 'SessionStart'];
 
 const DUTIES = [
   '**After a compaction, re-read the ledger before doing anything else.**',

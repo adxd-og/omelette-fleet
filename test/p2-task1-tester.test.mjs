@@ -31,7 +31,7 @@ const HANDED = [
 ];
 
 /** Hook-mechanics strings that P1 moved out of the rules file (test/rules-size.test.mjs MECHANICS); Task 1's new lines must not reintroduce any of them. */
-const MECHANICS = ['40 lines', '4 KB', '12 KB', '8 KB', 'PreCompact', 'SessionStart', 'PostToolUse', 'PostCompact', 'Stop'];
+const MECHANICS = ['40 lines', '4 KB', '12 KB', 'PreCompact', 'SessionStart'];
 
 /** The rendered rules file for a merge policy, current template. */
 const rendered = (merge) => renderRulesFile('1.2.0', { merge });

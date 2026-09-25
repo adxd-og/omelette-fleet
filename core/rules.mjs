@@ -467,7 +467,7 @@ export function parseSkillMarker(text) {
 export const skillsTarget = scopeDir('skills');
 
 /**
- * THE GUARD. One script serves all six hook events (`rules --hooks` writes it, and
+ * THE GUARD. One script serves all three hook events (`rules --hooks` writes it, and
  * PRINTS the settings.json snippet that calls it — Claude Code's settings.json
  * is read by this package and written only by the operator). Its marker is a
  * `//` comment on LINE 1: the file is JavaScript, so there is no frontmatter to
@@ -519,14 +519,15 @@ export function parseHookMarker(text) {
 /**
  * The rendered handoff block, read back OUT of an installed guard — the inverse
  * of the substitution above, and the only honest source for `doctor`'s handoff
- * line: the version marker cannot tell a stale threshold from a current one,
+ * line: the version marker cannot tell a stale switch from a current one,
  * because a changed value renders at the same version.
  *
  * A guard that predates the block (0.3.3 and earlier) and a file that is not a
- * guard both answer null; a value that is out of range answers with the
- * schema's default, which is exactly what the script itself would do with it.
+ * guard both answer null; a value that is invalid answers with the schema's
+ * default, which is exactly what the script itself would do with it. A key a
+ * guard rendered before 1.5.0 carried and the schema no longer has is ignored.
  *
- * @returns {{enabled:boolean, threshold:number, contextWindow:number, compactSummary:boolean}|null}
+ * @returns {{enabled:boolean}|null}
  */
 const HANDOFF_LITERAL = /^const HANDOFF_CONFIG = (\{[^\n]*\});$/m;
 
@@ -544,75 +545,28 @@ export function parseHookHandoff(text) {
   return values;
 }
 
-/**
- * The context window Claude Code auto-compacts against, in the forms it
- * documents: a bare integer, `<n>k` or `<n>m`, case-insensitive and decimal
- * (`500k` is 500 000, `1m` is 1 000 000). Anything else is not a window and is
- * refused rather than guessed at — a fraction, a separator, a negative, a blank.
- *
- * The guard carries its own copy of this parser (it imports nothing from here);
- * this one is what `doctor` uses, so the two are tested against the same table.
- */
-export const CONTEXT_WINDOW_ENV = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
-export const CONTEXT_WINDOW_SETTING = 'autoCompactWindow';
-export const CONTEXT_WINDOW_DEFAULT = 200000;
-
-const WINDOW_FORM = /^(\d+)([km])?$/i;
-
-export function parseContextWindow(raw) {
-  if (typeof raw === 'number') return Number.isSafeInteger(raw) && raw > 0 ? raw : null;
-  if (typeof raw !== 'string') return null;
-  const m = WINDOW_FORM.exec(raw.trim());
-  if (!m) return null;
-  const scale = !m[2] ? 1 : m[2].toLowerCase() === 'k' ? 1000 : 1000000;
-  const n = Number(m[1]) * scale;
-  return Number.isSafeInteger(n) && n > 0 ? n : null;
-}
-
-/**
- * THE ONE THING A MODEL ID SAYS ABOUT THE WINDOW. Claude Code writes the model
- * it is running into the user's settings, suffix and all, and the `[1m]` suffix
- * IS the 1 000 000-token context — `claude-opus-5[1m]`, `claude-fable-5-1[1m]`.
- * Nothing else about the id is read and no catalog of model names is kept here:
- * a name this package has never heard of still says what its suffix says.
- *
- * It is the FOURTH step of the ceiling chain — below `autoCompactWindow`,
- * because a window an operator capped on purpose was meant, and above Claude
- * Code's 200 000, which is wrong for every 1M session and read one as 144 %
- * full on the day 0.3.4 shipped.
- *
- * Case-insensitive, trimmed first, and the suffix has to END the id:
- * `claude-opus-5[1m] (old)` is a note somebody left behind, not a window. The
- * guard carries a COPY of this test (it imports nothing from here) and the two
- * are pinned against the same table.
- */
-export const MODEL_ENV = 'ANTHROPIC_MODEL';
-export const MODEL_SETTING = 'model';
-export const MODEL_WINDOW = 1000000;
-export const MODEL_WINDOW_SOURCE = 'model[1m]';
-
-const ONE_M_SUFFIX = /\[1m\]$/i;
-
-export function parseModelWindow(raw) {
-  return typeof raw === 'string' && ONE_M_SUFFIX.test(raw.trim()) ? MODEL_WINDOW : null;
-}
-
 /** Where `rules --hooks` writes: the project's .claude/hooks, or the global one. */
 export const hooksTarget = scopeDir('hooks');
 
 /**
- * The six events the guard serves, in the order doctor reports them wired.
- * `PostToolUse` and `Stop` are the auto-handoff: the first is where the
- * reminder can reach the model's context, the second the only place a turn can
- * be held until the handoff is written. `PostCompact` is the record that
- * follows a compaction — the summary, into the ledger.
+ * The three events the guard serves, in the order doctor reports them wired:
+ * the git guard, the ledger's re-read stamp, and the print of its last handoff
+ * block after a compaction.
  *
  * ORDER IS APPEND-ONLY. An event added by a release goes at the END, because
  * this list is the order `doctor` prints `wired:` and `missing …` in: an
  * operator upgrading reads the new name at the end of a list they recognise,
  * rather than hunting for it in the middle of one they already pasted.
  */
-export const HOOK_EVENTS = ['PreToolUse', 'PreCompact', 'SessionStart', 'PostToolUse', 'Stop', 'PostCompact'];
+export const HOOK_EVENTS = ['PreToolUse', 'PreCompact', 'SessionStart'];
+
+/**
+ * The events 0.3.4–1.4.0 also wired: the nudge, the Stop gate and the
+ * compaction summary, all removed in 1.5.0. `doctor` names a settings entry
+ * that still calls the guard on one of them, so the operator can remove it; the
+ * guard itself answers them with exit 0 and nothing else.
+ */
+export const RETIRED_HOOK_EVENTS = ['PostToolUse', 'Stop', 'PostCompact'];
 
 /**
  * QUOTING THE SCRIPT PATH FOR A SHELL, per platform. A hook `command` is a
@@ -654,10 +608,8 @@ export const shellWord = (s, platform = process.platform) => (/^[\w@%+=:,./-]+$/
  * THE MATCHERS ARE NOT INTERCHANGEABLE. `PreToolUse` is matched against a TOOL
  * name and `SessionStart` against the session's SOURCE — `startup`, `resume`,
  * `clear`, `compact`, `fork` — and only `compact` is a context somebody just
- * lost, which is the one the guard has anything to print into. The other four
- * are matched on nothing: every compaction is one, before it and after it,
- * every Stop is one, and a `PostToolUse` matcher could only skip tools that
- * grow the context exactly the way the ones it kept do.
+ * lost, which is the one the guard has anything to print into. `PreCompact` is
+ * matched on nothing: every compaction is one the ledger has to be stamped for.
  *
  * @returns {string[]} the snippet's lines, together a parseable JSON object.
  */
@@ -667,10 +619,7 @@ export function hookSettingsSnippet(scriptPath, platform = process.platform) {
     '{ "hooks": {',
     `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
     `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
-    `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
-    `  "PostToolUse": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
-    `  "Stop": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
-    `  "PostCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
+    `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
   ];
 }
 

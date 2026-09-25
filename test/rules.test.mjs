@@ -6,12 +6,11 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
-  AGENT_FILES, AGENT_MARKER, AGENT_ROLES, CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, FLEET_CONTRACT,
+  AGENT_FILES, AGENT_MARKER, AGENT_ROLES, FLEET_CONTRACT,
   HOOK_EVENTS, HOOK_FILES, HOOK_MARKER, HOOK_TEMPLATE_DIR, KINDS,
-  MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE,
   MERGE_SENTENCES, RULES_FILE_NAME, RULES_MARKER, RULES_TEMPLATE_PATH, SETTINGS_FILES, SHORT_CONTRACT, SKILL_FILES, SKILL_MARKER,
   SKILL_TEMPLATE_DIR,
-  agentSettings, agentsTarget, contractFor, hookSettingsSnippet, hooksTarget, parseAgentMarker, parseContextWindow, parseHookHandoff, parseHookMarker, parseModelWindow, parseRulesMarker, parseSkillMarker,
+  agentSettings, agentsTarget, contractFor, hookSettingsSnippet, hooksTarget, parseAgentMarker, parseHookHandoff, parseHookMarker, parseRulesMarker, parseSkillMarker,
   renderAgentFile, renderHookFile, renderRulesFile, renderSkillFile, rulesTarget, settingsTarget, settingsTargets,
   skillsTarget, unitInstructions,
 } from '../core/rules.mjs';
@@ -531,9 +530,7 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
   assert.ok(posix[1].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
   assert.ok(posix[2].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
   assert.ok(posix[3].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
-  assert.ok(posix[4].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
-  assert.ok(posix[5].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
-  assert.ok(posix[6].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
+  assert.equal(posix.length, 4, 'the opener and one line per event');
   assert.equal(hookSettingsSnippet(spaced, 'linux').join('\n'), posix.join('\n'));
 
   // cmd.exe knows nothing about POSIX single quotes, and the JSON layer is what
@@ -554,23 +551,20 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
   assert.deepEqual(hookSettingsSnippet(spaced), hookSettingsSnippet(spaced, process.platform));
 });
 
-test('the snippet wires all six events: SessionStart on `compact`, and the four unmatched ones on nothing', () => {
+test('the snippet wires the three events: SessionStart on `compact`, and PreCompact on nothing', () => {
   const script = '/Users/me/app/.claude/hooks/omelette-guard.mjs';
-  assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart', 'PostToolUse', 'Stop', 'PostCompact']);
+  assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart']);
   for (const platform of ['darwin', 'win32']) {
     const snippet = hookSettingsSnippet(script, platform);
     assert.equal(snippet.length, HOOK_EVENTS.length + 1, 'the opener line plus one line per event');
     const parsed = JSON.parse(snippet.join('\n'));
     assert.deepEqual(Object.keys(parsed.hooks), HOOK_EVENTS);
-    // PreToolUse is matched on a TOOL and SessionStart on a SOURCE. The other
-    // three are matched on nothing at all: every compaction is one, every Stop
-    // is one, and a PostToolUse matcher could only skip tools that grow the
-    // context exactly like the ones it kept.
+    // PreToolUse is matched on a TOOL and SessionStart on a SOURCE. PreCompact
+    // is matched on nothing at all: every compaction is one the ledger has to be
+    // stamped for.
     assert.equal(parsed.hooks.PreToolUse[0].matcher, 'Bash');
     assert.equal(parsed.hooks.SessionStart[0].matcher, 'compact');
-    for (const event of ['PreCompact', 'PostToolUse', 'Stop']) {
-      assert.equal('matcher' in parsed.hooks[event][0], false, `${event} is matched on nothing`);
-    }
+    assert.equal('matcher' in parsed.hooks.PreCompact[0], false, 'PreCompact is matched on nothing');
     for (const event of HOOK_EVENTS) {
       assert.equal(parsed.hooks[event].length, 1);
       assert.equal(parsed.hooks[event][0].hooks.length, 1);
@@ -601,8 +595,8 @@ test('settingsTargets names BOTH files Claude Code reads at a scope, in that ord
 });
 
 test('renderHookFile substitutes the handoff block as a JSON literal, and fills a partial one from the schema', () => {
-  const text = renderHookFile(HOOK_FILES[0], '1.2.3', { enabled: true, threshold: 85, contextWindow: 500000 });
-  assert.match(text, /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":85,"contextWindow":500000,"compactSummary":true\};$/m);
+  const text = renderHookFile(HOOK_FILES[0], '1.2.3', { enabled: false });
+  assert.match(text, /^const HANDOFF_CONFIG = \{"enabled":false\};$/m);
   assert.ok(!text.includes('{{'), 'no placeholder survives rendering');
   // The template is not runnable until it is rendered, and what renders into it
   // is a JSON literal — so the rendered script has to parse as a program. It is
@@ -615,78 +609,33 @@ test('renderHookFile substitutes the handoff block as a JSON literal, and fills 
 
   // A partial object, a broken value and a missing argument all render the
   // schema's defaults: `rules --hooks` never writes a guard that cannot run.
-  assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', { threshold: 200 }),
-    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0,"compactSummary":true\};$/m);
-  assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', {}),
-    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0,"compactSummary":true\};$/m);
-  assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', null),
-    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0,"compactSummary":true\};$/m);
-  assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', { enabled: false, threshold: 50, contextWindow: 1 }),
-    /^const HANDOFF_CONFIG = \{"enabled":false,"threshold":50,"contextWindow":1,"compactSummary":true\};$/m);
-  assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', { compactSummary: false }),
-    /^const HANDOFF_CONFIG = \{"enabled":true,"threshold":90,"contextWindow":0,"compactSummary":false\};$/m);
+  // A key the schema no longer has (1.4.0's threshold, contextWindow and
+  // compactSummary) is not rendered at all.
+  for (const given of [{ enabled: 'maybe' }, {}, null, { threshold: 50, contextWindow: 1, compactSummary: false }]) {
+    assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', given), /^const HANDOFF_CONFIG = \{"enabled":true\};$/m, JSON.stringify(given));
+  }
+  assert.match(renderHookFile(HOOK_FILES[0], '1.2.3', { enabled: 'off', threshold: 85 }),
+    /^const HANDOFF_CONFIG = \{"enabled":false\};$/m);
 });
 
 test('parseHookHandoff reads back exactly what renderHookFile wrote, and refuses anything that is not it', () => {
-  const settings = { enabled: false, threshold: 77, contextWindow: 300000, compactSummary: false };
+  const settings = { enabled: false };
   assert.deepEqual(parseHookHandoff(renderHookFile(HOOK_FILES[0], '1.2.3', settings)), settings);
   // No settings argument reads the live fleet config — which this file points at
   // an empty throwaway home on line 20, so it is the built-in defaults.
-  assert.deepEqual(parseHookHandoff(renderHookFile(HOOK_FILES[0], '1.2.3')),
-    { enabled: true, threshold: 90, contextWindow: 0, compactSummary: true });
+  assert.deepEqual(parseHookHandoff(renderHookFile(HOOK_FILES[0], '1.2.3')), { enabled: true });
   // A 0.3.3 guard, a file that is not a guard, and a hand-edited literal.
   assert.equal(parseHookHandoff(''), null);
   assert.equal(parseHookHandoff('// omelette-fleet hook v0.3.3 …\nconst HANDOFF = "x";\n'), null);
   assert.equal(parseHookHandoff('const HANDOFF_CONFIG = not json;\n'), null);
   assert.equal(parseHookHandoff('const HANDOFF_CONFIG = [1,2];\n'), null);
-  // …and a value out of range in a literal somebody edited by hand reads as the
-  // default, exactly as the guard itself treats it. A key a 0.3.6 literal never
-  // carried reads as its default too — which is what the guard's own
-  // `HANDOFF_CONFIG.compactSummary !== false` computes from the same literal.
+  // …and an invalid value in a literal somebody edited by hand reads as the
+  // default, exactly as the guard itself treats it. The keys a 1.4.0 literal
+  // carried beside `enabled` are read by nothing.
   assert.deepEqual(parseHookHandoff('const HANDOFF_CONFIG = {"enabled":"yes","threshold":900,"contextWindow":-5};\n'),
-    { enabled: true, threshold: 90, contextWindow: 0, compactSummary: true });
-});
-
-test('parseContextWindow: 200000, 500k, 1M — and nothing else is a window', () => {
-  assert.equal(CONTEXT_WINDOW_ENV, 'CLAUDE_CODE_AUTO_COMPACT_WINDOW');
-  assert.equal(CONTEXT_WINDOW_DEFAULT, 200000);
-  assert.equal(parseContextWindow('200000'), 200000);
-  assert.equal(parseContextWindow(200000), 200000);
-  assert.equal(parseContextWindow(' 500k '), 500000);
-  assert.equal(parseContextWindow('500K'), 500000);
-  assert.equal(parseContextWindow('1m'), 1000000);
-  assert.equal(parseContextWindow('1M'), 1000000);
-  for (const raw of ['', '   ', '0', '-1', '1.5m', '200_000', '200000 tokens', 'lots', 'k', null, undefined, true, {}, [], 0, -1, 1.5]) {
-    assert.equal(parseContextWindow(raw), null, JSON.stringify(raw));
-  }
-});
-
-test('parseModelWindow: a model id that ends in `[1m]` is a 1 000 000 window, and nothing else is one', () => {
-  assert.equal(MODEL_ENV, 'ANTHROPIC_MODEL');
-  assert.equal(MODEL_SETTING, 'model');
-  assert.equal(MODEL_WINDOW, 1000000);
-  assert.equal(MODEL_WINDOW_SOURCE, 'model[1m]');
-
-  // The suffix Claude Code writes into the id of a 1M-context model, in the
-  // forms a settings file or an environment variable can carry it: either case,
-  // and past the whitespace a hand-edited file leaves behind.
-  assert.equal(parseModelWindow('claude-opus-5[1m]'), 1000000);
-  assert.equal(parseModelWindow('claude-fable-5-1[1M]'), 1000000);
-  assert.equal(parseModelWindow('  claude-opus-5[1m]  '), 1000000);
-  // Nonsense to write and harmless to honour: the rule is the suffix, and a
-  // second rule about what must precede it is a rule the guard's own copy would
-  // have to match exactly.
-  assert.equal(parseModelWindow('[1m]'), 1000000);
-
-  // The suffix has to END the id. Everything below names a perfectly good model
-  // and says nothing whatever about the window — and a value that is not a
-  // string is not an id at all.
-  for (const raw of [
-    'claude-opus-5', 'claude-opus-5[1m] (default)', 'claude-opus-5[1m]x', 'claude-1m', 'opus[2m]',
-    '[1m]-opus', '1m', '', '   ', null, undefined, true, 1000000, {}, [],
-  ]) {
-    assert.equal(parseModelWindow(raw), null, JSON.stringify(raw));
-  }
+    { enabled: true });
+  assert.deepEqual(parseHookHandoff('const HANDOFF_CONFIG = {"enabled":false,"threshold":90,"contextWindow":0,"compactSummary":true};\n'),
+    { enabled: false });
 });
 
 test('hookSettingsSnippet: a path holding `$1`, a space and a single quote survives the quoting on both platforms', () => {

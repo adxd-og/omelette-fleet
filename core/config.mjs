@@ -8,7 +8,7 @@
  *     "contract": "auto",
  *     "agents": { "coder": { model, effort }, "coderMedium": { model, effort },
  *                 "tester": { model, effort, maxTurns }, "reviewer": { model, effort } },
- *     "handoff": { enabled, threshold, contextWindow, compactSummary },
+ *     "handoff": { enabled },
  *     "workflow": { merge },
  *     "defaults": { ...keys applied to every unit... },
  *     "units": { "<unit>": { enabled, mode, model, effort, timeoutS, maxTurns,
@@ -102,11 +102,10 @@ export function coerce(spec, raw) {
     // A WHOLE number, and a fraction is REFUSED rather than floored: flooring
     // made `0.5` mean the 0 every posint key exists to forbid, and `1.9` mean a
     // 1 the operator never wrote. Both are typos. `posint` starts at 1 and
-    // `nonneg` at 0 — the second exists for a key whose zero MEANS something
-    // (`handoff.contextWindow: 0` = resolve the window at run time), where a
-    // refusal would take the value away instead of validating it. `min`/`max`
-    // on the spec bound either one: a `handoff.threshold` of 100 is a typo, not
-    // a preference, and the schema is where that is said.
+    // `nonneg` at 0 — the second exists for a key whose zero MEANS something,
+    // where a refusal would take the value away instead of validating it.
+    // `min`/`max` on the spec bound either one: a value past the range a key
+    // can use is a typo, not a preference, and the schema is where that is said.
     case 'posint':
     case 'nonneg': {
       // `Number('')`, `Number(null)`, `Number(false)` and `Number([])` are all
@@ -245,41 +244,14 @@ export const AGENT_SETTINGS_SCHEMA = {
 };
 
 /**
- * THE AUTO-HANDOFF, as config: a third top-level block, beside `agents` and for
- * the same reason — it configures a managed FILE rather than a unit. Nothing
- * reads it at call time. `omelette-fleet rules --hooks` renders these four
- * values into the guard script as a JSON literal (core/rules.mjs,
- * `renderHookFile`), because that script imports nothing from this package, and
- * until it is re-rendered the config and the installed hook disagree — which is
- * why `doctor` reports the value it reads back OUT of the script.
- *
- * `threshold` is a percentage of the context window and is bounded 50–99: below
- * 50 the reminder arrives while there is nothing to hand off, and at 100 it
- * never arrives at all. `contextWindow` is the window to measure against, where
- * **0 means "resolve it at run time"**, through the five sources the guard and
- * `doctor` both walk in this order: `handoff.contextWindow` →
- * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` → `autoCompactWindow` → `model[1m]` →
- * `default`, Claude Code's documented 200 000 — so it is `nonneg` rather
- * than `posint`: the zero is the default and not a refusal. Its ceiling is the
- * safe integer range, because that is the arithmetic the guard does with it:
- * the script's own parser refuses a window it cannot hold exactly, and a config
- * value it would refuse has no business rendering into it.
- *
- * `compactSummary` is the one key that is not about the threshold at all: with
- * it true, the guard's `PostCompact` handler appends Claude Code's own summary
- * of a compaction to every ledger in the project, as a RECORD of what the
- * context dropped. It is independent of `enabled` on purpose — `enabled`
- * governs the nudge and the gate, and an operator who switched the reminder off
- * still wants to know what a compaction took with it. It is last in the schema
- * because it arrived last, and the rendered literal is written in schema order:
- * a guard re-rendered at 0.3.7 differs from its 0.3.6 self by one key at the
- * end, which is what a diff of two installed scripts should show.
+ * THE LEDGER HOOKS, as config. `enabled` switches the guard's PreCompact stamp
+ * and SessionStart print (the git guard is not affected); `rules --hooks`
+ * renders it into the guard as a JSON literal, and `doctor` reads it back out of
+ * the installed script. `threshold`, `contextWindow` and `compactSummary` were
+ * removed in 1.5.0 with the estimator, and warn as unknown keys.
  */
 export const HANDOFF_SCHEMA = {
   enabled: { type: 'boolean', default: true },
-  threshold: { type: 'posint', min: 50, max: 99, default: 90 },
-  contextWindow: { type: 'nonneg', max: Number.MAX_SAFE_INTEGER, default: 0 },
-  compactSummary: { type: 'boolean', default: true },
 };
 
 /**
@@ -315,8 +287,7 @@ export function fleetSettings(env = process.env) {
  * WARNING and the built-in default, never a throw, because the alternative is
  * `rules --hooks` refusing to write the guard a session needs.
  *
- * @returns {{enabled:boolean, threshold:number, contextWindow:number,
- *            sources:object, warnings:string[], configPath:string}}
+ * @returns {{enabled:boolean, sources:object, warnings:string[], configPath:string}}
  */
 export function handoffSettings(env = process.env) {
   const { config, error, path } = loadFleetConfig(env);

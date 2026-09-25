@@ -323,112 +323,70 @@ test('the result spool has three keys, resolved like every other one', () => {
 
 test('coerce: a bounded posint refuses what is outside its range, and `nonneg` is a whole number 0 or above', () => {
   // The bounds live on the spec, so one coercion serves every key that has
-  // them — `handoff.threshold` is the first, and a percentage outside 50–99 is
-  // a typo rather than a preference.
-  const threshold = { type: 'posint', min: 50, max: 99, default: 90 };
-  assert.deepEqual(coerce(threshold, 50), { ok: true, value: 50 });
-  assert.deepEqual(coerce(threshold, '85'), { ok: true, value: 85 });
-  assert.deepEqual(coerce(threshold, 99), { ok: true, value: 99 });
+  // them: a value outside the range a key can use is a typo, not a preference.
+  const bounded = { type: 'posint', min: 50, max: 99, default: 90 };
+  assert.deepEqual(coerce(bounded, 50), { ok: true, value: 50 });
+  assert.deepEqual(coerce(bounded, '85'), { ok: true, value: 85 });
+  assert.deepEqual(coerce(bounded, 99), { ok: true, value: 99 });
   for (const raw of [49, 100, 0, -1, '49', '100', 85.5, '85.5', 'high', '', '   ', true, null, []]) {
-    assert.deepEqual(coerce(threshold, raw), { ok: false }, JSON.stringify(raw));
+    assert.deepEqual(coerce(bounded, raw), { ok: false }, JSON.stringify(raw));
   }
   // An unbounded posint keeps the behaviour every other key relies on.
   assert.deepEqual(coerce({ type: 'posint' }, ' 900 '), { ok: true, value: 900 });
   assert.deepEqual(coerce({ type: 'posint' }, 0), { ok: false });
 
-  // `nonneg` exists for a key whose 0 MEANS something — contextWindow: 0 is
-  // "resolve the window at run time" — so 0 is a value and not a refusal.
-  const window = { type: 'nonneg', default: 0 };
-  assert.deepEqual(coerce(window, 0), { ok: true, value: 0 });
-  assert.deepEqual(coerce(window, '0'), { ok: true, value: 0 });
-  assert.deepEqual(coerce(window, 500000), { ok: true, value: 500000 });
+  // `nonneg` exists for a key whose 0 MEANS something, so 0 is a value and not
+  // a refusal.
+  const zeroMeans = { type: 'nonneg', default: 0 };
+  assert.deepEqual(coerce(zeroMeans, 0), { ok: true, value: 0 });
+  assert.deepEqual(coerce(zeroMeans, '0'), { ok: true, value: 0 });
+  assert.deepEqual(coerce(zeroMeans, 500000), { ok: true, value: 500000 });
   // `Number('')`, `Number(null)` and `Number([])` are all 0: a raw that is not
   // a number or a non-blank string is not a value nobody wrote.
   for (const raw of [-1, '-1', 1.5, '1.5', '', '   ', 'lots', null, true, [], {}]) {
-    assert.deepEqual(coerce(window, raw), { ok: false }, JSON.stringify(raw));
+    assert.deepEqual(coerce(zeroMeans, raw), { ok: false }, JSON.stringify(raw));
   }
+  // `max` bounds it the same way.
+  const safe = { type: 'nonneg', max: Number.MAX_SAFE_INTEGER, default: 0 };
+  assert.deepEqual(coerce(safe, Number.MAX_SAFE_INTEGER), { ok: true, value: Number.MAX_SAFE_INTEGER });
+  assert.deepEqual(coerce(safe, 9007199254740992), { ok: false });
 });
 
-test('HANDOFF_SCHEMA: four keys, the bounds the spec fixes, and the defaults the guard renders', () => {
-  assert.deepEqual(Object.keys(HANDOFF_SCHEMA), ['enabled', 'threshold', 'contextWindow', 'compactSummary']);
+test('HANDOFF_SCHEMA: one key, `enabled`, an ordinary boolean that defaults to true', () => {
+  assert.deepEqual(Object.keys(HANDOFF_SCHEMA), ['enabled']);
+  assert.equal(HANDOFF_SCHEMA.enabled.type, 'boolean');
   assert.equal(HANDOFF_SCHEMA.enabled.default, true);
-  assert.equal(HANDOFF_SCHEMA.threshold.default, 90);
-  assert.equal(HANDOFF_SCHEMA.threshold.min, 50);
-  assert.equal(HANDOFF_SCHEMA.threshold.max, 99);
-  assert.equal(HANDOFF_SCHEMA.contextWindow.default, 0);
-  assert.equal(HANDOFF_SCHEMA.contextWindow.type, 'nonneg');
-  // A window past the safe integer range is not a window: the guard measures
-  // `fill * 100 / window` and refuses anything it cannot hold exactly, so a
-  // config value it would refuse has to be refused here too.
-  assert.equal(HANDOFF_SCHEMA.contextWindow.max, Number.MAX_SAFE_INTEGER);
-  assert.deepEqual(coerce(HANDOFF_SCHEMA.contextWindow, Number.MAX_SAFE_INTEGER), { ok: true, value: Number.MAX_SAFE_INTEGER });
-  assert.deepEqual(coerce(HANDOFF_SCHEMA.contextWindow, 9007199254740992), { ok: false });
-  // The compaction summary is ON by default and is an ordinary boolean: the
-  // words `coerce` takes everywhere else work here too.
-  assert.equal(HANDOFF_SCHEMA.compactSummary.type, 'boolean');
-  assert.equal(HANDOFF_SCHEMA.compactSummary.default, true);
-  assert.deepEqual(coerce(HANDOFF_SCHEMA.compactSummary, 'off'), { ok: true, value: false });
-  assert.deepEqual(coerce(HANDOFF_SCHEMA.compactSummary, 'maybe'), { ok: false });
-  // It is the LAST key: the rendered literal a 0.3.6 guard carries keeps its
-  // key order, so a diff of two rendered scripts shows one addition.
-  assert.equal(Object.keys(HANDOFF_SCHEMA).pop(), 'compactSummary');
+  // The words `coerce` takes everywhere else work here too.
+  assert.deepEqual(coerce(HANDOFF_SCHEMA.enabled, 'off'), { ok: true, value: false });
+  assert.deepEqual(coerce(HANDOFF_SCHEMA.enabled, 'maybe'), { ok: false });
 });
 
 test('handoffSettings: file values with their sources, invalid ones warned and defaulted, never fatal', () => {
-  // No file at all: the built-in defaults, no warnings.
+  // No file at all: the built-in default, no warnings.
   const bare = handoffSettings({ OMELETTE_HOME: home() });
   assert.equal(bare.enabled, true);
-  assert.equal(bare.threshold, 90);
-  assert.equal(bare.contextWindow, 0);
   assert.deepEqual(bare.warnings, []);
-  assert.equal(bare.compactSummary, true);
-  assert.deepEqual(bare.sources, {
-    enabled: 'default', threshold: 'default', contextWindow: 'default', compactSummary: 'default',
-  });
+  assert.deepEqual(bare.sources, { enabled: 'default' });
   assert.match(bare.configPath, /fleet\.config\.json$/);
 
-  const set = handoffSettings({ OMELETTE_HOME: home({ version: 1, handoff: { threshold: 85, contextWindow: 500000, enabled: 'off' } }) });
-  assert.equal(set.threshold, 85);
-  assert.equal(set.contextWindow, 500000);
+  const set = handoffSettings({ OMELETTE_HOME: home({ version: 1, handoff: { enabled: 'off' } }) });
   assert.equal(set.enabled, false, 'the boolean words coerce accepts work here like everywhere else');
-  assert.deepEqual(set.sources, {
-    enabled: 'file', threshold: 'file', contextWindow: 'file', compactSummary: 'default',
-  });
+  assert.deepEqual(set.sources, { enabled: 'file' });
+  assert.deepEqual(set.warnings, []);
 
-  // An out-of-range value, an unknown key and a block that is not an object are
+  // An invalid value, an unknown key and a block that is not an object are
   // warnings and the default — `rules --hooks` must never refuse to render.
-  const huge = handoffSettings({ OMELETTE_HOME: home({ handoff: { contextWindow: 9007199254740992 } }) });
-  assert.equal(huge.contextWindow, 0, 'a window past the safe integer range is the default, not a ceiling');
-  assert.ok(huge.warnings.some((w) => /handoff\.contextWindow = 9007199254740992 is invalid — ignored/.test(w)), huge.warnings.join(' | '));
-
-  const bad = handoffSettings({ OMELETTE_HOME: home({ handoff: { threshold: 100, nudgeAt: 80 } }) });
-  assert.equal(bad.threshold, 90);
-  assert.ok(bad.warnings.some((w) => /handoff\.threshold = 100 is invalid — ignored/.test(w)), bad.warnings.join(' | '));
+  const bad = handoffSettings({ OMELETTE_HOME: home({ handoff: { enabled: 'sometimes', nudgeAt: 80 } }) });
+  assert.equal(bad.enabled, true);
+  assert.equal(bad.sources.enabled, 'default');
+  assert.ok(bad.warnings.some((w) => /handoff\.enabled = "sometimes" is invalid — ignored/.test(w)), bad.warnings.join(' | '));
   assert.ok(bad.warnings.some((w) => /handoff\.nudgeAt is not a known key — ignored/.test(w)), bad.warnings.join(' | '));
   const shape = handoffSettings({ OMELETTE_HOME: home({ handoff: 90 }) });
-  assert.equal(shape.threshold, 90);
+  assert.equal(shape.enabled, true);
   assert.ok(shape.warnings.some((w) => /handoff is not an object — ignored/.test(w)), shape.warnings.join(' | '));
   const broken = handoffSettings({ OMELETTE_HOME: home('{ not json') });
-  assert.equal(broken.threshold, 90);
+  assert.equal(broken.enabled, true);
   assert.ok(broken.warnings.some((w) => /fleet config:/.test(w)));
-});
-
-test('handoffSettings: compactSummary is a file value like any other, and an invalid one warns and defaults', () => {
-  const off = handoffSettings({ OMELETTE_HOME: home({ version: 1, handoff: { compactSummary: false } }) });
-  assert.equal(off.compactSummary, false);
-  assert.equal(off.sources.compactSummary, 'file');
-  assert.deepEqual(off.warnings, []);
-  // The rest of the block is untouched by it: one key is one key.
-  assert.equal(off.enabled, true);
-  assert.equal(off.threshold, 90);
-
-  const word = handoffSettings({ OMELETTE_HOME: home({ handoff: { compactSummary: 'off' } }) });
-  assert.equal(word.compactSummary, false, 'the boolean words coerce accepts work here like everywhere else');
-
-  const bad = handoffSettings({ OMELETTE_HOME: home({ handoff: { compactSummary: 'sometimes' } }) });
-  assert.equal(bad.compactSummary, true, 'an invalid value is the default, never a throw');
-  assert.equal(bad.sources.compactSummary, 'default');
-  assert.ok(bad.warnings.some((w) => /handoff\.compactSummary = "sometimes" is invalid — ignored/.test(w)), bad.warnings.join(' | '));
 });
 
 test('WORKFLOW_SCHEMA: one key, two values, and `session` is the default', () => {

@@ -55,7 +55,7 @@ import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WOR
 import { changedSince, checkPointers, parseCommit, parsePointers, readBoundedFile } from '../core/check.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import { CONTEXT_WINDOW_DEFAULT, CONTEXT_WINDOW_ENV, CONTEXT_WINDOW_SETTING, HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, MODEL_ENV, MODEL_SETTING, MODEL_WINDOW, MODEL_WINDOW_SOURCE, agentSettings, contractFor, hookSettingsSnippet, parseContextWindow, parseHookHandoff, parseModelWindow, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets, shellWord } from '../core/rules.mjs';
+import { HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, RETIRED_HOOK_EVENTS, agentSettings, contractFor, hookSettingsSnippet, parseHookHandoff, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets, shellWord } from '../core/rules.mjs';
 import { createUnitRuntime, resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -160,10 +160,10 @@ const COMMANDS = {
       'file its registrations live in, then one line per managed kind —',
       'rules, agents, skills, hooks — for both scopes, saying whose each',
       'file is and, for hooks, which events actually call the guard. Under',
-      'them a `handoff` line says what the INSTALLED guard will do about',
-      'the auto-handoff — the threshold, the context window and where that',
-      'window came from, whether the Stop gate is on, and how many ledgers',
-      'there are to guard — read back out of the script itself. A',
+      'them a `handoff` line says whether the INSTALLED guard stamps the',
+      'ledger on PreCompact and prints its tail on SessionStart',
+      '(`handoff.enabled`), and how many ledgers there are — read back out',
+      'of the script itself. A',
       '`contract` line under it says how much of the fleet contract a unit',
       'server started HERE would send at initialize: short when this',
       'project (or the global scope) already carries the rendered rules',
@@ -202,7 +202,7 @@ const COMMANDS = {
       'from (default / file:defaults / file / env:NAME), and the ceiling.',
       '`fleet` is the top-level block (`contract`, `updateCheck`), `agents`',
       'the sub-agent block `rules --agents` renders from, `handoff` the',
-      'auto-handoff block `rules --hooks` renders into the guard, and',
+      '`handoff` block (`enabled`) `rules --hooks` renders into the guard, and',
       '`workflow` the merge policy `rules` renders into the rules file.',
     ],
   },
@@ -708,7 +708,7 @@ function mergeUnreadable(...lists) {
   return [...seen];
 }
 
-/** What the guard reads of a settings file, and doctor reads no more. */
+/** How much of a settings file doctor reads: the settings are a few KiB, and a file past this is not one. */
 const SETTINGS_READ_MAX = 1024 * 1024;
 /** Not a file's contents: the one answer that means "it is there and it is lost". */
 const UNREADABLE = 'unreadable';
@@ -725,9 +725,9 @@ const UNREADABLE = 'unreadable';
 const RULES_READ_MAX = 1024 * 1024;
 
 /**
- * ONE bounded read for every settings file this CLI opens — the `env` block,
- * the top-level keys and the hook wiring all come through here, so no reader
- * can be the one that hangs. The project files doctor and `update` read beside
+ * ONE bounded read for every settings file this CLI opens — the `env` block
+ * and the hook wiring both come through here, so no reader can be the one that
+ * hangs. The project files doctor and `update` read beside
  * them come through here too — `.mcp.json` and the managed agent, skill and
  * hook files — because they arrive with the project, and a FIFO or a link to a
  * device under one of those names must not hold the CLI either.
@@ -737,9 +737,9 @@ const RULES_READ_MAX = 1024 * 1024;
  * regular file, rather than blocking doctor until somebody writes to it. The
  * symlink is FOLLOWED on purpose — a dotfile setup legitimately keeps these
  * files behind one, the read takes at most 1 MiB, and nothing is ever written
- * back through it. A file bigger than that cap comes back TRUNCATED, which is
- * what the guard sees too: half an object parses as nothing, and the caller
- * names the file instead of acting on a fragment of it.
+ * back through it. A file bigger than that cap comes back TRUNCATED: half an
+ * object parses as nothing, and the caller names the file instead of acting on
+ * a fragment of it.
  *
  * @returns {string|null} the bytes as UTF-8, null when the file is simply not
  *   there — the normal case — or `UNREADABLE` when it is there and this
@@ -810,54 +810,6 @@ function readClientEnv(name, { cwd = process.cwd(), env = process.env } = {}) {
     if (raw === undefined || raw === null) continue;
     if (!['string', 'number', 'boolean'].includes(typeof raw)) continue;
     return { value: String(raw), source: path, unreadable };
-  }
-  return { value: null, source: null, unreadable };
-}
-
-/**
- * One TOP-LEVEL setting out of Claude Code's own settings files — `readClientEnv`
- * reads the `env` block, and this reads the file's own keys, which is where
- * `autoCompactWindow` and `model` live. The user scope only, local file first,
- * exactly as the guard resolves it: a line describing a resolution the guard
- * would not make is worse than no line.
- *
- * `accept` IS PART OF THE SCAN, not something the caller applies afterwards.
- * The guard tries each file in turn and keeps looking past a value it cannot
- * read, so `settings.local.json` holding `"autoCompactWindow": "garbage"` and
- * `settings.json` holding `"500k"` resolves to 500 000 — and a doctor that
- * stopped at the garbage would report the 200 000 default for a hook that is
- * measuring against half a million.
- *
- * PARSED, NEVER WRITTEN, like every other settings read in this file. A file
- * that is ABSENT is skipped in silence — most machines have at most one of
- * these two. One that EXISTS and cannot be read, or does not parse into an
- * object, is skipped and NAMED, by the same rule `readClientEnv` uses: the
- * window this scan resolved may be the one that file was meant to change, and a
- * report that says nothing about it sends the operator looking at the wrong
- * thing. `unreadable` holds the files THIS scan opened — the ones ahead of the
- * value in the client's own order — and doctor merges the list with the ones
- * `readClientEnv` and `hookWiringAt` collect.
- *
- * @param {{global?:boolean, cwd?:string, env?:object, accept?:Function}} o
- *   `accept` turns the raw string into the value worth having, or null when
- *   this file's is not one.
- * @returns {{value: any, source: string|null, unreadable: string[]}}
- */
-function readClientSetting(name, { global = true, cwd = process.cwd(), env = process.env, accept = (v) => v } = {}) {
-  const unreadable = [];
-  for (const { path } of settingsTargets({ global, cwd, env }).slice().reverse()) {
-    const text = readSettingsFile(path);
-    if (text === null) continue;
-    if (text === UNREADABLE) { unreadable.push(path); continue; }
-    let parsed = null;
-    try { parsed = JSON.parse(text); } catch { parsed = null; }
-    if (!isObj(parsed)) { unreadable.push(path); continue; }
-    const raw = parsed[name];
-    if (raw === undefined || raw === null) continue;
-    if (!['string', 'number'].includes(typeof raw)) continue;
-    const value = accept(String(raw));
-    if (value === null || value === undefined) continue; // not a value: the next file may hold one
-    return { value, source: path, unreadable };
   }
   return { value: null, source: null, unreadable };
 }
@@ -1832,9 +1784,9 @@ async function cmdRules(argv) {
   // as their own value.
   const settings = flags.agents ? agentSettings() : undefined;
   if (settings && !flags.remove) settings.warnings.forEach((w) => err(`omelette-fleet rules: ${visible(w)}`));
-  // The guard's three handoff values are substituted into the script the same
-  // way, and for the same reason a bad one is said out loud rather than read
-  // back later as the operator's own number.
+  // The guard's handoff switch is substituted into the script the same way,
+  // and for the same reason a bad value or a retired key is said out loud
+  // rather than read back later as the operator's own choice.
   const handoff = flags.hooks ? handoffSettings() : undefined;
   if (handoff && !flags.remove) handoff.warnings.forEach((w) => err(`omelette-fleet rules: ${visible(w)}`));
   // The rules file is written on EVERY run, and its merge sentence renders from
@@ -2051,11 +2003,9 @@ const matcherProblemFor = (m, event, name) => {
 };
 
 /**
- * What each MATCHED event's entry has to cover — two of the six. `PreCompact`,
- * `PostToolUse`, `Stop` and `PostCompact` are deliberately absent: none of them
- * is matched on anything, because every compaction is one the guard has
- * something to say about — before it and after it — and so is every tool call
- * and every Stop, so any entry that calls it counts.
+ * What each MATCHED event's entry has to cover — two of the three. `PreCompact`
+ * is deliberately absent: it is matched on nothing, because every compaction is
+ * one the ledger has to be stamped for, so any entry that calls the guard counts.
  * `SessionStart` is matched on the session's SOURCE (`startup`, `resume`,
  * `clear`, `compact`, `fork`), and `compact` is the only one the guard has
  * anything to print into.
@@ -2069,21 +2019,25 @@ const MATCHED_ON = { PreToolUse: 'Bash', SessionStart: 'compact' };
  * the script somewhere else — all of which still run our guard, and none of
  * which we would recognise by comparing paths.
  *
- * @returns {{wired:string[], matcherProblem:string|null}} the events wired, plus
- *   why an entry that calls the guard will never fire on the thing its event is
- *   matched on — which looks installed from every angle and guards nothing, so
- *   it is reported instead of being counted either way.
+ * @returns {{wired:string[], retired:string[], matcherProblem:string|null}} the
+ *   events wired; the RETIRED events (RETIRED_HOOK_EVENTS) an entry still calls
+ *   the guard on, which it answers with exit 0 and nothing else, so doctor names
+ *   them for removal rather than as a fault; and why an entry that calls the
+ *   guard will never fire on the thing its event is matched on — which looks
+ *   installed from every angle and guards nothing, so it is reported instead of
+ *   being counted either way.
  */
 function hookWiring(config) {
   const hooks = isObj(config) && isObj(config.hooks) ? config.hooks : {};
   const calls = (h) => isObj(h) && HOOK_FILES.some((f) => String(h.command || '').includes(f));
+  const callingOn = (event) => (Array.isArray(hooks[event]) ? hooks[event] : [])
+    .filter((group) => isObj(group) && Array.isArray(group.hooks) && group.hooks.some(calls));
   const wired = [];
   let matcherProblem = null;
   for (const event of HOOK_EVENTS) {
-    const calling = (Array.isArray(hooks[event]) ? hooks[event] : [])
-      .filter((group) => isObj(group) && Array.isArray(group.hooks) && group.hooks.some(calls));
+    const calling = callingOn(event);
     if (!calling.length) continue;
-    // Two of the six events are matched against something; the other four are
+    // Two of the three events are matched against something; PreCompact is
     // matched on nothing at all. ONE entry covering the matcher is enough; when
     // none does, the first entry's reason is the one worth printing.
     const target = MATCHED_ON[event];
@@ -2093,7 +2047,10 @@ function hookWiring(config) {
     }
     wired.push(event);
   }
-  return { wired, matcherProblem };
+  // A retired event is matched on nothing either: any entry that calls the
+  // guard on one is an entry to remove.
+  const retired = RETIRED_HOOK_EVENTS.filter((event) => callingOn(event).length);
+  return { wired, retired, matcherProblem };
 }
 
 /**
@@ -2111,6 +2068,7 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
   const unreadable = [];       // the short names the hooks line prints
   const unreadablePaths = [];  // the absolute paths doctor's settings line prints
   const wired = new Set();
+  const retired = new Set();
   let matcherProblem = null;
   for (const { name, path } of settingsTargets({ global, cwd, env })) {
     const raw = readSettingsFile(path);
@@ -2122,6 +2080,7 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
     const here = hookWiring(config);
     matcherProblem = matcherProblem || here.matcherProblem;
     for (const event of here.wired) wired.add(event);
+    for (const event of here.retired) retired.add(event);
   }
   // A matcher that covers nothing is only a finding while something is still
   // missing: once the files together wire every event, the guard does see the
@@ -2129,7 +2088,11 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
   // HOOK_EVENTS rather than against a named event, so a release that adds one
   // needs no edit here.
   if (wired.size === HOOK_EVENTS.length) matcherProblem = null;
-  return { wired: HOOK_EVENTS.filter((e) => wired.has(e)), unreadable, unreadablePaths, matcherProblem };
+  return {
+    wired: HOOK_EVENTS.filter((e) => wired.has(e)),
+    retired: RETIRED_HOOK_EVENTS.filter((e) => retired.has(e)),
+    unreadable, unreadablePaths, matcherProblem,
+  };
 }
 
 /**
@@ -2143,58 +2106,29 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
  * when neither applies — and something IS wired, so this is not a fresh install
  * — is the missing event named, which is exactly the 0.3.2 wiring meeting a
  * 0.3.3 guard.
+ *
+ * An entry that still calls the guard on a RETIRED event is named in either
+ * case, inside the same parentheses: it does no harm, and it is not a reason
+ * the guard is unwired — it is one line of settings.json to delete.
  */
-const hooksLabel = (r, { wired, unreadable, matcherProblem }) => {
+const hooksLabel = (r, { wired, retired = [], unreadable, matcherProblem }) => {
   if (r.state === 'absent') return 'absent';
   if (r.state === 'foreign') return 'foreign (no marker)';
   const stale = r.behind ? ` [run: ${refreshCommand('hooks', r.scope)}]` : '';
-  if (wired.length === HOOK_EVENTS.length) return `v${r.version} (wired: ${wired.join(', ')})${stale}`;
+  const leftover = retired.length ? ` · ${retired.join(', ')} wired but no longer used — remove them from settings.json` : '';
+  if (wired.length === HOOK_EVENTS.length) return `v${r.version} (wired: ${wired.join(', ')}${leftover})${stale}`;
   const reasons = [];
   if (unreadable.length) reasons.push(`${unreadable.join(' and ')} unreadable`);
   if (matcherProblem) reasons.push(matcherProblem);
   if (!reasons.length && wired.length) reasons.push(`missing ${HOOK_EVENTS.filter((e) => !wired.includes(e)).join(', ')}`);
   const why = reasons.length ? ` (${reasons.join('; ')})` : '';
-  return `v${r.version} (NOT wired${why} — paste the snippet from rules --hooks)${stale}`;
+  return `v${r.version} (NOT wired${why} — paste the snippet from rules --hooks${leftover})${stale}`;
 };
 
 /**
- * The window the installed guard will measure against, and where that number
- * comes from — the same precedence the script itself applies, because this line
- * exists to say what the hook will do rather than what the config says.
- *
- * A `[1m]` passed only on the command line (`claude --model …[1m]`) is not a
- * source here, because it is not one for a hook either: the guard sees the
- * environment and the settings files, never the client's argv.
- *
- * The settings files this walks are carried up as `unreadable` rather than
- * swallowed: doctor prints one line per broken file whichever of its readers
- * opened it, and the ceiling is one of the things such a file was likely to
- * carry.
- */
-function resolveContextWindow(contextWindow, { cwd = process.cwd(), env = process.env } = {}) {
-  if (Number.isInteger(contextWindow) && contextWindow > 0) return { window: contextWindow, source: 'handoff.contextWindow', unreadable: [] };
-  const fromEnv = parseContextWindow(env[CONTEXT_WINDOW_ENV]);
-  if (fromEnv) return { window: fromEnv, source: CONTEXT_WINDOW_ENV, unreadable: [] };
-  const setting = readClientSetting(CONTEXT_WINDOW_SETTING, { global: true, cwd, env, accept: parseContextWindow });
-  if (setting.value) return { window: setting.value, source: CONTEXT_WINDOW_SETTING, unreadable: setting.unreadable };
-  // The fourth step, and the reason it is fourth: `autoCompactWindow` is what an
-  // operator set on purpose, and a model id is what the client happens to be
-  // running. `ANTHROPIC_MODEL` first, then the `model` key of the same two
-  // files — the identical lookup the guard makes, in the identical order, with
-  // the identical acceptance, because the two must not describe one machine
-  // differently.
-  if (parseModelWindow(env[MODEL_ENV])) return { window: MODEL_WINDOW, source: MODEL_WINDOW_SOURCE, unreadable: setting.unreadable };
-  const model = readClientSetting(MODEL_SETTING, { global: true, cwd, env, accept: parseModelWindow });
-  // Both scans walked the same two files; the caller wants each named once.
-  const unreadable = mergeUnreadable(setting.unreadable, model.unreadable);
-  if (model.value) return { window: MODEL_WINDOW, source: MODEL_WINDOW_SOURCE, unreadable };
-  return { window: CONTEXT_WINDOW_DEFAULT, source: 'default', unreadable };
-}
-
-/**
- * THE AUTO-HANDOFF LINE: what the INSTALLED guard will do, read out of the
- * script itself. The values are rendered into it by `rules --hooks`, and the
- * version marker cannot tell a stale threshold from a current one — a changed
+ * THE HANDOFF LINE: what the INSTALLED guard will do, read out of the script
+ * itself. `handoff.enabled` is rendered into it by `rules --hooks`, and the
+ * version marker cannot tell a stale switch from a current one — a changed
  * value renders at the same version — so the config is not the source here.
  * The project's guard first, then the global one, because that is the order a
  * session would pick them up in — and a line read off the global guard says so,
@@ -2204,17 +2138,8 @@ function resolveContextWindow(contextWindow, { cwd = process.cwd(), env = proces
  * `hooks` line already asks for a refresh, and printing a value the script does
  * not contain is exactly what reading it back exists to prevent.
  *
- * The `summary` clause is the same kind of statement about the same script:
- * `handoff.compactSummary`, as the guard's own `AUTO_HANDOFF` reads it, which
- * is why a literal that predates the key reads as `on` — that is what a guard
- * running that literal would compute. It sits beside the gate rather than at
- * the end, because the clauses that say what the hook DOES belong together and
- * `ledgers:` is a fact about the project. It is independent of `enabled`: an
- * operator who switched the nudge off still gets the record of a compaction.
- *
- * @returns {{line: string, unreadable: string[]}|null} the line's text and every
- *   settings file the ceiling lookup could not read, or null when there is
- *   nothing to say at all — which is also nothing read.
+ * @returns {{line: string}|null} the line's text, or null when there is nothing
+ *   to say at all.
  */
 function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
   let rendered = null;
@@ -2228,13 +2153,13 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
     if (rendered) { fromGlobal = global; break; }
   }
   if (!rendered) return null;
-  // WHOSE values these are. A project without its own rendered block reads the
-  // global guard's numbers, and changing them is `rules --global --hooks` — a
+  // WHOSE value this is. A project without its own rendered block reads the
+  // global guard's switch, and changing it is `rules --global --hooks` — a
   // line that did not say so would send the operator to re-render the project.
   const scope = fromGlobal ? ' · the project guard carries no handoff block — showing the global guard\'s values' : '';
 
-  // The ledger is the opt-in: with none, the hook measures nothing and says
-  // nothing, and an operator reading "nudge at 90%" would expect otherwise.
+  // The ledger is the opt-in: with none, the hook stamps nothing and prints
+  // nothing, and an operator reading "stamp and print on" would expect otherwise.
   let ledgers = 0;
   try {
     const dir = join(cwd, '.omelette');
@@ -2242,13 +2167,7 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
     if (st.isDirectory() && !st.isSymbolicLink()) ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).length;
   } catch { /* absent is the normal case */ }
   const found = ledgers ? `ledgers: ${ledgers}` : 'ledgers: none (hook silent — start .omelette/ledger-<plan>.md)';
-  const summary = `summary ${rendered.compactSummary ? 'on' : 'off'}`;
-  if (!rendered.enabled) return { line: `nudge off (handoff.enabled=false) · Stop gate off · ${summary} · ${found}${scope}`, unreadable: [] };
-  const ceiling = resolveContextWindow(rendered.contextWindow, { cwd, env });
-  return {
-    line: `nudge at ${rendered.threshold}% of ${ceiling.window} (${ceiling.source}) · Stop gate on · ${summary} · ${found}${scope}`,
-    unreadable: ceiling.unreadable,
-  };
+  return { line: `stamp and print ${rendered.enabled ? 'on' : 'off (handoff.enabled=false)'} · ${found}${scope}` };
 }
 
 /**
@@ -2682,7 +2601,7 @@ async function cmdDoctor(argv) {
   const wiring = { project: hookWiringAt({}), global: hookWiringAt({ global: true }) };
   out(`hooks         ${dirReport('hooks', PKG.version).map((r) => `${r.scope}: ${hooksLabel(r, r.scope === 'global' ? wiring.global : wiring.project)}`).join(' · ')}`);
   // What the installed guard will do about the handoff — read out of the script
-  // itself, so a threshold changed in the config and never re-rendered reads as
+  // itself, so a switch changed in the config and never re-rendered reads as
   // the value that is actually in force.
   const handoff = handoffReport();
   if (handoff) out(`handoff       ${handoff.line}`);
@@ -2705,14 +2624,13 @@ async function cmdDoctor(argv) {
   // Every settings file doctor could not parse, named once whichever reader
   // tripped over it: `readClientEnv` skipped its `env` block, so the wall lines
   // above may be reporting the client's defaults instead of what the operator
-  // wrote; `hookWiringAt` skipped its `hooks` block; and `readClientSetting`
-  // skipped the keys behind the `handoff` line's ceiling. Three readers, three
+  // wrote; and `hookWiringAt` skipped its `hooks` block. Two readers, two
   // different blocks of the same file — which is why the line says "its values"
   // and not "env values". Read-only and never a fault: a file nobody can parse
   // is a fact about the machine, and this CLI does not repair settings files,
   // it names them.
   for (const path of mergeUnreadable(
-    walls.unreadable, handoff ? handoff.unreadable : [], wiring.project.unreadablePaths, wiring.global.unreadablePaths,
+    walls.unreadable, wiring.project.unreadablePaths, wiring.global.unreadablePaths,
   )) {
     out(`              settings: ${path} unreadable — its values were not consulted`);
   }
@@ -2875,7 +2793,7 @@ function cmdShow(argv) {
     out('  note     `omelette-fleet rules --agents` renders these into .claude/agents/.');
     out();
   }
-  // The auto-handoff is config too, and it reaches a session the same way the
+  // The handoff switch is config too, and it reaches a session the same way the
   // agent block does: not until the file it renders is written again.
   if (!only || only === 'handoff') {
     const settings = handoffSettings();

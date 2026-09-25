@@ -57,7 +57,6 @@ test('the Handoff-settings paragraph links to the new section', () => {
 
 test('every mechanics string and event name matches the guard\'s own constants, not a hardcoded copy', () => {
   const guard = read('hooks/omelette-guard.mjs');
-  const cfg = read('core/config.mjs');
   const md = config();
   const from = md.indexOf('\n## The handoff hooks\n');
   const to = md.indexOf('\n## Keys\n', from);
@@ -66,37 +65,29 @@ test('every mechanics string and event name matches the guard\'s own constants, 
   const maxLinesMatch = guard.match(/maxLines\s*=\s*(\d+)/);
   const maxBytesMatch = guard.match(/maxBytes\s*=\s*(\d+)/);
   const totalMaxMatch = guard.match(/HANDOFF_TOTAL_MAX\s*=\s*(\d+)\s*\*\s*1024/);
-  const summaryMaxMatch = guard.match(/SUMMARY_MAX\s*=\s*(\d+)\s*\*\s*1024/);
-  const thresholdMatch = cfg.match(/threshold:\s*\{[^}]*default:\s*(\d+)/);
-  for (const m of [maxLinesMatch, maxBytesMatch, totalMaxMatch, summaryMaxMatch, thresholdMatch]) {
+  for (const m of [maxLinesMatch, maxBytesMatch, totalMaxMatch]) {
     assert.ok(m, 'constant found in source');
   }
   const maxLines = Number(maxLinesMatch[1]);
   const maxBytesKB = Number(maxBytesMatch[1]) / 1024;
   const totalMaxKB = Number(totalMaxMatch[1]);
-  const summaryMaxKB = Number(summaryMaxMatch[1]);
-  const thresholdDefault = Number(thresholdMatch[1]);
 
   assert.equal(maxLines, 40);
   assert.equal(maxBytesKB, 4);
   assert.equal(totalMaxKB, 12);
-  assert.equal(summaryMaxKB, 8);
-  assert.equal(thresholdDefault, 90);
 
   assert.ok(section.includes(`${maxLines} lines / ${maxBytesKB} KB per ledger, ${totalMaxKB} KB in all`), 'the 40/4/12 KB bound, taken from the guard\'s own numbers');
-  assert.ok(section.includes(`Bounded to ${summaryMaxKB} KB`), 'the 8 KB summary bound, taken from the guard\'s own number');
-  assert.ok(section.includes(`${thresholdDefault} % by default`), 'the 90% threshold default, taken from core/config.mjs');
 
-  // The guard dispatches on six events; `PreToolUse` is the unrelated git guard
-  // on the coder/tester roles (guard comment line 9), not part of the handoff
-  // hooks this section documents, so it is excluded here on purpose.
+  // The guard dispatches on three events; `PreToolUse` is the unrelated git
+  // guard on the shipped roles, not part of the handoff hooks this section
+  // documents, so it is excluded here on purpose.
   const dispatched = [...guard.matchAll(/name === '([A-Za-z]+)'/g)].map((m) => m[1]);
   const handoffEvents = dispatched.filter((ev) => ev !== 'PreToolUse');
-  assert.deepEqual(handoffEvents.sort(), ['PostCompact', 'PostToolUse', 'PreCompact', 'SessionStart', 'Stop'].sort());
+  assert.deepEqual(handoffEvents.sort(), ['PreCompact', 'SessionStart']);
   for (const ev of handoffEvents) assert.ok(section.includes(`\`${ev}\``), `${ev} named as inline code in the section`);
 });
 
-test('the section carries the facts the guard code actually implements (symlink/FIFO skip, sub-agent silence, opt-in ledger)', () => {
+test('the section carries the facts the guard code actually implements (symlink/FIFO skip, the enabled switch, opt-in ledger)', () => {
   const md = config();
   const guard = read('hooks/omelette-guard.mjs');
   const from = md.indexOf('\n## The handoff hooks\n');
@@ -106,21 +97,21 @@ test('the section carries the facts the guard code actually implements (symlink/
   assert.match(section, /symlink or a FIFO named like a ledger is skipped/);
   assert.match(guard, /lstatSync\(path\)\.isFile\(\)/, 'guard actually uses lstat.isFile() (skips symlinks/FIFOs)');
 
-  assert.match(section, /silent in a sub-agent/);
-  assert.match(guard, /inSubagent\(event\)/, 'guard actually checks inSubagent');
+  assert.match(section, /`handoff\.enabled=false` turns it off/);
+  assert.match(guard, /if \(!AUTO_HANDOFF\.enabled\) return;/, 'guard actually checks the switch');
 
   assert.match(section, /that file is the opt-in/);
 });
 
-test('three of the five spec obligation phrases (P1 bullet list) are echoed verbatim in the CONFIG section', () => {
+test('the spec obligation phrase that outlived 1.5.0 (P1 bullet list) is echoed verbatim in the CONFIG section', () => {
   const md = config();
   const from = md.indexOf('\n## The handoff hooks\n');
   const to = md.indexOf('\n## Keys\n', from);
   const section = md.slice(from, to);
+  // The other two phrases described the summary and the threshold reminder,
+  // both removed in 1.5.0.
   for (const phrase of [
-    'the handoff block is still yours to write',
     'a ledger kept in another repository gets neither the stamp nor the print',
-    'A manual `/compact` below the threshold gets no reminder',
   ]) assert.ok(section.includes(phrase), `echoed: ${phrase}`);
   // Not asserted present or absent (and this is not a bug either way): "after a
   // compaction, re-read the ledger before doing anything else" is the rules
