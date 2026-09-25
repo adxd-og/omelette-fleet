@@ -56,7 +56,7 @@ function section(md, heading) {
 
 // ── the two rules lines land, and name what the spec says ───────────────────
 
-const P1_REVIEWS_LINE = "- **A sub-agent review goes to `omelette-reviewer`.** It writes nothing but `.omelette/reports/<name>-review.md`; run `git status --porcelain` and compare `git rev-parse HEAD` after it, and reject the review outright if anything but that report changed.";
+const P1_REVIEWS_LINE = "- **A sub-agent review goes to `omelette-reviewer`.** It writes nothing but `.omelette/reports/<name>-review.md`; run `git status --porcelain` and compare `git rev-parse HEAD` and `git symbolic-ref -q HEAD` after it, and reject the review outright if anything but that report changed.";
 const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus, `effort: xhigh`), **`omelette-coder-medium`** (Opus, `effort: medium`), **`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus, `effort: xhigh`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
 const CODER_PARENTHETICAL = '(Opus-class, xhigh — the shipped `omelette-coder`)';
 

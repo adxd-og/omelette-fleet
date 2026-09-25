@@ -49,7 +49,7 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 - **A finding has four parts, or it is a question.** Every review brief asks for, and every finding is recorded as, `location · scenario · consequence · how to confirm`. The orchestrator rules on each: `verified`, `rejected (reason)` or `needs-check (what)`, in the ledger.
 - **First review clean, re-review continued.** The first review of a change runs with a clean context — no coder summary, no earlier findings. A re-review after a fix round is briefed with the previous findings and the rulings on them, so it verifies the fixes instead of rediscovering the file.
 - Review a plan by header, task list and Self-Review; a unit gets the full file (spec, plan, four-part findings); open the findings' pointers, not the file.
-- **A sub-agent review goes to `omelette-reviewer`.** It writes nothing but `.omelette/reports/<name>-review.md`; run `git status --porcelain` and compare `git rev-parse HEAD` after it, and reject the review outright if anything but that report changed.
+- **A sub-agent review goes to `omelette-reviewer`.** It writes nothing but `.omelette/reports/<name>-review.md`; run `git status --porcelain` and compare `git rev-parse HEAD` and `git symbolic-ref -q HEAD` after it, and reject the review outright if anything but that report changed.
 
 ## Spawning sub-agents: model and effort
 

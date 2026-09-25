@@ -124,9 +124,9 @@ The rent is the resident context of the orchestrating session (`claude-fable-5-1
 | | 1.2.0 | 1.3.0 |
 |---|---|---|
 | Session's resident context per request (`claude-fable-5-1`) | 210–250k | last 200 requests: mean 442k (min 259k, max 627k); all-time mean 339k over 1 354 requests |
-| Rendered rules file, characters | 13 069 | 13 922 (`session` merge policy) · 13 890 (`pr`); ceiling 14 030 |
+| Rendered rules file, characters | 13 069 | 13 987 (`session` merge policy) · 13 955 (`pr`); ceiling 14 030 |
 
-One line: the session ran 1.3.0 end to end without a compaction, so its rent roughly doubled while the rules file grew by 853 characters (about 210 tokens at four characters per token) — the growth is the session's length, not the rules file.
+One line: the session ran 1.3.0 end to end without a compaction, so its rent roughly doubled while the rules file grew by 918 characters (about 230 tokens at four characters per token) — the growth is the session's length, not the rules file.
 
 ## Planning cost with the scout map
 

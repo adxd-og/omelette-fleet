@@ -75,7 +75,7 @@ test('the reviewer\'s frontmatter: its name, opus at xhigh by default, a read-an
  */
 const SAYS = [
   'The only file you write is `.omelette/reports/<name>-review.md`.',
-  'After your report the session runs `git status --porcelain` and compares `git rev-parse HEAD` with its value before you started, and rejects the whole review if anything but that report changed.',
+  'After your report the session runs `git status --porcelain` and compares `git rev-parse HEAD` and `git symbolic-ref -q HEAD` with their values before you started, and rejects the whole review if anything but that report changed.',
   'your `git commit`, `merge`, `rebase`, `push`, `stash`, `tag`, a branch creation and `worktree` are refused with exit 2 and a line naming you.',
   'You have deliberately not been given the author\'s summary',
   'A re-review\'s brief also carries the earlier findings and the rulings on them',
