@@ -146,7 +146,7 @@ test('a full research call: config model + effort reach ctx, the child env is an
   // key: passed the unit's envPassthrough, then deleted by the billing scrub.
   // secret: never on the allowlist at all — a read-only run cannot read GH_TOKEN.
   assert.equal(r.text, 'mode=read-only;model=m-fast;effort=high;key=undefined;secret=undefined');
-  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.deepEqual(snap.lastEvent.usage, { out: 1 });
 });
@@ -239,7 +239,7 @@ test('an adapter that refuses the call surfaces isError and records "error" in t
   const r = await rt.callTool('fake_refuse', {});
   assert.equal(r.isError, true);
   assert.match(r.text, /"prompt" is required/);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'error');
   assert.match(snap.lastEvent.error, /"prompt" is required/);
 });
@@ -250,7 +250,7 @@ test('a partial result is a successful answer that says so: status ok, isError f
   const r = await rt.callTool('fake_partial', {});
   assert.equal(r.isError, undefined, 'a hard-killed run that produced text is not an MCP error');
   assert.match(r.text, /^half an answer/);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.equal(snap.lastEvent.partial, true);
   assert.deepEqual(snap.lastEvent.usage, { out: 2 }, 'usage and partial travel together');
@@ -260,7 +260,7 @@ test('a partial result is a successful answer that says so: status ok, isError f
   // …and a normal answer carries no `partial` key at all.
   const plain = createUnitRuntime(fakeUnit(), { env: e });
   await plain.callTool('fake_refuse', {});
-  assert.equal('partial' in JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8')).lastEvent, false);
+  assert.equal('partial' in JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8')).lastEvent, false);
 });
 
 test('defineUnit keeps an `instructions` line and defaults it to empty', () => {
@@ -288,7 +288,7 @@ test('a `local` tool is answered in-process: no spawn in its ctx, no feed entry,
   assert.equal(r.text, 'local:42:no-spawn');
   // Never tracked: the feed only ever hears from tools that spawn a CLI.
   assert.equal(existsSync(join(dir, 'fleet-log.ndjson')), false);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.deepEqual(snap.active, []);
   assert.equal(snap.lastEvent, null);
   // …while the spawning tools of the same disabled unit still refuse.
@@ -308,7 +308,7 @@ test('makeResultId: a sortable <stamp>-<pid>-<seq>, and the runtime counts its o
   assert.match(ids[0], /-1$/);
   assert.match(ids[1], /-2$/);
   assert.notEqual(ids[0], ids[1]);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.resultId, ids[1], 'the same id closes the pair');
 });
 
@@ -351,7 +351,7 @@ test('cancel `finish` (the default): the run is left alone, the answer stands, t
   if (abort.unref) abort.unref();
   const r = await rt.callTool('fake_cancel', {}, { id: 1, signal: c.signal });
   assert.equal(r.text, 'killed=false;cancelled=false', 'the child ran to the end');
-  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok', 'the outcome is what the run produced');
   assert.equal(snap.lastEvent.detached, true, '…but nobody is listening any more');
   assert.ok(snap.lastEvent.resultId);
@@ -367,7 +367,7 @@ test('cancel `kill`: the signal reaches the spawn, the group is reaped, the feed
   const r = await rt.callTool('fake_cancel', {}, { id: 1, signal: c.signal });
   assert.equal(r.text, 'killed=true;cancelled=true');
   assert.ok(Date.now() - t0 < 700, 'the child died with the cancel instead of running its course');
-  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   assert.equal('detached' in snap.lastEvent, false, 'a killed run was not left to finish');
 });
@@ -389,7 +389,7 @@ test('the progress ticker stops the moment the request is cancelled, even under 
   // so it must stop being told about it.
   assert.equal((await p).text, 'waited');
   assert.equal(notes.length, atAbort, 'no progress is sent for a request the client dropped');
-  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.equal(snap.lastEvent.detached, true);
 });
@@ -418,7 +418,7 @@ test('createUnitRuntime({ cancel }) overrides the configured policy for that run
   const r = await killing.callTool('fake_cancel', {}, { id: 1, signal: c.signal });
   assert.equal(r.text, 'killed=true;cancelled=true', 'the config said finish; this runtime kills');
   assert.ok(Date.now() - t0 < 700, 'the child died with the cancel instead of running its course');
-  const snap = JSON.parse(readFileSync(join(dir, 'status-fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   // The adapter sees the signal it only ever gets under `kill`.
   assert.equal((await killing.callTool('fake_signal', {}, { signal: new AbortController().signal })).text, 'signal=yes');
@@ -564,7 +564,7 @@ test('results: false writes nothing; the feed being off does not stop the spool'
   const feedOff = env({ units: { fake: { status: false } } });
   await createUnitRuntime(fakeUnit(), { env: feedOff.env }).callTool('fake_research', { prompt: 'x' });
   assert.equal(spooled(feedOff.dir).length, 1, 'the spool is not the status feed');
-  assert.equal(existsSync(join(feedOff.dir, 'status-fake.json')), false);
+  assert.equal(existsSync(join(feedOff.dir, `status-fake-${process.pid}.json`)), false);
 });
 
 test('a refusal before the spawn is an answer too — spooled as an error; a catalog read never is', async () => {

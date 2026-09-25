@@ -49,7 +49,7 @@ const spoolBody = (dir, unit) => {
 
 const UNITS = [
   {
-    name: 'gemini', unit: geminiUnit, binEnv: 'AGY_BIN', tool: 'gemini_research', statusFile: 'status-gemini.json',
+    name: 'gemini', unit: geminiUnit, binEnv: 'AGY_BIN', tool: 'gemini_research', statusFile: `status-gemini-${process.pid}.json`,
     fake: () => [
       'process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "a clean gemini answer" }));',
       'process.exit(1);',
@@ -57,7 +57,7 @@ const UNITS = [
     markerRe: /\[gemini: CLI exited 1 — treat the answer as partial\]/,
   },
   {
-    name: 'grok', unit: grokUnit, binEnv: 'GROK_BIN', tool: 'grok_research', statusFile: 'status-grok.json',
+    name: 'grok', unit: grokUnit, binEnv: 'GROK_BIN', tool: 'grok_research', statusFile: `status-grok-${process.pid}.json`,
     fake: () => [
       'const lines = [',
       '  JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "a clean grok answer" }] } }),',
@@ -69,7 +69,7 @@ const UNITS = [
     markerRe: /\[grok: CLI exited 1 — treat the answer as partial\]/,
   },
   {
-    name: 'codex', unit: codexUnit, binEnv: 'CODEX_BIN', tool: 'codex_research', statusFile: 'status-codex.json',
+    name: 'codex', unit: codexUnit, binEnv: 'CODEX_BIN', tool: 'codex_research', statusFile: `status-codex-${process.pid}.json`,
     fake: () => [
       'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
       '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
@@ -158,7 +158,7 @@ test('gemini_image: an artifact from a run that exited non-zero is flagged parti
   assert.equal(r.isError, undefined, r.text);
   assert.match(r.text, /omelette-gemini-image-\S+[/\\]img\.png$/, r.text);   // the bare path
   assert.ok(!PARTIAL_MARK_RE.test(r.text), `expected NO marker in the image tool's text, got: ${r.text}`);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, true);
 });
 

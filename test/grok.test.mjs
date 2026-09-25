@@ -487,7 +487,7 @@ test('runtime with a fake grok: the streamed answer is assembled, usage reaches 
   assert.match(rv.text, /--output-format streaming-messages-json --include-partial-messages/);
   assert.match(rv.text, /--max-turns 12/);
   assert.match(rv.text, /WEBFETCH=1/);
-  const snapshot = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  const snapshot = JSON.parse(readFileSync(join(dir, `status-grok-${process.pid}.json`), 'utf8'));
   assert.deepEqual(snapshot.lastEvent.usage, { input: 11, output: 7 }); // Grok reported no usage before 0.3.1
   // A count the run never reported reads as "?" in the log, never "null".
   const stderrWrite = process.stderr.write.bind(process.stderr);
@@ -643,7 +643,7 @@ test('runtime with a fake grok: a cancel does not swallow the error Grok had alr
   assert.equal(r.isError, true);
   assert.match(r.text, /grok cancelled by the client — Grok had reported: auth expired/);
   // The cancel still decides the outcome: `cancelled`, not `error`.
-  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-grok-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   // And it is still deterministic: an auth failure is not retried.
   assert.doesNotMatch(r.text, /hard-killed/);
@@ -677,7 +677,7 @@ test('grok_image: a capped run whose artifact is on disk answers with the BARE p
   // THE CONTRACT: the path, alone. No cap marker, no prose — the caller stats
   // what comes back, and a marker would make it something else.
   assert.equal(r.text, saved);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-grok-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');   // there IS an artifact
   assert.equal(snap.lastEvent.partial, true);  // …from a run that did not finish
   const spool = join(dir, 'results', 'grok');
@@ -703,7 +703,7 @@ test('grok_image: an artifact from a run that exited non-zero is flagged partial
   const r = await rt.callTool('grok_image', { prompt: 'a cat' });
   assert.equal(r.isError, undefined, r.text);
   assert.equal(r.text, saved);   // the bare path, with no "CLI exited 1" marker
-  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-grok-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, true);
 });
 
@@ -739,7 +739,7 @@ test('grok_image_edit: a hard-killed run whose new file is already on disk answe
   const r = await rt.callTool('grok_image_edit', { prompt: 'make it blue', imagePath: source });
   assert.equal(r.isError, undefined, r.text);
   assert.equal(r.text, saved);                 // never the source, never a kill marker
-  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-grok-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.equal(snap.lastEvent.partial, true);
 });

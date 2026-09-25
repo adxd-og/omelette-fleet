@@ -288,7 +288,7 @@ test('deep research under `cancel: kill`: a cancel stops the remaining gathers a
   assert.equal(spawns.length, 2, `decompose + one gather only, got: ${JSON.stringify(spawns.map((s) => s.slice(0, 40)))}`);
   assert.match(r.text, /Cancelled — the synthesis stage did not run/);
   assert.match(r.text, /_\(cancelled before this sub-question ran\)_/);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
 });
 
@@ -334,7 +334,7 @@ test('deep research under `cancel: kill`: a cancel DURING synthesis still return
   assert.match(r.text, /### Sub-question 1: q one\n\na finding/);
   assert.match(r.text, /### Sub-question 2: q two\n\na finding/);
   assert.equal(r.isError, undefined, 'a cancelled run with findings is an answer, not an error');
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   assert.equal(snap.lastEvent.partial, true);
 });
@@ -400,7 +400,7 @@ test('deep research under `cancel: kill`: a synthesis KILLED MID-SENTENCE keeps 
   assert.match(r.text, /\[gemini: partial synthesis, cancelled\]/);
   assert.match(r.text, /half a report, cut off mid-/);
   assert.equal(r.isError, undefined);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   assert.equal(snap.lastEvent.partial, true);
 });
@@ -431,7 +431,7 @@ test('runtime with a fake agy: a capped run whose envelope survived is marked, a
   assert.ok(!marked.isError, marked.text);
   assert.match(marked.text, /^A+/);
   assert.match(marked.text, CAP_MARK(CAP));
-  const snapshot = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snapshot = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snapshot.lastEvent.status, 'ok');
   assert.equal(snapshot.lastEvent.partial, true);
 
@@ -494,7 +494,7 @@ test('gemini_deep_research: a partial stage makes the whole report partial and s
   assert.match(synthPrompt, /_\(gather failed: Gemini quota exhausted/);
   assert.match(synthPrompt, /half of alpha/);
   assert.match(r.text, /## Summary/);
-  const snapshot = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snapshot = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snapshot.lastEvent.status, 'ok');
   assert.equal(snapshot.lastEvent.partial, true);
 });
@@ -517,7 +517,7 @@ test('gemini_deep_research: the partial line sits UNDER the degraded banner, and
   const paras = degraded.text.split('\n\n');
   assert.match(paras[0], /^> \*\*Degraded run — decomposition failed\.\*\*/);
   assert.equal(paras[1], '[gemini: 1 of 3 stages returned partial answers]');   // decompose + 1 gather + synthesis
-  const degradedSnap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const degradedSnap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(degradedSnap.lastEvent.partial, true);
 
   // Every stage clean: no banner, no count line, no flag anywhere.
@@ -532,7 +532,7 @@ test('gemini_deep_research: the partial line sits UNDER the degraded banner, and
   assert.equal(clean.text.startsWith('## Summary'), true, clean.text);
   assert.doesNotMatch(clean.text, /stages returned partial answers/);
   assert.doesNotMatch(clean.text, /Degraded run/);
-  const cleanSnap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const cleanSnap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(cleanSnap.lastEvent.partial, undefined);   // absent, never false
 });
 
@@ -587,7 +587,7 @@ test('a spooled deep-research result names the stage models the run asked for �
   assert.equal(onlySpooledHeader(bare).model, COMPOSITE);
   // The status feed is NOT a second place this is reported: it still records
   // what the runtime resolved, which here is nothing at all.
-  const snap = JSON.parse(readFileSync(join(bare, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(bare, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.equal(snap.lastEvent.model, undefined);
 
@@ -723,7 +723,7 @@ test('gemini_image: a capped run whose artifact is on disk answers with the BARE
   const r = await rt.callTool('gemini_image', { prompt: 'a cat' });
   assert.equal(r.isError, undefined, r.text);
   assert.equal(r.text, saved);   // the path, alone: no cap marker on a string to stat
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.equal(snap.lastEvent.partial, true);
 });
@@ -786,7 +786,7 @@ test('gemini_image: a run hard-killed with EMPTY stdout answers with the file it
   assert.equal(r.isError, undefined, r.text);
   assert.match(r.text, /omelette-gemini-image-\S+[/\\]img\.png$/, r.text);
   assert.equal(existsSync(r.text), true, r.text);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, true);
 });
 
@@ -798,7 +798,7 @@ test('gemini_image: a run that saved the file and then said NOTHING answers with
   const r = await rt.callTool('gemini_image', { prompt: 'a cat' });
   assert.equal(r.isError, undefined, r.text);
   assert.match(r.text, /omelette-gemini-image-\S+[/\\]img\.png$/, r.text);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, true);
 });
 
@@ -818,7 +818,7 @@ test('gemini_image: a file saved in a SUBDIRECTORY of the run cwd is still the a
   assert.equal(r.isError, undefined, r.text);
   assert.match(r.text, /omelette-gemini-image-\S+[/\\]generated[/\\]image\.png$/, r.text);
   assert.equal(existsSync(r.text), true, r.text);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, true);
 });
 
@@ -834,7 +834,7 @@ test('gemini_image: a capped run whose envelope was cut open answers with the fi
   const r = await rt.callTool('gemini_image', { prompt: 'a cat' });
   assert.equal(r.isError, undefined, r.text);
   assert.match(r.text, /omelette-gemini-image-\S+[/\\]img\.png$/, r.text);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, true);
 });
 
@@ -851,7 +851,7 @@ test('gemini_image: an artifact from a run agy did not finish cleanly is flagged
   assert.equal(r.isError, undefined, r.text);
   assert.match(r.text, /omelette-gemini-image-\S+[/\\]img\.png$/, r.text);
   assert.doesNotMatch(r.text, /TIMEOUT|status/);   // the bare path, still
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, true);
 });
 
@@ -888,7 +888,7 @@ test('gemini_image: a hard-killed run whose file is already on disk answers with
   const r = await rt.callTool('gemini_image', { prompt: 'a cat' });
   assert.equal(r.isError, undefined, r.text);
   assert.equal(r.text, saved);   // no kill marker rides a path
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.equal(snap.lastEvent.partial, true);
 });

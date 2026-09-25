@@ -76,7 +76,7 @@ test('grok_image: a run the client cancels, with the file already on disk, answe
   // The client aborted the call, so the status feed reports the outcome the
   // way core/unit.mjs classifies it — `cancelled`, not `ok` — with `partial`
   // still carried from the tool's own result.
-  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-grok-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   assert.equal(snap.lastEvent.partial, true);
 });
@@ -118,7 +118,7 @@ test('gemini_image: a run the client cancels, with the file already on disk, ans
   assert.equal(r.isError, undefined, r.text);
   assert.match(r.text, /img\.png$/);
   assert.doesNotMatch(r.text, /cancelled/);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   assert.equal(snap.lastEvent.partial, true);
 });
@@ -148,7 +148,7 @@ test('codex_image: a run the client cancels, with image.png already saved, answe
   const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
   assert.equal(r.text, join(argv[argv.indexOf('-C') + 1], 'image.png'));
   assert.doesNotMatch(r.text, /cancelled/);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-codex.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-codex-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   assert.equal(snap.lastEvent.partial, true);
 });

@@ -45,7 +45,7 @@ test('gemini_deep_research: a gather that threw is named in a `gathers failed` h
   assert.match(synthPrompt, /_\(gather failed: agy exited 2/);   // the synthesis still ran, on honest input
   assert.doesNotMatch(r.text, /stages returned partial answers/);   // a thrown gather is not a partial stage
   assert.match(r.text, /## Summary/);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, true);
 });
 
@@ -65,7 +65,7 @@ test('gemini_deep_research: a decomposition with no sub-questions degrades, with
   assert.match(r.text, /^> \*\*Degraded run — decomposition failed\.\*\*/);
   assert.equal(seen.last.partial, undefined);   // absent, never false
   assert.doesNotMatch(r.text, /gathers failed/);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-gemini.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, undefined);
 });
 

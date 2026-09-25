@@ -58,7 +58,7 @@ test('grok_research under webSearch:false refuses BEFORE any spawn — the fake 
   assert.equal(existsSync(marker), false, 'the fake grok binary was spawned when it should not have been');
   // The refusal is still spooled like any other, and grok_result (unaffected
   // by this diff) still serves it back.
-  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-grok-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'error');
   assert.ok(!snap.lastEvent.usage, 'a refusal that never spawned must report no usage'); // nothing spawned, nothing to report
   const spooled = await rt.callTool('grok_result', {});

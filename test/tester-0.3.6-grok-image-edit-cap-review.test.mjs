@@ -58,7 +58,7 @@ test('grok_image_edit: a capped run whose NEW file is on disk answers with the B
   // cap marker stapled onto it.
   assert.equal(r.text, saved);
   assert.notEqual(r.text, source);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-grok-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');   // there IS an artifact
   assert.equal(snap.lastEvent.partial, true);  // …from a run that did not finish
   const spool = join(dir, 'results', 'grok');
@@ -80,6 +80,6 @@ test('grok_image_edit: a capped run with NO new file on disk is an error naming 
   assert.equal(r.isError, true);
   assert.match(r.text, /image run finished without a saved image path on disk \(the run's output exceeded the 300 char cap — raise grok\.outputCap or narrow the task\)/);
   assert.match(r.text, /Raw output: /);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-grok-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'error');
 });

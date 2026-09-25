@@ -368,7 +368,7 @@ test('codex_image: an artifact from a run that exited non-zero is flagged partia
   assert.equal(r.isError, undefined, r.text);
   const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
   assert.equal(r.text, join(argv[argv.indexOf('-C') + 1], 'image.png'));   // bare path, no exit marker
-  const snap = JSON.parse(readFileSync(join(dir, 'status-codex.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-codex-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.partial, true);
 });
 
@@ -410,7 +410,7 @@ test('runtime with a fake codex: a capped run whose final message survived comes
   assert.ok(!r.isError, r.text);
   assert.match(r.text, /^the tail answer/);
   assert.match(r.text, CAP_MARK(300));   // the configured cap, not the fleet default
-  const snapshot = JSON.parse(readFileSync(join(dir, 'status-codex.json'), 'utf8'));
+  const snapshot = JSON.parse(readFileSync(join(dir, `status-codex-${process.pid}.json`), 'utf8'));
   assert.equal(snapshot.lastEvent.status, 'ok');   // there IS an answer
   assert.equal(snapshot.lastEvent.partial, true);  // …just not a whole one
 });
@@ -579,7 +579,7 @@ test('codex_image: a capped run whose image.png is on disk answers with the BARE
   assert.equal(r.isError, undefined, r.text);
   const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
   assert.equal(r.text, join(argv[argv.indexOf('-C') + 1], 'image.png'));   // bare, no cap marker
-  const snap = JSON.parse(readFileSync(join(dir, 'status-codex.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-codex-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok');
   assert.equal(snap.lastEvent.partial, true);
 });
@@ -608,7 +608,7 @@ test('codex_image: a hard-killed run answers with the file it had already saved 
   assert.equal(r.isError, undefined, r.text);
   const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
   assert.equal(r.text, join(argv[argv.indexOf('-C') + 1], 'image.png'));
-  assert.equal(JSON.parse(readFileSync(join(dir, 'status-codex.json'), 'utf8')).lastEvent.partial, true);
+  assert.equal(JSON.parse(readFileSync(join(dir, `status-codex-${process.pid}.json`), 'utf8')).lastEvent.partial, true);
 
   // (2) The run saved the file and was killed before it said ANYTHING:
   //     extractResult refuses it ("hard-killed after 1s"), and the file on
@@ -622,7 +622,7 @@ test('codex_image: a hard-killed run answers with the file it had already saved 
   assert.equal(r2.isError, undefined, r2.text);
   const argv2 = JSON.parse(readFileSync(muteLog, 'utf8'));
   assert.equal(r2.text, join(argv2[argv2.indexOf('-C') + 1], 'image.png'));
-  const snap2 = JSON.parse(readFileSync(join(mute, 'status-codex.json'), 'utf8'));
+  const snap2 = JSON.parse(readFileSync(join(mute, `status-codex-${process.pid}.json`), 'utf8'));
   assert.equal(snap2.lastEvent.status, 'ok');
   assert.equal(snap2.lastEvent.partial, true);
 });

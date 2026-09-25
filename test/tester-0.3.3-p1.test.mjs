@@ -213,7 +213,7 @@ test('cancel `finish`, whole stack: the response is dropped at once, but the rea
   assert.equal(result, null, 'no response is sent for a cancelled request, whatever the mode');
   assert.equal(h.inflight(), 0, 'the entry clears once the child actually finishes');
   assert.equal(existsSync(marker), true, 'the child ran to completion untouched');
-  const snap = JSON.parse(readFileSync(join(dir, 'status-p1fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-p1fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok', 'the outcome is whatever the run produced');
   assert.equal(snap.lastEvent.detached, true, 'but nobody is listening any more');
 });
@@ -232,7 +232,7 @@ test('cancel `kill`, whole stack: the response is dropped, the whole process GRO
   assert.equal(result, null, 'no response is sent for a cancelled request');
   assert.ok(Date.now() - t0 < 1000, '`kill` ends the call with the cancel, not on the process tree\'s own schedule');
   assert.equal(h.inflight(), 0);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-p1fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-p1fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   assert.equal('detached' in snap.lastEvent, false, 'a killed run was not left to finish');
   await wait(1300); // long past markerDelayMs, to be sure this isn't a race
@@ -272,7 +272,7 @@ test('a cancel that arrives before the spawn even starts (`kill`, signal pre-abo
   assert.match(r.text, /cancelled=true/);
   assert.ok(Date.now() - t0 < 2000, 'the run ended almost immediately, not after the full 5s the child was scheduled for');
   assert.equal(existsSync(marker), false);
-  const snap = JSON.parse(readFileSync(join(dir, 'status-p1fake.json'), 'utf8'));
+  const snap = JSON.parse(readFileSync(join(dir, `status-p1fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
 });
 
