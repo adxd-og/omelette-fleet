@@ -65,9 +65,9 @@ Every release closes its ledger with one line: findings found, accepted, rejecte
 | 1.0.0 | 10 | 8 | 1 / 1 | Three diagram labels that contradicted the code; three blind spots in the docs test itself |
 | 1.1.0 | 37 | 29 | 6 / 2 | `check` writing git's index; a one-character fragment passing; staleness blind to the working tree; an unusable `commit:` value switching staleness off in silence |
 | 1.2.0 | 24 | 17 | 7 | the measuring script printing this checkout's absolute path through an uncaught throw; the release's rules-size claim being P1's figure, not the shipped file's |
-| 1.3.0 | 28 | 24 | 4 | the guard's invocation cut handing `-b new` to a nested `$(git tag -l)` (a missed write, found by the shipped reviewer and by Codex); `xargs git tag < file`; PATH still reaching an env-shebang vendor; a false "three runs" line in SECURITY |
+| 1.3.0 | 34 | 30 | 4 | the guard's invocation cut handing `-b new` to a nested `$(git tag -l)` (a missed write, found by the shipped reviewer and by Codex); `xargs git tag < file`; PATH still reaching an env-shebang vendor; a false "three runs" line in SECURITY; three re-review rounds found process substitutions dropped unread, `reset --hard` passing for every role, and `>>(…)` under zsh |
 
-Across eight releases, 215 findings and 186 accepted: the reviewers are rarely wrong, and the rejected ones are mostly stricter readings of a brief than of the spec. A docs-only release (1.0.0) still produced eight real defects.
+Across eight releases, 221 findings and 192 accepted: the reviewers are rarely wrong, and the rejected ones are mostly stricter readings of a brief than of the spec. A docs-only release (1.0.0) still produced eight real defects.
 
 ## Security audit: plain, brief and plugin over one revision
 
