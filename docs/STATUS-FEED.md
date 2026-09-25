@@ -95,7 +95,7 @@ One compact JSON object per line, all units appending to the same file, one `O_A
 
 - **Atomic snapshots.** Each write goes to `status-<unit>-<pid>.json.<pid>.tmp` in the same directory and is `rename`d into place, so a reader never sees a half-written file. Every file is created with mode `0600`.
 - **Fail-soft, absolutely.** Every write is synchronous and wrapped in try/catch. A full disk, a read-only home, a vanished directory — none of it can break, crash, or delay a tool call. There is no "status feed error" surfaced anywhere; the feed simply stops updating.
-- **Sweep on boot.** At process start a unit removes the snapshots of its own dead predecessors (pid no longer alive; a process of another user counts as alive), trims the log, and writes its own file. It reads nothing from a neighbour: `lastEvent` starts `null` in every new process.
+- **Sweep on boot.** At process start a unit removes the snapshots of its own dead predecessors — a file named for this unit whose contents (schema 2) name this unit and the pid in its name, and whose pid is no longer alive (a process of another user counts as alive; an unreadable file is kept) — trims the log, and writes its own file. It reads nothing from a neighbour: `lastEvent` starts `null` in every new process.
 - **Trimming.** At each server start only: if `fleet-log.ndjson` is larger than ~500 KB, it is rewritten with the last ~1000 lines (same tmp + rename dance). Between starts the file grows with the session. A server that starts mid-session — another unit, a second process of one — trims an over-size log by renaming a new file into place, and a `tail -f` on the old inode stops following it; use `tail -F`, which reopens by name.
 
 ## Turning it off
