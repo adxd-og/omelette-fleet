@@ -23,6 +23,7 @@ What has actually been measured on this project, how each number was taken, and 
 | Which web mode does a Codex research run get when none is set? | [The Codex web default mode](#the-codex-web-default-mode) |
 | What outlives a killed unit server, per vendor CLI? | [Unit processes after the server is gone](#unit-processes-after-the-server-is-gone) |
 | Which MCP protocol version does Claude Code ask for, and which does the server claim? | [What Claude Code sends at `initialize`](#what-claude-code-sends-at-initialize) |
+| Which vendor CLI versions was each release live-gated on? | [Vendor CLI versions per release](#vendor-cli-versions-per-release) |
 | How do I repeat these on my own sessions? | [How the numbers are taken](#how-the-numbers-are-taken) |
 | Which claims has nobody measured? | [Not measured yet](#not-measured-yet) |
 
@@ -317,6 +318,25 @@ Measured 2026-09-25 on Claude Code 2.1.282: every `initialize` request carries `
 
 **How it was taken.** `grep -h -o 'rotocolVersion[^0-9]*[0-9-]*' ~/Library/Caches/claude-cli-nodejs/*/mcp-logs-orion-*/*.jsonl | sort | uniq -c` on the operator's machine; the changelogs at `modelcontextprotocol.io/specification/<revision>/changelog`.
 
+## Vendor CLI versions per release
+
+The versions the live gate ran on, from the ledgers' live-gate lines and the CHANGELOG; "—" means the ledger did not record it (the CLIs auto-update, so a release without a recorded version was gated on whatever was installed that day).
+
+| omelette-fleet | agy | grok | codex-cli |
+|---|---|---|---|
+| 0.2.0 (2026-09-03) | — | — | 0.153.0 |
+| 0.3.0 (2026-09-06) | — | — | 0.153.4 |
+| 1.1.0 (2026-09-17) | — | 1.0.41 | 0.156.1 |
+| 1.2.0 (2026-09-24) | — | 1.0.41 | 0.156.1 |
+| 1.3.0 (2026-09-25) | — | 1.0.41 | 0.156.1 |
+| 1.4.0 (2026-09-25) | — | 1.0.41 | 0.156.1 |
+| 1.5.0 (2026-09-25) | 1.2.11 | 1.0.41 | 0.156.1 |
+| 1.6.0 | (Task 8 fills in: `agy --version`, `grok --version`, `codex --version` at the live gate) | | |
+
+The release checklist (CLAUDE.md) adds the row at the live gate.
+
+**Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since <branch date>` (calls, wall-clock, spool per unit); 1.6.0's row: (Task 8).
+
 ## How the numbers are taken
 
 - **Sub-agent tokens.** `node scripts/agent-usage.mjs <transcript.jsonl>` (in the repository; not part of the installed package) reads a Claude Code session transcript (`~/.claude/projects/<project>/<session>.jsonl`) and collects the task notifications the harness writes when a background sub-agent finishes — `subagent_tokens`, `tool_uses`, `duration_ms` — one row per agent. It reads nothing else, and a description that carries an absolute path is cut to its last segment. The transcript itself is private and is not in this repository; only the aggregates above are.
@@ -335,7 +355,6 @@ Measured 2026-09-25 on Claude Code 2.1.282: every `initialize` request carries `
 ## Not measured yet
 
 - **Whether the five-section report shortens the orchestrator's reading.** The orchestrator's own tokens per release have not been separated out of its single long session.
-- **What the units cost per release.** `results --stats --since` has the data; it has not been cut by release.
 - **Whether `check` catches wrong evidence in practice.** In 1.1.0 it caught one off-by-one pointer in the orchestrator's own documentation and one weak fragment in the coder's own report. Two is an anecdote.
 - **A second judgement-heavy effort trial.** [The matched repeat](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) is one task, N = 1; the two-bucket rule rests on it and on an observational bucket log. A second judgement-heavy pair is what would make it a ranking.
 - **The plugin run of the security audit.** [The row](#security-audit-plain-brief-and-plugin-over-one-revision) has two runs; the `claude-security` plugin waits for the operator's own `/claude-security` invocation.
