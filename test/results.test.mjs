@@ -8,6 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createResultStore, formatEntry, isValidResultId, parseResult, renderResult, RESULT_ID_RE } from '../core/results.mjs';
@@ -403,4 +404,61 @@ test('stats on a spool that is not there, or is not ours, is a row of zeros', ()
   assert.deepEqual(store(dir).stats(), zeros);
   assert.equal(existsSync(join(dir, 'results')), false, 'counting never creates the spool');
   assert.deepEqual(createResultStore({ home: dir, unit: '../evil' }).stats(), zeros);
+});
+
+// ─── 1.5.0 T4: `results` prints its headers through visible() ────────────────
+
+const RESULTS_BIN = join(new URL('..', import.meta.url).pathname, 'bin', 'omelette-fleet.mjs');
+const resultsCli = (dir, args) => {
+  const r = spawnSync(process.execPath, [RESULTS_BIN, 'results', ...args], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' },
+  });
+  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+};
+// Every control a terminal acts on, and the bidi override, but not `\n`.
+const CONTROLS = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f‮]/;
+
+test('results <unit> <id>: the header prints escaped, the body prints as the model wrote it', () => {
+  const dir = home();
+  const d = join(dir, 'results', 'codex');
+  mkdirSync(d, { recursive: true });
+  const id = '20260925T120000Z-1-1';
+  // Written by hand, as a tampered or foreign file would be: the store's own
+  // writer already folds C0 controls, so the header here holds what it would not.
+  writeFileSync(join(d, `${id}.md`), [
+    '---', 'unit: codex', 'tool: codex_research', `resultId: ${id}`,
+    'model: gpt‮-6-astra', 'startedAt: 2026-09-25T12:00:00.000Z', 'endedAt: 2026-09-25T12:00:01.000Z',
+    'durationMs: 1000', 'status: ok', 'partial: false', 'detached: false', 'cwd: /tmp/p',
+    'promptPreview: "erase \\u001b[2K this‮"', '---', '\u001b[1A body',
+  ].join('\n'));
+  const r = resultsCli(dir, ['codex', id]);
+  assert.equal(r.code, 0, r.err);
+  const [head, body] = [r.out.slice(0, r.out.lastIndexOf('\n---\n') + 5), r.out.slice(r.out.lastIndexOf('\n---\n') + 5)];
+  assert.match(head, /^---\nunit: codex\n/, 'the header lines stay lines');
+  // renderResultHeader folds C0 controls to a space before `visible` sees them;
+  // what `visible` adds is the rest of its class — C1, bidi, zero-width.
+  assert.ok(head.includes('promptPreview: "erase  [2K this\\u202e"'), head);
+  assert.ok(head.includes('model: gpt\\u202e-6-astra'), head);
+  assert.ok(!CONTROLS.test(head), `no control in the header: ${JSON.stringify(head)}`);
+  assert.equal(body, '\u001b[1A body\n', 'the body is the evidence and prints as written');
+});
+
+test('results listing: every formatEntry line prints with no control character', () => {
+  const dir = home();
+  const d = join(dir, 'results', 'codex');
+  mkdirSync(d, { recursive: true });
+  const id = '20260925T120000Z-1-2';
+  writeFileSync(join(d, `${id}.md`), [
+    '---', 'unit: codex', 'tool: codex_\u001b[2Kresearch', `resultId: ${id}`,
+    'startedAt: 2026-09-25T12:00:00.000Z‮', 'endedAt: 2026-09-25T12:00:01.000Z',
+    'durationMs: 1000', 'status: o\u0007k', 'partial: false', 'detached: false',
+    'promptPreview: "x"', '---', 'body',
+  ].join('\n'));
+  const r = resultsCli(dir, ['codex']);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(!CONTROLS.test(r.out), `no control in the listing: ${JSON.stringify(r.out)}`);
+  assert.ok(r.out.includes('codex_\\u001b[2Kresearch'), r.out);
+  assert.ok(r.out.includes('o\\u0007k'), r.out);
 });

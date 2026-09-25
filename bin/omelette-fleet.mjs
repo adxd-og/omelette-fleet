@@ -53,7 +53,7 @@ import { visible } from '../core/log.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
 import { changedSince, checkPointers, parseCommit, parsePointers, readBoundedFile } from '../core/check.mjs';
-import { createResultStore, formatEntry, isValidResultId, renderResult } from '../core/results.mjs';
+import { createResultStore, formatEntry, isValidResultId, renderResultHeader } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
 import { HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, RETIRED_HOOK_EVENTS, agentSettings, contractFor, hookSettingsSnippet, parseHookHandoff, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets, shellWord } from '../core/rules.mjs';
 import { createUnitRuntime, resolveBin } from '../core/unit.mjs';
@@ -3250,7 +3250,11 @@ function cmdResults(argv) {
         : `omelette-fleet results: no spooled result "${id}" for ${name} in ${join(fleetHome(), 'results', name)}`);
       return 1;
     }
-    out(flags.path ? found.path : renderResult({ ...found.header, text: found.text }));
+    // The header is escaped line by line (`visible` would escape the newlines
+    // too); the body of a spooled answer is model text and prints as written —
+    // it is the evidence (SECURITY, "What is best-effort").
+    const header = renderResultHeader(found.header).split('\n').map(visible).join('\n');
+    out(flags.path ? found.path : `${header}\n${found.text}`);
     return 0;
   }
 
@@ -3259,7 +3263,7 @@ function cmdResults(argv) {
   rows.sort((a, b) => (a.endedAt === b.endedAt ? 0 : a.endedAt < b.endedAt ? 1 : -1));
   const top = rows.slice(0, 10);
   if (!top.length) { out(`(no results spooled yet — ${join(fleetHome(), 'results')})`); return 0; }
-  for (const e of top) out(flags.path ? e.path : formatEntry(e, { unit: e.unit }));
+  for (const e of top) out(flags.path ? e.path : visible(formatEntry(e, { unit: e.unit })));
   return 0;
 }
 
@@ -3338,18 +3342,19 @@ function cmdCheck(argv) {
     } else if (hash !== undefined) {
       const answer = changedSince({ hash, root });
       if (answer.changed) changed = answer.changed;
-      else { unchecked = true; report.push(`staleness: not checked (${answer.reason})`); }
+      else { unchecked = true; report.push(`staleness: not checked (${visible(answer.reason)})`); }
     }
 
     const checked = checkPointers({ text, root, realRoot, changed });
     counts = checked.counts;
     for (const p of checked.pointers) {
       if (p.status === 'ok') continue;
-      if (p.status === 'malformed') { report.push(`malformed  line ${p.line}  ${p.raw.trim().slice(0, MALFORMED_ECHO_MAX)}`); continue; }
-      report.push(`${p.status}  ${p.path}:${p.lineNo}  ${p.fragment}${p.status === 'moved' ? `  → found at ${p.foundAt}` : ''}`);
+      // Paths and fragments come from the checked file: echoed through `visible`.
+      if (p.status === 'malformed') { report.push(`malformed  line ${p.line}  ${visible(p.raw.trim().slice(0, MALFORMED_ECHO_MAX))}`); continue; }
+      report.push(`${p.status}  ${visible(p.path)}:${p.lineNo}  ${visible(p.fragment)}${p.status === 'moved' ? `  → found at ${visible(p.foundAt)}` : ''}`);
     }
   } catch (e) {
-    err(`omelette-fleet check: ${firstLine((e && e.message) || e) || 'the check could not be completed'}`);
+    err(`omelette-fleet check: ${visible(firstLine((e && e.message) || e)) || 'the check could not be completed'}`);
     return 2;
   }
 

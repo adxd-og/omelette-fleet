@@ -127,8 +127,11 @@ function parseUsage(value) {
   return Number.isFinite(u.input) && Number.isFinite(u.output) ? u : null;
 }
 
-/** The file body: the header block, then the text verbatim. */
-export function renderResult(record = {}) {
+/**
+ * The header block alone, `---` to `---`, with no trailing newline: what
+ * `renderResult` writes before the body, and what `results` prints escaped.
+ */
+export function renderResultHeader(record = {}) {
   const r = record && typeof record === 'object' ? record : {};
   const head = HEADER_KEYS.map((key) => {
     if (key === 'promptPreview') return `promptPreview: ${JSON.stringify(line1(r.promptPreview, 200))}`;
@@ -142,7 +145,13 @@ export function renderResult(record = {}) {
     const v = line1(r[key], key === 'cwd' ? 1024 : 200);
     return v ? `${key}: ${v}` : `${key}:`;
   }).filter((l) => l !== null);
-  return ['---', ...head, '---'].join('\n') + '\n' + String(r.text ?? '');
+  return ['---', ...head, '---'].join('\n');
+}
+
+/** The file body: the header block, then the text verbatim. */
+export function renderResult(record = {}) {
+  const r = record && typeof record === 'object' ? record : {};
+  return renderResultHeader(r) + '\n' + String(r.text ?? '');
 }
 
 /**

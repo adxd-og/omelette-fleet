@@ -772,3 +772,27 @@ test('changedSince: a name git would quote — café.js — is matched as it is 
   const { pointers } = checkPointers({ text: 'café.js:1 · `export const answer = 42;` · the constant', root, changed });
   assert.equal(pointers[0].status, 'stale');
 });
+
+// ─── 1.5.0 T4: echoes print through visible() ───────────────────────────────
+
+test('check: a path, a fragment and a malformed echo print their control characters escaped', () => {
+  const root = project({
+    'a.txt': 'first line here\n',
+    'report.md': [
+      'a\u001bb.mjs:1 · `erase \u001b[2K this line` · missing',
+      'a.txt:1 · `nowhere ‮ in this file` · mismatch',
+      'a.txt:1 · no backticks \u001b[2K here · malformed',
+      '',
+    ].join('\n'),
+  });
+  const r = cli(['check', 'report.md'], { cwd: root });
+  assert.equal(r.code, 1);
+  assert.equal(r.out, [
+    'missing  a\\u001bb.mjs:1  erase \\u001b[2K this line',
+    'mismatch  a.txt:1  nowhere \\u202e in this file',
+    'malformed  line 3  a.txt:1 · no backticks \\u001b[2K here · malformed',
+    summary(3, { mismatch: 1, missing: 1, malformed: 1 }),
+    '',
+  ].join('\n'));
+  assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(r.out), JSON.stringify(r.out));
+});
