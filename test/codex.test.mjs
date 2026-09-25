@@ -32,11 +32,11 @@ test('argv: isolation flags, read-only sandbox, json, web search toggle, effort 
   assert.deepEqual(a, [
     'exec', '--json', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules',
     '-s', 'read-only', '-c', 'notify=[]',
-    '-c', 'tools.web_search=true', '-C', '/tmp/x', '-m', 'gpt-5.6-terra', '-c', 'model_reasoning_effort="high"', '-',
+    '-c', 'tools.web_search=true', '-c', 'web_search="live"', '-C', '/tmp/x', '-m', 'gpt-5.6-terra', '-c', 'model_reasoning_effort="high"', '-',
   ]);
   const b = buildArgs({ mode: 'workspace-write', webSearch: false });
   assert.ok(b.includes('workspace-write'));
-  assert.ok(b.includes('tools.web_search=false'));
+  assert.ok(b.includes('tools.web_search=false') && b.includes('web_search="disabled"'));
   assert.ok(!b.includes('-m'));
   assert.ok(!b.some((x) => /dangerously/.test(x)));
   // The operator's ~/.codex/config.toml (MCP servers, plugins, hooks) and the
@@ -299,8 +299,8 @@ test('codex_image: workspace-write kernel-scoped to a fresh temp dir, web search
 
   const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
   assert.equal(argv[argv.indexOf('-s') + 1], 'workspace-write');
-  assert.ok(argv.includes('-c') && argv.includes('tools.web_search=false'));
-  assert.ok(!argv.includes('tools.web_search=true'));
+  assert.ok(argv.includes('-c') && argv.includes('tools.web_search=false') && argv.includes('web_search="disabled"'));
+  assert.ok(!argv.includes('tools.web_search=true') && !argv.includes('web_search="live"'));
   // No effort flag: the reasoning budget does not reach the image model, and a
   // configured `effort: high` must not ride along.
   assert.ok(!argv.some((x) => /model_reasoning_effort/.test(x)));
@@ -649,8 +649,10 @@ test('codex_image: its sandbox is the run\'s own directory — /tmp and $TMPDIR 
 
 // --- web search per tool: review never, research by config ---------------------
 
-test('codex_code_review argv always holds tools.web_search=false; codex_research follows webSearch (default true)', async () => {
-  for (const [cfg, researchWeb] of [[{}, 'true'], [{ webSearch: true }, 'true'], [{ webSearch: false }, 'false']]) {
+test('codex_code_review argv always holds web_search="disabled" and tools.web_search=false; codex_research follows webSearch (default live)', async () => {
+  const DISABLED = ['tools.web_search=false', 'web_search="disabled"'];
+  const LIVE = ['tools.web_search=true', 'web_search="live"'];
+  for (const [cfg, researchPair] of [[{}, LIVE], [{ webSearch: true }, LIVE], [{ webSearch: false }, DISABLED]]) {
     const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-web-'));
     const argvLog = join(dir, 'argv.json');
     const fake = fakeImageCodex({ dir, name: 'fake-web.mjs', argvLog, writeImage: false, answer: 'ok' });
@@ -660,14 +662,38 @@ test('codex_code_review argv always holds tools.web_search=false; codex_research
     const review = await rt.callTool('codex_code_review', { prompt: 'look', cwd: dir });
     assert.ok(!review.isError, review.text);
     const reviewArgv = JSON.parse(readFileSync(argvLog, 'utf8'));
-    assert.ok(reviewArgv.includes('tools.web_search=false'), `review under ${JSON.stringify(cfg)}: ${reviewArgv.join(' ')}`);
-    assert.ok(!reviewArgv.includes('tools.web_search=true'));
+    for (const x of DISABLED) assert.ok(reviewArgv.includes(x), `review under ${JSON.stringify(cfg)}: ${reviewArgv.join(' ')}`);
+    for (const x of LIVE) assert.ok(!reviewArgv.includes(x), `review under ${JSON.stringify(cfg)}: ${reviewArgv.join(' ')}`);
 
     const research = await rt.callTool('codex_research', { prompt: 'what is new' });
     assert.ok(!research.isError, research.text);
     const researchArgv = JSON.parse(readFileSync(argvLog, 'utf8'));
-    assert.ok(researchArgv.includes(`tools.web_search=${researchWeb}`), `research under ${JSON.stringify(cfg)}: ${researchArgv.join(' ')}`);
+    for (const x of researchPair) assert.ok(researchArgv.includes(x), `research under ${JSON.stringify(cfg)}: ${researchArgv.join(' ')}`);
+    // The legacy key comes first, the setting codex-cli 0.156.1 honours second.
+    assert.ok(researchArgv.indexOf(researchPair[0]) < researchArgv.indexOf(researchPair[1]));
   }
+});
+
+test('the review prompt says it has no web search; the research prompt says it has web search', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-prefix-'));
+  const fake = join(dir, 'fake-codex-prefix.mjs');
+  writeFileSync(fake, [
+    'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{',
+    '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
+    '  line({type:"item.completed",item:{type:"agent_message",text:s}});',
+    '  line({type:"turn.completed",usage:{input_tokens:1,output_tokens:1}});',
+    '});',
+  ].join('\n'));
+  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 30 } } }));
+  const rt = wrapCodex({ ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake);
+  const review = await rt.callTool('codex_code_review', { prompt: 'look', cwd: dir });
+  assert.ok(!review.isError, review.text);
+  assert.match(review.text, /you have no web search/);
+  assert.doesNotMatch(review.text, /use web search/);
+  const research = await rt.callTool('codex_research', { prompt: 'what is new' });
+  assert.ok(!research.isError, research.text);
+  assert.match(research.text, /use web search/);
+  assert.doesNotMatch(research.text, /no web search/);
 });
 
 test('codex_code_review description says it has no web search', () => {

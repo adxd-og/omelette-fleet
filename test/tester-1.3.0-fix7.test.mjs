@@ -12,10 +12,10 @@ import { join } from 'node:path';
 
 // --- buildArgs: excludeTmp, both modes, both booleans, exact order ----------
 
-test('buildArgs: excludeTmp=true inserts both overrides right after tools.web_search, in order, before -C', () => {
+test('buildArgs: excludeTmp=true inserts both overrides right after the web_search pair, in order, before -C', () => {
   for (const mode of ['workspace-write', 'read-only']) {
     const withExclude = buildArgs({ cwd: '/scratch', mode, webSearch: false, excludeTmp: true });
-    const webIdx = withExclude.indexOf('tools.web_search=false');
+    const webIdx = withExclude.indexOf('web_search="disabled"');
     assert.ok(webIdx > -1, withExclude.join(' '));
     assert.deepEqual(
       withExclude.slice(webIdx + 1, webIdx + 5),

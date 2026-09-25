@@ -48,13 +48,18 @@
  * identical; only the wording changes, because neither bound was reached and
  * "raise codex.timeoutS" would send the operator after a limit that held.
  *
- * WEB SEARCH — `-c tools.web_search=true` (verified live: emits `web_search`
- * items and grounds the answer). `-s read-only` bounds writes and shell
- * network, not file reads and not this hosted tool, so a run with it reads
- * files and reaches the web at once. Review: never — `codex_code_review`
- * passes `tools.web_search=false` whatever the config says. Research: on
- * unless `webSearch: false` in the fleet config — research that depends on
- * running things needs both, and SECURITY names that residual.
+ * WEB SEARCH — the switch is the top-level `web_search` setting, which takes
+ * `disabled`, `cached`, `indexed` or `live`: `-c 'web_search="disabled"'`
+ * leaves the run with no web tool (zero `web_search` items), `"live"` keeps it.
+ * The legacy `-c tools.web_search=<bool>` is a no-op on codex-cli 0.156.1 — a
+ * run with `false` still performed two searches (measured 2026-09-25) — and is
+ * still emitted, first, for older CLIs; both keys together run without error.
+ * `-s read-only` bounds writes and shell network, not file reads and not this
+ * hosted tool, so a run with it reads files and reaches the web at once.
+ * Review: never — `codex_code_review` passes `web_search="disabled"` whatever
+ * the config says. Research: `live` unless `webSearch: false` in the fleet
+ * config — research that depends on running things needs both, and SECURITY
+ * names that residual.
  *
  * PROMPT ON STDIN — `codex exec -` reads the instructions from stdin, so a
  * prompt beginning with `-` can never be mistaken for a flag and argv stays
@@ -107,7 +112,7 @@
  *   `-c sandbox_workspace_write.exclude_tmpdir_env_var=true`; the `-C`
  *   directory stays writable as the workspace root although it sits under
  *   $TMPDIR (buildArgs, `excludeTmp`).
- *   `tools.web_search=false` on image runs (nothing to search), no `effort`
+ *   `web_search="disabled"` on image runs (nothing to search), no `effort`
  *   (the reasoning budget does not reach the image model), and NO retry — a
  *   re-issued generation bills image quota twice. The result is preferred from
  *   disk (`<tmpdir>/image.png`) and only then from the final message, via
@@ -158,10 +163,15 @@ export const catalog = makeCatalog({
  */
 export const CODEX_OUTPUT_CAP = 4000000;
 
-const READONLY_PREFIX =
+const RESEARCH_PREFIX =
   'You are a read-only research and code-analysis assistant running inside a ' +
   'read-only sandbox. Do NOT attempt to modify files, run git, deploy, or ' +
   'publish — you only read, search, and use web search. Answer in plain text.\n\n';
+
+const REVIEW_PREFIX =
+  'You are a read-only code-analysis assistant. You read files and run read-only ' +
+  'commands inside the directory you are pointed at; you have no web search. ' +
+  'Do NOT modify files, run git write commands, deploy, or publish. Answer in plain text.\n\n';
 
 const WORKSPACE_WRITE_PREFIX =
   'You are a code assistant working inside a sandbox that allows edits ONLY ' +
@@ -200,7 +210,10 @@ export function buildArgs({ model, effort, cwd, mode, webSearch, excludeTmp = fa
     '--ignore-user-config', '--ignore-rules',
     '-s', mode === 'workspace-write' ? 'workspace-write' : 'read-only',
     '-c', 'notify=[]',
+    // WEB SEARCH (see header): legacy key first for older CLIs, then the
+    // setting codex-cli 0.156.1 honours.
     '-c', `tools.web_search=${webSearch ? 'true' : 'false'}`,
+    '-c', 'web_search=' + JSON.stringify(webSearch ? 'live' : 'disabled'),
   ];
   if (excludeTmp) {
     args.push(
@@ -427,7 +440,7 @@ export default defineUnit({
         // Research is read-only no matter what the config says, and a directory to
         // point at is not a reason to widen it: `-C` says WHERE the run happens,
         // `-s read-only` says what it may do there.
-        return ctx.retry(() => runOnce(ctx, { prompt: READONLY_PREFIX + prompt, cwd: c.cwd, mode: 'read-only' }), { skipIf: isDeterministic });
+        return ctx.retry(() => runOnce(ctx, { prompt: RESEARCH_PREFIX + prompt, cwd: c.cwd, mode: 'read-only' }), { skipIf: isDeterministic });
       },
     },
     {
@@ -465,7 +478,7 @@ export default defineUnit({
         // workspace-write only with an explicit directory to scope it to.
         const mode = ctx.mode === 'workspace-write' && c.cwd ? 'workspace-write' : 'read-only';
         if (ctx.mode === 'workspace-write' && !c.cwd) ctx.log('workspace-write requested without cwd — running read-only');
-        const prefix = mode === 'workspace-write' ? WORKSPACE_WRITE_PREFIX : READONLY_PREFIX;
+        const prefix = mode === 'workspace-write' ? WORKSPACE_WRITE_PREFIX : REVIEW_PREFIX;
         // No web whatever `webSearch` says: a review reads the tree, and a run
         // that also held web_search could send what it read out in a query.
         const run = () => runOnce(ctx, { prompt: prefix + prompt, cwd: c.cwd, mode, webSearch: false });
