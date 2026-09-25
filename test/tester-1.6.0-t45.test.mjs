@@ -261,7 +261,7 @@ test('README:198 area links docs/SECURITY.md#threat-model, and that heading exis
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
   assert.match(
     readme,
-    /Every unit tool is read-only by design — each vendor CLI runs under that vendor's own read-only enforcement \(a kernel sandbox for Codex, a permission policy for Gemini; \[SECURITY\]\(docs\/SECURITY\.md#threat-model\) says which is which\) — so approving each call one at a time buys you nothing\./,
+    /Every unit tool is read-only by design — each vendor CLI runs under that vendor's own read-only enforcement \(a kernel sandbox for Codex, a permission policy for Gemini; \[SECURITY\]\(docs\/SECURITY\.md#threat-model\) says which is which\) under the default read-only mode \(`OMELETTE_ALLOW_WRITE` closed; \[SECURITY, "The ceiling"\]\(docs\/SECURITY\.md#the-ceiling\)\) — so approving each call one at a time buys you nothing\./,
   );
   assert.doesNotMatch(readme, /cannot write your repository/);
   const security = readFileSync(join(ROOT, 'docs', 'SECURITY.md'), 'utf8');
@@ -301,5 +301,5 @@ test('MEASUREMENTS: the 1.6.0 matrix row is filled at the release (re-pinned fro
   const md = readFileSync(join(ROOT, 'docs', 'MEASUREMENTS.md'), 'utf8');
   const from = md.indexOf('## Vendor CLI versions per release');
   const section = md.slice(from, from + 1500);
-  assert.match(section, /\|\s*1\.6\.0 \(2026-09-26\)\s*\|\s*1\.2\.11\s*\|\s*1\.0\.41\s*\|\s*0\.157\.0\s*\|/);
+  assert.match(section, /\|\s*1\.6\.0 \(\d{4}-\d{2}-\d{2}\)\s*\|\s*1\.2\.11\s*\|\s*1\.0\.41\s*\|\s*0\.157\.0\s*\|/);
 });

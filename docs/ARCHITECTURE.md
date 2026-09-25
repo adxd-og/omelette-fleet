@@ -59,7 +59,7 @@ defineUnit({
 })
 ```
 
-Defaults filled in by `defineUnit`: `version: '0.1.0'`, `serverName: 'omelette-<name>'`, `label: <name>`, empty `riskEnv` / `envPassthrough` / `envMap` / `builtin` / `extraSchema`, `supportedModes: { 'read-only': true, 'workspace-write': null }`, `auth: null`. A string `bin` is normalised to `{ env: null, default: bin }`.
+Defaults filled in by `defineUnit`: `version`: the package version (`VERSION` from `core/update.mjs`), `serverName: 'omelette-<name>'`, `label: <name>`, empty `riskEnv` / `envPassthrough` / `envMap` / `builtin` / `extraSchema`, `supportedModes: { 'read-only': true, 'workspace-write': null }`, `auth: null`. A string `bin` is normalised to `{ env: null, default: bin }`.
 
 **Tool kinds** — `research | review | image | pipeline | catalog`. A `catalog` tool never spawns: the runtime answers it locally with `catalog.render()`. Every other kind must supply `run(args, ctx)` returning a string or `{ text, usage?, isError? }`. `isError: true` is how an adapter reports a refusal it handled itself — a missing prompt, a bad `cwd` — so that MCP is told it is an error and the status feed records one, instead of an `Error: …` string being reported as a successful answer.
 
