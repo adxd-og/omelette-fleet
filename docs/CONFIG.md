@@ -330,7 +330,7 @@ Fleet-wide:
 
 Binary location, if a CLI is not on `PATH`: `AGY_BIN`, `GROK_BIN`, `CODEX_BIN`.
 
-These are the only variables a vendor CLI sees beyond the fixed allowlist and its own `PREFIX_*` patterns — the child environment is built, not inherited. Full list and ordering in [SECURITY.md](SECURITY.md#the-environment-allowlist). If a unit ignores a variable you set, check that it survives the allowlist before assuming the config layer dropped it.
+These are the only variables a vendor CLI sees beyond the fixed allowlist and its own exact names (no unit declares a pattern; only `OMELETTE_ENV_PASSTHROUGH` takes one) — the child environment is built, not inherited. Full list and ordering in [SECURITY.md](SECURITY.md#the-environment-allowlist). If a unit ignores a variable you set, check that it survives the allowlist before assuming the config layer dropped it.
 
 ## Update check
 
