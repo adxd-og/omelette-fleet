@@ -578,7 +578,9 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
 
   // tools/list must show only the public MCP shape.
   const tools = allTools.map(({ run, kind, mutateGate, ...pub }) => pub);
-  return { log, status, callTool, cfgFor, tools, bin };
+  /** A clean exit: this process's status snapshot goes. Never throws. */
+  function shutdown() { try { status.dispose(); } catch { /* fail-soft */ } }
+  return { log, status, callTool, cfgFor, tools, bin, shutdown };
 }
 
 /** Start the unit as an MCP stdio server on this process. */
@@ -622,6 +624,7 @@ export function startUnit(unit, opts = {}) {
     callTool: rt.callTool,
     log: rt.log,
     env: opts.env || process.env,
+    onShutdown: () => rt.shutdown(),
   });
   return rt;
 }

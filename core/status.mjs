@@ -3,26 +3,39 @@
  * The fleet status feed — what each unit is doing right now, for a menu-bar
  * app, a HUD, or `tail -f`.
  *
- * FILE CONTRACT (schema 1 — readers are built against this; changes bump the
- * number, never silently reshape a field):
- *   <home>/status-<unit>.json   per-unit snapshot, written ATOMICALLY (tmp + rename)
- *     { schema, unit, active: [{id, tool, model, effort, promptPreview, startedAt, resultId}],
+ * FILE CONTRACT (schema 2 since 1.6.0, schema 1 through 1.5.0 — readers are
+ * built against this; changes bump the number, never silently reshape a field):
+ *   <home>/status-<unit>-<pid>.json   per-PROCESS snapshot, written ATOMICALLY (tmp + rename)
+ *     { schema, unit, pid, active: [{id, tool, model, effort, promptPreview, startedAt, resultId}],
  *       lastEvent: {tool, status, endedAt, durationMs, error, resultId, ...extra} | null, updatedAt }
  *     `active` = tool calls running in THIS process right now (parallel calls
  *     are possible; a multi-spawn pipeline is ONE entry for the whole run).
+ *     One file per process: two Claude Code sessions running one unit used to
+ *     overwrite each other's file (schema 1). What runs now is the union of
+ *     `active` over every file; a unit's last event is the newest `endedAt`
+ *     across its files. `lastEvent` starts null in every process — nothing is
+ *     read from a neighbour or a predecessor.
  *   <home>/fleet-log.ndjson     shared append log, one compact JSON per line,
  *     a single O_APPEND write per event (start / end). Trimmed at process start
  *     when it grows past ~500 KB (last ~1000 lines kept).
  *
- * FAIL-SOFT ABSOLUTELY: every write is try/catch-wrapped and synchronous. An
+ * LIFECYCLE: boot() sweeps, trims the log and writes this process's file;
+ * dispose() removes this process's file (a clean exit). The SWEEP removes a
+ * file only when all of these hold: it is named status-<this unit>-<pid>.json,
+ * the pid is not this process's own, and the OS answers ESRCH for that pid.
+ * EPERM (alive, another user's) keeps the file, and so does any other error:
+ * unknown is not dead. A reused pid keeps a dead file until the next boot finds
+ * it dead — delayed cleanup, not wrong data (the file's updatedAt shows its age).
+ *
+ * FAIL-SOFT ABSOLUTELY: every fs call is try/catch-wrapped and synchronous. An
  * fs error can never break, crash, or delay a tool call. `enabled` is read
  * per event through `resolve()`, so switching the feed off in the fleet
  * config takes effect on the next call without a restart.
  */
-import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const STATUS_SCHEMA = 1;
+export const STATUS_SCHEMA = 2;
 const LOG_TRIM_BYTES = 500 * 1024;
 const LOG_KEEP_LINES = 1000;
 
@@ -33,28 +46,41 @@ const LOG_KEEP_LINES = 1000;
  */
 export const previewText = (t) => String(t || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
 
+/** The one place a snapshot's name is spelled: `status-<unit>-<pid>.json`. */
+export const snapshotPath = (dir, unit, pid) => join(dir, `status-${unit}-${pid}.json`);
+
+const SNAPSHOT_NAME_RE = /^status-(.+)-(\d+)\.json$/;
+
+/** Only ESRCH is dead. EPERM is a live process of another user; anything else is unknown, and unknown is kept. */
+function pidIsGone(pid) {
+  try { process.kill(pid, 0); return false; } catch (e) { return !!e && e.code === 'ESRCH'; }
+}
+
 /**
- * @param {{unit:string, spawnTools:Set<string>, resolve:()=>{dir:string, enabled:boolean}}} o
+ * @param {{unit:string, spawnTools:Set<string>, resolve:()=>{dir:string, enabled:boolean}, pid?:number}} o
  *   spawnTools: only tools that spawn a CLI are tracked — catalog reads never are.
+ *   pid: the process that owns this snapshot — process.pid; tests set it to
+ *   play two processes in one.
  */
-export function createStatus({ unit, spawnTools, resolve }) {
+export function createStatus({ unit, spawnTools, resolve, pid = process.pid }) {
   let seq = 0;
   let lastEvent = null;
   const active = new Map();
 
   const paths = () => {
     const { dir } = resolve();
-    return { dir, snapshot: join(dir, `status-${unit}.json`), log: join(dir, 'fleet-log.ndjson') };
+    return { dir, snapshot: snapshotPath(dir, unit, pid), log: join(dir, 'fleet-log.ndjson') };
   };
 
   function writeSnapshot() {
     try {
       const { dir, snapshot } = paths();
       mkdirSync(dir, { recursive: true });
-      const tmp = `${snapshot}.${process.pid}.tmp`;
+      const tmp = `${snapshot}.${pid}.tmp`;
       writeFileSync(tmp, JSON.stringify({
         schema: STATUS_SCHEMA,
         unit,
+        pid,
         active: [...active.values()],
         lastEvent,
         updatedAt: new Date().toISOString(),
@@ -82,14 +108,33 @@ export function createStatus({ unit, spawnTools, resolve }) {
     } catch { /* log may not exist yet */ }
   }
 
-  /** Process start: carry over the previous lastEvent, clear stale `active` from a crashed predecessor, trim the log. */
+  /** Remove the snapshots of this unit's dead processes; a live or unknown one is never touched. */
+  function sweep() {
+    let dir;
+    let names;
+    try { dir = paths().dir; names = readdirSync(dir); } catch { return; /* no home yet */ }
+    for (const name of names) {
+      try {
+        const m = SNAPSHOT_NAME_RE.exec(name);
+        if (!m || m[1] !== unit || m[2] === String(pid)) continue;
+        if (pidIsGone(Number(m[2]))) rmSync(join(dir, name), { force: true });
+      } catch { /* this file only; the next one is still looked at */ }
+    }
+  }
+
+  /** Process start: sweep dead predecessors, trim the log, write this process's own file. Reads no snapshot. */
   function boot() {
     try {
       if (!resolve().enabled) return;
-      try { lastEvent = JSON.parse(readFileSync(paths().snapshot, 'utf8')).lastEvent || null; } catch { /* first run */ }
+      sweep();
       trimLog();
       writeSnapshot();
     } catch { /* fail-soft */ }
+  }
+
+  /** Clean exit: this process's file goes; every other file stays. */
+  function dispose() {
+    try { rmSync(paths().snapshot, { force: true }); } catch { /* fail-soft */ }
   }
 
   /**
@@ -102,7 +147,7 @@ export function createStatus({ unit, spawnTools, resolve }) {
     if (!spawnTools.has(tool)) return null;
     try {
       if (!resolve().enabled) return null;
-      const id = `${process.pid}-${++seq}`;
+      const id = `${pid}-${++seq}`;
       const startedAt = new Date().toISOString();
       const promptPreview = previewText(promptText);
       const rid = resultId || null;
@@ -137,5 +182,5 @@ export function createStatus({ unit, spawnTools, resolve }) {
     } catch { /* fail-soft */ }
   }
 
-  return { boot, start, end, get lastEvent() { return lastEvent; }, get activeCount() { return active.size; } };
+  return { boot, start, end, dispose, get lastEvent() { return lastEvent; }, get activeCount() { return active.size; } };
 }

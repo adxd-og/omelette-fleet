@@ -214,8 +214,9 @@ export function createLineSplitter(onLine, onOverflow = () => {}) {
  * Attach a handler to this process's stdin/stdout and never let a stray error kill the loop.
  * `instructions` is passed straight through to `createHandler`; `send` doubles
  * as the notification sink, so progress reaches the client on the same stream.
+ * `onShutdown` runs once, right before a clean exit after stdin closed.
  */
-export function serve({ serverInfo, tools, callTool, instructions, log = () => {}, env = process.env }) {
+export function serve({ serverInfo, tools, callTool, instructions, log = () => {}, env = process.env, onShutdown = () => {} }) {
   const send = (m) => { process.stdout.write(JSON.stringify(m) + '\n'); };
   const handle = createHandler({ serverInfo, tools, callTool, instructions, notify: send, log, env });
   process.on('uncaughtException', (e) => log('uncaught: ' + ((e && e.stack) || e)));
@@ -248,14 +249,21 @@ export function serve({ serverInfo, tools, callTool, instructions, log = () => {
     // process.exit() there would cut the frame off mid-string. The callback of
     // an empty write runs only once every write queued before it has gone out,
     // so this exits on the last byte of the answer, not on the first.
+    // Either way out, `onShutdown` runs right before the exit: the drain is
+    // done, so nothing is left to report, and the unit's status snapshot goes
+    // with the process. A throwing hook is logged; it never keeps us alive.
+    const shutdownAndExit = () => {
+      try { onShutdown(); } catch (e) { log('onShutdown: ' + ((e && e.stack) || e)); }
+      process.exit(0);
+    };
     const exitWhenFlushed = () => setImmediate(() => {
       // …and a client that keeps the pipe open without ever reading it never
       // lets that callback run: the write stays parked on backpressure and the
       // server would sit there for good. 10 s is far longer than any real
       // flush and short enough that a stuck server still goes away by itself.
-      const t = setTimeout(() => process.exit(0), 10000);
+      const t = setTimeout(shutdownAndExit, 10000);
       if (t.unref) t.unref();
-      process.stdout.write('', () => { clearTimeout(t); process.exit(0); });
+      process.stdout.write('', () => { clearTimeout(t); shutdownAndExit(); });
     });
     handle.drain().then(exitWhenFlushed, exitWhenFlushed);
   });
