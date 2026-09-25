@@ -20,6 +20,7 @@ What has actually been measured on this project, how each number was taken, and 
 | Who runs past 200 k tokens, and doing what? | [Past 200 k](#past-200-k) |
 | Does the guard's context estimate match the engine's? | [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) |
 | What did the handoff hooks do across every compaction the project has had? | [The handoff hooks over five compactions](#the-handoff-hooks-over-five-compactions) |
+| Which web mode does a Codex research run get when none is set? | [The Codex web default mode](#the-codex-web-default-mode) |
 | How do I repeat these on my own sessions? | [How the numbers are taken](#how-the-numbers-are-taken) |
 | Which claims has nobody measured? | [Not measured yet](#not-measured-yet) |
 
@@ -276,6 +277,18 @@ Reading: over five compactions the hook-authored parts — the nudge, the gate a
 
 **Acted on in 1.5.0.** The nudge, the gate and the summary were removed; the stamp and the print stay. `hooks/omelette-guard.mjs` went from 1 929 lines / 95 871 bytes to 1 152 lines / 57 184 bytes (the rendered guard, `renderHookFile`, is the same file plus the marker line).
 
+## The Codex web default mode
+
+Taken 2026-09-25 on codex-cli 0.156.1 with `gpt-6-astra`, one run per setting, over a prompt that needs a page fetched (quote the `<title>` of https://example.com/ and name the tool used). The question: which of `cached`, `indexed` and `live` a research run gets when the adapter sets no mode, as it has since 1.3.0.
+
+| Setting | `web_search` items | What the answer showed |
+|---|---|---|
+| none (the CLI's default) | 2 (one query, one `open_page` of the URL) | "Example Domain", via `web.run`, marked "Crawled: today"; the model could not say live or cache; `curl` failed DNS in the sandbox |
+| `web_search="cached"` | 2 (the same two) | the same |
+| `web_search="live"` | 2 (the same two) | the same |
+
+Measured 2026-09-25 on codex-cli 0.156.1: with no `web_search` setting, with `"cached"` and with `"live"`, a page-fetch prompt produced the same two `web_search` items (a query and an `open_page`) and the same answer marked `Crawled: today`; the default is indistinguishable from either on the exec output, and the only mode with an observable difference is `"disabled"` (zero items, 1.4.0).
+
 ## How the numbers are taken
 
 - **Sub-agent tokens.** `node scripts/agent-usage.mjs <transcript.jsonl>` (in the repository; not part of the installed package) reads a Claude Code session transcript (`~/.claude/projects/<project>/<session>.jsonl`) and collects the task notifications the harness writes when a background sub-agent finishes — `subagent_tokens`, `tool_uses`, `duration_ms` — one row per agent. It reads nothing else, and a description that carries an absolute path is cut to its last segment. The transcript itself is private and is not in this repository; only the aggregates above are.
@@ -289,6 +302,7 @@ Reading: over five compactions the hook-authored parts — the nudge, the gate a
 - **Contract sizes.** `FLEET_CONTRACT.length` and `SHORT_CONTRACT.length` from `core/rules.mjs`.
 - **Rules file size.** `renderRulesFile('1.2.0', { merge: 'session' })` from `core/rules.mjs` — `.length` for characters, `Buffer.byteLength` for bytes — and, for 1.1.0, the same three substitutions applied to `git show v1.1.0:rules/omelette-fleet.md`.
 - **Per-task cost tables.** Taken from sub-agent transcripts with `scripts/context-by-source.mjs --agents` — roles come from each agent's `.meta.json` `agentType` since commit `1997a71`, guessed from the description only when a run predates it — and that day's list prices. Session-side numbers are estimates: the session's own windows overlap other, concurrent work, so they are not read off a clean transcript the way a sub-agent's are.
+- **The Codex web default mode.** Three runs, each in a fresh empty directory with stdin closed (`< /dev/null`: codex reads stdin to EOF when it is not a TTY): `codex exec -s read-only --ignore-user-config --ignore-rules --json -m gpt-6-astra '<prompt>'`, the same with `-c 'web_search="cached"'`, and the same with `-c 'web_search="live"'`; the number is the count of `"type":"web_search"` items in each `--json` stream.
 
 ## Not measured yet
 

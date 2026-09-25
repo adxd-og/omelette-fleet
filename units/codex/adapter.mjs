@@ -59,13 +59,18 @@
  * `disabled`, `cached`, `indexed` or `live`: `-c 'web_search="disabled"'`
  * leaves the run with no web tool (zero `web_search` items, measured
  * 2026-09-25). With web on, no mode is set: the run gets the CLI's own default,
- * exactly as 1.3.0 ran it. The legacy `-c tools.web_search=<bool>` is a no-op
+ * exactly as 1.3.0 ran it. Measured 2026-09-25 on codex-cli 0.156.1: with no
+ * `web_search` setting, with `"cached"` and with `"live"`, a page-fetch prompt
+ * produced the same two `web_search` items (a query and an `open_page`) and the
+ * same answer marked `Crawled: today`; the default is indistinguishable from
+ * either on the exec output, and the only mode with an observable difference is
+ * `"disabled"` (zero items, 1.4.0). The legacy `-c tools.web_search=<bool>` is a no-op
  * on codex-cli 0.156.1 — a run with `false` still performed two searches — and
  * is still emitted, first, for older CLIs; both keys together run without error.
  * `-s read-only` bounds writes and shell network, not file reads and not this
  * hosted tool, so a run with it reads files and reaches the web at once.
  * Review: never — `codex_code_review` passes `web_search="disabled"` whatever
- * the config says. Research: `live` unless `webSearch: false` in the fleet
+ * the config says. Research: the CLI's default mode unless `webSearch: false` in the fleet
  * config — research that depends on running things needs both, and SECURITY
  * names that residual.
  *
