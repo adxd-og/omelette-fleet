@@ -195,7 +195,7 @@ Once published, the same commands work as `npx omelette-fleet …`.
 
 ### Fewer permission prompts
 
-Every unit tool is read-only by design — it spawns a vendor CLI that cannot write your repository — so approving each call one at a time buys you nothing. Allowlist them once in `.claude/settings.json` (project) or `~/.claude/settings.json` (global):
+Every unit tool is read-only by design — each vendor CLI runs under that vendor's own read-only enforcement (a kernel sandbox for Codex, a permission policy for Gemini; [SECURITY](docs/SECURITY.md#threat-model) says which is which) — so approving each call one at a time buys you nothing. Allowlist them once in `.claude/settings.json` (project) or `~/.claude/settings.json` (global):
 
 ```json
 {
