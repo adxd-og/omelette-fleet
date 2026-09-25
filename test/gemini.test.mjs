@@ -489,6 +489,8 @@ test('gemini_deep_research: a partial stage makes the whole report partial and s
   // the one partial ANSWER, and the failed one is a failure line, never a
   // partial stage — there is no half-answer to warn about.
   assert.match(r.text, /^\[gemini: 1 of 4 stages returned partial answers\]/);
+  // 1.6.0 (R2): the gather that threw is named in its own header, under the count.
+  assert.match(r.text, /^\[gemini: 1 of 2 gathers failed: beta\]$/m);
   assert.match(synthPrompt, /_\(gather failed: Gemini quota exhausted/);
   assert.match(synthPrompt, /half of alpha/);
   assert.match(r.text, /## Summary/);

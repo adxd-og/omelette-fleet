@@ -410,8 +410,10 @@ const DEGRADED_BANNER =
  * output-capped envelope). A report synthesized out of partial stages is a
  * partial report: the count is stated under the title and the flag travels out
  * with it, because a reader who cannot see the stages cannot see the gap.
- * A gather that THREW is not a partial stage — it produced no text at all, and
- * its `_(gather failed: …)_` line already stands where the finding would be.
+ * A gather that THREW ran and produced nothing: it is counted as a FAILED
+ * gather, named in the `gathers failed` header with its sub-question, and
+ * makes the report partial — the synthesis was written over a hole, and a
+ * reader who cannot see the stages cannot see the hole.
  * A cancelled run has no synthesis to speak of — the stage is never started,
  * killed with nothing printed, or killed after a fragment — so all three come
  * back as the FINDINGS, partial, with any fragment appended under a marker.
@@ -453,6 +455,7 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
   let degraded = false;
   if (!subs || !subs.length) { subs = [question]; degraded = true; }
 
+  const failedGathers = [];
   const findings = await Promise.all(subs.map(async (sq, i) => {
     if (cancelled()) return { text: `### Sub-question ${i + 1}: ${sq}\n\n_(cancelled before this sub-question ran)_`, partial: false };
     try {
@@ -466,6 +469,8 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
       });
       return { text: `### Sub-question ${i + 1}: ${sq}\n\n${r.text}`, partial: !!r.partial };
     } catch (e) {
+      // Brackets become parentheses: a sub-question can never close the marker early, nor open a fake one.
+      failedGathers.push(sq.slice(0, 80).replace(/[\[\]]/g, (c) => (c === '[' ? '(' : ')')));
       return { text: `### Sub-question ${i + 1}: ${sq}\n\n_(gather failed: ${(e && e.message) || e})_`, partial: false };
     }
   }));
@@ -518,14 +523,19 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
   }
 
   // The stages that RAN: decompose, one per sub-question, synthesis. A gather
-  // that threw is counted here (it ran, it was paid for) and never in the
-  // partial count above.
+  // that threw is counted here (it ran, it was paid for), never in the partial
+  // count, and named in the `gathers failed` header instead.
   const stages = [!!decompose.partial, ...findings.map((f) => f.partial), !!synth.partial];
   const partialCount = stages.filter(Boolean).length;
+  // The headers go ABOVE the synthesis, so withPartial (which appends) is not
+  // used here: the flag is set by hand, from the markers the head carries.
+  const stagesMarked = partialCount ? partialMark('gemini', 'stages', { n: partialCount, m: stages.length }) : null;
+  const gathersMarked = failedGathers.length ? partialMark('gemini', 'gathers', { n: failedGathers.length, m: subs.length, subs: failedGathers.join('; ') }) : null;
   const head = [];
   if (degraded) head.push(DEGRADED_BANNER);
-  if (partialCount) head.push(`[gemini: ${partialCount} of ${stages.length} stages returned partial answers]`);
-  return { text: [...head, synth.text].join('\n\n'), partial: partialCount > 0 };
+  if (stagesMarked) head.push(stagesMarked);
+  if (gathersMarked) head.push(gathersMarked);
+  return { text: [...head, synth.text].join('\n\n'), partial: !!(stagesMarked || gathersMarked) };
 }
 
 // --- tool table ---------------------------------------------------------------
