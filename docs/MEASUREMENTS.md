@@ -64,9 +64,10 @@ Every release closes its ledger with one line: findings found, accepted, rejecte
 | 0.3.7 | 31 | 28 | 3 | A FIFO at the rules path hanging every server start; a compaction summary able to forge a handoff heading |
 | 1.0.0 | 10 | 8 | 1 / 1 | Three diagram labels that contradicted the code; three blind spots in the docs test itself |
 | 1.1.0 | 37 | 29 | 6 / 2 | `check` writing git's index; a one-character fragment passing; staleness blind to the working tree; an unusable `commit:` value switching staleness off in silence |
-| 1.3.0 | — | — | — | (filled at release close) |
+| 1.2.0 | 24 | 17 | 7 | the measuring script printing this checkout's absolute path through an uncaught throw; the release's rules-size claim being P1's figure, not the shipped file's |
+| 1.3.0 | 28 | 24 | 4 | the guard's invocation cut handing `-b new` to a nested `$(git tag -l)` (a missed write, found by the shipped reviewer and by Codex); `xargs git tag < file`; PATH still reaching an env-shebang vendor; a false "three runs" line in SECURITY |
 
-Across six releases, 163 findings and 145 accepted: the reviewers are rarely wrong, and the rejected ones are mostly stricter readings of a brief than of the spec. A docs-only release (1.0.0) still produced eight real defects.
+Across eight releases, 215 findings and 186 accepted: the reviewers are rarely wrong, and the rejected ones are mostly stricter readings of a brief than of the spec. A docs-only release (1.0.0) still produced eight real defects.
 
 ## Security audit: plain, brief and plugin over one revision
 
@@ -88,7 +89,7 @@ Two runs over the same revision, `d7180b2` (v1.2.0), on 2026-09-24: Codex with n
 
 **In one line.** Over `d7180b2`: plain 34 found, 18 verified; brief 16 found, 9 verified; plugin not run; 3 verified by the brief only.
 
-Reading: the brief verified 3 defects the plain review missed, and 12 of the plain review's verified defects were not among its findings; the spec's condition for `omelette-auditor` — defects the plain review and the plugin both missed — cannot be read without the plugin run, and the three are real but low, so no auditor definition is built: the security brief is SECURITY's section, and a release's security review is a review run with it. What landed: the 19 findings verified at the session's ruling (S2 and G6 were settled after it) became ten tasks of the release, T4–T13 of the fixes plan, each fix with its test, all committed.
+Reading: the brief verified 3 defects the plain review missed, carried 12 of the plain review's 34 candidates and dropped 22 (two in three) before refutation, and 12 of the plain review's verified defects were not among its findings; the spec's condition for `omelette-auditor` — defects the plain review and the plugin both missed — cannot be read without the plugin run, and the three are real but low, so no auditor definition is built: the security brief is SECURITY's section, and a release's security review is a review run with it. What landed: the 19 findings verified at the session's ruling (S2 and G6 were settled after it) became ten tasks of the release, T4–T13 of the fixes plan, each fix with its test, all committed.
 
 ## The fleet contract, full and short
 
@@ -182,7 +183,7 @@ The release's largest security fix — the guard's git classifier, T4 of the P0 
 | A | `omelette-coder-medium` · `claude-opus-5-5` · medium | 30 | 3.08M | 139k | 139k | 17.3 min | $1.33 | 1 | 39/39 | 3 real defects — a second quadratic path left in place (117 s on a 448 KB command before exit 2, a fail-open class); branch writes in a nested shell missed; a redirection before the subcommand missed — and 1 pre-existing |
 | B | `omelette-coder` · `claude-opus-5-5` · xhigh | 67 | 16.38M | 785k | 373k | 46.5 min round 1 + ~12 min round 2 | $7.28 | 2 | 39/39 | 2 narrow missed writes (a value-less global option before the subcommand; split quoting) and 1 maintainability, fixed in round 2 — shipped |
 
-Reading: the acceptance tests could not tell the arms apart (39/39 each); the blind review could; N = 1. Arm A cost a fifth of arm B and left a fail-open class in the guard; arm B cost 5.5× and shipped after one fix round. Bucket log: 21 plan-driven tasks ran at medium in one round each with 0 acceptance defects and 1 tester-found defect (a line-splitting disagreement the printed diff missed), 4 stopped for a ruling the plan lacked (all stale test pins), and docs went to Sonnet 5 times. The coder default does not move: the spec moves it only if the matched repeat holds for medium, and it did not — `omelette-coder` stays at xhigh, and `omelette-coder-medium` is the plan-driven bucket.
+Reading: the acceptance tests could not tell the arms apart (39/39 each); the blind review could; N = 1. Arm A cost a fifth of arm B and left a fail-open class in the guard; arm B cost 5.5× and shipped after one fix round. Bucket log: 21 plan-driven tasks ran at medium in one round each with 0 acceptance defects and 1 tester-found defect (a line-splitting disagreement the printed diff missed), 4 stopped for a ruling the plan lacked (all stale test pins), and docs went to Sonnet 5 times. The coder default does not move: the spec moves it only if the matched repeat holds for medium, and it did not — `omelette-coder` stays at xhigh, and `omelette-coder-medium` is the plan-driven bucket. The shipped reviewer's release review of 1.3.0 found 14 findings, all accepted, against 1.2.0's three reviews together at 24 found / 17 accepted (that release did not record the Opus review's own share).
 
 ## Sub-agents by role
 
@@ -269,4 +270,3 @@ Not yet taken: the near-threshold and post-compaction points, which need a worki
 - **N0: the near-threshold and post-compaction points.** Flagged as not yet taken under [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) — the probe mod exists in the scratchpad; it needs an operator session with function hooks enabled to run.
 - **A second judgement-heavy effort trial.** [The matched repeat](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) is one task, N = 1; the two-bucket rule rests on it and on an observational bucket log. A second judgement-heavy pair is what would make it a ranking.
 - **The plugin run of the security audit.** [The row](#security-audit-plain-brief-and-plugin-over-one-revision) has two runs; the `claude-security` plugin waits for the operator's own `/claude-security` invocation.
-- **The shipped reviewer against 1.2.0's hand-briefed review.** Filled at release close, in [Review yield per release](#review-yield-per-release).

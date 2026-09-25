@@ -49,6 +49,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
   "defaults": { "status": true },
   "agents": {
     "coder":  { "model": "opus", "effort": "xhigh" },
+    "coderMedium": { "model": "opus", "effort": "medium" },
     "tester": { "model": "sonnet", "effort": "xhigh", "maxTurns": 80 },
     "reviewer": { "model": "opus", "effort": "xhigh" }
   },
