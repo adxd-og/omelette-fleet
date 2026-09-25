@@ -57,10 +57,11 @@
  *
  * WEB SEARCH — the switch is the top-level `web_search` setting, which takes
  * `disabled`, `cached`, `indexed` or `live`: `-c 'web_search="disabled"'`
- * leaves the run with no web tool (zero `web_search` items), `"live"` keeps it.
- * The legacy `-c tools.web_search=<bool>` is a no-op on codex-cli 0.156.1 — a
- * run with `false` still performed two searches (measured 2026-09-25) — and is
- * still emitted, first, for older CLIs; both keys together run without error.
+ * leaves the run with no web tool (zero `web_search` items, measured
+ * 2026-09-25). With web on, no mode is set: the run gets the CLI's own default,
+ * exactly as 1.3.0 ran it. The legacy `-c tools.web_search=<bool>` is a no-op
+ * on codex-cli 0.156.1 — a run with `false` still performed two searches — and
+ * is still emitted, first, for older CLIs; both keys together run without error.
  * `-s read-only` bounds writes and shell network, not file reads and not this
  * hosted tool, so a run with it reads files and reaches the web at once.
  * Review: never — `codex_code_review` passes `web_search="disabled"` whatever
@@ -180,6 +181,9 @@ const RESEARCH_PREFIX =
   'read-only sandbox. Do NOT attempt to modify files, run git, deploy, or ' +
   'publish — you only read, search, and use web search. Answer in plain text.\n\n';
 
+/** The same preamble for a research run whose web tool is off (`webSearch: false`). */
+const RESEARCH_PREFIX_NOWEB = RESEARCH_PREFIX.replace(', and use web search', '');
+
 const REVIEW_PREFIX =
   'You are a read-only code-analysis assistant. You read files and run read-only ' +
   'commands inside the directory you are pointed at; you have no web search. ' +
@@ -225,7 +229,9 @@ export function buildArgs({ model, effort, cwd, mode, webSearch, excludeTmp = fa
     // WEB SEARCH (see header): legacy key first for older CLIs, then the
     // setting codex-cli 0.156.1 honours.
     '-c', `tools.web_search=${webSearch ? 'true' : 'false'}`,
-    '-c', 'web_search=' + JSON.stringify(webSearch ? 'live' : 'disabled'),
+    // Web on: the CLI's own default mode, exactly as 1.3.0 ran (the legacy key
+    // was a no-op); web off: the setting that removes the tool (measured).
+    ...(webSearch ? [] : ['-c', 'web_search="disabled"']),
   ];
   if (excludeTmp) {
     args.push(
@@ -458,7 +464,7 @@ export default defineUnit({
           // Research is read-only no matter what the config says, and a directory to
           // point at is not a reason to widen it: `-C` says WHERE the run happens,
           // `-s read-only` says what it may do there.
-          return await ctx.retry(() => runOnce(ctx, { prompt: RESEARCH_PREFIX + prompt, cwd, mode: 'read-only' }), { skipIf: isDeterministic });
+          return await ctx.retry(() => runOnce(ctx, { prompt: (ctx.cfg.webSearch ? RESEARCH_PREFIX : RESEARCH_PREFIX_NOWEB) + prompt, cwd, mode: 'read-only' }), { skipIf: isDeterministic });
         } finally {
           if (!c.cwd) rmSync(cwd, { recursive: true, force: true });
         }

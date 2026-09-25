@@ -32,7 +32,7 @@ test('argv: isolation flags, read-only sandbox, json, web search toggle, effort 
   assert.deepEqual(a, [
     'exec', '--json', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules',
     '-s', 'read-only', '-c', 'notify=[]',
-    '-c', 'tools.web_search=true', '-c', 'web_search="live"', '-C', '/tmp/x', '-m', 'gpt-5.6-terra', '-c', 'model_reasoning_effort="high"', '-',
+    '-c', 'tools.web_search=true', '-C', '/tmp/x', '-m', 'gpt-5.6-terra', '-c', 'model_reasoning_effort="high"', '-',
   ]);
   const b = buildArgs({ mode: 'workspace-write', webSearch: false });
   assert.ok(b.includes('workspace-write'));
@@ -650,9 +650,9 @@ test('codex_image: its sandbox is the run\'s own directory — /tmp and $TMPDIR 
 
 // --- web search per tool: review never, research by config ---------------------
 
-test('codex_code_review argv always holds web_search="disabled" and tools.web_search=false; codex_research follows webSearch (default live)', async () => {
+test('codex_code_review argv always holds web_search="disabled" and tools.web_search=false; codex_research follows webSearch (default: the CLI default mode)', async () => {
   const DISABLED = ['tools.web_search=false', 'web_search="disabled"'];
-  const LIVE = ['tools.web_search=true', 'web_search="live"'];
+  const LIVE = ['tools.web_search=true'];
   for (const [cfg, researchPair] of [[{}, LIVE], [{ webSearch: true }, LIVE], [{ webSearch: false }, DISABLED]]) {
     const dir = mkdtempSync(join(tmpdir(), 'omelette-codex-web-'));
     const argvLog = join(dir, 'argv.json');
@@ -664,14 +664,20 @@ test('codex_code_review argv always holds web_search="disabled" and tools.web_se
     assert.ok(!review.isError, review.text);
     const reviewArgv = JSON.parse(readFileSync(argvLog, 'utf8'));
     for (const x of DISABLED) assert.ok(reviewArgv.includes(x), `review under ${JSON.stringify(cfg)}: ${reviewArgv.join(' ')}`);
+    assert.ok(!reviewArgv.some((x) => /^web_search=/.test(x) && x !== 'web_search="disabled"'), `review never sets a web mode: ${reviewArgv.join(' ')}`);
     for (const x of LIVE) assert.ok(!reviewArgv.includes(x), `review under ${JSON.stringify(cfg)}: ${reviewArgv.join(' ')}`);
 
     const research = await rt.callTool('codex_research', { prompt: 'what is new' });
     assert.ok(!research.isError, research.text);
     const researchArgv = JSON.parse(readFileSync(argvLog, 'utf8'));
     for (const x of researchPair) assert.ok(researchArgv.includes(x), `research under ${JSON.stringify(cfg)}: ${researchArgv.join(' ')}`);
-    // The legacy key comes first, the setting codex-cli 0.156.1 honours second.
-    assert.ok(researchArgv.indexOf(researchPair[0]) < researchArgv.indexOf(researchPair[1]));
+    if (researchPair.length === 2) {
+      // Web off: the legacy key comes first, the setting codex-cli 0.156.1 honours second.
+      assert.ok(researchArgv.indexOf(researchPair[0]) < researchArgv.indexOf(researchPair[1]));
+    } else {
+      // Web on: no `web_search=` setting at all — the CLI's own default mode, as 1.3.0 ran.
+      assert.ok(!researchArgv.some((x) => /^web_search=/.test(x)), `research under ${JSON.stringify(cfg)} sets no web mode: ${researchArgv.join(' ')}`);
+    }
   }
 });
 
