@@ -275,7 +275,7 @@ Taken 2026-09-25 from every ledger under `.omelette/` (current and archived) and
 
 Reading: over five compactions the hook-authored parts — the nudge, the gate and the compaction summary — rescued nothing that the session had not already written itself, and the summary left three duplicate blocks in ledgers they do not belong to. The part that carried value is the cheapest one: printing the ledger tail at session start and after a compaction. The estimator behind the nudge (window detection, the transcript scan, `handoff-state.json`) is the largest piece of the guard and the source of [the window gap above](#the-guards-estimate-against-the-engine). N = 5, all manual: whether the nudge would earn its place under automatic compactions is not measured, because none has occurred.
 
-**Acted on in 1.5.0.** The nudge, the gate and the summary were removed; the stamp and the print stay. `hooks/omelette-guard.mjs` went from 1 929 lines / 95 871 bytes to 1 152 lines / 57 184 bytes (the rendered guard, `renderHookFile`, is the same file plus the marker line).
+**Acted on in 1.5.0.** The nudge, the gate and the summary were removed; the stamp and the print stay. `hooks/omelette-guard.mjs` went from 1 929 lines / 95 871 bytes to 1 152 lines / 57 184 bytes (the rendered guard, `renderHookFile`, has the same line count: the marker replaces the placeholder line).
 
 ## The Codex web default mode
 

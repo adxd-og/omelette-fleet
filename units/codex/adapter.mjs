@@ -86,6 +86,9 @@
  * system (a tracker, a deploy endpoint) would be reachable from a "read-only"
  * research call. Both `--ignore-user-config` and `--ignore-rules` (user /
  * project execpolicy `.rules` files) are therefore passed on every spawn.
+ * What the flag does NOT shut out: `~/.codex/hooks.json` still runs under
+ * `--ignore-user-config` (observed 2026-09-25, codex-cli 0.156.1) — the
+ * operator's file, named in SECURITY ("Configuration the fleet did not choose").
  * Verified live with ChatGPT auth (codex-cli 0.153.0, 2026-09-03): auth still
  * resolves through CODEX_HOME and `codex exec --ignore-user-config
  * --ignore-rules -s read-only --skip-git-repo-check --json
@@ -441,7 +444,7 @@ export default defineUnit({
       mutateGate: true,
       description:
         'Delegate a research / Q&A / summarization task to OpenAI Codex (local ' +
-        'codex CLI, ChatGPT subscription) WITH live web search. READ-ONLY at the ' +
+        'codex CLI, ChatGPT subscription) WITH web search in the CLI\'s default mode. READ-ONLY at the ' +
         'OS-sandbox level — Codex can read and search but physically cannot write, ' +
         'regardless of fleet config or of `cwd`. The run happens where `cwd` ' +
         'points when you give one, else in a fresh empty directory. ' +
