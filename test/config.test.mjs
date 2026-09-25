@@ -477,3 +477,23 @@ test('workflowSettings: the file value with its source, an invalid one warned an
   const dir = home({ workflow: { merge: 'pr' }, units: { codex: { timeoutS: 7 } } });
   assert.equal(unitConfig({ unit: 'codex', supportedModes: MODES_CODEX, env: { OMELETTE_HOME: dir } }).values.timeoutS, 7);
 });
+
+test('an agent model holding a C1 control or a bidi override is rejected — default kept, a warning; plain is accepted', async () => {
+  const { agentSettings } = await import('../core/rules.mjs');
+  const spec = AGENT_SETTINGS_SCHEMA.coder.model;
+  assert.deepEqual(coerce(spec, 'op\u009bus'), { ok: false });
+  assert.deepEqual(coerce(spec, 'opus‮'), { ok: false });
+  assert.deepEqual(coerce(spec, 'opus­'), { ok: false });
+  assert.deepEqual(coerce(spec, 'opus\u{e0041}'), { ok: false });
+  assert.deepEqual(coerce(spec, 'opus'), { ok: true, value: 'opus' });
+  for (const bad of ['op\u009bus', 'opus‮']) {
+    const dir = home({ agents: { coder: { model: bad } } });
+    const s = agentSettings({ OMELETTE_HOME: dir });
+    assert.equal(s.coder.model, 'opus');
+    assert.equal(s.sources.coder.model, 'default');
+    assert.ok(s.warnings.some((w) => w.startsWith('fleet config: agents.coder.model = ') && w.endsWith('is invalid — ignored')), s.warnings.join('\n'));
+  }
+  const good = agentSettings({ OMELETTE_HOME: home({ agents: { coder: { model: 'opus' } } }) });
+  assert.equal(good.sources.coder.model, 'file');
+  assert.deepEqual(good.warnings, []);
+});

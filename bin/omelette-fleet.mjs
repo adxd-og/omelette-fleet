@@ -49,6 +49,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../core/spawn.mjs';
+import { visible } from '../core/log.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
 import { changedSince, checkPointers, parseCommit, parsePointers, readBoundedFile } from '../core/check.mjs';
@@ -2590,18 +2591,9 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
   }
 }
 
-/**
- * A value read from project or user JSON, made safe to print: the goal is that
- * the terminal does nothing with doctor's output. Every C0/C1 control
- * character and DEL becomes its `\uXXXX` escape, and so do the line and
- * paragraph separators and the zero-width and bidi format characters, which
- * can hide or reorder what the operator reads (`.mcp.json` is project content
- * — a clone can carry `\u001b[2K` in a `command` and erase doctor's own
- * lines, or U+202E to turn a path around; 1.4.0 P3). It is not injective: a
- * value holding the six characters `\u001b` and a value holding a real ESC
- * print alike, and that is accepted — the output is for reading, not parsing.
- */
-const visible = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+// `visible` (core/log.mjs) is how every value read from project or user JSON,
+// the fleet config or the update-check cache is printed: the goal is that the
+// terminal does nothing with doctor's, show's or rules' output (1.4.0 P3, D-2).
 
 /**
  * What the registry says about this unit — and whether it is even ours (see
