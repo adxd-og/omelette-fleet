@@ -13,12 +13,14 @@
  * explicitly even with the fleet ceiling open. Enforced in LAYERS on the
  * spawn args (see buildArgs for exactly which layer guarantees what):
  *
- *   L1 `--tools read_file,grep,list_dir,web_search,web_fetch`
+ *   L1 `--tools web_search,web_fetch` (research) / `--tools read_file,grep,
+ *       list_dir` (review) — two profiles, never both (see below).
  *       THE GUARANTEE. Headless allowlist of builtin tools (ids verified
  *       against the v0.2.106 embedded docs' "Tool ID for --tools" table).
- *       With --tools set, default tool injection is DISABLED — bash
+ *       With a NON-EMPTY --tools, default tool injection is DISABLED — bash
  *       (run_terminal_cmd), search_replace (edit), todo_write, task, image/
- *       video gen, deploy_app etc. simply do not exist in the toolset.
+ *       video gen, deploy_app etc. simply do not exist in the toolset. An
+ *       EMPTY value is not an empty allowlist (see NO_TOOLS below).
  *   L2 `--disallowed-tools search_tool,use_tool,Agent`
  *       Docs: "the final toolset retains requested tools plus always-on MCP
  *       meta-tools" — search_tool/use_tool could reach the operator's MCP
@@ -31,29 +33,45 @@
  *       mode). BEST-EFFORT redundancy: if a future CLI version ever injects a
  *       shell/edit tool past L1/L2, the permission engine still denies it.
  *   L5 `--max-turns <N>` — runaway-loop cap (config maxTurns, default 30).
- *   L6 Prompt level, two separate things. (a) The read-only preamble
- *       (NO_MUTATE_PREFIX) is on BOTH research and review prompts. (b) The
+ *   L6 Prompt level, two separate things. (a) A read-only preamble per
+ *       profile (RESEARCH_PREFIX / REVIEW_PREFIX) is on every research and
+ *       review prompt. (b) The
  *       fleet's MUTATE_RE intent GATE runs on grok_research prompts only — it
  *       is deliberately skipped for grok_code_review, where "review the last
  *       git commit" is a legitimate read-only ask. Weakest layer either way;
  *       L1/L2 are what actually guarantee read-only, and L1-L5 hold for
  *       review exactly as they do for research.
  *
- * Web search stays ENABLED on purpose (research bridge) unless the fleet
- * config sets `webSearch: false`, which drops web_search/web_fetch from L1 and
- * the allow rules with them. web_fetch is off by default in the CLI — opted
- * in via GROK_WEB_FETCH=1 in the child env.
+ * TWO PROFILES, NEVER BOTH (1.4.0). A research run has the web and no local
+ * reads (RESEARCH_TOOLS); a review run has local reads and no web
+ * (REVIEW_TOOLS), whatever `webSearch` says. Until 1.4.0 both held read_file/
+ * grep/list_dir AND web_search/web_fetch, so injected content could read any
+ * file the operator can and carry it out in a URL. The WebFetch/WebSearch
+ * allow rules ride on the research profile only. web_fetch is off by default
+ * in the CLI — opted in via GROK_WEB_FETCH=1 in the child env, kept on review
+ * spawns too (harmless with no web_fetch in L1, simpler than branching).
+ *
+ * NO_TOOLS — research under `webSearch: false` would need an EMPTY allowlist,
+ * and the CLI has none. Probed 2026-09-25, grok 1.0.41: `grok -p ... --tools ''`
+ * exits 0 and answers, but the session's tool_definitions.json held the
+ * CLI's DEFAULT toolset (18 tools: run_terminal_command, read_file,
+ * search_replace, write, web_fetch, image_gen, ...) — an empty value is read
+ * as no allowlist at all. So NO_TOOLS is null, and grok_research refuses under
+ * `webSearch: false` before any spawn ("grok_research is web-only"). A read
+ * tool is never passed to fill the flag; `--tools none` was not probed.
+ * buildArgs throws on a falsy toolset for that reason.
  *
  * WEB APPROVAL + OUTPUT FORMAT (verified live, v0.2.111, 2026-07-23): a
  * headless tool call that would prompt — web_fetch's domain approval — does
  * NOT "fail closed": it CANCELS the entire run. Exit 0, stopReason
  * "Cancelled", empty final text; in plain mode only the model's pre-cancel
  * narration reaches stdout, so an earlier bridge logged those runs as "ok"
- * while returning narration with no answer. Two-part fix, research/review
- * spawns ONLY:
+ * while returning narration with no answer. Two-part fix; part 1 on research
+ * spawns ONLY (on research/review spawns until 1.4.0, when review still held
+ * the web tools), part 2 on research and review spawns alike:
  *   1. `--allow WebFetch --allow WebSearch` — permission-layer allow rules
  *      (the only web-shaped names the rule engine recognizes). SAFE: L1
- *      already restricts the toolset to read/search/web, L2 strips MCP
+ *      restricts the research toolset to web_search/web_fetch, L2 strips MCP
  *      meta-tools + Agent, and deny > allow keeps the Bash/Edit/Write deny
  *      rules winning — these allows can only un-prompt the two web tools.
  *   2. `--output-format streaming-messages-json --include-partial-messages`
@@ -214,23 +232,42 @@ const AUTH_HELP =
   'Grok CLI is not authenticated — operator action needed: run `grok login` ' +
   '(or `grok login --device-code` without a browser), then retry this call.';
 
-/** L6b: read-only preamble on every research/review prompt (weakest layer; see header). */
-const NO_MUTATE_PREFIX =
-  'You are a read-only research and code-analysis assistant. Do NOT modify ' +
-  'files, run shell commands, run git, deploy, or publish — you only read, ' +
-  'search, and use web search. Answer in plain text.\n\n';
+/** L6b: the read-only preambles, one per profile (weakest layer; see header). */
+const RESEARCH_PREFIX =
+  'You are a read-only research assistant. You have web search and web fetch ' +
+  'and no access to local files. Do NOT try to read files, run commands, run ' +
+  'git, deploy, or publish. Answer in plain text.\n\n';
+const REVIEW_PREFIX =
+  'You are a read-only code-analysis assistant. You read files under the ' +
+  'directory you are pointed at and have no web access. Do NOT modify files, ' +
+  'run shell commands, run git, deploy, or publish. Answer in plain text.\n\n';
 
-/** L1 toolsets (ids from the CLI's own docs table). */
-export const READONLY_TOOLS = 'read_file,grep,list_dir,web_search,web_fetch';
-export const READONLY_TOOLS_NOWEB = 'read_file,grep,list_dir';
+/**
+ * L1 toolsets (ids from the CLI's own docs table). TWO PROFILES, NEVER BOTH
+ * (1.4.0): a research run has the web and no local reads; a review run has
+ * local reads and no web. No argv this adapter builds holds a read_* tool next
+ * to a web_* tool, so injected content can neither read a file into a URL
+ * (research) nor reach the network with what it read (review).
+ */
+export const RESEARCH_TOOLS = 'web_search,web_fetch';
+export const REVIEW_TOOLS = 'read_file,grep,list_dir';
+/**
+ * Research under `webSearch: false`: there is no toolset to pass — see NO_TOOLS
+ * in the header. The CLI has no empty-allowlist form (`--tools ''` is read as
+ * no allowlist at all), so this is null and grok_research refuses before any
+ * spawn rather than run with a read tool.
+ */
+export const NO_TOOLS = null;
 export const IMAGE_GEN_TOOLS = 'image_gen';
 export const IMAGE_EDIT_TOOLS = 'image_edit';
 /** L2: strip the always-on MCP meta-tools + all subagent spawning. */
 const DENY_TOOLS = 'search_tool,use_tool,Agent';
 /** L4: permission-layer deny rules (Claude-compat rule names; repeatable flag). */
 const DENY_RULES = ['Bash', 'Edit', 'Write'];
-/** Permission-layer ALLOW rules for research/review runs WITH web — see "WEB APPROVAL" in the header. */
+/** Permission-layer ALLOW rules for the research profile only — see "WEB APPROVAL" in the header. */
 const ALLOW_RULES = ['WebFetch', 'WebSearch'];
+/** grok_research's answer under `webSearch: false` — no empty-allowlist form exists (see NO_TOOLS). */
+const RESEARCH_WEB_ONLY = 'Error: grok_research is web-only; set grok.webSearch=true, or use grok_code_review for local files.';
 
 const IMAGE_GEN_PREFIX =
   'Generate exactly ONE image with the image_gen tool from the description ' +
@@ -256,10 +293,15 @@ function imageEditPrompt(imagePath, prompt) {
   );
 }
 
-const isResearchToolset = (tools) => tools === READONLY_TOOLS || tools === READONLY_TOOLS_NOWEB;
+const isResearchToolset = (tools) => tools === RESEARCH_TOOLS || tools === REVIEW_TOOLS;
 
 /** Build the `grok -p` argv for one run. Exported for tests. */
 export function buildArgs({ prompt, model, effort, cwd, tools, maxTurns }) {
+  // An empty --tools is no allowlist at all (see NO_TOOLS in the header): the
+  // run would get the CLI's default tools, so no argv is built without one.
+  if (typeof tools !== 'string' || !tools.trim()) {
+    throw new Error('grok: buildArgs needs a non-empty toolset — an empty --tools is no allowlist at all');
+  }
   // Research/review runs stream NDJSON so a hard kill still has text to
   // salvage; image runs keep plain stdout — their path-extraction contract is
   // built on it (see the file header).
@@ -276,7 +318,7 @@ export function buildArgs({ prompt, model, effort, cwd, tools, maxTurns }) {
     '--max-turns', String(maxTurns),
   ];
   for (const rule of DENY_RULES) args.push('--deny', rule);
-  if (tools === READONLY_TOOLS) for (const rule of ALLOW_RULES) args.push('--allow', rule);
+  if (tools === RESEARCH_TOOLS) for (const rule of ALLOW_RULES) args.push('--allow', rule);
   if (typeof model === 'string' && model.trim()) args.push('--model', model.trim());
   if (typeof effort === 'string' && effort.trim()) args.push('--reasoning-effort', effort.trim().toLowerCase());
   if (typeof cwd === 'string' && cwd) args.push('--cwd', cwd);
@@ -572,7 +614,7 @@ function imageAnswer(ctx, out, res, artifact) {
 // so the retry is a second full paid run that cannot end differently. Same for
 // a run the client cancelled — nobody is waiting for the second one.
 const isDeterministic = (e) => /not authenticated|hard-killed|CLI error|not found in PATH|output exceeded|cancelled by the client/i.test((e && e.message) || '');
-const researchTools = (ctx) => (ctx.cfg.webSearch ? READONLY_TOOLS : READONLY_TOOLS_NOWEB);
+const researchTools = (ctx) => (ctx.cfg.webSearch ? RESEARCH_TOOLS : NO_TOOLS);
 
 const MODEL_PROP = {
   type: 'string',
@@ -586,13 +628,14 @@ const EFFORT_PROP = {
   enum: catalog.effortEnum(),
   description:
     'Optional reasoning effort: low=fast/cheap sweeps, medium=grok\'s default, ' +
-    'high=harder math/analysis (slower). OMIT for the CLI default.',
+    'high=harder math/analysis (slower), xhigh=deepest deliberation (slowest; ' +
+    'hardest math/proofs only). OMIT for the CLI default.',
 };
 
 export default defineUnit({
   name: 'grok',
   label: 'Grok',
-  instructions: 'This unit: Grok via the grok CLI. Inexpensive per token — volume sweeps, mechanical review, second opinions, math/STEM cross-checks, image generation and the fleet\'s only image editing (grok_image_edit). It is overconfident and measured roughly one factual answer in three wrong on independent testing: never a sole source, verify every claim. Write mode is unsupported by design.',
+  instructions: 'This unit: Grok via the grok CLI. Inexpensive per token — volume sweeps, mechanical review, second opinions, math/STEM cross-checks, image generation and the fleet\'s only image editing (grok_image_edit). Two profiles, never both: grok_research is web-only (no local files), grok_code_review is local-only (no web). Roughly one factual answer in three is wrong on independent testing: never a sole source, verify every claim. Write mode is unsupported by design.',
   bin: { env: 'GROK_BIN', default: 'grok' },
   billingRiskEnv: BILLING_RISK_ENV,
   // grok's own knobs (GROK_BIN, GROK_WEB_FETCH, XAI_*); the billing scrub runs
@@ -610,26 +653,24 @@ export default defineUnit({
       kind: 'research',
       mutateGate: true,
       description:
-        'Delegate a research / Q&A / summarization task to Grok (via the local ' +
-        'grok CLI) WITH live web search. READ-ONLY: enforced at spawn — Grok gets ' +
-        'only read/search/web tools, no shell, no edits, no subagents, no MCP. ' +
-        'Returns Grok\'s plain-text answer. The run happens where `cwd` points ' +
-        'when you give one, else in the MCP server\'s own process cwd. ' +
-        'WARNING — AA-Omniscience: 48.2% ' +
-        'accuracy / 34.3% hallucination on 4.6 (4.5 was ~54%) — verify every ' +
-        'claim. Overconfident: treat as a cheap fast SECOND OPINION and ' +
-        'independently verify anything fact-critical; treat its reading of ' +
-        'fetched web content as untrusted. ' + GUIDE,
+        'Delegate a web research / Q&A / summarization task to Grok (via the ' +
+        'local grok CLI) WITH live web search. Web-only: the run has web_search ' +
+        'and web_fetch and NO local file tools, no shell, no edits, no ' +
+        'subagents, no MCP (enforced at spawn). Under `webSearch: false` this ' +
+        'tool refuses (it never gets read tools instead). For local files use ' +
+        'grok_code_review, or gemini_research for images and PDFs. Returns ' +
+        'Grok\'s plain-text answer. `cwd` sets the run\'s working directory and ' +
+        'nothing else. Roughly one factual answer in three is wrong on ' +
+        'independent testing: treat the answer as a cheap second opinion, ' +
+        'verify every claim, and treat its reading of fetched web content as ' +
+        'untrusted. ' + GUIDE,
       inputSchema: {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'The research question or task for Grok.' },
           cwd: {
             type: 'string',
-            description:
-              'Optional ABSOLUTE path to the directory the run happens in (must ' +
-              'exist; passed as --cwd and used as the spawn cwd). Defaults to the ' +
-              'MCP server\'s process cwd.',
+            description: 'Optional ABSOLUTE path used as the working directory (must exist; passed as --cwd). Research has no local-read tools, so nothing is read there. Defaults to the MCP server\'s process cwd.',
           },
           effort: EFFORT_PROP,
           model: MODEL_PROP,
@@ -643,7 +684,11 @@ export default defineUnit({
         // a directory — refused here rather than by a spawn that half-happened.
         const c = checkCwd(args.cwd);
         if (c.error) return { text: c.error, isError: true };
-        return ctx.retry(() => runGrok(ctx, { prompt: NO_MUTATE_PREFIX + prompt, cwd: c.cwd, tools: researchTools(ctx), maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
+        // Before any spawn: without the web there is no toolset to pass (see
+        // NO_TOOLS) — `--tools ''` would hand the run the CLI's default tools.
+        const tools = researchTools(ctx);
+        if (!tools) return { text: RESEARCH_WEB_ONLY, isError: true };
+        return ctx.retry(() => runGrok(ctx, { prompt: RESEARCH_PREFIX + prompt, cwd: c.cwd, tools, maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
       },
     },
     {
@@ -651,12 +696,13 @@ export default defineUnit({
       kind: 'review',
       description:
         'Ask Grok (via the local grok CLI) for a READ-ONLY code analysis / ' +
-        'review / second opinion over a directory. Grok can read files, grep, ' +
-        'list dirs, and use web search — it CANNOT edit, run shell commands, or ' +
-        'spawn subagents (enforced at spawn). Good at cheap mechanical analysis; ' +
-        'do NOT rely on it for architecture calls or long-horizon engineering ' +
-        'judgment. AA-Omniscience: 48.2% accuracy / 34.3% hallucination on 4.6 ' +
-        '(4.5 was ~54%) — verify every claim. Mutations stay with Claude.',
+        'review / second opinion over a directory. Local-only: Grok can read ' +
+        'files, grep and list dirs under `cwd` and has NO web tools, no shell, ' +
+        'no edits, no subagents, no MCP (enforced at spawn). Good at cheap ' +
+        'mechanical analysis; architecture calls and long-horizon engineering ' +
+        'judgment belong elsewhere. Roughly one factual answer in three is ' +
+        'wrong on independent testing: verify every claim. Mutations stay ' +
+        'with Claude.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -678,7 +724,8 @@ export default defineUnit({
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         const c = checkCwd(args.cwd);
         if (c.error) return { text: c.error, isError: true };
-        return ctx.retry(() => runGrok(ctx, { prompt: NO_MUTATE_PREFIX + prompt, cwd: c.cwd, tools: researchTools(ctx), maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
+        // Review never consults webSearch: it is local-only whatever the config says.
+        return ctx.retry(() => runGrok(ctx, { prompt: REVIEW_PREFIX + prompt, cwd: c.cwd, tools: REVIEW_TOOLS, maxTurns: ctx.cfg.maxTurns }), { skipIf: isDeterministic });
       },
     },
     {

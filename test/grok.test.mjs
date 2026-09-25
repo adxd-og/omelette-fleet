@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit, {
   buildArgs, interpretGrok, parseStream, catalog, GROK_OUTPUT_CAP,
-  READONLY_TOOLS, READONLY_TOOLS_NOWEB, IMAGE_GEN_TOOLS,
+  RESEARCH_TOOLS, REVIEW_TOOLS, NO_TOOLS, IMAGE_GEN_TOOLS,
 } from '../units/grok/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
@@ -36,9 +36,9 @@ const stream = (...lines) => lines.join('\n') + '\n';
 const USAGE = { input_tokens: 10867, output_tokens: 524, cache_read_input_tokens: 128 };
 
 test('buildArgs: research runs stream NDJSON and carry every layer L1-L5 plus the web allow rules', () => {
-  const a = buildArgs({ prompt: 'p', model: 'grok-4.6', effort: 'high', cwd: '/tmp', tools: READONLY_TOOLS, maxTurns: 30 });
+  const a = buildArgs({ prompt: 'p', model: 'grok-4.6', effort: 'high', cwd: '/tmp', tools: RESEARCH_TOOLS, maxTurns: 30 });
   assert.deepEqual(a.slice(0, 5), ['-p', 'p', '--output-format', 'streaming-messages-json', '--include-partial-messages']);
-  assert.ok(a.includes('--tools') && a[a.indexOf('--tools') + 1] === READONLY_TOOLS);
+  assert.equal(a[a.indexOf('--tools') + 1], 'web_search,web_fetch');
   assert.equal(a[a.indexOf('--disallowed-tools') + 1], 'search_tool,use_tool,Agent');
   assert.ok(a.includes('--no-subagents'));
   assert.equal(a[a.indexOf('--max-turns') + 1], '30');
@@ -49,14 +49,14 @@ test('buildArgs: research runs stream NDJSON and carry every layer L1-L5 plus th
   assert.equal(a[a.indexOf('--cwd') + 1], '/tmp');
 });
 
-test('buildArgs: no-web research still streams; image runs stay plain with an image-only toolset', () => {
-  const noweb = buildArgs({ prompt: 'p', tools: READONLY_TOOLS_NOWEB, maxTurns: 30 });
-  assert.equal(noweb[noweb.indexOf('--output-format') + 1], 'streaming-messages-json');
-  assert.ok(noweb.includes('--include-partial-messages'));
-  assert.equal(noweb.filter((x) => x === '--allow').length, 0);
+test('buildArgs: review runs are local-only with no allow rule; image runs stay plain with an image-only toolset', () => {
+  const review = buildArgs({ prompt: 'p', tools: REVIEW_TOOLS, maxTurns: 30 });
+  assert.equal(review[review.indexOf('--tools') + 1], 'read_file,grep,list_dir');
+  assert.equal(review[review.indexOf('--output-format') + 1], 'streaming-messages-json');
+  assert.equal(review.filter((x) => x === '--allow').length, 0);
   const img = buildArgs({ prompt: 'p', tools: IMAGE_GEN_TOOLS, maxTurns: 8 });
   assert.equal(img[img.indexOf('--output-format') + 1], 'plain');
-  assert.ok(!img.includes('--include-partial-messages')); // the path-extraction contract is built on plain stdout
+  assert.ok(!img.includes('--include-partial-messages'));
   assert.equal(img[img.indexOf('--tools') + 1], 'image_gen');
   assert.equal(img.filter((x) => x === '--allow').length, 0);
   assert.ok(!img.includes('--always-approve'));
@@ -468,19 +468,27 @@ test('runtime with a fake grok: the streamed answer is assembled, usage reaches 
   );
   assert.equal(rt.cfgFor().values.mode, 'read-only'); // refused: unsupported by the unit
   const r = await rt.callTool('grok_research', { prompt: 'q' });
-  assert.match(r.text, /^ARGS /); // the deltas / result line assembled back into one answer
-  assert.match(r.text, /--output-format streaming-messages-json --include-partial-messages/);
-  assert.match(r.text, /--tools read_file,grep,list_dir --/); // webSearch:false → no web tools
-  assert.doesNotMatch(r.text, /--allow/);
-  assert.match(r.text, /--max-turns 12/);
-  assert.match(r.text, /WEBFETCH=1/);
+  // webSearch:false → research refuses before any spawn: the CLI has no
+  // empty-allowlist form (`--tools ''` is read as no allowlist at all), and a
+  // read tool is never passed to fill the flag.
+  assert.match(r.text, /^Error: grok_research is web-only/);
+  assert.equal(r.isError, true);
+  // Review under the same config keeps its local tools and gains no web ones;
+  // it is the spawned run the rest of this test reads.
+  const rv = await rt.callTool('grok_code_review', { prompt: 'q' });
+  assert.match(rv.text, /--tools read_file,grep,list_dir --/);
+  assert.doesNotMatch(rv.text, /--allow|web_search|web_fetch/);
+  assert.match(rv.text, /^ARGS /); // the deltas / result line assembled back into one answer
+  assert.match(rv.text, /--output-format streaming-messages-json --include-partial-messages/);
+  assert.match(rv.text, /--max-turns 12/);
+  assert.match(rv.text, /WEBFETCH=1/);
   const snapshot = JSON.parse(readFileSync(join(dir, 'status-grok.json'), 'utf8'));
   assert.deepEqual(snapshot.lastEvent.usage, { input: 11, output: 7 }); // Grok reported no usage before 0.3.1
   // A count the run never reported reads as "?" in the log, never "null".
   const stderrWrite = process.stderr.write.bind(process.stderr);
   let logged = '';
   process.stderr.write = (chunk, ...rest) => { logged += chunk; return stderrWrite(chunk, ...rest); };
-  try { await rt.callTool('grok_research', { prompt: 'OUTPUT_ONLY' }); } finally { process.stderr.write = stderrWrite; }
+  try { await rt.callTool('grok_code_review', { prompt: 'OUTPUT_ONLY' }); } finally { process.stderr.write = stderrWrite; }
   assert.match(logged, /grok done · tokens in=\? out=7/);
   const bad = await rt.callTool('grok_image_edit', { prompt: 'x', imagePath: 'nope.jpg' });
   assert.match(bad.text, /must be an absolute path/);
