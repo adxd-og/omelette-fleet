@@ -87,13 +87,13 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  * `git` invocation that writes history, a ref, a stash or a worktree. Matched
  * against real git syntax rather than its tidiest form, and read the way the
  * shell reads the command — the comments come off (withoutComments), the rest
- * becomes words, separators, redirections and command substitutions in one pass
- * (tokenize), and every `git … <subcommand>` in those words is found with its
- * own arguments (invocations). Then:
+ * becomes words, separators, redirections and command and process substitutions
+ * in one pass (tokenize), and every `git … <subcommand>` in those words is found
+ * with its own arguments (invocations). Then:
  *   - a subcommand in WRITES_HISTORY writes, whatever follows it;
- *   - `branch`, `checkout`, `switch`, `tag` and `rebase` are read by their
- *     ARGUMENTS, because a flag anywhere among them decides what they do — see
- *     branchWrites, createsBranch, tagWrites and rebaseWrites below;
+ *   - `branch`, `checkout`, `switch`, `tag`, `rebase`, `reset` and
+ *     `symbolic-ref` are read by their ARGUMENTS, because a flag or a name
+ *     among them decides what they do — see WRITES_BY_ARGUMENTS below;
  *   - and a longer subcommand that merely starts like one of these is NOT it:
  *     `git commit-tree` writes an object and commits nothing, and `merge-base`
  *     only computes — hence the `(?![\w-])` in SUBCOMMAND.
@@ -103,8 +103,12 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  * or `$(which git)` are deliberately out of scope. See docs/SECURITY.md.
  */
 
-/** Subcommands that create a commit, or move a stash / worktree — nothing after them makes them read-only. */
-const WRITES_HISTORY = new Set(['commit', 'merge', 'cherry-pick', 'revert', 'am', 'pull', 'push', 'stash', 'worktree']);
+/**
+ * Subcommands that create a commit, move a stash or a worktree, or set or delete
+ * a ref by hand (`update-ref`, `-d` included) — nothing after them makes them
+ * read-only.
+ */
+const WRITES_HISTORY = new Set(['commit', 'merge', 'cherry-pick', 'revert', 'am', 'pull', 'push', 'stash', 'worktree', 'update-ref']);
 
 /**
  * The options git accepts BEFORE the subcommand, one word each. GLOBAL_VALUED
@@ -159,10 +163,11 @@ function withoutComments(command) {
 const SEPARATORS = new Set([';', '&', '|', '\n', '\r']);
 
 /**
- * Where the command substitution opened at `start` — `$(` or a backquote — ends:
- * the index of its closing `)` or backquote, or the command's length when it
- * never closes. `$(…)` nests, so its parentheses are counted, outside quotes;
- * a backquoted one ends at the next backquote that no backslash escapes.
+ * Where the substitution opened at `start` — `$(`, `<(`, `>(` or a backquote —
+ * ends: the index of its closing `)` or backquote, or the command's length when
+ * it never closes. A parenthesised one nests, so its parentheses are counted,
+ * outside quotes; a backquoted one ends at the next backquote that no backslash
+ * escapes.
  */
 function substitutionEnd(command, start) {
   if (command[start] === '`') {
@@ -200,7 +205,10 @@ function substitutionEnd(command, start) {
  * read as a command. So `git checkout $(git tag -l v1) -b new` is a checkout
  * whose start point comes from a listing, and `-b new` is the checkout's; `git
  * -C $(git rev-parse --show-toplevel) commit` commits. What a substitution
- * PRINTS is not known here and is not guessed at: it is one word, no flag.
+ * PRINTS is not known here and is not guessed at: it is one word, no flag. A
+ * process substitution, `<(…)` or `>(…)`, is read exactly the same way — `diff
+ * <(git tag -l) <(git branch -l)` is a diff of two listings — and so is one in
+ * a redirection's target: `echo x > >(git commit -m y)` commits.
  *
  * A REDIRECTION IS THE SHELL'S. An unquoted `<`, `>`, `>>`, `>|`, `<>`, `&>`,
  * `&>>`, `>&`, `<&`, `<<`, `<<-` or `<<<` ends the word before it, takes a
@@ -208,12 +216,11 @@ function substitutionEnd(command, start) {
  * (`>--abort`) or after a space — its TARGET. git sees neither, so a target is
  * no word at all: `git tag t > --list` creates `t`, and `git tag > tags.txt`
  * lists. A substitution or a quoted word inside a target is still handed back
- * (`> $(git tag v1)`); a `<(` or `>(` is a process substitution and no
- * redirection at all.
+ * (`> $(git tag v1)`, `< <(git commit)`): the word goes, what it runs does not.
  *
  * @returns {object} `{ tokens, spans }`: each token `{ text, quoted, separator }`,
  *   each span a text to read again as a command — a quoted word with its quotes
- *   off, or what a command substitution runs
+ *   off, or what a command or process substitution runs
  */
 function tokenize(command) {
   const tokens = [];
@@ -240,9 +247,9 @@ function tokenize(command) {
     }
     if (c === '"' || c === "'") { quoted = quoted || !text; text += c; quote = c; continue; }
     const next = command[i + 1] ?? '';
-    if ((c === '$' && next === '(') || c === '`') {
+    if (((c === '$' || c === '<' || c === '>') && next === '(') || c === '`') {
       const end = substitutionEnd(command, i);
-      const open = c === '`' ? '`' : '$(';
+      const open = c === '`' ? '`' : `${c}(`;
       spans.push(command.slice(i + open.length, end));
       // Its bare delimiters, never longer than what they stand for, so a word
       // read again is never longer than the one it came from.
@@ -250,7 +257,7 @@ function tokenize(command) {
       i = end;
       continue;
     }
-    if (((c === '<' || c === '>') && next !== '(') || (c === '&' && next === '>')) {
+    if (c === '<' || c === '>' || (c === '&' && next === '>')) {
       if (/^\d+$/.test(text)) text = ''; else push(); // `2>`: the fd number is part of the operator
       if (c === '&') i++; //                             `&>`, `&>>`: the `>` comes next
       const follows = (chars) => i + 1 < command.length && chars.includes(command[i + 1]);
@@ -664,6 +671,54 @@ const createsBranch = ({ short, long }) => (args) => {
   return false;
 };
 
+/**
+ * `git reset` MODES that rewrite the working tree to a commit — HEAD's, or the
+ * one named, which the branch then moves to. The tree matches that commit after
+ * one, so `git status --porcelain` reads clean: work thrown away or a moved
+ * HEAD leaves nothing for the session's check to see. The other modes — plain,
+ * `--soft`, `--mixed`, `reset <commit> -- <path>` — leave the tree alone and
+ * stay allowed: given a commit they move the branch too, but what the commits
+ * held then shows in `git status` as changes.
+ */
+const RESET_REWRITES_TREE = new Set(['--hard', '--merge', '--keep']);
+
+/** Does this `git reset` rewrite the tree? A mode flag does, anywhere before a bare `--`; behind it every word is a path. */
+function resetWrites(args) {
+  for (const { text } of args) {
+    const token = unquote(text);
+    if (token === '--') return false;
+    if (RESET_REWRITES_TREE.has(token)) return true;
+  }
+  return false;
+}
+
+/**
+ * Does this `git symbolic-ref` write? With ONE name it reads what that name
+ * points at (`git symbolic-ref --short HEAD`); with two it points the first at
+ * the second (`git symbolic-ref HEAD refs/heads/x` moves HEAD, and the tree does
+ * not change), and `-d`/`--delete` deletes it. `-m` takes the reason as its
+ * value, attached or as the next word — the last letter of a short cluster as
+ * elsewhere — and a bare `--` leaves every word after it a name.
+ */
+function symbolicRefWrites(args) {
+  let names = 0;
+  let afterSeparator = false;
+  let takesValue = false;
+  for (const { text } of args) {
+    if (takesValue) { takesValue = false; continue; } // the previous option's value
+    const token = unquote(text);
+    if (afterSeparator || token === '-' || !token.startsWith('-')) { names++; continue; }
+    if (token === '--') { afterSeparator = true; continue; }
+    if (token === '--delete') return true;
+    if (token.startsWith('--')) continue;
+    for (let k = 1; k < token.length; k++) {
+      if (token[k] === 'd') return true;
+      if (token[k] === 'm') { takesValue = k === token.length - 1; break; }
+    }
+  }
+  return names >= 2;
+}
+
 /** The subcommands read by their arguments, and the question each one is asked. */
 const WRITES_BY_ARGUMENTS = new Map([
   ['branch', branchWrites],
@@ -671,6 +726,8 @@ const WRITES_BY_ARGUMENTS = new Map([
   ['switch', createsBranch(SWITCH_CREATES)],
   ['tag', tagWrites],
   ['rebase', rebaseWrites],
+  ['reset', resetWrites],
+  ['symbolic-ref', symbolicRefWrites],
 ]);
 
 /**
@@ -684,18 +741,20 @@ const SUBCOMMAND = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUMENTS.ke
 
 /**
  * The subcommands that WRITE when xargs feeds them: what decides each one is in
- * its arguments — a name for `tag` and `branch`, a flag anywhere for all four —
- * and under xargs those arguments are lines of input the command never shows:
- * `xargs git tag < names.txt` creates a tag per line. `rebase` needs no entry:
- * its own reading refuses every rebase but an undo or explain word, and git
- * takes that word only as the whole argument list, so anything xargs appends
- * turns it into a usage error.
+ * its arguments — a name for `tag` and `branch`, a second name for
+ * `symbolic-ref`, a flag anywhere for all five — and under xargs those
+ * arguments are lines of input the command never shows: `xargs git tag <
+ * names.txt` creates a tag per line. `rebase` needs no entry: its own reading
+ * refuses every rebase but an undo or explain word, and git takes that word
+ * only as the whole argument list, so anything xargs appends turns it into a
+ * usage error. Nor does `reset`: it writes only by one of three mode flags, and
+ * what xargs hands it is paths or a commit.
  */
-const FED_BY_XARGS_WRITES = new Set(['branch', 'checkout', 'switch', 'tag']);
+const FED_BY_XARGS_WRITES = new Set(['branch', 'checkout', 'switch', 'symbolic-ref', 'tag']);
 
 /**
- * How deep a quoted word or a command substitution is read again inside
- * another. `sh -c "bash -c 'git push'"` is two levels, and joined pieces
+ * How deep a quoted word or a command or process substitution is read again
+ * inside another. `sh -c "bash -c 'git push'"` is two levels, and joined pieces
  * (`'"'"'`) or nested `$(…)` let the shell go deeper — without end, which the
  * scan must not follow. A level is never longer than the one it came from, so
  * each adds at most one more reading of the command; past the last, a text that
@@ -706,10 +765,10 @@ const QUOTE_DEPTH = 4;
 /**
  * Everything a guarded role may not run, in one question: the comments come off,
  * the command is tokenized once, and each invocation is answered — a history
- * writer always, one fed by xargs when FED_BY_XARGS_WRITES names it, the other
- * five by their arguments. Then every quoted word and every command substitution
- * is asked the same question, because `sh -c 'git commit'` and `$(git commit)`
- * run it. Each step is a single pass and there are at most QUOTE_DEPTH + 1
+ * writer always, one fed by xargs when FED_BY_XARGS_WRITES names it, the others
+ * by their arguments (WRITES_BY_ARGUMENTS). Then every quoted word and every
+ * command or process substitution is asked the same question, because `sh -c
+ * 'git commit'`, `$(git commit)` and `>(git commit)` run it. Each step is a single pass and there are at most QUOTE_DEPTH + 1
  * levels, so a 10 KB command costs milliseconds and is never tiled.
  */
 const forbidden = (raw, depth = 0) => {

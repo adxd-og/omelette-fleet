@@ -1219,3 +1219,64 @@ test('PreToolUse: a tag, branch, checkout or switch fed its arguments by xargs i
     assert.equal(r.err, '');
   }
 });
+
+/*
+ * 1.3.0 release re-review, round 3: a process substitution in a redirection's
+ * target, and the git writes that move HEAD or a ref with nothing left in the
+ * tree for `git status --porcelain` to see.
+ */
+test('PreToolUse: a process substitution is read as a command of its own wherever it sits — a redirection\'s target included', () => {
+  const g = guard();
+  for (const command of [
+    'echo x > >(git commit -m y)',
+    'cat < <(git commit -m x)',
+    'make &> >(git push)',
+    'exec > >(git tag v1)',
+    'while read l; do :; done < <(git commit -m x)',
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 2, `${command} should be blocked: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), REFUSAL('omelette-coder'));
+  }
+  for (const command of ['diff <(git tag -l) <(git branch -l)', 'cat <(git log -1)']) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, 0, `${command} should pass: ${r.out}${r.err}`);
+    assert.equal(r.err, '');
+  }
+});
+
+test('PreToolUse: a reset that rewrites the tree, update-ref and a writing symbolic-ref are refused for every guarded role; the index resets and the reads pass', () => {
+  const g = guard();
+  for (const agent of ['omelette-coder', 'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer']) {
+    for (const command of [
+      // Each moves HEAD or a ref, and `git status --porcelain` reads clean after it.
+      'git reset --hard HEAD~1',
+      'git reset --merge x',
+      'git reset --keep x',
+      'git reset -q --hard',
+      'git update-ref refs/heads/main HEAD~1',
+      'git update-ref -d refs/heads/x',
+      'git symbolic-ref HEAD refs/heads/x',
+      'git symbolic-ref -m reason HEAD refs/heads/x',
+      'git symbolic-ref -d HEAD',
+    ]) {
+      const r = fire(g.path, preToolUse({ agent_type: agent, tool_input: { command } }));
+      assert.equal(r.code, 2, `${agent}: ${command} should be blocked: ${r.out}${r.err}`);
+      assert.equal(r.err.trim(), REFUSAL(agent), 'the refusal names the agent that was caught');
+    }
+    for (const command of [
+      'git reset',
+      'git reset --soft',
+      'git reset HEAD -- file',
+      'git reset --mixed',
+      // A path called `--hard` behind a bare `--` is a path.
+      'git reset -- --hard',
+      'git symbolic-ref --short HEAD',
+      'git symbolic-ref HEAD',
+    ]) {
+      const r = fire(g.path, preToolUse({ agent_type: agent, tool_input: { command } }));
+      assert.equal(r.code, 0, `${agent}: ${command} should pass: ${r.out}${r.err}`);
+      assert.equal(r.err, '');
+    }
+  }
+});
