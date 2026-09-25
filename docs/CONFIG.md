@@ -8,7 +8,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | What does the whole config file look like? | [Shape](#shape) |
 | What do `contract` and `updateCheck` control? | [Top-level settings](#top-level-settings) |
 | How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |
-| How do I configure the auto-handoff threshold and window? | [Handoff settings](#handoff-settings) |
+| How do I switch the handoff hooks off? | [Handoff settings](#handoff-settings) |
 | What do the handoff hooks do to my ledger, and when? | [The handoff hooks](#the-handoff-hooks) |
 | How do I set whether the session merges or opens a PR? | [Workflow settings](#workflow-settings) |
 | What config keys exist and what do they default to? | [Keys](#keys) |
@@ -53,7 +53,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
     "tester": { "model": "sonnet", "effort": "xhigh", "maxTurns": 80 },
     "reviewer": { "model": "opus", "effort": "xhigh" }
   },
-  "handoff": { "enabled": true, "threshold": 90, "contextWindow": 0, "compactSummary": true },
+  "handoff": { "enabled": true },
   "workflow": { "merge": "session" },
   "units": {
     "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
@@ -63,7 +63,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 }
 ```
 
-`defaults` applies to every unit; `units.<unit>` overrides it for one unit. Both accept the same keys. `agents` is a separate top-level block that has nothing to do with the units — it configures the Claude Code sub-agent definitions this package ships, and is described [below](#agent-settings). `handoff` is the third top-level block and configures the guard hook's auto-handoff, described [below](#handoff-settings). `workflow` is the fourth, and it decides one sentence of the rules file — how a finished feature branch reaches main — described [below](#workflow-settings). A `version` higher than 1 is accepted with a warning — known keys still apply, unknown ones are ignored.
+`defaults` applies to every unit; `units.<unit>` overrides it for one unit. Both accept the same keys. `agents` is a separate top-level block that has nothing to do with the units — it configures the Claude Code sub-agent definitions this package ships, and is described [below](#agent-settings). `handoff` is the third top-level block and switches the guard hook's two ledger hooks, described [below](#handoff-settings). `workflow` is the fourth, and it decides one sentence of the rules file — how a finished feature branch reaches main — described [below](#workflow-settings). A `version` higher than 1 is accepted with a warning — known keys still apply, unknown ones are ignored.
 
 ### Top-level settings
 
@@ -133,29 +133,24 @@ Validation is deliberately forgiving in one direction: an unknown agent, an unkn
 
 ### Handoff settings
 
-The `handoff` block configures the other managed file that is rendered rather than read at call time: the guard hook's auto-handoff, which asks for the `## Handoff` block once the session's context passes a threshold and holds one `Stop` until it is written. What each hook does with these values: [The handoff hooks](#the-handoff-hooks).
+The `handoff` block configures the other managed file that is rendered rather than read at call time: the guard hook's two ledger hooks, the `PreCompact` stamp and the `SessionStart` print. What each does: [The handoff hooks](#the-handoff-hooks).
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `handoff.enabled` | boolean | `true` | `false` renders a guard whose `PostToolUse` and `Stop` handlers do nothing at all |
-| `handoff.threshold` | integer 50–99 | `90` | Percent of the context window at which the reminder fires. Below 50 it arrives before there is anything to hand off; 100 would never arrive |
-| `handoff.contextWindow` | integer ≥ 0 | `0` | The window to measure against. **`0` means resolve it at run time**: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, then `autoCompactWindow` in your Claude Code user settings (`~/.claude/settings.json` or `$CLAUDE_CONFIG_DIR`, the `.local` file first), then a model id ending in `[1m]` — `ANTHROPIC_MODEL`, then the `model` key of those same two files — which is 1 000 000, then Claude Code's 200 000. The first two accept the `500k` / `1m` forms |
-| `handoff.compactSummary` | boolean | `true` | `false` renders a guard whose `PostCompact` handler does nothing. With it on, the summary Claude Code writes after a compaction is appended to every `.omelette/ledger-*.md` under `## Compaction summary <ISO> (trigger: …)`, bounded to 8 KB. Independent of `handoff.enabled`, which is the nudge and the gate |
+| `handoff.enabled` | boolean | `true` | `false` renders a guard that neither stamps the ledgers on `PreCompact` nor prints their tails on `SessionStart`; the git guard is unaffected |
 
-The guard imports nothing from this package — it is one file copied into a project — so these four values are **substituted into the script** at `rules --hooks` time, exactly the way the agent definitions get theirs. A change here reaches a session on the next re-render, and not before:
+The guard imports nothing from this package — it is one file copied into a project — so the value is **substituted into the script** at `rules --hooks` time, exactly the way the agent definitions get theirs, and it reaches a session on the next `rules --hooks`, not before:
 
 ```bash
-omelette-fleet show handoff                 # values and where each came from
-omelette-fleet set handoff.threshold=85
+omelette-fleet show handoff                 # the value and where it came from
+omelette-fleet set handoff.enabled=false
 omelette-fleet rules --hooks                # re-render the guard, then paste nothing: the wiring is unchanged
 omelette-fleet doctor | grep '^handoff'     # what the INSTALLED guard will do
 ```
 
-`doctor` reads the numbers back out of the installed script rather than out of this file, because the version marker cannot tell a stale threshold from a current one — a changed value renders at the same version. So `handoff       nudge at 90% of 200000 (default) · Stop gate on · summary on · ledgers: 1` is a statement about the hook, and `set` without `rules --hooks` visibly does not move it. `summary on|off` is `handoff.compactSummary` read out of the same literal; a guard rendered before 0.3.7 carries no such key and reads as `on`, which is what a guard running that literal would compute — the `hooks` line above it is already asking for the re-render. The ceiling's source is named in parentheses: `handoff.contextWindow`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `autoCompactWindow`, `model[1m]` or `default`.
+`doctor` reads the value back out of the installed script rather than out of this file, because the version marker cannot tell a stale switch from a current one — a changed value renders at the same version. So `handoff       stamp and print on · ledgers: 1` is a statement about the hook, and `set` without `rules --hooks` visibly does not move it.
 
-**The `[1m]` step.** Claude Code writes the model it is running into your settings, suffix and all, and that suffix is the window: a value ending in `[1m]` — `claude-opus-5[1m]`, case aside and whitespace trimmed — is 1 000 000 tokens. It is read from `ANTHROPIC_MODEL` first and then from the `model` key of the same two user-scope files, and only once `autoCompactWindow` has said nothing: a window you capped on purpose is a window you meant. Nothing else about the id is read and no list of model names is kept, so a model this package has never heard of still says what its suffix says, and the id itself is never printed. The step exists because the alternative was worse than useless: a 1M session measured against 200 000 reads as 144 % full, and the reminder fires on the first tool call of the day. **A `[1m]` passed only on the command line — `claude --model …[1m]` — is invisible to a hook**, which sees the environment and your settings files and never the client's argv; that session wants `handoff.contextWindow` or the setting.
-
-Two things the block cannot switch on: the hook is silent unless the project keeps a `.omelette/ledger-*.md` (that file is the opt-in, and `doctor` says `ledgers: none (hook silent — start .omelette/ledger-<plan>.md)` when there is none), and it is silent inside a sub-agent, which has no ledger of its own. Validation is the same as everywhere else: an invalid value is a warning and the default, and `set` refuses it outright.
+`handoff.threshold`, `handoff.contextWindow` and `handoff.compactSummary` left with the estimator in 1.5.0: a config file that still carries one gets a warning per key and the key is ignored, and `set` refuses them. The hooks are silent unless the project keeps a `.omelette/ledger-*.md` — that file is the opt-in, and `doctor` says `ledgers: none (hook silent — start .omelette/ledger-<plan>.md)` when there is none. Validation is the same as everywhere else: an invalid value is a warning and the default, and `set` refuses it outright.
 
 ### Workflow settings
 
@@ -182,21 +177,16 @@ Validation is the same as everywhere else: an invalid value is a warning (`omele
 
 ## The handoff hooks
 
-What `omelette-fleet rules --hooks` does for the ledger, event by event. The rules file keeps only the obligations; the mechanism is here. Every handler reads `<session cwd>/.omelette/ledger-*.md` — the directory the session runs in, not the repository the plan is about — so **a ledger kept in another repository gets neither the stamp nor the print**. None of it happens unless `.omelette/` holds a `ledger-*.md`: that file is the opt-in.
+What `omelette-fleet rules --hooks` does for the ledger, event by event. The rules file keeps only the obligations; the mechanism is here. Both handlers read `<session cwd>/.omelette/ledger-*.md` — the directory the session runs in, not the repository the plan is about — so **a ledger kept in another repository gets neither the stamp nor the print**. None of it happens unless `.omelette/` holds a `ledger-*.md`: that file is the opt-in.
 
 | Event | What the guard does | Bounds and switch |
 |---|---|---|
-| `PreCompact` | Appends `## Compaction <ISO> (trigger: …) — re-read this ledger before continuing` to every ledger, announced compaction or not, and drops this session's threshold crossing | Regular files only: a symlink or a FIFO named like a ledger is skipped. Silent when no ledger exists (nothing stamped, nothing announced); otherwise on whenever the guard is wired |
-| `SessionStart`, matcher `compact` | Prints each ledger's **last handoff block** into the context that opens after the compaction, so the re-read is a paste rather than a search | Only for the source `compact`; 40 lines / 4 KB per ledger, 12 KB in all |
-| `PostToolUse` | Reads the last request's token usage out of the session transcript; once the context passes `handoff.threshold` (90 % by default) of the window `handoff.contextWindow` resolves to ([Handoff settings](#handoff-settings)), puts one line into the context asking for a `## Handoff` block now | Once per crossing; silent in a sub-agent; `handoff.enabled=false` turns it off |
-| `Stop` | Refuses the first `Stop` after the crossing while no `## Handoff` has been appended since; stop again and the turn ends | Once per crossing; silent in a sub-agent; `handoff.enabled=false` turns it off |
-| `PostCompact` | Appends Claude Code's own summary of the compaction to every ledger under `## Compaction summary <ISO> (trigger: …)`: the account of what the context dropped, kept where the plan is kept | Bounded to 8 KB; `handoff.compactSummary=false` turns it off |
+| `PreCompact` | Appends `## Compaction <ISO> (trigger: …) — re-read this ledger before continuing` to every ledger, announced compaction or not | Regular files only: a symlink or a FIFO named like a ledger is skipped. Silent when no ledger exists (nothing stamped, nothing announced); `handoff.enabled=false` turns it off |
+| `SessionStart`, matcher `compact` | Prints each ledger's **last handoff block** into the context that opens after the compaction, so the re-read is a paste rather than a search | Only for the source `compact`; 40 lines / 4 KB per ledger, 12 KB in all; `handoff.enabled=false` turns it off |
 
-**The summary is not a handoff.** Its heading is deliberately not `## Handoff`, and a heading quoted inside it is escaped on the way in, so the `SessionStart` print and the `Stop` gate both ignore it: the handoff block is still yours to write.
+**What the hooks do not do.** They stamp and they print the block you wrote. Nothing measures the context and nothing holds a turn: over five compactions the nudge, the gate and the summary rescued nothing the session had not written itself ([MEASUREMENTS](MEASUREMENTS.md#the-handoff-hooks-over-five-compactions)); an operator whose `settings.json` still wires `PostToolUse`, `Stop` or `PostCompact` to the guard gets exit 0 and a `doctor` line naming the entries to remove.
 
-**What the hooks do not do.** They remind **once** and gate **once** per crossing, and they print only the handoff block you wrote. A manual `/compact` below the threshold gets no reminder. The discipline is the ledger file, not the hook: handoffs at every natural pause, and the hook is the net under it.
-
-A changed value reaches a session only through a re-render — `omelette-fleet set handoff.compactSummary=false && omelette-fleet rules --hooks` — because the values are substituted into the script ([Handoff settings](#handoff-settings)).
+A changed value reaches a session only through a re-render — `omelette-fleet set handoff.enabled=false && omelette-fleet rules --hooks` — because the value is substituted into the script ([Handoff settings](#handoff-settings)).
 
 ## Keys
 
@@ -300,7 +290,7 @@ An invalid value does not poison the key — it warns and falls through to the n
 
 ### Editing with `set`
 
-`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command. A two-part path with `handoff` or `workflow` in front — `omelette-fleet set handoff.threshold=85`, `omelette-fleet set workflow.merge=pr` — edits the [handoff block](#handoff-settings) or the [workflow block](#workflow-settings), and a bare `key=value` with no dot at all — `omelette-fleet set contract=short` — edits a [fleet-wide key](#top-level-settings); `agents`, `handoff` and `workflow` are the only words accepted in the first position that are not unit names, and the only bare keys accepted are `contract` and `updateCheck`. A name that is not declared in the schema is refused whatever it is, an inherited one (`constructor`, `toString`) included. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` / `handoff` / `workflow` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
+`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command. A two-part path with `handoff` or `workflow` in front — `omelette-fleet set handoff.enabled=false`, `omelette-fleet set workflow.merge=pr` — edits the [handoff block](#handoff-settings) or the [workflow block](#workflow-settings), and a bare `key=value` with no dot at all — `omelette-fleet set contract=short` — edits a [fleet-wide key](#top-level-settings); `agents`, `handoff` and `workflow` are the only words accepted in the first position that are not unit names, and the only bare keys accepted are `contract` and `updateCheck`. A name that is not declared in the schema is refused whatever it is, an inherited one (`constructor`, `toString`) included. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` / `handoff` / `workflow` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
 
 ```
 codex.timeoutS  600 [default] → 900 [file]

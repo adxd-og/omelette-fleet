@@ -252,6 +252,8 @@ The handoff guard estimates the context fill from the session transcript; Claude
 
 Not yet taken: the near-threshold and post-compaction points, which need a working `[1m]` session run with the probe loaded. The row that matters for the guard's design is the window one: an estimate that reads its window from config cannot follow a session whose model differs, and the engine's figure can — which is the case for moving the guard into a function-hooks module once that API leaves early access (backlog N1).
 
+1.5.0 removed the estimator; this section stays as the record of why an estimate read from config could not follow the session's model.
+
 ## The handoff hooks over five compactions
 
 Taken 2026-09-25 from every ledger under `.omelette/` (current and archived) and the 116 session transcripts of this project, after the closing assessment of 1.3.0 named the handoff machine as the first thing three of four readers would cut. The question: how many compactions did a hook-written handoff actually rescue?
@@ -270,6 +272,8 @@ Taken 2026-09-25 from every ledger under `.omelette/` (current and archived) and
 - **The SessionStart / PostCompact print** (the ledger tail into the fresh context): present after each of the five, and the session continued each time without re-deriving state — but what it printed was the session's own handoff, not anything a hook wrote.
 
 Reading: over five compactions the hook-authored parts — the nudge, the gate and the compaction summary — rescued nothing that the session had not already written itself, and the summary left three duplicate blocks in ledgers they do not belong to. The part that carried value is the cheapest one: printing the ledger tail at session start and after a compaction. The estimator behind the nudge (window detection, the transcript scan, `handoff-state.json`) is the largest piece of the guard and the source of [the window gap above](#the-guards-estimate-against-the-engine). N = 5, all manual: whether the nudge would earn its place under automatic compactions is not measured, because none has occurred.
+
+**Acted on in 1.5.0.** The nudge, the gate and the summary were removed; the stamp and the print stay. `hooks/omelette-guard.mjs` went from 1 929 lines / 95 871 bytes to 1 152 lines / 57 184 bytes (the rendered guard, `renderHookFile`, is the same file plus the marker line).
 
 ## How the numbers are taken
 
@@ -291,7 +295,5 @@ Reading: over five compactions the hook-authored parts — the nudge, the gate a
 - **Whether the five-section report shortens the orchestrator's reading.** The orchestrator's own tokens per release have not been separated out of its single long session.
 - **What the units cost per release.** `results --stats --since` has the data; it has not been cut by release.
 - **Whether `check` catches wrong evidence in practice.** In 1.1.0 it caught one off-by-one pointer in the orchestrator's own documentation and one weak fragment in the coder's own report. Two is an anecdote.
-- **The handoff nudge under automatic compactions.** [Five compactions](#the-handoff-hooks-over-five-compactions), all manual: whether the nudge would rescue anything when a session compacts on its own is untested, because it has not happened here.
-- **N0: the near-threshold and post-compaction points.** Flagged as not yet taken under [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) — the probe mod exists in the scratchpad; it needs an operator session with function hooks enabled to run.
 - **A second judgement-heavy effort trial.** [The matched repeat](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) is one task, N = 1; the two-bucket rule rests on it and on an observational bucket log. A second judgement-heavy pair is what would make it a ranking.
 - **The plugin run of the security audit.** [The row](#security-audit-plain-brief-and-plugin-over-one-revision) has two runs; the `claude-security` plugin waits for the operator's own `/claude-security` invocation.
