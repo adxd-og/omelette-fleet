@@ -23,7 +23,8 @@ test('the grok catalog is 4.7, 4.7-build-fast and 4.6 — 4.5 is two generations
   assert.equal(DEFAULT_MODEL, '', 'omit --model: the CLI default is the fleet default');
   const m47 = GROK_MODELS.find((m) => m.id === 'grok-4.7');
   assert.match(m47.useFor, /CLI DEFAULT since 2026-09-21/);
-  assert.match(m47.avoid, /no AA-Omniscience figure for 4\.7 was verified/);
+  // Re-pinned by fix round B (B22): the 4.7 AA-Omniscience figures now exist and are carried.
+  assert.match(m47.avoid, /AA-Omniscience lists 4\.7 at 47\.5% accuracy \/ 29\.3% hallucination at xhigh/);
   const fast = GROK_MODELS.find((m) => m.id === 'grok-4.7-build-fast');
   assert.match(fast.useFor, /twice the output speed at twice the price/);
   assert.equal(fast.tier, 'fast');

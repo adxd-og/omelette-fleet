@@ -107,8 +107,34 @@ function planGrokModels() {
   return new Function(`return [${body.slice(0, cut)}]`)();
 }
 
-test('the plan Step 2 text: grok-4.7 and grok-4.7-build-fast useFor/avoid equal the catalog exactly', () => {
-  const planned = planGrokModels();
+/** Fix round B (2026-09-26) superseded four of the plan's strings on review
+ * findings: the effort default (B9), build-fast's price (B8), the 4.7 effort
+ * labels (B21) and the 4.7 AA-Omniscience figures (B22). Applied to the plan's
+ * text here, so every other byte is still compared against what it printed. */
+const FIX_ROUND_B = [
+  ["effort: 'Medium',", "effort: 'High',"],
+  ["Grok Build only: not on the public API and not on docs.x.ai's price list, so no per-token price is published. ",
+    'Cursor and Grok Build only (not on the public xAI API); priced at $4 in / $1 cached / $12 out per Mtok under 200K prompt tokens, $6 / $1.50 / $18 above (docs.x.ai/developers/pricing, "Grok 4.7 Fast pricing", read 2026-09-26). '],
+  ["xAI's own table against 4.6 (high effort):",
+    "xAI's own table against 4.6 (Grok 4.7 at xhigh against Grok 4.6 at high; DeepSWE's 71.0% is the one high-effort figure):"],
+  ['AA Intelligence Index 46 on v4.3.2 (read', 'AA Intelligence Index 46 (xhigh) on v4.3.2 (read'],
+  ['no AA-Omniscience figure for 4.7 was verified when this entry was written (2026-09-25); until one is, the 4.6 measurement stands (roughly one wrong factual answer in three) and the "never a sole source" rule with it. ',
+    'AA-Omniscience lists 4.7 at 47.5% accuracy / 29.3% hallucination at xhigh (47.8% / 32.4% at high; index 32.0 / 30.9; artificialanalysis.ai/models/grok-4-7, read 2026-09-26), better than 4.6\'s 34.3% and still roughly one wrong factual answer in three: the "never a sole source" rule stands. '],
+];
+const afterFixRoundB = (m) => {
+  const out = { ...m };
+  for (const k of ['effort', 'useFor', 'avoid']) {
+    for (const [from, to] of FIX_ROUND_B) {
+      const probe = k === 'effort' ? `effort: '${out[k]}',` : out[k];
+      const next = probe.split(from).join(to);
+      out[k] = k === 'effort' ? /effort: '(.*)',/.exec(next)[1] : next;
+    }
+  }
+  return out;
+};
+
+test('the plan Step 2 text: grok-4.7 and grok-4.7-build-fast useFor/avoid equal the catalog exactly (after fix round B)', () => {
+  const planned = planGrokModels().map(afterFixRoundB);
   assert.deepEqual(planned.map((m) => m.id), ['grok-4.7', 'grok-4.7-build-fast']);
   for (const p of planned) {
     const actual = GROK_MODELS.find((m) => m.id === p.id);
