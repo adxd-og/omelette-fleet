@@ -434,7 +434,11 @@ async function probeLogin(unit, binPath) {
   }
   if (name === 'grok') {
     if (/not authenticated|not signed in/i.test(both)) return { state: 'out', detail: 'signed out — run `grok login`' };
-    if (r.code === 0 && lines.length) return { state: 'in', detail: `${cmd} listed ${lines.length} line(s)` };
+    // `grok models` opens with `Default model: <id>` — the model every call
+    // that omits `model` runs on. doctor compares it with the catalog.
+    const dm = r.stdout.match(/^\s*Default model:\s*(\S+)/m);
+    const defaultModel = dm ? dm[1] : null;
+    if (r.code === 0 && lines.length) return { state: 'in', detail: `${cmd} listed ${lines.length} line(s)`, defaultModel };
     return unknown;
   }
   // agy: exit 0 with output is the only positive signal, and only an explicit
@@ -2670,6 +2674,14 @@ async function cmdDoctor(argv) {
       const label = login.label || (login.state === 'in' ? 'OK' : login.state === 'out' ? 'SIGNED OUT' : 'unknown');
       out(`  login       ${label} — ${login.detail}`);
       if (login.state === 'out') problems.push('signed out');
+      // Only grok's probe reports the CLI's default; a default the catalog does
+      // not carry means every call that omits `model` runs on an unknown model.
+      if (typeof login.defaultModel === 'string') {
+        const ids = unit.catalog.modelEnum();
+        out(ids.includes(login.defaultModel)
+          ? `  models      CLI default ${visible(login.defaultModel)} — in the catalog`
+          : `  models      CLI default ${visible(login.defaultModel)} — NOT in the catalog (units/${name}/models.js knows ${ids.join(', ')}) — every call that omits \`model\` runs on it; update the catalog`);
+      }
     } else {
       out('  version     — (no binary)');
       out('  login       unknown (no binary)');
