@@ -70,7 +70,6 @@ const HEADINGS = [
 
 /** The two bullets test/evidence-pointers.test.mjs pins, byte for byte as 1.1.0 shipped them. */
 const EVIDENCE = '- **Evidence travels with pointers.** Coder and tester reports come as `TASK / FINDINGS / DIFF / TEST RESULTS / OPEN QUESTIONS`, each finding a pointer line — `path:line` (relative to the project root, one line) · a verbatim fragment in backticks · the claim. `omelette-fleet check <file>` verifies the pointers: check before you trust.';
-const SCOUT = '- **One scout map per release, never to a first review.** Before planning several packages, one read-only scout writes `.omelette/map-<plan>.md` — `commit: <hash>`, factual pointer lines, a closing `## Not read` — and the planners get it instead of re-reading. Run `check` on it, open three pointers yourself, re-take stale lines.';
 
 /**
  * The five obligations the three hook bullets carried, each by its full
@@ -102,7 +101,6 @@ test('the rules keep every heading and the two evidence bullets byte for byte', 
   const lines = rules().split('\n');
   for (const h of HEADINGS) assert.ok(lines.includes(h), `heading kept: ${h}`);
   assert.ok(lines.includes(EVIDENCE), 'the evidence bullet is unchanged');
-  assert.ok(lines.includes(SCOUT), 'the scout-map bullet is unchanged');
 });
 
 test('"Ledger and handoff" states the five hook obligations in full, one line each, and points at CONFIG for the rest', () => {
@@ -121,20 +119,20 @@ test('"Ledger and handoff" states the five hook obligations in full, one line ea
  * P2's rules for the operating model (spec "P2 — briefing from the map", and
  * the principle the release measured), as the template words them. Each is
  * pinned as a whole line: a condition dropped from one fails here, where a
- * substring pin would stay green. They follow the scout-map bullet, whose map
- * they are about.
+ * substring pin would stay green. They follow the evidence bullet (1.5.0 P2:
+ * the scout-map bullet they followed left the rules, and the planner line with it).
  */
 const HANDED = [
-  "- A planner gets the map and its spec section: map first, three pointers opened by hand (one false: whole map unverified), then only what the map lacks; the plan header lists map lines relied on and re-taken.",
+  "- A planner gets its spec section and the pointers the session hands it, and the plan header lists what it read.",
   "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates); a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.",
   "- Pay for judgement, not for repetition: planners do not dry-run plans.",
 ];
 
-test('the operating model says what a planner and a coder are handed, and what the session pays for, right after the scout map', () => {
+test('the operating model says what a planner and a coder are handed, and what the session pays for, right after the evidence bullet', () => {
   const lines = section(rules(), '## Operating model for the session').split('\n');
-  const scout = lines.indexOf(SCOUT);
-  assert.notEqual(scout, -1, 'the scout-map bullet is in the operating model');
-  assert.deepEqual(lines.slice(scout + 1, scout + 1 + HANDED.length), HANDED, 'the three lines follow the scout-map bullet');
+  const evidence = lines.indexOf(EVIDENCE);
+  assert.notEqual(evidence, -1, 'the evidence bullet is in the operating model');
+  assert.deepEqual(lines.slice(evidence + 1, evidence + 1 + HANDED.length), HANDED, 'the three lines follow the evidence bullet');
 });
 
 /**
@@ -159,7 +157,7 @@ test('"Reviews" says how the session reviews a plan, after the four-part finding
  * rules file says each in one line; this is where the full text lives.
  */
 const HANDED_DOC = [
-  "- **A planner starts from the map.** Its brief carries the scout map's path and the package's section of the spec, and says: read the map first; open three of its pointers yourself before relying on it, and if one is false treat the whole map as unverified; then open only what the map does not cover; record in the plan's header which map lines you relied on and which you re-took. If you keep a planner definition of your own (none ships), give it the same sentence.",
+  "- **A planner gets its section.** Its brief carries the package's section of the spec and the pointers the session hands it; the plan's header lists what it read. When several packages are planned by fresh delegates, a scout map is the way to hand them the same reading once — see [The scout map, when a fresh planner needs one](#the-scout-map-when-a-fresh-planner-needs-one).",
   "- **A coder gets its task, not the release.** Its brief carries the task's section of the plan and the pointers it needs, not the whole spec; the spec's path is there for the cases the plan did not settle. The brief also names which coder, by how much the section leaves to decide. **`omelette-coder-medium`** (`effort: medium`) when the section prints the exact text, the diff, the tests and the numbers they must print: the coder executes it, and on one plan-driven trial medium built the same behaviour as xhigh, which took 2.5× the cache reads and 3.6× the wall clock ([MEASUREMENTS](MEASUREMENTS.md#coder-effort-medium-high-xhigh-on-one-task), N = 1). **`omelette-coder`** (`effort: xhigh`) otherwise: a new thing with no written shape, debugging with no known cause, or a decision the brief *explicitly delegates* (decide X between A and B, report the trade-off) — effort buys depth on the decisions the brief hands over, not permission to guess. A brief that leaves a required decision open gets `NEEDS_CONTEXT` back at any effort: the coder template says so, and neither bucket changes it. The bucket and the reason for it go into the brief and into the task's ledger line.",
   "- **The session reviews a plan by its header, task list and Self-Review.** The full plan file goes to a unit — `codex_code_review` or `grok_code_review`, with the spec's path and the plan's path, asking for four-part findings — and the session opens the pointers of the findings, not the file. The ledger records the findings and the rulings as for any review.",
   "- **Pay for judgement, not for repetition.** Reviews, clean-context testers and arbitration are what the tokens are for; re-reading, re-running and re-deriving are where they are lost. A planner does not dry-run its plan: the review reads it, and the coder and the tester run it for real.",

@@ -20,7 +20,7 @@ const CODE_CHANGES_LINE =
   '- **Code changes go to a strong coding sub-agent** (Opus-class, xhigh — the shipped `omelette-coder`), briefed with the approved plan and the constraints. Never to a fleet unit.';
 
 const PLANNER_LINE =
-  '- A planner gets the map and its spec section: map first, three pointers opened by hand (one false: whole map unverified), then only what the map lacks; the plan header lists map lines relied on and re-taken.';
+  '- A planner gets its spec section and the pointers the session hands it, and the plan header lists what it read.';
 
 const PAY_LINE = '- Pay for judgement, not for repetition: planners do not dry-run plans.';
 

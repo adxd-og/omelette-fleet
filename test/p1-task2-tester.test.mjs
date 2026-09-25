@@ -76,7 +76,7 @@ for (const merge of ['session', 'pr']) {
 
 test('the replaced block is exactly six bullet lines, each starting "- "', () => {
   const working = fs.readFileSync(RULES_TEMPLATE_PATH, 'utf8').split('\n');
-  const block = working.slice(28, 34); // 0-indexed: lines 29-34
+  const block = working.slice(27, 33); // 0-indexed: lines 28-33 (1.5.0 P2 took the scout-map bullet out above it)
   assert.equal(block.length, 6);
   for (const line of block) assert.match(line, /^- /, `bullet line: ${JSON.stringify(line)}`);
 });

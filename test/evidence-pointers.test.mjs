@@ -26,23 +26,25 @@ for (const name of AGENT_FILES) {
   });
 }
 
-test('the rendered rules carry the two evidence bullets, and stay short', () => {
+// 1.5.0 P2: the scout-map mandate left the rules; the technique lives in
+// ORCHESTRATION ("The scout map, when a fresh planner needs one").
+test('the rendered rules carry the evidence bullet and the planner line, and no scout-map mandate', () => {
   const text = renderRulesFile('1.1.0', { merge: 'session' });
   const evidence = text.split('\n').find((l) => l.startsWith('- **Evidence travels with pointers.**'));
-  const scout = text.split('\n').find((l) => l.startsWith('- **One scout map per release, never to a first review.**'));
-  assert.ok(evidence && scout, 'both bullets present');
+  assert.ok(evidence, 'the evidence bullet is present');
   assert.match(evidence, /TASK \/ FINDINGS \/ DIFF \/ TEST RESULTS \/ OPEN QUESTIONS/);
   assert.match(evidence, /omelette-fleet check <file>/);
-  assert.match(scout, /\.omelette\/map-<plan>\.md/);
-  assert.match(scout, /## Not read/);
-  assert.match(scout, /three pointers/);
-  // The rules file is resident context in every session: the release that saves
-  // tokens does not get to spend them here.
-  assert.ok(evidence.length + scout.length < 800, `two bullets under 800 chars (${evidence.length + scout.length})`);
+  assert.ok(!text.includes('One scout map per release'));
+  assert.ok(text.includes('- A planner gets its spec section and the pointers the session hands it, and the plan header lists what it read.'));
 });
 
 test('ORCHESTRATION explains the pointer line, the report shape, the scout map and check', () => {
   const md = fs.readFileSync(path.join(ROOT, 'docs/ORCHESTRATION.md'), 'utf8');
+  assert.ok(md.includes('### The scout map, when a fresh planner needs one'), 'the scout-map subsection is present');
+  assert.ok(md.includes('.omelette/map-<plan>.md'));
+  assert.ok(md.includes('## Not read'));
+  assert.ok(md.includes('three pointers'));
+  assert.ok(!md.includes('| **Scout map** |'), 'the scout-map table row is gone');
   // THE SECTION AND NOTHING AFTER IT: an unbounded slice would let a later
   // section satisfy these assertions with this one gutted.
   const from = md.indexOf('\n## Evidence with pointers\n');

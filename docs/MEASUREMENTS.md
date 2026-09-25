@@ -119,6 +119,7 @@ The rendered `.claude/rules/omelette-fleet.md` is loaded at every session start,
 | **Net, resident in every session** | 1 321 | 1 339 | **~330** |
 | 1.3.0 as shipped (reviewer lines, four definitions) | 13 987 | 14 062 | ~3 500 |
 | 1.4.0 as shipped (the prompt audit's rewrites, the Gemini opt-in note) | 13 946 | 14 011 | ~3 490 |
+| 1.5.0 as shipped (the scout-map mandate out) | 13 519 | 13 580 | ~3 380 |
 
 Rendered under the default merge policy (`session`; the `pr` sentence is 32 characters shorter). Tokens at four characters per token, as for the contract above: the character counts are exact, the token figures an estimate. The ceiling is 14 030 characters since 1.3.0, pinned by `test/rules-size.test.mjs`; it is a ceiling, not a pin, so 1.4.0's smaller file leaves it where it is.
 
@@ -291,7 +292,6 @@ Reading: over five compactions the hook-authored parts — the nudge, the gate a
 
 ## Not measured yet
 
-- **What the scout map saves.** The baseline is above; the after is not. Until a release is planned from a map, "saves tokens" is a design intent, not a result.
 - **Whether the five-section report shortens the orchestrator's reading.** The orchestrator's own tokens per release have not been separated out of its single long session.
 - **What the units cost per release.** `results --stats --since` has the data; it has not been cut by release.
 - **Whether `check` catches wrong evidence in practice.** In 1.1.0 it caught one off-by-one pointer in the orchestrator's own documentation and one weak fragment in the coder's own report. Two is an anecdote.

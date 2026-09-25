@@ -20,12 +20,9 @@ import { renderRulesFile } from '../core/rules.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-/** The scout-map bullet, byte for byte as the template (before and after this diff) words it. */
-const SCOUT = "- **One scout map per release, never to a first review.** Before planning several packages, one read-only scout writes `.omelette/map-<plan>.md` — `commit: <hash>`, factual pointer lines, a closing `## Not read` — and the planners get it instead of re-reading. Run `check` on it, open three pointers yourself, re-take stale lines.";
-
 /** The three lines Task 1 adds, in order, byte for byte (plan Step 1.4). */
 const HANDED = [
-  "- A planner gets the map and its spec section: map first, three pointers opened by hand (one false: whole map unverified), then only what the map lacks; the plan header lists map lines relied on and re-taken.",
+  "- A planner gets its spec section and the pointers the session hands it, and the plan header lists what it read.",
   "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates); a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.",
   "- Pay for judgement, not for repetition: planners do not dry-run plans.",
 ];
@@ -36,17 +33,21 @@ const MECHANICS = ['40 lines', '4 KB', '12 KB', 'PreCompact', 'SessionStart'];
 /** The rendered rules file for a merge policy, current template. */
 const rendered = (merge) => renderRulesFile('1.2.0', { merge });
 
-// ── the three lines land, whole, right after the scout bullet ───────────────
+// ── the three lines land, whole and in order ─────────────────────────────────
+// 1.5.0 P2: the scout-map bullet they followed left the rules; they now follow
+// the evidence bullet, and the planner line is the 1.5.0 wording.
 
-test('the three lines are whole lines in the rendered file, immediately after the scout-map bullet, under both merge policies', () => {
+const EVIDENCE_PREFIX = '- **Evidence travels with pointers.**';
+
+test('the three lines are whole lines in the rendered file, immediately after the evidence bullet, under both merge policies', () => {
   for (const merge of ['session', 'pr']) {
     const lines = rendered(merge).split('\n');
-    const scout = lines.indexOf(SCOUT);
-    assert.notEqual(scout, -1, `${merge}: the scout-map bullet is present, unchanged`);
+    const evidence = lines.findIndex((l) => l.startsWith(EVIDENCE_PREFIX));
+    assert.notEqual(evidence, -1, `${merge}: the evidence bullet is present`);
     assert.deepEqual(
-      lines.slice(scout + 1, scout + 1 + HANDED.length),
+      lines.slice(evidence + 1, evidence + 1 + HANDED.length),
       HANDED,
-      `${merge}: the three lines follow the scout-map bullet, in order`,
+      `${merge}: the three lines follow the evidence bullet, in order`,
     );
   }
 });
