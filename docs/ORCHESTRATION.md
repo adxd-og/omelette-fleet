@@ -269,7 +269,7 @@ The rules below come from the catalogs' own `GUIDE` strings. Omit `model` to kee
 - `GPT-OSS 120B (Medium)` is a corroborating voice for maths and vendor de-biasing, never the lead researcher.
 - The `effort` config key and argument are **inert** for this unit: effort is baked into the model id.
 
-**Grok** — default `grok-4.6`; `grok-4.5` exists only as a regression fallback.
+**Grok** — default `grok-4.7` (the CLI's own default since 2026-09-21); `grok-4.7-build-fast` is the same model at twice the output speed and twice the price; `grok-4.6` exists only as a regression fallback. `doctor` prints the grok CLI's reported default beside the catalog and says when the catalog does not carry it.
 - `effort: low` for fast cheap sweeps, `medium` (the default) for ordinary work, `high` for harder analysis, `xhigh` for the hardest maths and proofs only — it is the slowest setting.
 
 **Codex** — default `gpt-6-astra` at `effort: high`.
