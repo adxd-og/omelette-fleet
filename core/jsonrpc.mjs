@@ -9,7 +9,8 @@
  * A `tools/call` is a REQUEST with a lifecycle, not a bare promise: the handler
  * keeps it in an in-flight table keyed by its id, hands the tool a context
  * (id, progress token, abort signal, notify) and drops the response of a
- * request the client cancelled. `serve` drains that table before it exits.
+ * request the client cancelled. `serve` drains that table before it exits
+ * when stdin closes; on SIGTERM or SIGHUP it exits at once.
  */
 /**
  * The MCP revisions this server implements, newest first. Handshake era only
@@ -214,7 +215,8 @@ export function createLineSplitter(onLine, onOverflow = () => {}) {
  * Attach a handler to this process's stdin/stdout and never let a stray error kill the loop.
  * `instructions` is passed straight through to `createHandler`; `send` doubles
  * as the notification sink, so progress reaches the client on the same stream.
- * `onShutdown` runs once, right before a clean exit after stdin closed.
+ * `onShutdown` runs right before every exit this function makes: after stdin
+ * closed and the calls in flight drained, or on SIGTERM / SIGHUP.
  */
 export function serve({ serverInfo, tools, callTool, instructions, log = () => {}, env = process.env, onShutdown = () => {} }) {
   const send = (m) => { process.stdout.write(JSON.stringify(m) + '\n'); };
@@ -231,6 +233,13 @@ export function serve({ serverInfo, tools, callTool, instructions, log = () => {
     },
     (bytes) => log(`stdin: dropped a frame of ${bytes} bytes with no newline (cap ${MAX_FRAME_BYTES}) — still listening`),
   );
+  // Every way out goes through here: `onShutdown` first (the unit kills the
+  // vendor process groups it still runs and removes its status snapshot), then
+  // the exit. A throwing hook is logged; it never keeps us alive.
+  const shutdownAndExit = () => {
+    try { onShutdown(); } catch (e) { log('onShutdown: ' + ((e && e.stack) || e)); }
+    process.exit(0);
+  };
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', feed);
   process.stdin.on('end', () => {
@@ -249,13 +258,8 @@ export function serve({ serverInfo, tools, callTool, instructions, log = () => {
     // process.exit() there would cut the frame off mid-string. The callback of
     // an empty write runs only once every write queued before it has gone out,
     // so this exits on the last byte of the answer, not on the first.
-    // Either way out, `onShutdown` runs right before the exit: the drain is
-    // done, so nothing is left to report, and the unit's status snapshot goes
-    // with the process. A throwing hook is logged; it never keeps us alive.
-    const shutdownAndExit = () => {
-      try { onShutdown(); } catch (e) { log('onShutdown: ' + ((e && e.stack) || e)); }
-      process.exit(0);
-    };
+    // Either way out, `shutdownAndExit` runs: the drain is done, so nothing
+    // is left to report, and the unit's status snapshot goes with the process.
     const exitWhenFlushed = () => setImmediate(() => {
       // …and a client that keeps the pipe open without ever reading it never
       // lets that callback run: the write stays parked on backpressure and the
@@ -267,4 +271,14 @@ export function serve({ serverInfo, tools, callTool, instructions, log = () => {
     });
     handle.drain().then(exitWhenFlushed, exitWhenFlushed);
   });
+  // A server TOLD to stop does not drain: Claude Code sends SIGTERM when a
+  // server outlives its closed stdin, and `call --timeout` sends it after its
+  // cancel. Without a handler the default action kills this process alone and
+  // leaves every vendor process group it started running with no bound.
+  for (const sig of ['SIGTERM', 'SIGHUP']) {
+    process.on(sig, () => {
+      log(`${sig}: shutting down`);
+      shutdownAndExit();
+    });
+  }
 }

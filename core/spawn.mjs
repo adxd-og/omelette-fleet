@@ -12,7 +12,10 @@
  *   - the child env built from an ALLOWLIST, not inherited (see below);
  *   - billing-risk env vars deleted from the child env (see units/*: an API
  *     key reaching a CLI silently switches it from subscription to metered API);
- *   - ENOENT surfaced as an actionable "install X" message, never a stack.
+ *   - ENOENT surfaced as an actionable "install X" message, never a stack;
+ *   - every live group listed in this process, so a server that is told to
+ *     stop (SIGTERM/SIGHUP, see core/jsonrpc.mjs `serve`) can kill them all
+ *     with `killLiveGroups()` instead of leaving them to run unbounded.
  *
  * Never rejects on a non-zero exit — the unit's own parser decides what an
  * exit code means for that CLI. Rejects only when the process could not run.
@@ -71,6 +74,30 @@ export const ALLOWED_ENV = [
   'http_proxy', 'https_proxy', 'no_proxy',
   'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
 ];
+
+/**
+ * Process groups this process started and has not seen close, by leader pid.
+ * Each run's child is a group leader (`detached: true` below), so the leader's
+ * pid names the whole group.
+ */
+const LIVE = new Set();
+
+/**
+ * SIGKILL every live group and forget them. For a process that is going away:
+ * a server told to stop kills what it started, since its own hard-kill timers
+ * die with it. Never throws; returns how many groups the signal reached.
+ */
+export function killLiveGroups() {
+  let n = 0;
+  for (const pid of LIVE) {
+    try { process.kill(-pid, 'SIGKILL'); n++; } catch { /* group already gone */ }
+  }
+  LIVE.clear();
+  return n;
+}
+
+/** How many groups are listed as live (tests). */
+export const liveGroupCount = () => LIVE.size;
 
 /** Fleet-wide operator extension of the allowlist. */
 export const ENV_PASSTHROUGH_VAR = 'OMELETTE_ENV_PASSTHROUGH';
@@ -144,6 +171,8 @@ export function runProcess({
       reject(new Error(`${bin} spawn failed: ${(err && err.message) || err}`));
       return;
     }
+    // No pid means the spawn failed (ENOENT and friends arrive as 'error' below).
+    if (child.pid) LIVE.add(child.pid);
 
     // THE TAIL, AS A QUEUE. Chunks go into an array with a running total, and
     // the HEAD is dropped while what remains still covers the cap — so what is
@@ -212,6 +241,7 @@ export function runProcess({
     child.on('error', (e) => {
       if (timer) clearTimeout(timer);
       detachAbort();
+      LIVE.delete(child.pid);
       if (settled) return;
       settled = true;
       if (e && e.code === 'ENOENT') {
@@ -223,6 +253,7 @@ export function runProcess({
     child.on('close', (code, sig) => {
       if (timer) clearTimeout(timer);
       detachAbort();
+      LIVE.delete(child.pid);
       if (settled) return;
       settled = true;
       // `capped` counts characters DROPPED, not slices attempted: output that

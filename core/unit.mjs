@@ -78,7 +78,7 @@ import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter, isAbsolute, resolve as resolvePath } from 'node:path';
 import { serve } from './jsonrpc.mjs';
 import { contractFor, unitInstructions } from './rules.mjs';
-import { runProcess } from './spawn.mjs';
+import { killLiveGroups, runProcess } from './spawn.mjs';
 import { createStatus, previewText } from './status.mjs';
 import { unitConfig } from './config.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from './results.mjs';
@@ -578,8 +578,18 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
 
   // tools/list must show only the public MCP shape.
   const tools = allTools.map(({ run, kind, mutateGate, ...pub }) => pub);
-  /** A clean exit: this process's status snapshot goes. Never throws. */
-  function shutdown() { try { status.dispose(); } catch { /* fail-soft */ } }
+  /**
+   * The server is going away: the vendor process groups it still runs go
+   * first (their hard-kill timers die with this process), then this process's
+   * status snapshot. Never throws.
+   */
+  function shutdown() {
+    try {
+      const n = killLiveGroups();
+      if (n) log(`shutdown: killed ${n} process group(s)`);
+    } catch { /* fail-soft */ }
+    try { status.dispose(); } catch { /* fail-soft */ }
+  }
   return { log, status, callTool, cfgFor, tools, bin, shutdown };
 }
 
