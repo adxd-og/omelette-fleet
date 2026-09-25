@@ -177,7 +177,7 @@ test('SECURITY says what the P0 refutations found true: proxy URLs pass as they 
   assert.match(security, /On a `PreToolUse` event that is a fail-open, by design/);
   assert.match(security, /`gemini_research` with the ceiling closed passes \*\*no\*\* `--mode` at all/);
   assert.match(security, /in `doctor`'s own environment/);
-  assert.match(security, /unit-timeouts spec \(backlog U1, still open after 1\.5\.0\)/);
+  assert.match(security, /Two things still outlive it[^\n]*a server that is SIGKILLed outright[^\n]*a shell command Codex is running/);
   assert.match(security, /`GOOGLE_APPLICATION_CREDENTIALS` and `GOOGLE_CREDENTIALS` and the Vertex switch `GOOGLE_GENAI_USE_VERTEXAI`/);
   assert.match(security, /git diff --name-only -z --relative <hash> --/);
   for (const rel of ['docs/SECURITY.md', 'docs/ORCHESTRATION.md']) {
