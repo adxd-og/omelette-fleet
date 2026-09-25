@@ -19,7 +19,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, cpSync, existsSync, fchmodSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -3602,4 +3602,62 @@ test('install: a printed registration quotes a server path that holds a space, a
     // What the operator pastes: the path is ONE argument to a POSIX shell.
     const words = spawnSync('sh', ['-c', `set -- ${line.trim().slice('claude '.length)}; printf '%s\\n' "$@"`], { encoding: 'utf8' });
     assert.equal(words.stdout.trim().split('\n').pop(), server, words.stdout + words.stderr);
+  });
+
+test('doctor --probe-sandbox: a probe directory replaced by a link to a LOCKED directory is never reopened through the link — the target keeps its mode',
+  { skip: process.platform === 'win32' && 'POSIX symlinks and modes' }, () => {
+    const dir = home();
+    const gone = join(dir, 'no-such');
+    const locked = join(dir, 'locked');
+    mkdirSync(locked);
+    writeFileSync(join(locked, 'keep.txt'), 'kept');
+    chmodSync(locked, 0o500);
+    const fake = probeScript(dir, 'lock-link-cli', [
+      "process.chdir('/');",
+      'fs.rmdirSync(cwd);',
+      `fs.symlinkSync(${JSON.stringify(locked)}, cwd);`,
+      "console.log('done');",
+      'process.exit(0);',
+    ].join('\n'));
+    registerOurs(dir, ['grok']);
+    const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+    try {
+      assert.match(r.out, /sandbox\s+BREACHED — \S+omelette-probe-grok-\S+ directory was removed or replaced/, r.out + r.err);
+      // The cleanup's reopen is a chmod to 0700: through the link it would have
+      // unlocked the target. It is still 0500, and still holds its file.
+      assert.equal(lstatSync(locked).mode & 0o777, 0o500, 'the cleanup reopened the link\'s target');
+      assert.equal(readFileSync(join(locked, 'keep.txt'), 'utf8'), 'kept');
+      // The primitive the cleanup opens with, on this platform: a link at the
+      // path is REFUSED by the open itself, so no swap between a check and the
+      // chmod can hand it a target — and a real directory opens and takes the mode.
+      const flags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+      const link = join(dir, 'link-to-locked');
+      symlinkSync(locked, link);
+      assert.throws(() => openSync(link, flags), /ELOOP|ENOTDIR/);
+      const real = join(dir, 'real-dir');
+      mkdirSync(real, { mode: 0o500 });
+      const fd = openSync(real, flags);
+      try { fchmodSync(fd, 0o700); } finally { closeSync(fd); }
+      assert.equal(lstatSync(real).mode & 0o777, 0o700);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+  });
+
+test('doctor --probe-sandbox: a probe directory the run left EMPTY and locked (0000) is still removed — without reopening it by path',
+  { skip: process.platform === 'win32' && 'POSIX modes' }, () => {
+    const dir = home();
+    const gone = join(dir, 'no-such');
+    const fake = probeScript(dir, 'lock-empty-cli', [
+      `fs.writeFileSync(${JSON.stringify(join(dir, 'locked.txt'))}, cwd);`,
+      'fs.chmodSync(cwd, 0o000);',
+      "console.log('refused');",
+      'process.exit(0);',
+    ].join('\n'));
+    registerOurs(dir, ['grok']);
+    cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+    const locked = readFileSync(join(dir, 'locked.txt'), 'utf8').trim();
+    const left = existsSync(locked);
+    if (left) { chmodSync(locked, 0o700); rmSync(locked, { recursive: true, force: true }); }
+    assert.equal(left, false, `the cleanup left ${locked} behind`);
   });

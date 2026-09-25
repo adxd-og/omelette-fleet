@@ -44,7 +44,7 @@
  * honoured NOWHERE else: server paths, the shipped example config and doctor
  * all still come from the real ROOT below.
  */
-import { accessSync, chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, opendirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { accessSync, chmodSync, closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, opendirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2434,6 +2434,33 @@ function probeRuntimeEnv(unit, env, { capS }) {
 }
 
 /**
+ * Give the probe directory back its own bits before it is removed — a unit that
+ * stripped them would otherwise leave it behind — WITHOUT EVER FOLLOWING A LINK.
+ * The directory is opened, not named: O_NOFOLLOW refuses a symlink at the path
+ * (a run that REPLACED the directory with one is BREACHED, and its target is not
+ * ours), O_DIRECTORY anything else, and the chmod goes to the descriptor — the
+ * directory that was there at the open, whatever is swapped in after it. rmSync
+ * then removes a link itself, never what it points at.
+ *
+ * Opening a directory needs its read bit, and a unit that stripped EVERY bit
+ * leaves it unopenable (EACCES — a link would have answered ELOOP). The name is
+ * never chmodded instead; an empty directory is removed as it stands, because
+ * rmdir needs nothing from the directory itself and never follows a link. A
+ * locked directory the run left something in stays behind, and the removal
+ * below says so in its one line.
+ */
+function reopenProbeDir(dir) {
+  let fd;
+  try {
+    fd = openSync(dir, constants.O_RDONLY | (constants.O_DIRECTORY || 0) | (constants.O_NOFOLLOW || 0));
+  } catch (e) {
+    if (e && e.code === 'EACCES') { try { rmdirSync(dir); } catch { /* not empty: left for rmSync to report */ } }
+    return; //                                                           gone, a link, or not a directory
+  }
+  try { fchmodSync(fd, 0o700); } catch { /* it is removed below either way */ } finally { closeSync(fd); }
+}
+
+/**
  * Probe ONE unit. The caller has already decided the unit is enabled,
  * registered as OURS and has a binary — the `skipped` reasons left to this
  * function are the ones only the run itself can produce: no temp directory, a
@@ -2555,11 +2582,9 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
     // EVERY path — verdict, timeout or throw: the directory does not outlive
     // the probe. A removal that fails is one line, never a lost diagnosis.
     // A unit that stripped the directory's own bits (the "could not inspect"
-    // case) would otherwise leave it behind: reopen it, then remove it.
-    // lstat FIRST: a directory the run REPLACED with a symlink (BREACHED above)
-    // is not ours to reopen, and chmod follows a link — the mode of whatever it
-    // points at would change on the way out. rmSync below removes the link itself.
-    try { if (lstatSync(dir).isDirectory()) chmodSync(dir, 0o700); } catch { /* gone, or not ours to reopen */ }
+    // case) would otherwise leave it behind: reopen it — by descriptor, never
+    // through a link (reopenProbeDir) — then remove it.
+    reopenProbeDir(dir);
     try { rmSync(dir, { recursive: true, force: true }); }
     catch (e) { log(`probe: could not remove ${dir}: ${(e && e.message) || e}`); }
   }
