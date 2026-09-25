@@ -45,8 +45,10 @@
  * `outputCap`) unless the call passes its own. `capped: true` means the tail
  * cap dropped the BEGINNING of stdout: the adapter's parser is reading a
  * fragment and must say so rather than pass it off as a whole answer.
- * `partial: true` marks an answer whose run did not finish (a hard kill whose
- * captured text was kept): still a success, still `isError: false`, and the
+ * `partial: true` marks an answer whose text carries an incompleteness marker
+ * — one rule, core/partial.mjs: a hard kill, a cap, a cancel, a non-zero exit,
+ * an early stop, a missing `turn.completed`, a deep-research stage or gather
+ * that did not finish: still a success, still `isError: false`, and the
  * flag travels to the status feed's `end()` extra next to `usage`. Both reach
  * the spooled record as well: `usage` is filed on it verbatim, and
  * core/results.mjs writes its `usage:` header line only for a reported

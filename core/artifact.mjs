@@ -113,7 +113,7 @@ export function extractImagePath(text, excludePath = '', since = 0) {
  * ONE thing a caller has left to read the run's health from is `partial` —
  * and a cap, a kill, a cancel or a non-zero exit all mean the same thing about
  * the file that came back: it is what a run that did not finish left behind.
- * The interpreters already flag the cap and the kill; this is what catches the
+ * The interpreters flag every marker (core/partial.mjs); this is what catches the
  * exit code an image tool would otherwise return as a clean answer, because the
  * marker their text carries is exactly what the bare-path contract drops.
  * @param {{code?:number|null, killed?:boolean, capped?:boolean, cancelled?:boolean}} res

@@ -157,6 +157,7 @@ import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
 import { artifactMiss, extractImagePath, unfinishedRun } from '../../core/artifact.mjs';
 import { checkCwd } from '../../core/cwd.mjs';
+import { partialMark, withPartial } from '../../core/partial.mjs';
 import { CODEX_MODELS, EFFORTS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -281,8 +282,9 @@ function errorText(raw) {
 
 /**
  * Turn a finished run into { text, usage, searches } — `partial: true` when the
- * answer is there but incomplete (a hard kill whose captured text we kept, a run
- * whose stdout hit the tail cap) — or throw a clear error. Exported for tests.
+ * text carries an incompleteness marker (core/partial.mjs: a hard kill whose
+ * captured text we kept, a cap, a cancel, a missing turn.completed, a non-zero
+ * exit) — or throw a clear error. Exported for tests.
  * @param {{stdout:string, stderr:string, code:number|null, killed:boolean, capped?:boolean, cancelled?:boolean}} res
  * @param {{timeoutS?:number, capped?:boolean, outputCap?:number}} o
  *   capped defaults to the run's own flag; outputCap is the tail cap the run was
@@ -308,10 +310,8 @@ export function extractResult(res, { timeoutS, capped = res.capped, outputCap = 
 
   // THE TAIL CAP DROPS THE BEGINNING of the JSONL, so a capped run is never a
   // whole answer: every path out of here marks it and flags it partial.
-  const capMark = (text) => (capped && text
-    ? `${text}\n\n[codex: output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial]`
-    : text);
-  const capExtra = capped ? { partial: true } : undefined;
+  const capMarker = partialMark('codex', 'capped', { outputCap });
+  const cap = (r) => (capped ? withPartial(r, capMarker) : r);
 
   // A hard kill at timeoutS used to discard every item the run had already
   // completed. The messages above were parsed from what WAS captured, so if the
@@ -320,17 +320,10 @@ export function extractResult(res, { timeoutS, capped = res.capped, outputCap = 
   if (res.killed) {
     // The same SIGKILL ends a cancelled request; `cancelled` says which it was,
     // and a client that stopped the run is not a timeoutS to raise.
-    const killMark = res.cancelled
-      ? '[codex: cancelled by the client — treat the answer as partial]'
-      : `[codex: hard-killed after ${timeoutS ?? '?'}s — treat the answer as partial; raise codex.timeoutS in the fleet config]`;
-    if (messages.length) {
-      return {
-        text: capMark(`${messages.at(-1)}\n\n${killMark}`),
-        usage,
-        searches,
-        partial: true,
-      };
-    }
+    const killMarker = res.cancelled
+      ? partialMark('codex', 'cancelled')
+      : partialMark('codex', 'killed', { after: timeoutS ?? '?' });
+    if (messages.length) return cap(withPartial({ text: messages.at(-1), usage, searches }, killMarker));
     // A cancelled run has no answer because the caller asked for none: neither
     // bound was reached, so neither is named.
     if (res.cancelled) throw new Error('codex cancelled by the client');
@@ -352,12 +345,12 @@ export function extractResult(res, { timeoutS, capped = res.capped, outputCap = 
     throw new Error(res.code === 0 ? `codex produced no answer: ${tail}` : `codex exited ${res.code}: ${tail}`);
   }
   // The final agent_message is the answer; earlier ones are narration.
-  let text = messages.at(-1);
-  if (!completed) text += '\n\n[codex: run ended before turn.completed — treat as partial]';
+  let r = { text: messages.at(-1), usage, searches };
+  if (!completed) r = withPartial(r, partialMark('codex', 'unfinished'));
   // A non-zero exit WITH an answer: keep the answer (the run is paid for and
   // the text is usually the useful part) but never let it read as a clean one.
-  if (res.code !== 0) text += `\n\n[codex: CLI exited ${res.code} — treat the answer as partial]`;
-  return { text: capMark(text), usage, searches, ...capExtra };
+  if (res.code !== 0) r = withPartial(r, partialMark('codex', 'exited', { code: res.code }));
+  return cap(r);
 }
 
 // `output exceeded`: an answer that outgrew the cap once will outgrow it again,

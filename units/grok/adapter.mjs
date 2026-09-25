@@ -225,6 +225,7 @@ import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
 import { artifactMiss, extractImagePath, unfinishedRun } from '../../core/artifact.mjs';
 import { checkCwd } from '../../core/cwd.mjs';
+import { partialMark, withPartial } from '../../core/partial.mjs';
 import { GROK_MODELS, EFFORTS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -542,14 +543,13 @@ function grokAnswer(out, jsonMode) {
   return { text, stop: s.error ? s.stopReason || 'error' : s.stopReason, parsed: true, error: null, reported: s.error || null, usage: s.usage };
 }
 
-/** A bare string when the text is all there is to say; the object shape when usage or `partial` travel with it. */
-const answer = (text, usage, extra) =>
-  (usage || extra ? { text, ...(usage ? { usage } : {}), ...extra } : text);
+/** A bare string when the text is all there is to say; the object shape when usage travels with it. */
+const answer = (text, usage) => (usage ? { text, usage } : text);
 
 /**
  * Interpret one finished grok run → the answer text, `{ text, usage? }` once
- * the run reported tokens, `{ text, usage?, partial: true }` for a salvaged
- * hard kill or a front-truncated stream, or throw. Exported for tests.
+ * the run reported tokens, `{ text, usage?, partial: true }` when the text
+ * carries an incompleteness marker (core/partial.mjs), or throw. Exported for tests.
  * `jsonMode` selects the structured output format (since 0.3.1: the streaming
  * NDJSON of research/review runs); false is the plain stdout of image runs.
  * `outputCap` is the tail cap the run was spawned under — `res.capped` says it
@@ -560,10 +560,10 @@ export function interpretGrok(res, { jsonMode, timeoutS, outputCap = GROK_OUTPUT
   const a = grokAnswer(out, jsonMode);
   // THE TAIL CAP DROPS THE BEGINNING of the stream, so a capped run is never a
   // whole answer: every path out of here marks it and flags it partial.
-  const capMark = (text) => (capped && text
-    ? `${text}\n\n[grok: output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial]`
-    : text);
-  const capExtra = capped ? { partial: true } : undefined;
+  const capMarker = partialMark('grok', 'capped', { outputCap });
+  const cap = (r) => (capped ? withPartial(r, capMarker) : r);
+  // The object shape once the run reported tokens; a bare string otherwise.
+  const withUsage = (r) => (typeof r === 'string' ? answer(r, a.usage) : a.usage ? { ...r, usage: a.usage } : r);
   // A capped STREAM that parsed nothing is the one case with NO ANSWER AT ALL:
   // the whole reply rode one huge `result` line, the tail kept a fragment of it,
   // and grokAnswer's fail-open would hand that JSON fragment back as the answer.
@@ -585,16 +585,10 @@ export function interpretGrok(res, { jsonMode, timeoutS, outputCap = GROK_OUTPUT
     const cancelTail = res.cancelled && a.reported ? ` — Grok had reported: ${a.reported}` : '';
     // The same SIGKILL ends a cancelled request; `cancelled` says which it was,
     // and a client that stopped the run is not a timeoutS to raise.
-    const killMark = res.cancelled
-      ? `[grok: cancelled by the client${cancelTail || ' — treat the answer as partial'}]`
-      : `[grok: hard-killed after ${timeoutS}s — treat the answer as partial; raise grok.timeoutS in the fleet config]`;
-    if (a.text && !fragmentOnly) {
-      return answer(
-        capMark(`${a.text}\n\n${killMark}`),
-        a.usage,
-        { partial: true },
-      );
-    }
+    const killMarker = res.cancelled
+      ? partialMark('grok', 'cancelled', { tail: cancelTail })
+      : partialMark('grok', 'killed', { after: timeoutS });
+    if (a.text && !fragmentOnly) return cap(withUsage(withPartial(a.text, killMarker)));
     // A cancelled run has no answer because the caller asked for none: neither
     // bound was reached, so neither is named — but the failure it had already
     // reported is named, because nothing else will name it.
@@ -614,14 +608,15 @@ export function interpretGrok(res, { jsonMode, timeoutS, outputCap = GROK_OUTPUT
   // A non-zero exit that still produced text: keep the text — the run is paid
   // for and it is usually the useful part — but mark it, in every mode, so it
   // can never be read as a completed answer.
-  const partial = (text) => (code !== 0 && text ? `${text}\n\n[grok: CLI exited ${code} — treat the answer as partial]` : text);
+  // Marker order: text, early stop, exit, cap — as since 0.3.x.
+  const exited = (r) => (code !== 0 ? withPartial(r, partialMark('grok', 'exited', { code })) : r);
   if (a.error) throw new Error(`grok CLI error: ${a.error}`);
   // Plain mode, or a stream in a format we do not recognize: fail open with the
   // text, marked when the cap took its beginning.
-  if (!a.parsed) return answer(capMark(partial(a.text)), a.usage, capExtra);
+  if (!a.parsed) return cap(withUsage(exited(a.text)));
   const stopNorm = a.stop.toLowerCase().replace(/[_\s]/g, '');
-  if (a.text && (!a.stop || stopNorm === 'endturn')) return answer(capMark(partial(a.text)), a.usage, capExtra);
-  if (a.text) return answer(capMark(partial(`${a.text}\n\n[grok: run ended early — stopReason=${a.stop}]`)), a.usage, capExtra);
+  if (a.text && (!a.stop || stopNorm === 'endturn')) return cap(withUsage(exited(a.text)));
+  if (a.text) return cap(withUsage(exited(withPartial(a.text, partialMark('grok', 'early', { stopReason: a.stop })))));
   throw new Error(
     `grok run ended with no answer (stopReason=${a.stop || 'unknown'})` +
     (stopNorm === 'cancelled' ? ' — a tool call needed interactive approval and the headless run was cancelled' : ''),

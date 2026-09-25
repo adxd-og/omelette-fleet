@@ -134,6 +134,7 @@ import { checkCwd } from '../../core/cwd.mjs';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
 import { artifactMiss, extractImagePath, newestImage, unfinishedRun } from '../../core/artifact.mjs';
+import { partialMark, withPartial } from '../../core/partial.mjs';
 import { GEMINI_MODELS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({
@@ -238,9 +239,8 @@ export function interpretAgy(res, { timeoutS, capped = res.capped, outputCap = O
   };
   // THE TAIL CAP DROPS THE BEGINNING of stdout, so a capped run is never a whole
   // answer: every path out of here that returns text marks it and flags it partial.
-  const capMark = (text) => (capped && text
-    ? `${text}\n\n[gemini: output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial]`
-    : text);
+  const capMarker = partialMark('gemini', 'capped', { outputCap });
+  const cap = (r) => (capped ? withPartial(r, capMarker) : r);
   // agy prints ONE envelope. Capped and it no longer parses means the answer was
   // cut open and `answer` is the raw fail-open fragment — never an answer.
   const fragmentOnly = !!capped && !parsed;
@@ -248,7 +248,7 @@ export function interpretAgy(res, { timeoutS, capped = res.capped, outputCap = O
   // itself reporting success — a SUCCESSFUL answer is never scanned for
   // exhaustion (answers ABOUT quotas must not be misread as an empty bucket).
   if (code === 0 && answer && !killed && !fragmentOnly && (!status || status === 'SUCCESS')) {
-    return capped ? { ...result, text: capMark(answer), partial: true } : result;
+    return cap(result);
   }
   // Failed turn — now the exhaustion patterns disambiguate the CAUSE.
   if (EXHAUSTED_PATTERNS.some((re) => re.test(`${errBuf}\n${out}`))) {
@@ -262,16 +262,10 @@ export function interpretAgy(res, { timeoutS, capped = res.capped, outputCap = O
     const after = timeoutS + HARD_KILL_GRACE_MS / 1000;
     // The same SIGKILL ends a cancelled request; `cancelled` says which it was,
     // and a client that stopped the run is not a timeoutS to raise.
-    const killMark = res.cancelled
-      ? '[gemini: cancelled by the client — treat the answer as partial]'
-      : `[gemini: hard-killed after ${after}s — treat the answer as partial; raise gemini.timeoutS in the fleet config]`;
-    if (answer && !fragmentOnly) {
-      return {
-        ...result,
-        text: capMark(`${answer}\n\n${killMark}`),
-        partial: true,
-      };
-    }
+    const killMarker = res.cancelled
+      ? partialMark('gemini', 'cancelled')
+      : partialMark('gemini', 'killed', { after });
+    if (answer && !fragmentOnly) return cap(withPartial(result, killMarker));
     // A cancelled run has no answer because the caller asked for none: neither
     // bound was reached, so neither is named.
     if (res.cancelled) throw new Error('agy cancelled by the client');
@@ -282,19 +276,18 @@ export function interpretAgy(res, { timeoutS, capped = res.capped, outputCap = O
     throw new Error(`agy output exceeded the ${outputCap} char cap and the answer envelope was lost — raise gemini.outputCap or narrow the task`);
   }
   if (code !== 0 && !answer) throw new Error(`agy exited ${code}: ${errBuf.trim().slice(-500) || '(no stderr)'}`);
-  // agy says the run did not finish cleanly. Partial text is often the useful
-  // part, so keep it — but never let the caller read it as a whole answer.
-  const notes = [];
+  // agy says the run did not finish cleanly (status) and/or the CLI exited
+  // non-zero with text. Partial text is often the useful part, so keep it —
+  // but never let the caller read it as a whole answer. Both are markers with
+  // a flag; the status note gets its own kind so an exit-0 TIMEOUT is never
+  // labelled "CLI exited 0". The cap marker goes last, as it always has.
+  let r = result;
   if (status && status !== 'SUCCESS') {
     if (!answer) throw new Error(`agy run ended with no answer (status=${status})`);
-    notes.push(`[gemini: run ended early — status=${status}]`);
+    r = withPartial(r, partialMark('gemini', 'status', { status }));
   }
-  // A non-zero exit with text: same deal — annotated, never thrown away and
-  // never passed off as a clean answer.
-  if (code !== 0 && answer) notes.push(`[gemini: CLI exited ${code} — treat the answer as partial]`);
-  if (notes.length) {
-    return { ...result, text: capMark([answer, ...notes].join('\n\n')), ...(capped ? { partial: true } : {}) };
-  }
+  if (code !== 0 && answer) r = withPartial(r, partialMark('gemini', 'exited', { code }));
+  if (r !== result) return cap(r);
   // Exit 0 with NO output but a talkative stderr: agy "succeeded" without
   // producing anything, and the cause (typically a headless permission
   // auto-deny: 'a tool required the "read_url" permission...') is sitting on

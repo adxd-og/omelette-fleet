@@ -252,8 +252,8 @@ test('interpretGrok: a failed result that still carries text is an early stop, n
   const fromDeltas = interpretGrok(ok({
     stdout: stream(sys(), textDelta('what it got to'), JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, result: null })),
   }), { jsonMode: true, timeoutS: 300 });
-  assert.match(fromDeltas, /^what it got to/);
-  assert.match(fromDeltas, /\[grok: run ended early — stopReason=error_max_turns\]/);
+  assert.match(fromDeltas.text, /^what it got to/);
+  assert.match(fromDeltas.text, /\[grok: run ended early — stopReason=error_max_turns\]/);
   // Nothing assembled: the failure is still an error, with the errors[] message.
   assert.throws(
     () => interpretGrok(ok({ stdout: stream(sys(), JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['auth expired'] })), code: 1 }), { jsonMode: true, timeoutS: 300 }),
@@ -294,18 +294,18 @@ test('interpretGrok: plain mode returns raw text; an unrecognized stream fails o
 
 test('interpretGrok: a non-zero exit WITH text keeps the text under a partial marker, in both modes', () => {
   const plain = interpretGrok(ok({ stdout: 'half an answer', code: 1, stderr: 'wobble' }), { jsonMode: false, timeoutS: 300 });
-  assert.match(plain, /^half an answer/);
-  assert.match(plain, /\[grok: CLI exited 1 — treat the answer as partial\]/);
+  assert.match(plain.text, /^half an answer/);
+  assert.match(plain.text, /\[grok: CLI exited 1 — treat the answer as partial\]/);
   const streamed = interpretGrok(ok({ stdout: stream(sys(), textDelta('hi'), resultLine({ result: 'hi', stop_reason: 'end_turn', usage: USAGE })), code: 2 }), { jsonMode: true, timeoutS: 300 });
   assert.match(streamed.text, /^hi/);
   assert.match(streamed.text, /CLI exited 2/);
   assert.deepEqual(streamed.usage, { input: 10867, output: 524 });
   // An early stop AND a non-zero exit: both markers, answer still returned.
   const both = interpretGrok(ok({ stdout: stream(sys(), textDelta('partial'), messageDelta('cancelled', null)), code: 1 }), { jsonMode: true, timeoutS: 300 });
-  assert.match(both, /run ended early — stopReason=cancelled/);
-  assert.match(both, /CLI exited 1/);
+  assert.match(both.text, /run ended early — stopReason=cancelled/);
+  assert.match(both.text, /CLI exited 1/);
   // Unparseable output on a failed exit still fails open — with the marker.
-  assert.match(interpretGrok(ok({ stdout: '{not json', code: 1 }), { jsonMode: true, timeoutS: 300 }), /CLI exited 1/);
+  assert.match(answerText(ok({ stdout: '{not json', code: 1 })), /CLI exited 1/);
 });
 
 test('interpretGrok: a front-truncated stream is a marked partial answer, or a loud error — never a fragment', () => {
