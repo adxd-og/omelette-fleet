@@ -116,8 +116,10 @@ The rendered `.claude/rules/omelette-fleet.md` is loaded at every session start,
 | **Saved by P1** | 1 869 | 1 887 | **~500** |
 | 1.2.0 as shipped (P2 added four rules lines) | 13 069 | 13 140 | ~3 300 |
 | **Net, resident in every session** | 1 321 | 1 339 | **~330** |
+| 1.3.0 as shipped (reviewer lines, four definitions) | 13 987 | 14 062 | ~3 500 |
+| 1.4.0 as shipped (the prompt audit's rewrites) | 13 875 | 13 940 | ~3 470 |
 
-Rendered under the default merge policy (`session`; the `pr` sentence is 32 characters shorter). Tokens at four characters per token, as for the contract above: the character counts are exact, the token figures an estimate. The ceiling is 13 100 characters, pinned by `test/rules-size.test.mjs`.
+Rendered under the default merge policy (`session`; the `pr` sentence is 32 characters shorter). Tokens at four characters per token, as for the contract above: the character counts are exact, the token figures an estimate. The ceiling is 14 030 characters since 1.3.0, pinned by `test/rules-size.test.mjs`; it is a ceiling, not a pin, so 1.4.0's smaller file leaves it where it is.
 
 ## Rent and the rules file, 1.2.0 to 1.3.0
 
