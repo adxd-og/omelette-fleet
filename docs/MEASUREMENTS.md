@@ -19,6 +19,7 @@ What has actually been measured on this project, how each number was taken, and 
 | What fills a sub-agent's context — reading, its own output, the harness? | [Where a sub-agent's context goes](#where-a-sub-agents-context-goes) |
 | Who runs past 200 k tokens, and doing what? | [Past 200 k](#past-200-k) |
 | Does the guard's context estimate match the engine's? | [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) |
+| What did the handoff hooks do across every compaction the project has had? | [The handoff hooks over five compactions](#the-handoff-hooks-over-five-compactions) |
 | How do I repeat these on my own sessions? | [How the numbers are taken](#how-the-numbers-are-taken) |
 | Which claims has nobody measured? | [Not measured yet](#not-measured-yet) |
 
@@ -251,6 +252,25 @@ The handoff guard estimates the context fill from the session transcript; Claude
 
 Not yet taken: the near-threshold and post-compaction points, which need a working `[1m]` session run with the probe loaded. The row that matters for the guard's design is the window one: an estimate that reads its window from config cannot follow a session whose model differs, and the engine's figure can — which is the case for moving the guard into a function-hooks module once that API leaves early access (backlog N1).
 
+## The handoff hooks over five compactions
+
+Taken 2026-09-25 from every ledger under `.omelette/` (current and archived) and the 116 session transcripts of this project, after the closing assessment of 1.3.0 named the handoff machine as the first thing three of four readers would cut. The question: how many compactions did a hook-written handoff actually rescue?
+
+| Compaction (ledger stamp) | Trigger | A session-written `## Handoff` already above it | Lines between them | Hook summary written into |
+|---|---|---|---:|---|
+| 2026-09-08 14:08 | manual | yes ("written before the operator's restart") | 10 | 0.3.3 (no summary: PostCompact shipped in 0.3.7) |
+| 2026-09-11 09:30 | manual | yes ("RELEASED — written before the operator's restart") | 7 | 0.3.7 — 47 lines |
+| 2026-09-20 08:34 | manual | yes ("measurements published") | 6 | post-1.1 — 27 lines |
+| 2026-09-22 21:29 | manual | yes ("before the operator's /compact") | 10 | 1.2.0 — 38 lines, and a copy in post-1.1 |
+| 2026-09-24 17:34 | manual | yes ("spec approved; operator compacting") | 7 | 1.3.0 — 153 lines, and copies in 1.2.0 and post-1.1 |
+
+- **Compactions:** 5 in 17 days, every one manual (`trigger: manual`); no automatic compaction has happened in this project. Before each, the session had written its own handoff block six to ten lines earlier, four times naming the coming compaction in the heading.
+- **The threshold nudge and the Stop gate** (`PostToolUse` / `Stop`): fired on one day, 2026-09-08, twice, at "91% of 200000 tokens (default)" — the window fell back to the 200 k default in a 1 M session, so the crossing was not real (18 % of the live window). One of the two was followed by a handoff, the other was not. Since `handoff.contextWindow` was set to 1 M (1.2.0) neither has fired: the operator compacts between packages, far below 90 %. `handoff-state.json` holds `{}`.
+- **The PostCompact summary:** 7 written, 3 of them duplicates — the hook stamps every `ledger-*.md` in `.omelette/`, so the 1.3.0 summary also landed in the 1.2.0 and post-1.1 ledgers. 23–153 lines each.
+- **The SessionStart / PostCompact print** (the ledger tail into the fresh context): present after each of the five, and the session continued each time without re-deriving state — but what it printed was the session's own handoff, not anything a hook wrote.
+
+Reading: over five compactions the hook-authored parts — the nudge, the gate and the compaction summary — rescued nothing that the session had not already written itself, and the summary left three duplicate blocks in ledgers they do not belong to. The part that carried value is the cheapest one: printing the ledger tail at session start and after a compaction. The estimator behind the nudge (window detection, the transcript scan, `handoff-state.json`) is the largest piece of the guard and the source of [the window gap above](#the-guards-estimate-against-the-engine). N = 5, all manual: whether the nudge would earn its place under automatic compactions is not measured, because none has occurred.
+
 ## How the numbers are taken
 
 - **Sub-agent tokens.** `node scripts/agent-usage.mjs <transcript.jsonl>` (in the repository; not part of the installed package) reads a Claude Code session transcript (`~/.claude/projects/<project>/<session>.jsonl`) and collects the task notifications the harness writes when a background sub-agent finishes — `subagent_tokens`, `tool_uses`, `duration_ms` — one row per agent. It reads nothing else, and a description that carries an absolute path is cut to its last segment. The transcript itself is private and is not in this repository; only the aggregates above are.
@@ -271,6 +291,7 @@ Not yet taken: the near-threshold and post-compaction points, which need a worki
 - **Whether the five-section report shortens the orchestrator's reading.** The orchestrator's own tokens per release have not been separated out of its single long session.
 - **What the units cost per release.** `results --stats --since` has the data; it has not been cut by release.
 - **Whether `check` catches wrong evidence in practice.** In 1.1.0 it caught one off-by-one pointer in the orchestrator's own documentation and one weak fragment in the coder's own report. Two is an anecdote.
+- **The handoff nudge under automatic compactions.** [Five compactions](#the-handoff-hooks-over-five-compactions), all manual: whether the nudge would rescue anything when a session compacts on its own is untested, because it has not happened here.
 - **N0: the near-threshold and post-compaction points.** Flagged as not yet taken under [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) — the probe mod exists in the scratchpad; it needs an operator session with function hooks enabled to run.
 - **A second judgement-heavy effort trial.** [The matched repeat](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) is one task, N = 1; the two-bucket rule rests on it and on an observational bucket log. A second judgement-heavy pair is what would make it a ranking.
 - **The plugin run of the security audit.** [The row](#security-audit-plain-brief-and-plugin-over-one-revision) has two runs; the `claude-security` plugin waits for the operator's own `/claude-security` invocation.
