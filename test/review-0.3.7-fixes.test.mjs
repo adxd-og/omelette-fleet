@@ -57,7 +57,7 @@ function initializeServer(serverPath, cwd, env, { timeoutMs = 10_000 } = {}) {
 
 /* ── A · the marker test never blocks: a FIFO at the rules path is "unmarked" ─ */
 
-test('A: a FIFO where the rules file should be answers the full contract within 2 s, and a server still starts there', async (t) => {
+test('A: a FIFO where the rules file should be answers the full contract within 10 s (a blocked open never returns), and a server still starts there', async (t) => {
   const w = workspace('fifo');
   const { path } = rulesTarget({ cwd: w.proj, env: w.env });
   mkdirSync(dirname(path), { recursive: true });
@@ -71,7 +71,8 @@ test('A: a FIFO where the rules file should be answers the full contract within 
     `const c = contractFor({ cwd: ${JSON.stringify(w.proj)}, env: ${JSON.stringify(w.env)} });`,
     'process.stdout.write(JSON.stringify({ short: c.short, reason: c.reason }));',
   ].join('\n'));
-  const r = spawnSync(process.execPath, [probe], { encoding: 'utf8', timeout: 2000, env: w.env });
+  // 10 s, not 2: the assertion is "it answered at all"; 2 s read as a hang under load.
+  const r = spawnSync(process.execPath, [probe], { encoding: 'utf8', timeout: 10000, env: w.env });
   assert.equal(r.signal, null, `contractFor blocked on the FIFO: ${r.stdout}${r.stderr}`);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), { short: false, reason: `no rules file in ${w.proj}` });

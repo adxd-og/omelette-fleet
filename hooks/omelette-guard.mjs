@@ -815,10 +815,12 @@ const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
  * — because a guard that buffers without bound or waits without end is a
  * session that hangs on every tool call.
  *
- * The cap is 8 MiB rather than a tidier 1: a `PostToolUse` event carries the
- * tool's own `tool_response`, and a few megabytes of command output on one call
- * is ordinary. Giving up on an event that large would drop the very reminder
- * this guard exists to send — and, on a `PreToolUse`, a refusal.
+ * The cap is 8 MiB rather than a tidier 1: stdin is read whole before the
+ * event is named, and a settings file still wiring the retired `PostToolUse`
+ * (1.5.0 answers it with exit 0) sends events carrying a tool's own
+ * `tool_response` — a few megabytes of command output on one call is ordinary.
+ * A `PreToolUse` event with a long command must never be cut short of its
+ * refusal, so the cap fits the largest event any wiring can send.
  */
 const MAX_STDIN = 8 * 1024 * 1024; // 8 MiB — well above a real hook event, and above a big one
 const STDIN_DEADLINE_MS = 5000;

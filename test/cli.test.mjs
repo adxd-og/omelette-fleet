@@ -2996,7 +2996,9 @@ test('doctor: a settings file that would BLOCK the read is named unreadable, and
   if (spawnSync('mkfifo', [fifo], { encoding: 'utf8' }).status !== 0) return t.skip('mkfifo is unavailable here');
   const t0 = Date.now();
   const r = doctorFromProject(dir);
-  assert.ok(Date.now() - t0 < 2000, `doctor took ${Date.now() - t0} ms`);
+  // "At once" against a hang of 20 s (the cli() timeout): 10 s, because 2 s
+  // read as a hang whenever two suites shared the machine (2026-09-24/25).
+  assert.ok(Date.now() - t0 < 10000, `doctor took ${Date.now() - t0} ms`);
   assert.deepEqual(
     settingsLines(r.out),
     [`settings: ${fifo} unreadable — its values were not consulted`],
