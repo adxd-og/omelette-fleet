@@ -173,6 +173,7 @@ test('deepResearchModel: the stage ids the run asked for, collapsed when every s
 test('unit contract: four tools, billing scrub list, both modes declared', () => {
   assert.deepEqual(unit.tools.map((t) => t.name), ['gemini_research', 'gemini_image', 'gemini_models', 'gemini_deep_research']);
   assert.ok(unit.billingRiskEnv.includes('GEMINI_API_KEY') && unit.billingRiskEnv.includes('ANTHROPIC_API_KEY'));
+  assert.ok(unit.billingRiskEnv.includes('GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES'));
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': true });
   assert.equal(catalog.efforts.length, 0);
 });
@@ -199,8 +200,11 @@ test('runtime with a fake agy: argv per mode — research standard, workspace-wr
   utimesSync(join(dir, 'fleet.config.json'), new Date(), new Date(Date.now() + 5000));
   const closed = await wrap(base).callTool('gemini_research', { prompt: 'q' });
   assert.doesNotMatch(closed.text, /--mode accept-edits/);
-  const open = await wrap({ ...base, OMELETTE_ALLOW_WRITE: 'gemini' }).callTool('gemini_research', { prompt: 'q' });
+  // workspace-write needs a cwd to scope it to (1.4.0 round E): without one the run stays read-only.
+  const open = await wrap({ ...base, OMELETTE_ALLOW_WRITE: 'gemini' }).callTool('gemini_research', { prompt: 'q', cwd: dir });
   assert.match(open.text, /--mode accept-edits/);
+  const noCwd = await wrap({ ...base, OMELETTE_ALLOW_WRITE: 'gemini' }).callTool('gemini_research', { prompt: 'q' });
+  assert.doesNotMatch(noCwd.text, /--mode accept-edits/);
 
   // Every spawn disables slash-command / skill expansion of the prompt text.
   assert.match(ro.text, /--disable-slash-commands/);
@@ -239,8 +243,8 @@ test('runtime with a fake agy: argv per mode — research standard, workspace-wr
   assert.notEqual(imgRun.cwd, process.cwd());
   // The answer is the artifact on disk, not the prose that named it.
   assert.equal(img.text, join(imgRun.cwd, 'img.png'));
-  // Research keeps the process cwd — only image runs are relocated.
-  assert.match(ro.text, new RegExp(`CWD ${realpathSync(process.cwd())}$`));
+  // Research with no `cwd` is relocated too (1.4.0 round E): its own empty temp dir.
+  assert.match(ro.text, /CWD \S*omelette-gemini-research-\S*$/);
 
   const noPrompt = await wrap(base).callTool('gemini_research', { prompt: '  ' });
   assert.equal(noPrompt.isError, true);
@@ -683,7 +687,7 @@ test('gemini_research: an absolute `cwd` is where the run happens (agy has no cw
     { env },
   );
   assert.equal((await rt.callTool('gemini_research', { prompt: 'q', cwd: where })).text, `CWD ${realpathSync(where)}`);
-  assert.equal((await rt.callTool('gemini_research', { prompt: 'q' })).text, `CWD ${realpathSync(process.cwd())}`);
+  assert.match((await rt.callTool('gemini_research', { prompt: 'q' })).text, /^CWD \S*omelette-gemini-research-/);
   const rel = await rt.callTool('gemini_research', { prompt: 'q', cwd: 'relative/path' });
   assert.equal(rel.isError, true);
   assert.match(rel.text, /"cwd" must be an absolute path \(got "relative\/path"\)/);
@@ -917,7 +921,7 @@ test('gemini_research under workspace-write: a run that came back empty is NOT r
   const stub = (o) => { calls.push(o.args); return spawnRes({ stdout: '' }); };
 
   const open = await deepRt({ ...process.env, OMELETTE_HOME: dir, OMELETTE_ALLOW_WRITE: 'gemini' }, stub)
-    .callTool('gemini_research', { prompt: 'q' });
+    .callTool('gemini_research', { prompt: 'q', cwd: dir });
   assert.equal(calls.length, 1, 'one approved write request is one write-capable run');
   assert.ok(calls[0].includes('accept-edits'), calls[0].join(' '));
   assert.equal(open.text, '(empty response from Gemini)');

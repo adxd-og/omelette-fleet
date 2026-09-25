@@ -85,7 +85,7 @@ test('S18: the other billing-risk API keys are still scrubbed alongside the new 
   assert.deepEqual(unit.billingRiskEnv, [
     'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY',
     'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CREDENTIALS', 'GOOGLE_GENAI_USE_VERTEXAI',
-    'GOOGLE_GENERATIVE_AI_API_KEY',
+    'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES',
   ]);
 });
 
@@ -98,7 +98,8 @@ test('S19: gemini_research under accept-edits (workspace-write) — an empty fir
   const stub = (o) => { calls.push(o.args); return spawnRes({ stdout: '' }); };
 
   const rt = deepRt({ ...process.env, OMELETTE_HOME: dir, OMELETTE_ALLOW_WRITE: 'gemini' }, stub);
-  const r = await rt.callTool('gemini_research', { prompt: 'q' });
+  // workspace-write needs a cwd to scope it to (1.4.0 round E).
+  const r = await rt.callTool('gemini_research', { prompt: 'q', cwd: dir });
 
   assert.equal(calls.length, 1, 'an accept-edits run must not be re-issued on empty output');
   assert.ok(calls[0].includes('accept-edits'), calls[0].join(' '));

@@ -55,8 +55,9 @@
  *   either way. The hook where a research-mode flag would go is marked in
  *   runAgy.
  *   workspace-write (fleet ceiling open + mode set) maps to `--mode
- *   accept-edits` for research: file edits are auto-approved by agy's OWN
- *   permission layer inside the process cwd. That is WEAKER than Codex's
+ *   accept-edits` for research given a `cwd` (without one the run stays
+ *   read-only): file edits are auto-approved by agy's OWN
+ *   permission layer inside that cwd. That is WEAKER than Codex's
  *   kernel sandbox and is documented as such. agy's `skip` / `sandbox` modes
  *   are never used by this unit.
  *   gemini_image always runs with `--mode accept-edits` regardless of mode —
@@ -91,7 +92,19 @@
  * BILLING — the OAuth subscription is the only billing path this unit accepts;
  * every env var that could flip agy to metered billing is deleted from the
  * child env: the API keys, and the Google Cloud credentials and Vertex switch
- * the GOOGLE_* passthrough would otherwise admit (BILLING_RISK_ENV).
+ * the GOOGLE_* passthrough would otherwise admit (BILLING_RISK_ENV). The same
+ * list holds one reach knob: GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES, which
+ * lets the Google auth libraries launch a credential helper executable.
+ * AGY_ADC_AUTH (a login mode) is the operator's choice and passes.
+ *
+ * EMPTY RESEARCH DIRECTORY — gemini_research with no `cwd`, and every stage of
+ * gemini_deep_research (which takes no `cwd`), runs in a fresh empty temp
+ * directory created for the call and removed after it, never in the MCP
+ * server's own cwd (the operator's project): agy's documented default allows
+ * workspace reads under the cwd even with no `read_file` rule (vendor docs;
+ * not measured). A caller's `cwd` opts a gemini_research run into that
+ * directory. workspace-write needs that `cwd`, as codex_code_review does:
+ * without one the run is logged and stays read-only in the empty directory.
  *
  * DEEP RESEARCH — reimplemented in-process as DECOMPOSE → parallel GATHER →
  * SYNTHESIZE over agy one-shots, with the decompose stage shape-locked by
@@ -111,7 +124,7 @@
  * and gemini_image report NOTHING on purpose — agy picks their model and never
  * says which — so those stay filed under `(vendor default)`.
  */
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OUTPUT_CAP } from '../../core/spawn.mjs';
@@ -149,6 +162,9 @@ const BILLING_RISK_ENV = [
   'GOOGLE_CREDENTIALS',
   'GOOGLE_GENAI_USE_VERTEXAI',
   'GOOGLE_GENERATIVE_AI_API_KEY',
+  // A reach knob, not a billing one: at 1 the Google auth libraries may launch
+  // a credential helper executable named in a credential config.
+  'GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES',
 ];
 
 /** Exhaustion strings => quota is empty. Checked ONLY on FAILED turns (see header). */
@@ -410,7 +426,7 @@ const DEGRADED_BANNER =
  * The findings are what was paid for; a half-written report is not a report.
  * @returns {Promise<{text:string, partial:boolean}>}
  */
-async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
+async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
   const cap = Math.min(5, Math.max(1, Number(maxSubquestions) || 3));
   const stage = stageModels(ctx.catalog, model);
   // Filed BEFORE the first stage spawns, so a run that is cancelled or capped
@@ -432,6 +448,7 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
       `{"subquestions": [...]}.\n\nQuestion: ${question}`,
     model: stage.decompose,
     schema: SUBQUESTIONS_SCHEMA,
+    cwd,
   });
 
   const fromSchema = decompose.structured && Array.isArray(decompose.structured.subquestions)
@@ -453,6 +470,7 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
           'Research this question using web search grounding. Cite sources with ' +
           `URLs. Be thorough but concise.\n\nQuestion: ${sq}`,
         model: stage.gather,
+        cwd,
       });
       return { text: `### Sub-question ${i + 1}: ${sq}\n\n${r.text}`, partial: !!r.partial };
     } catch (e) {
@@ -476,6 +494,7 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model }) {
         'sources, flag contradictions, and be explicit about uncertainty.\n\n' +
         `Original question: ${question}\n\n${findings.map((f) => f.text).join('\n\n---\n\n')}`,
       model: stage.synth,
+      cwd,
     });
   } catch (e) {
     // The cancel can land INSIDE the synthesis: the SIGKILL leaves that stage
@@ -553,8 +572,8 @@ export default defineUnit({
         'READ-ONLY: Gemini must not edit files, run git, or mutate the repo. Returns ' +
         "Gemini's plain-text answer. Use for web-style research, fact synthesis, " +
         'reading & summarizing, or a second-opinion analysis — NOT for code changes. ' +
-        'The run happens where `cwd` points when you give one, else in the MCP ' +
-        "server's own process cwd. " +
+        'The run happens where `cwd` points when you give one, else in a fresh ' +
+        'empty directory. ' +
         'MULTIMODAL: Gemini can read local files INCLUDING IMAGES and PDFs — give the ' +
         'ABSOLUTE path in the prompt and say "view the file directly, no terminal ' +
         'commands" (works on screenshots, UI mocks and docs) ' +
@@ -568,8 +587,8 @@ export default defineUnit({
             type: 'string',
             description:
               'Optional ABSOLUTE path to the directory the run happens in (must ' +
-              'exist; used as the spawn cwd — agy takes no cwd flag). Defaults to ' +
-              'the MCP server\'s process cwd.',
+              'exist; used as the spawn cwd — agy takes no cwd flag). Defaults to a ' +
+              'fresh empty directory: pass a path only when the run should see a workspace.',
           },
           model: MODEL_PROP,
         },
@@ -580,13 +599,23 @@ export default defineUnit({
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         const c = checkCwd(args.cwd);
         if (c.error) return { text: c.error, isError: true };
-        const acceptEdits = ctx.mode === 'workspace-write';
-        const a = { prompt: NO_GIT_PREFIX + prompt, model: ctx.model, acceptEdits, cwd: c.cwd || undefined };
-        // Never re-issue a run that may have written something: an accept-edits
-        // run that came back empty may still have made its edits. Codex's
-        // codex_code_review follows the same rule.
-        const r = acceptEdits ? await runAgy(ctx, a) : await runAgyWithRetry(ctx, a);
-        return { text: r.text, usage: r.usage, ...(r.partial ? { partial: true } : {}) };
+        // workspace-write only with an explicit directory to scope it to — the
+        // throwaway directory is no place for edits (codex_code_review's rule).
+        const acceptEdits = ctx.mode === 'workspace-write' && !!c.cwd;
+        if (ctx.mode === 'workspace-write' && !c.cwd) ctx.log('workspace-write requested without cwd — running read-only');
+        // No `cwd`: a fresh empty directory for this call, never the MCP
+        // server's own cwd (the operator's project) — see the header.
+        const cwd = c.cwd || mkdtempSync(join(tmpdir(), 'omelette-gemini-research-'));
+        const a = { prompt: NO_GIT_PREFIX + prompt, model: ctx.model, acceptEdits, cwd };
+        try {
+          // Never re-issue a run that may have written something: an accept-edits
+          // run that came back empty may still have made its edits. Codex's
+          // codex_code_review follows the same rule.
+          const r = acceptEdits ? await runAgy(ctx, a) : await runAgyWithRetry(ctx, a);
+          return { text: r.text, usage: r.usage, ...(r.partial ? { partial: true } : {}) };
+        } finally {
+          if (!c.cwd) rmSync(cwd, { recursive: true, force: true });
+        }
       },
     },
     {
@@ -700,6 +729,7 @@ export default defineUnit({
         'This is a LONG call (commonly 3-10 minutes). QUOTA COST: one run is ~5 agy ' +
         'one-shots (decompose + up to 3 gathers + synthesize) — a modest multiplier; ' +
         'use deliberately rather than as the default research mode. ' +
+        'Every stage runs in a fresh empty directory; it reads no local files. ' +
         'Optionally choose a model with `model` (omit for the per-stage defaults). ' + GUIDE,
       inputSchema: {
         type: 'object',
@@ -713,7 +743,14 @@ export default defineUnit({
       async run(args, ctx) {
         const question = String(args.question || '').trim();
         if (!question) return { text: 'Error: "question" is required.', isError: true };
-        const r = await runDeepResearch(ctx, { question, maxSubquestions: args.maxSubquestions, model: ctx.model || undefined });
+        // One empty directory for every stage of this call (see the header).
+        const cwd = mkdtempSync(join(tmpdir(), 'omelette-gemini-research-'));
+        let r;
+        try {
+          r = await runDeepResearch(ctx, { question, maxSubquestions: args.maxSubquestions, model: ctx.model || undefined, cwd });
+        } finally {
+          rmSync(cwd, { recursive: true, force: true });
+        }
         // A report standing on a partial stage is partial: the flag reaches the
         // status feed next to the count line the text already carries.
         return { text: r.text || '(empty deep-research report)', ...(r.partial ? { partial: true } : {}) };
