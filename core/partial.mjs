@@ -34,14 +34,18 @@ export function partialMark(unit, kind, detail = {}) {
 /**
  * Matches every marker above for the three units, and nothing else the
  * adapters print (`_(gather failed: …)_`, the degraded banner and the
- * cancellation notes are not markers: they carry no flag).
+ * cancellation notes are prose, not markers; the flag on a cancelled deep
+ * research report comes from the `cancelled` marker appended after its note).
+ * `after` may be `?` (codex with no timeoutS) and `code` may be `null` (a
+ * vendor child that died by an outside signal). A hard-kill marker names the
+ * config key of the unit its prefix names (`\1`).
  */
 export const PARTIAL_MARK_RE = new RegExp(
   '\\[(gemini|grok|codex): (' +
   'output capped at \\d+ chars — the beginning of the stream was dropped; treat the answer as partial' +
-  '|hard-killed after [\\d.]+s — treat the answer as partial; raise (gemini|grok|codex)\\.timeoutS in the fleet config' +
-  '|cancelled by the client[^\\]]*' +
-  '|CLI exited -?\\d+ — treat the answer as partial' +
+  '|hard-killed after [\\d.?]+s — treat the answer as partial; raise \\1\\.timeoutS in the fleet config' +
+  '|cancelled by the client( — [^\\]]*)?' +
+  '|CLI exited (-?\\d+|null) — treat the answer as partial' +
   '|run ended early — stopReason=[^\\]]*' +
   '|run ended early — status=[^\\]]*' +
   '|run ended before turn\\.completed — treat as partial' +

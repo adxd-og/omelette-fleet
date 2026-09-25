@@ -235,10 +235,29 @@ export function serve({ serverInfo, tools, callTool, instructions, log = () => {
   );
   // Every way out goes through here: `onShutdown` first (the unit kills the
   // vendor process groups it still runs and removes its status snapshot), then
-  // the exit. A throwing hook is logged; it never keeps us alive.
-  const shutdownAndExit = () => {
+  // the exit. A throwing hook is logged; it never keeps us alive. It runs ONCE:
+  // a signal can land while the stdin-end path is already flushing.
+  let shutdownRan = false;
+  const runShutdown = () => {
+    if (shutdownRan) return;
+    shutdownRan = true;
     try { onShutdown(); } catch (e) { log('onShutdown: ' + ((e && e.stack) || e)); }
+  };
+  const shutdownAndExit = () => {
+    runShutdown();
     process.exit(0);
+  };
+  // Written is not flushed: a write to a PIPE is asynchronous, and a response
+  // larger than the pipe buffer is still queued when a bare process.exit()
+  // runs — it would cut the frame off mid-string. The callback of an empty
+  // write runs only once every write queued before it has gone out, so this
+  // exits on the last byte of the answer, not on the first. A client that
+  // keeps the pipe open without ever reading it never lets that callback run,
+  // so `capMs` bounds the wait and the server still goes away by itself.
+  const flushAndExit = (capMs) => {
+    const t = setTimeout(shutdownAndExit, capMs);
+    if (t.unref) t.unref();
+    process.stdout.write('', () => { clearTimeout(t); shutdownAndExit(); });
   };
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', feed);
@@ -252,33 +271,25 @@ export function serve({ serverInfo, tools, callTool, instructions, log = () => {
     if (n) log(`stdin closed with ${n} call(s) in flight — finishing them before exit`);
     // setImmediate, not a bare exit: the drain resolves inside the handler's
     // `finally`, one microtask BEFORE the response is handed to `send`. The
-    // check phase runs after every pending microtask, so the answer is written.
-    // Written is not flushed: a write to a PIPE is asynchronous, and a response
-    // larger than the pipe buffer is still queued when the check phase runs —
-    // process.exit() there would cut the frame off mid-string. The callback of
-    // an empty write runs only once every write queued before it has gone out,
-    // so this exits on the last byte of the answer, not on the first.
-    // Either way out, `shutdownAndExit` runs: the drain is done, so nothing
-    // is left to report, and the unit's status snapshot goes with the process.
-    const exitWhenFlushed = () => setImmediate(() => {
-      // …and a client that keeps the pipe open without ever reading it never
-      // lets that callback run: the write stays parked on backpressure and the
-      // server would sit there for good. 10 s is far longer than any real
-      // flush and short enough that a stuck server still goes away by itself.
-      const t = setTimeout(shutdownAndExit, 10000);
-      if (t.unref) t.unref();
-      process.stdout.write('', () => { clearTimeout(t); shutdownAndExit(); });
-    });
+    // check phase runs after every pending microtask, so the answer is written
+    // — and `flushAndExit` waits for it to go out. Either way out,
+    // `shutdownAndExit` runs: the drain is done, so nothing is left to report,
+    // and the unit's status snapshot goes with the process. 10 s is far longer
+    // than any real flush and short enough that a stuck server still goes away.
+    const exitWhenFlushed = () => setImmediate(() => flushAndExit(10000));
     handle.drain().then(exitWhenFlushed, exitWhenFlushed);
   });
   // A server TOLD to stop does not drain: Claude Code sends SIGTERM when a
   // server outlives its closed stdin, and `call --timeout` sends it after its
   // cancel. Without a handler the default action kills this process alone and
   // leaves every vendor process group it started running with no bound.
+  // The shutdown runs at once; the exit waits for what stdout already holds
+  // (an answer written after stdin closed), 1 s at most.
   for (const sig of ['SIGTERM', 'SIGHUP']) {
     process.on(sig, () => {
       log(`${sig}: shutting down`);
-      shutdownAndExit();
+      runShutdown();
+      flushAndExit(1000);
     });
   }
 }

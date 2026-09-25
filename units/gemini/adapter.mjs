@@ -480,7 +480,7 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
   if (cancelled()) {
     ctx.log('deep research · cancelled — the synthesis stage was not started');
     // A report that never reached synthesis is partial whatever its stages did.
-    return { text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n'), partial: true };
+    return withPartial({ text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n') }, partialMark('gemini', 'cancelled'));
   }
 
   let synth;
@@ -502,7 +502,7 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
     // return above — the findings, unsynthesised, under the same note.
     if (!cancelled() && !/cancelled by the client|^cancelled$/i.test((e && e.message) || '')) throw e;
     ctx.log('deep research · cancelled during synthesis — the findings are returned unsynthesised');
-    return { text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n'), partial: true };
+    return withPartial({ text: CANCELLED_NOTE + findings.map((f) => f.text).join('\n\n---\n\n') }, partialMark('gemini', 'cancelled'));
   }
 
   // A cancel that lands MID-SYNTHESIS while agy had already printed something
@@ -517,11 +517,15 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
     // empty-handed is a run whose synthesis produced nothing, and that is what
     // CANCELLED_NOTE says.
     const fragment = synth.text ? `\n\n---\n\n[gemini: partial synthesis, cancelled]\n\n${synth.text}` : '';
-    return {
+    const report = {
       text: (fragment ? CANCELLED_MID_SYNTH_NOTE : CANCELLED_NOTE)
         + findings.map((f) => f.text).join('\n\n---\n\n') + fragment,
-      partial: true,
     };
+    // A fragment the kill salvaged already ends on interpretAgy's cancel
+    // marker: a second one would say nothing new. Any other marker (a gather's
+    // cap or hard kill) does not say the run was cancelled, so it gets one.
+    const cancelMark = partialMark('gemini', 'cancelled');
+    return report.text.endsWith(cancelMark) ? { ...report, partial: true } : withPartial(report, cancelMark);
   }
 
   // The stages that RAN: decompose, one per sub-question, synthesis. A gather

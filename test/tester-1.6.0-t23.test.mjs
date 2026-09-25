@@ -211,6 +211,9 @@ test('R2.4: cancellation before synthesis returns CANCELLED + partial, with no g
 
 test('R3.5: two different units in one dir — each boot sweeps only its OWN units dead file', () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-t23-r3-crossunit-'));
+  // "Dead" only when the OS says so: on Linux pid_max can reach 4194304.
+  assert.throws(() => process.kill(999991, 0));
+  assert.throws(() => process.kill(999992, 0));
   const deadAlpha = join(dir, 'status-alpha-999991.json');
   const deadBravo = join(dir, 'status-bravo-999992.json');
   writeFileSync(deadAlpha, JSON.stringify({ schema: 2, unit: 'alpha', pid: 999991, active: [], lastEvent: null, updatedAt: '2000-01-01T00:00:00.000Z' }));
@@ -235,6 +238,8 @@ test('R3.6: a hyphenated unit name round-trips through the snapshot name and the
   assert.equal(snap.unit, 'my-unit');
   assert.equal(snap.pid, 42424);
 
+  assert.throws(() => process.kill(999999, 0));
+  assert.throws(() => process.kill(999998, 0));
   const deadMyUnit = join(dir, 'status-my-unit-999999.json');
   writeFileSync(deadMyUnit, JSON.stringify({ schema: 2, unit: 'my-unit', pid: 999999, active: [], lastEvent: null, updatedAt: '2000-01-01T00:00:00.000Z' }));
   const deadUnit = join(dir, 'status-unit-999998.json');

@@ -76,21 +76,40 @@ export const ALLOWED_ENV = [
 ];
 
 /**
- * Process groups this process started and has not seen close, by leader pid.
- * Each run's child is a group leader (`detached: true` below), so the leader's
- * pid names the whole group.
+ * The group leaders this process started, as ChildProcess objects. Each run's
+ * child is a group leader (`detached: true` below), so the leader's pid names
+ * the whole group, and the group id outlives the leader for as long as the
+ * group has members — a grandchild of the same group is still reached by
+ * `-pid` after the leader has exited. An entry goes on `close` or `error`,
+ * and at the leader's `exit` when its group is already empty.
+ *
+ * WHAT THE PROBE KNOWS. `kill(-pid, 0)` tells "group exists" from "group
+ * gone", not ours from a stranger's. The exit-time deletion closes the
+ * empty-group case: a group that is empty when its leader exits is forgotten
+ * before its id can be handed out again. The window left is accepted: a
+ * same-group member dies after the leader while a process of ANOTHER group
+ * still holds our pipes (so `close` has not come), and a stranger takes the
+ * id in between. docs/MEASUREMENTS.md ("Unit processes after the server is
+ * gone") found nothing left in a group after a normal run.
  */
 const LIVE = new Set();
 
+/** Does process group `pgid` still have a member? Any error counts as no. */
+const groupExists = (pgid) => {
+  try { process.kill(-pgid, 0); return true; } catch { return false; }
+};
+
 /**
- * SIGKILL every live group and forget them. For a process that is going away:
+ * SIGKILL every listed group that still has a member — whether or not its
+ * leader has exited — and forget them all. For a process that is going away:
  * a server told to stop kills what it started, since its own hard-kill timers
  * die with it. Never throws; returns how many groups the signal reached.
  */
 export function killLiveGroups() {
   let n = 0;
-  for (const pid of LIVE) {
-    try { process.kill(-pid, 'SIGKILL'); n++; } catch { /* group already gone */ }
+  for (const child of LIVE) {
+    if (!groupExists(child.pid)) continue; // gone: forgotten below, never signalled
+    try { process.kill(-child.pid, 'SIGKILL'); n++; } catch { /* gone in between */ }
   }
   LIVE.clear();
   return n;
@@ -172,7 +191,12 @@ export function runProcess({
       return;
     }
     // No pid means the spawn failed (ENOENT and friends arrive as 'error' below).
-    if (child.pid) LIVE.add(child.pid);
+    // At the leader's exit the entry stays only while its group has a member
+    // left: an empty group's id is free for the OS to reuse (see LIVE).
+    if (child.pid) {
+      LIVE.add(child);
+      child.on('exit', () => { if (!groupExists(child.pid)) LIVE.delete(child); });
+    }
 
     // THE TAIL, AS A QUEUE. Chunks go into an array with a running total, and
     // the HEAD is dropped while what remains still covers the cap — so what is
@@ -241,7 +265,7 @@ export function runProcess({
     child.on('error', (e) => {
       if (timer) clearTimeout(timer);
       detachAbort();
-      LIVE.delete(child.pid);
+      LIVE.delete(child);
       if (settled) return;
       settled = true;
       if (e && e.code === 'ENOENT') {
@@ -253,7 +277,7 @@ export function runProcess({
     child.on('close', (code, sig) => {
       if (timer) clearTimeout(timer);
       detachAbort();
-      LIVE.delete(child.pid);
+      LIVE.delete(child);
       if (settled) return;
       settled = true;
       // `capped` counts characters DROPPED, not slices attempted: output that

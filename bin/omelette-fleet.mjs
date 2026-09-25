@@ -436,7 +436,10 @@ async function probeLogin(unit, binPath) {
     if (/not authenticated|not signed in/i.test(both)) return { state: 'out', detail: 'signed out — run `grok login`' };
     // `grok models` opens with `Default model: <id>` — the model every call
     // that omits `model` runs on. doctor compares it with the catalog.
-    const dm = r.stdout.match(/^\s*Default model:\s*(\S+)/m);
+    // [ \t], not \s: an empty `Default model:` must not capture the next line's
+    // word. A CRLF line reads too: `$` under /m already stops before `\r`, and
+    // `\r?` spells that out.
+    const dm = r.stdout.match(/^[ \t]*Default model:[ \t]*(\S+)[ \t]*\r?$/m);
     const defaultModel = dm ? dm[1] : null;
     if (r.code === 0 && lines.length) return { state: 'in', detail: `${cmd} listed ${lines.length} line(s)`, defaultModel };
     return unknown;
@@ -2428,12 +2431,13 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
     // line, and the wait for the aborted call to settle is deliberately not
     // part of it: `timed out after N s` names the deadline the operator set.
     let decidedAt = 0;
+    let rt = null;
     try {
       // `cancel: 'kill'` for THIS runtime only (core/unit.mjs), whatever the
       // operator configured: it is what makes the signal below reach the
       // spawn. Under `finish` the runtime passes nothing down, and the
       // deadline would end the WAIT without ending the RUN.
-      const rt = createUnitRuntime(unit, { env: probeRuntimeEnv(unit, env, { capS }), cancel: 'kill' });
+      rt = createUnitRuntime(unit, { env: probeRuntimeEnv(unit, env, { capS }), cancel: 'kill' });
       // The three research tools take a `cwd` (0.3.6), so the vendor process
       // runs in the probe directory because it was ASKED to — not because
       // doctor stood there. A cwd-relative write still lands in the directory
@@ -2479,6 +2483,9 @@ async function probeUnit(unit, { cfg, env = process.env, log = () => {} }) {
       failed = true;
     } finally {
       if (timer) clearTimeout(timer);
+      // The runtime wrote a status snapshot under doctor's own pid at boot;
+      // it goes with the probe, as a server's goes with the server.
+      if (rt) rt.shutdown();
     }
     const seconds = Math.round(((decidedAt || Date.now()) - started) / 1000);
     const reply = firstLine(text).slice(0, 80);

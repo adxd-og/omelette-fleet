@@ -159,10 +159,10 @@ test('call --timeout through the real CLI binary: exit 1 with the new message, a
     // already proof the whole chain has settled, not just the client promise.
     const r = spawnSync(process.execPath, [
       BIN, 'call', 'gemini', 'gemini_research', JSON.stringify({ prompt: 'run long — t7 e2e' }), '--timeout', '3',
-    ], { cwd: dir, encoding: 'utf8', env, timeout: 9500 });
+    ], { cwd: dir, encoding: 'utf8', env, timeout: 20_000 });
     assert.equal(r.status, 1, `exit code · stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
     assert.match(r.stderr, /omelette-fleet call: no answer after 3s — server cancelled and killed/);
-    pids = JSON.parse(readFileSync(pidFile, 'utf8'));
+    pids = await until(() => JSON.parse(readFileSync(pidFile, 'utf8')), 'the fake agy to write its pids');
     await until(() => !alive(pids.agy) && !alive(pids.grandchild) && !alive(pids.server),
       'the fake agy, its grandchild and the server to all be gone');
     assert.ok(Date.now() - t0 < DEADLINE_MS, `took ${Date.now() - t0} ms`);

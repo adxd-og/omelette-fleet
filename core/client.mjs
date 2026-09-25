@@ -116,6 +116,9 @@ export function callUnitServer({
     child.stdout.setEncoding('utf8');
     child.stdout.on('error', () => {});
     child.stdout.on('data', createLineSplitter((line) => {
+      // Settled means answered, failed or timed out: a reply that lands after
+      // that (a late tools/list) must not start a tools/call nobody waits for.
+      if (settled) return;
       let m;
       try { m = JSON.parse(line); } catch { onProgress(`non-JSON on stdout: ${line.slice(0, 200)}`); return; }
       if (!REQUESTS[m.id]) return; // a notification, or someone else's id

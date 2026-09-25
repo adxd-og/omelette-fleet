@@ -22,7 +22,11 @@
  * LIFECYCLE: boot() sweeps, trims the log and writes this process's file;
  * dispose() removes this process's file (a clean exit). The SWEEP removes a
  * file only when all of these hold: it is named status-<this unit>-<pid>.json,
- * the pid is not this process's own, and the OS answers ESRCH for that pid.
+ * the pid is not this process's own, the OS answers ESRCH for that pid, and
+ * the file itself says schema >= 2 with that same unit and pid. The last check
+ * keeps another unit's file whose name happens to parse as ours (schema 1's
+ * status-my-unit-999999.json is unit `my-unit-999999`, not `my-unit`'s pid);
+ * a file that cannot be read or parsed is kept.
  * EPERM (alive, another user's) keeps the file, and so does any other error:
  * unknown is not dead. A reused pid keeps a dead file until the next boot finds
  * it dead — delayed cleanup, not wrong data (the file's updatedAt shows its age).
@@ -117,7 +121,10 @@ export function createStatus({ unit, spawnTools, resolve, pid = process.pid }) {
       try {
         const m = SNAPSHOT_NAME_RE.exec(name);
         if (!m || m[1] !== unit || m[2] === String(pid)) continue;
-        if (pidIsGone(Number(m[2]))) rmSync(join(dir, name), { force: true });
+        if (!pidIsGone(Number(m[2]))) continue;
+        const parsed = JSON.parse(readFileSync(join(dir, name), 'utf8'));
+        if (!(parsed && parsed.schema >= 2 && parsed.unit === unit && parsed.pid === Number(m[2]))) continue;
+        rmSync(join(dir, name), { force: true });
       } catch { /* this file only; the next one is still looked at */ }
     }
   }

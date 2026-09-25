@@ -336,6 +336,10 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
     resolve: () => { const c = cfgFor(); return { dir: c.home, enabled: c.values.status }; },
   });
   status.boot();
+  // The feed tokens of the calls running now: added when status.start() hands
+  // one out, removed in finish(). shutdown() closes whatever is left, so a
+  // signal during a call leaves an `end` beside its `start`, never a lone one.
+  const openTokens = new Set();
   // Retention runs at boot as well as after every write: a `resultsKeep`
   // lowered while this server was down should not wait for the next call.
   const bootCfg = cfgFor();
@@ -431,6 +435,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
     const startedAt = new Date().toISOString();
     const t0 = Date.now();
     const token = status.start(name, promptText, model, effort, resultId);
+    if (token) openTokens.add(token);
     // Progress exists for one reason: a stdio tool call that sends neither a
     // response nor a `notifications/progress` for 30 minutes is aborted for
     // idleness by the client, whatever the wall-clock timeout says. Only for a
@@ -488,6 +493,9 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
 
     const finish = (text, isError = false, extra) => {
       clearProgress();
+      // shutdown() already closed this call's feed entry as `cancelled`: it is
+      // not closed twice, and nothing is spooled — the server is on its way out.
+      if (token && !openTokens.delete(token)) return isError ? { text, isError: true } : { text };
       const aborted = !!(call.signal && call.signal.aborted);
       const cancelled = aborted && cancelMode === 'kill';
       const detached = aborted && !cancelled;
@@ -579,11 +587,16 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
   // tools/list must show only the public MCP shape.
   const tools = allTools.map(({ run, kind, mutateGate, ...pub }) => pub);
   /**
-   * The server is going away: the vendor process groups it still runs go
-   * first (their hard-kill timers die with this process), then this process's
-   * status snapshot. Never throws.
+   * The server is going away: the calls still running end in the feed first,
+   * as `cancelled` (no spool record: there is no answer to keep), then the
+   * vendor process groups it still runs go (their hard-kill timers die with
+   * this process), then this process's status snapshot. Never throws.
    */
   function shutdown() {
+    for (const token of openTokens) {
+      status.end(token, 'cancelled', 'server shut down before the call finished', { resultId: token.resultId });
+    }
+    openTokens.clear();
     try {
       const n = killLiveGroups();
       if (n) log(`shutdown: killed ${n} process group(s)`);
