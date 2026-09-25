@@ -37,7 +37,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 ~/.omelette/fleet.config.json         # default
 ```
 
-`OMELETTE_HOME` also holds the status feed (`status-<unit>.json`, `fleet-log.ndjson`), the result spool (`results/<unit>/<resultId>.md`) and the update-check cache (`update-check.json`). The file is optional: with no file at all, every unit runs on built-in defaults, read-only, with no warnings. `omelette-fleet set` writes it atomically (temp file + rename) with mode `0600` and `"version": 1`.
+`OMELETTE_HOME` also holds the status feed (`status-<unit>-<pid>.json`, `fleet-log.ndjson`), the result spool (`results/<unit>/<resultId>.md`) and the update-check cache (`update-check.json`). The file is optional: with no file at all, every unit runs on built-in defaults, read-only, with no warnings. `omelette-fleet set` writes it atomically (temp file + rename) with mode `0600` and `"version": 1`.
 
 ## Shape
 

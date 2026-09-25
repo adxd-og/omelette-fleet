@@ -115,7 +115,7 @@
   <text x="332" y="471" fill="#4a6187" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">HOME</text>
   <text x="452" y="494" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Fleet home · $OMELETTE_HOME</text>
   <text x="452" y="512" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">fleet.config.json</text>
-  <text x="452" y="528" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">status-&lt;unit&gt;.json · fleet-log.ndjson</text>
+  <text x="452" y="528" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">status-&lt;unit&gt;-&lt;pid&gt;.json · fleet-log.ndjson</text>
   <text x="452" y="544" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">results/&lt;unit&gt;/</text>
 
   <!-- ===== Legend ===== -->

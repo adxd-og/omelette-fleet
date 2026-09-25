@@ -122,7 +122,7 @@ Everything else that reaches the network is the vendor CLI's own traffic, made w
 
 Two things under the fleet home (`$OMELETTE_HOME`, default `~/.omelette`), both `0600`, both plain files on your own machine:
 
-- **The status feed** — `status-<unit>.json` and `fleet-log.ndjson`: what each unit is doing, with a 200-character preview of each prompt.
+- **The status feed** — `status-<unit>-<pid>.json` and `fleet-log.ndjson`: what each unit is doing, with a 200-character preview of each prompt.
 - **The result spool** — `results/<unit>/<resultId>.md`, in a `0700` directory: the *whole* answer of every spawned call, written before the response is sent.
 
 Be deliberate about the second one. A review answer quotes the source it reviewed, so the spool holds excerpts of whatever you pointed a unit at, for as long as retention keeps them (`resultsKeep`, `resultsMaxBytes`; `results: false` switches writing off entirely). Nothing is uploaded, nothing is shared between machines and no unit can reach another unit's files through the fleet — this is local disk, under the same directory and the same permissions as the config and the feed, and never a path outside the fleet home.
