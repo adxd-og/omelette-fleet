@@ -45,13 +45,13 @@ defineUnit({
   name: 'codex',                       // [a-z][a-z0-9-]*; also the config key and status unit
   label: 'Codex',                      // human name in error messages
   bin: { env: 'CODEX_BIN', default: 'codex' },
-  riskEnv: ['OPENAI_API_KEY'],         // deleted from every child env
+  riskEnv: ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL'],  // deleted from every child env
   envPassthrough: ['CODEX_HOME'],      // exact names added to core/spawn.mjs's ALLOWED_ENV for this unit's
                                        // children only; defineUnit refuses a PREFIX_* pattern. Everything
                                        // else is NOT inherited.
   envMap: { model: 'CODEX_DEFAULT_MODEL', timeoutS: 'CODEX_TIMEOUT_S' },   // env overrides
   builtin: { timeoutS: 600 },          // unit defaults for config keys
-  extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },          // unit-only config keys
+  extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },          // unit-only config keys (grok's; codex declares none)
   supportedModes: { 'read-only': true, 'workspace-write': true|null },     // null = refuse that level
   auth: { detect: (stderr) => bool, help: 'run `codex login`' },           // checked on empty-stdout runs only
   catalog: makeCatalog({ models, efforts, guide, title }),

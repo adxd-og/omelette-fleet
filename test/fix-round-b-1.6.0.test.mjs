@@ -25,7 +25,7 @@ test('B1 README scopes "read-only by design" to the default mode and links an an
 });
 
 test('B2 grok-4.5: a config naming it is ignored with a warning, an explicit call argument is refused', () => {
-  has('CHANGELOG.md', '**grok-4.5 is dropped** (a fleet config naming it is ignored with a warning and the CLI default applies; an explicit `model: "grok-4.5"` in a call is refused — core/unit.mjs:407)');
+  has('CHANGELOG.md', '**grok-4.5 is dropped** (a fleet config naming it is ignored with a warning and the CLI default applies; an explicit `model: "grok-4.5"` in a call is refused — core/unit.mjs:412–416 and :543)');
   lacks('CHANGELOG.md', 'a config naming it is refused at call time');
   const models = read('units/grok/models.js').replace(/\n \* /g, ' ');
   assert.ok(models.includes('a fleet config naming it is ignored with a warning, an explicit call argument is refused'));
@@ -119,7 +119,7 @@ test('B15 the initialize measurement is 299 records across the logs, dated 2026-
 });
 
 test('B16 CHANGELOG counts the touched test files', () => {
-  has('CHANGELOG.md', 'fifteen existing test files touched');
+  has('CHANGELOG.md', 'seventeen existing test files touched');
   lacks('CHANGELOG.md', 'twenty-three re-pinned');
 });
 
