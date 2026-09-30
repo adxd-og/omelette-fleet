@@ -515,11 +515,11 @@ test('1b rule 4: the text items — README\'s probe claim is versioned, 5.6-luna
     }
   }
   // README's doctor sample carries a codex that knows 6.1-sol, and its models line
-  // (the sample machine runs the shipped example config, which pins the model).
+  // (re-taken at the 1.6.1 live gate on an install that pins no codex model: the catalog head).
   const sample = readme.slice(readme.indexOf('── codex'), readme.indexOf('── codex') + 800);
   assert.match(sample, /^  version     codex-cli 0\.159\.2$/m, sample);
-  assert.match(sample, /^  models      CLI default gpt-6\.1-sol — in the catalog; the fleet pins gpt-6\.1-sol \(fleet config\)$/m, sample);
-  assert.match(readme, /on codex-cli 0\.157\.1, and `gpt-6\.1-sol`, which 0\.157\.1 refused, on codex-cli 0\.159\.2/);
+  assert.match(sample, /^  models      CLI default gpt-6\.1-sol — in the catalog; the fleet pins gpt-6\.1-sol \(catalog head\)$/m, sample); // live gate 1.6.1: the sample install pins no codex model
+  assert.match(readme, /on codex-cli 0\.159\.2, `doctor --probe-models`[^\n]*accepted every id in the catalog[^\n]*0\.157\.1 had refused `gpt-6\.1-sol`/); // live gate 1.6.1: every id re-probed on 0.159.2
 });
 
 test('1b: CONFIG and ORCHESTRATION say a named model brings its own pairing unless an effort is configured', () => {

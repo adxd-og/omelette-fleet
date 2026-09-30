@@ -34,10 +34,11 @@
  * operator's update, same ChatGPT plan; one-shot `codex exec
  * --ignore-user-config -c model_reasoning_effort=low -m <id>` per id, plus
  * `omelette-fleet doctor --probe-models`):
- *   ACCEPTED  gpt-6-sol and gpt-6-luna (on 0.157.1 and 0.159.2); gpt-6-astra,
- *             gpt-5.6-terra, gpt-5.6-luna AND gpt-5.6-sol (`--probe-models`;
- *             sol's 2026-09-03 rejection above no longer holds);
- *             gpt-6.1-sol on 0.159.2, at effort low and at `ultra`.
+ *   ACCEPTED  all seven catalog ids on 0.159.2 (`--probe-models` at the 1.6.1
+ *             live gate), gpt-6.1-sol also at `ultra`; on 0.157.1 the six
+ *             others (one-shots for gpt-6-sol and gpt-6-luna, `--probe-models`
+ *             for astra and the 5.6 tiers — sol's 2026-09-03 rejection above no
+ *             longer holds).
  *   REJECTED  gpt-6.1-sol on 0.157.1 — "not supported when using Codex with a
  *             ChatGPT account" plus "Model metadata for gpt-6.1-sol not
  *             found": the CLI lacked its metadata, not the plan. 0.159.2

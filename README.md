@@ -106,7 +106,7 @@ mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1800000 nee
   bin         codex → ~/.local/bin/codex   [CODEX_BIN=(unset)]
   version     codex-cli 0.159.2
   login       OK — Logged in using ChatGPT
-  models      CLI default gpt-6.1-sol — in the catalog; the fleet pins gpt-6.1-sol (fleet config)
+  models      CLI default gpt-6.1-sol — in the catalog; the fleet pins gpt-6.1-sol (catalog head)
   config      closed — OMELETTE_ALLOW_WRITE does not list "codex" · effective mode: read-only
   mcp         omelette-codex registered (user) → node ~/omelette-fleet/servers/codex.mjs [file exists]
 
@@ -375,7 +375,7 @@ Only deliberately, and only where it is actually enforceable. Write mode takes t
 **What if my ChatGPT plan rejects a Codex model?**
 The Codex catalog lists what exists in the current generation, not what one account happens to accept. A refused id fails fast, before any work, with `The '<id>' model is not supported when using Codex with a ChatGPT account`.
 
-- On 2026-09-30 the ChatGPT plan these probes ran on accepted every id in the catalog, each in a one-shot call: `gpt-6-sol` and `gpt-6-luna` at effort `low` and `gpt-6-astra` and the three 5.6 tiers under `doctor --probe-models` on codex-cli 0.157.1, and `gpt-6.1-sol`, which 0.157.1 refused, on codex-cli 0.159.2 at `low` and at `ultra`. `gpt-5.6-sol` had been refused on 2026-09-03 (codex-cli 0.146.0).
+- On 2026-09-30, on codex-cli 0.159.2, `doctor --probe-models` on the ChatGPT plan these probes run on accepted every id in the catalog (`gpt-6.1-sol` also at `ultra`); the same day, 0.157.1 had refused `gpt-6.1-sol` for lack of its metadata while accepting the other six. `gpt-5.6-sol` had been refused on 2026-09-03 (codex-cli 0.146.0).
 - The default `gpt-6.1-sol` needs a codex-cli that carries its metadata, which older ones lack: an older CLI refuses it with that same message, not because of the plan — update Codex. Which versions, probed when: [ORCHESTRATION, "Model and effort escalation"](docs/ORCHESTRATION.md#model-and-effort-escalation).
 - `gpt-6-astra-pro`, `gpt-6-pro` and `gpt-6` are rejected on a ChatGPT plan and are not in the catalog ([when last probed](docs/ORCHESTRATION.md#model-and-effort-escalation)).
 - `omelette-fleet doctor --probe-models` tells you exactly which ids your account accepts. Plain `doctor` prints your installed CLI's bundled default beside the model the fleet pins — since 0.159.1 the CLI's is `gpt-6.1-sol`, the same catalog head the fleet pins when no `codex.model` is configured, and the fleet pins its model explicitly regardless, because it runs with `--ignore-user-config`.
