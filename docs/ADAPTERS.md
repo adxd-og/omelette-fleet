@@ -2,12 +2,16 @@
 
 A unit is one vendor CLI exposed as one MCP server. Adding one is three files and a test. The runtime already owns everything that is not vendor-specific, so an adapter that reaches for `process.stdout`, `readFileSync` on the config, or `child_process` directly is doing the runtime's job.
 
+Read [ARCHITECTURE, "The adapter contract"](ARCHITECTURE.md#the-adapter-contract) first: it is what `defineUnit` validates, and this guide builds on it and on the call path under it.
+
 | Question | Where |
 |---|---|
 | What does the runtime handle for me vs what do I write myself? | [What the runtime does for you vs what the adapter owns](#what-the-runtime-does-for-you-vs-what-the-adapter-owns) |
 | How do I write the model catalog file? | [1. `units/<unit>/models.js`](#1-unitsunitmodelsjs) |
 | How do I write the adapter itself? | [2. `units/<unit>/adapter.mjs`](#2-unitsunitadaptermjs) |
+| What does `ctx` hand my `run()`, what does `spawn` return, and what may `run()` return? | [What `ctx`, `spawn` and `run()` hand each other](#what-ctx-spawn-and-run-hand-each-other) |
 | What do I do when a run's output got capped mid-answer? | [Handle `capped`](#handle-capped) |
+| What should my image tool return when the run did not finish? | [Image tools return a bare path](#image-tools-return-a-bare-path) |
 | What is a `local` tool, and when should a tool be one? | [The `local` kind](#the-local-kind) |
 | How do progress notifications and cancellation work? | [Progress and cancellation](#progress-and-cancellation) |
 | Why prefer a streaming CLI format over whole-document JSON? | [Prefer a streaming output format](#prefer-a-streaming-output-format) |
@@ -139,7 +143,51 @@ export default defineUnit({
 });
 ```
 
-`ctx` gives you `{ cfg, mode, model, effort, spawn, retry, log, catalog, home, signal, usedModel }`. `usedModel(id)` is a report, not a setting: call it when the runtime named no model and you chose one yourself (Codex pins the catalog head because `--ignore-user-config` drops the operator's default; deep research names each stage's model) — it reaches only the `model:` line of the spooled result, and the first non-empty string wins (core/unit.mjs, the header comment). `spawn(o)` accepts `{ args, cwd, stdinText, extraEnv, hardKillMs, outputCap }` and resolves `{ stdout, stderr, code, signal, killed, capped, cancelled }` — it does **not** reject on a non-zero exit, because only you know what an exit code means for this CLI. `killed` is the wall-clock SIGKILL, and `cancelled: true` marks the one the CLIENT asked for (the same kill, under `cancel: kill`): neither bound was reached, so "raise `timeoutS`" is the wrong thing to tell an operator. Both bounds default to the unit's config (`timeoutS`, `outputCap`) and a call may override either. A refusal you make yourself returns `{ text, isError: true }`; returning an `Error: …` string without the flag reports a failure to MCP as a success. `{ text, partial: true }` is the third shape: an answer the run did not finish — a success, with the flag carried into the status feed. Reasons to set it: a hard kill whose captured text you kept, a client cancellation with the same, output that hit `outputCap`, a stage of a pipeline tool whose own answer came back partial (`gemini_deep_research` states the count in the report and passes the flag out), and — for an image tool, whose text carries no marker at all — any run that did not finish cleanly but had already saved its file.
+### What `ctx`, `spawn` and `run()` hand each other
+
+`run(args, ctx)` gets this `ctx` (core/unit.mjs, the header comment):
+
+| `ctx` member | What it is | Local tools get it |
+|---|---|---|
+| `cfg` | The resolved value bag | yes |
+| `mode` | The *effective* mode after the ceiling | yes |
+| `model`, `effort` | The resolved model and effort for this call | no |
+| `spawn(o)` | The bounded child-process call (below) | no |
+| `retry(fn, { skipIf })` | The one-shot retry | no |
+| `log` | stderr logging; stdout is JSON-RPC only | yes |
+| `catalog` | The unit's catalog, from `makeCatalog()` | yes |
+| `home` | The fleet home (`OMELETTE_HOME`) | yes |
+| `signal` | An `AbortSignal` under `cancel: kill`, `undefined` otherwise — see [Progress and cancellation](#progress-and-cancellation) | no |
+| `usedModel(id)` | A report, not a setting: call it when the runtime named no model and you chose one yourself (Codex pins the catalog head because `--ignore-user-config` drops the operator's default; deep research names each stage's model) — it reaches only the `model:` line of the spooled result, and the first non-empty string wins | a no-op |
+
+`spawn(o)` accepts `{ args, cwd, stdinText, extraEnv, hardKillMs, outputCap }`. Both bounds default to the unit's config (`timeoutS`, `outputCap`) and a call may override either. It resolves — it does **not** reject on a non-zero exit, because only you know what an exit code means for this CLI — to:
+
+| `spawn` result field | Means |
+|---|---|
+| `stdout` | The tail of stdout, at most `outputCap` characters |
+| `stderr` | The tail of stderr |
+| `code` | The exit code |
+| `signal` | The signal the process ended on, or `null` |
+| `killed` | The wall-clock SIGKILL fired |
+| `capped` | The tail cap dropped the beginning of stdout — see [Handle `capped`](#handle-capped) |
+| `cancelled` | `true` marks the kill the CLIENT asked for (the same kill, under `cancel: kill`): neither bound was reached, so "raise `timeoutS`" is the wrong thing to tell an operator |
+
+`run()` returns one of:
+
+| `run()` returns | Means | Status feed |
+|---|---|---|
+| a string | The answer | `ok` |
+| `{ text, isError: true }` | A refusal you make yourself — a missing prompt, a bad `cwd` — so MCP is told it is an error; returning an `Error: …` string without the flag reports a failure to MCP as a success | `error` |
+| `{ text, partial: true }` | The third shape: an answer the run did not finish — a success, with the flag carried into the status feed | `ok` (or `cancelled` when the client ended the run) with `partial: true` |
+| any of these with `usage` | The token counts the CLI reported — see [Prefer a streaming output format](#prefer-a-streaming-output-format) | `usage` on the `end` event |
+
+Reasons to set `partial: true`:
+
+- a hard kill whose captured text you kept;
+- a client cancellation with the same;
+- output that hit `outputCap`;
+- a stage of a pipeline tool whose own answer came back partial (`gemini_deep_research` states the count in the report and passes the flag out);
+- for an image tool, whose text carries no marker at all, any run that did not finish cleanly but had already saved its file.
 
 **Where the run happens.** `spawn`'s `cwd` is the directory the vendor process runs in, and the three research tools take an optional one from the caller: an ABSOLUTE path that must exist and be a directory, validated before any spawn with the wording the review tools use — `Error: "cwd" must be an absolute path (got …)` and `Error: "cwd" is not an existing directory: …`. Pass it to the CLI as well where the CLI has a flag for it (grok `--cwd`, codex `-C`; agy has none and takes the spawn cwd alone), and leave the sandbox alone: `codex_research` is `-s read-only` with a `cwd` exactly as it is without one. Without one, a research run starts in a fresh empty temp directory made for the call and removed afterwards (1.4.0); a review run uses the MCP server's own process cwd. The runtime writes the value onto the spooled record's `cwd:` header, so an answer can be read back knowing where it was produced — which is how `doctor --probe-sandbox` gets a unit to run in a throwaway directory without the CLI process ever changing its own.
 
@@ -149,9 +197,27 @@ export default defineUnit({
 
 All three shipped units read `capped` since 0.3.3, and the three shapes cover most CLIs you will meet: Grok's line-per-event NDJSON (whole lines survive, or the final `result` line is cut open), Codex's line-per-item JSONL (the answer is the last `agent_message`, present or gone), and agy's single JSON envelope (it parses, or it does not — and a capped envelope that no longer parses is the case where failing open would return the middle of an object as prose). Copy whichever matches your CLI.
 
-One exception worth stating, because it looks like a missing marker: **an image tool answers with a bare path by contract.** All four — `gemini_image`, `grok_image`, `grok_image_edit`, `codex_image` — return the file they verified on disk and nothing else. When the run did not finish cleanly — capped, hard-killed, cancelled, a non-zero exit, a vendor status that is not success — and the artifact is there anyway, the path still comes back bare: `partial: true` carries the incompleteness to the status feed and the spooled record, and no marker is stapled to a string the caller is expected to `stat`. `core/artifact.mjs`'s `unfinishedRun()` is what reads the run's own flags for that, since the marker the interpreter put on the text is exactly what this contract drops. When there is no artifact the tool fails — with the interpreter's own error where the run produced nothing to read at all, and otherwise with a message naming the bound that explains it (`core/artifact.mjs`'s `artifactMiss`: `raise <unit>.outputCap`, `raise <unit>.timeoutS`, or the client's own cancellation). And the file outranks the refusal: an artifact the run had already saved comes back even when the interpreter threw on the run that saved it, flagged `partial: true`. Each tool looks where its own run puts files — `codex_image` at the fixed `image.png` it asked for in its throwaway cwd, `gemini_image` at the newest image file anywhere in its own, up to three directory levels down and never through a symlink (`core/artifact.mjs`'s `newestImage`, since agy names both the file and the directory it puts it in — `generated/image.png` under the run's cwd is the shape seen live), the two grok tools at the path the run printed, since the xAI CLI saves under its session directory rather than in the run's. Anything a caller is expected to `stat` must stay a path.
-
 Export `buildArgs` and the result interpreter. Everything worth testing about an adapter lives in those two pure functions.
+
+### Image tools return a bare path
+
+One exception worth stating, because it looks like a missing marker: **an image tool answers with a bare path by contract.** All four — `gemini_image`, `grok_image`, `grok_image_edit`, `codex_image` — return the file they verified on disk and nothing else. Anything a caller is expected to `stat` must stay a path.
+
+What comes back, per run outcome:
+
+- **Finished cleanly, artifact saved** — the path.
+- **Did not finish cleanly — capped, hard-killed, cancelled, a non-zero exit, a vendor status that is not success — and the artifact is there anyway** — the path still comes back bare: `partial: true` carries the incompleteness to the status feed and the spooled record, and no marker is stapled to a string the caller is expected to `stat`. `core/artifact.mjs`'s `unfinishedRun()` is what reads the run's own flags for that, since the marker the interpreter put on the text is exactly what this contract drops.
+- **The interpreter threw, and the run had already saved an artifact** — the file outranks the refusal: it comes back, flagged `partial: true`.
+- **No artifact, and the run produced nothing to read at all** — the tool fails with the interpreter's own error.
+- **No artifact otherwise** — the tool fails with a message naming the bound that explains it (`core/artifact.mjs`'s `artifactMiss`: `raise <unit>.outputCap`, `raise <unit>.timeoutS`, or the client's own cancellation).
+
+Each tool looks where its own run puts files:
+
+| Tool | Where it looks for the file |
+|---|---|
+| `codex_image` | The fixed `image.png` it asked for in its throwaway cwd |
+| `gemini_image` | The newest image file anywhere in its own cwd, up to three directory levels down and never through a symlink (`core/artifact.mjs`'s `newestImage`, since agy names both the file and the directory it puts it in — `generated/image.png` under the run's cwd is the shape seen live) |
+| `grok_image`, `grok_image_edit` | The path the run printed, since the xAI CLI saves under its session directory rather than in the run's |
 
 ### The `local` kind
 
@@ -198,7 +264,7 @@ bound to the signal.
 
 The example above asks for `--output-format json` because it is the shortest thing to write. **If the CLI offers a streaming format, take it instead**, and pick it for the same reason the Grok unit did in 0.3.1.
 
-A hard kill only salvages what the CLI has already written to stdout. A whole-document JSON format has written nothing at that point: it buffers the run and prints one object at the end. Measured on the Grok CLI, 2026-09-06 — `--output-format json` had produced **0 bytes at 20 s** on a question that had visible text in plain mode by 16 s. The salvage path was correct, tested, and had nothing to work with on precisely the runs it exists for. Switching to `--output-format streaming-messages-json --include-partial-messages` — NDJSON, one object per line, written as the answer is produced — left 441 text deltas and 1513 characters recoverable from a 30 s kill.
+A hard kill only salvages what the CLI has already written to stdout. A whole-document JSON format has written nothing at that point: it buffers the run and prints one object at the end. Measured on the Grok CLI, 2026-09-06 — `--output-format json` had produced **0 bytes at 20 s** on a question that had visible text in plain mode by 16 s. The salvage path was correct, tested, and had nothing to work with on precisely the runs it exists for. Switching `grok_research` and `grok_code_review` to `--output-format streaming-messages-json --include-partial-messages` — NDJSON, one object per line, written as the answer is produced — left 441 text deltas and 1513 characters recoverable from a 30 s kill.
 
 What that costs you is a line parser instead of one `JSON.parse`, and it comes with three rules worth stating:
 

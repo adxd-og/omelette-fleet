@@ -61,9 +61,7 @@ defineUnit({
 
 Defaults filled in by `defineUnit`: `version`: the package version (`VERSION` from `core/update.mjs`), `serverName: 'omelette-<name>'`, `label: <name>`, empty `riskEnv` / `envPassthrough` / `envMap` / `builtin` / `extraSchema`, `supportedModes: { 'read-only': true, 'workspace-write': null }`, `auth: null`. A string `bin` is normalised to `{ env: null, default: bin }`.
 
-**Tool kinds** — `research | review | image | pipeline | catalog`. A `catalog` tool never spawns: the runtime answers it locally with `catalog.render()`. Every other kind must supply `run(args, ctx)` returning a string or `{ text, usage?, isError? }`. `isError: true` is how an adapter reports a refusal it handled itself — a missing prompt, a bad `cwd` — so that MCP is told it is an error and the status feed records one, instead of an `Error: …` string being reported as a successful answer.
-
-**`ctx`** — `{ cfg, mode, model, effort, spawn, retry, log, catalog, home }`. `cfg` is the resolved value bag, `mode` is the *effective* mode after the ceiling, `spawn(o)` is the bounded child-process call, `retry(fn, {skipIf})` is the one-shot retry.
+**Tool kinds** — `research | review | image | pipeline | catalog | local`: a `catalog` tool never spawns (the runtime answers it locally with `catalog.render()`), and every other kind supplies `run(args, ctx)` — what `ctx` holds, what `spawn` resolves to and each shape `run()` may return, `isError` and `partial` included, are tabled in [ADAPTERS, "What `ctx`, `spawn` and `run()` hand each other"](ADAPTERS.md#what-ctx-spawn-and-run-hand-each-other).
 
 **`mutateGate: true`** puts the tool's `prompt` through `MUTATE_RE` (`git push|commit|merge|rebase|reset|tag`, `npm publish`, `deploy`) and rejects the call before any spawn. It is applied per tool, not globally, because "review the last git commit" is a legitimate read-only ask for a review tool.
 

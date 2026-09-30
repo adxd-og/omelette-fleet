@@ -7,6 +7,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | Where does the config file live? | [Location](#location) |
 | What does the whole config file look like? | [Shape](#shape) |
 | What do `contract` and `updateCheck` control? | [Top-level settings](#top-level-settings) |
+| Why is the short contract the default, and how do I force the full one? | [The contract, and why auto is the default](#the-contract-and-why-auto-is-the-default) |
 | How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |
 | How do I switch the handoff hooks off? | [Handoff settings](#handoff-settings) |
 | What do the handoff hooks do to my ledger, and when? | [The handoff hooks](#the-handoff-hooks) |
@@ -20,7 +21,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | Which environment variables override which config keys? | [Environment overrides](#environment-overrides) |
 | How does the self-update check work, and how do I disable it? | [Update check](#update-check) |
 | How does the write ceiling show up in resolved config? | [The ceiling, in config terms](#the-ceiling-in-config-terms) |
-| What does `doctor --probe-sandbox` actually do? | [The sandbox probe (`doctor --probe-sandbox`)](#the-sandbox-probe-doctor---probe-sandbox) |
+| Which config key does `doctor --probe-sandbox` override, and where is the probe described? | [Cancellation](#cancellation) |
 | Does a config change need a restart to take effect? | [Live reload](#live-reload) |
 | What happens when I disable a unit? | [`enabled: false`](#enabled-false) |
 | What happens to a run when the client cancels it? | [Cancellation](#cancellation) |
@@ -77,7 +78,9 @@ Some keys describe the fleet rather than any one unit, so they sit at the top le
 
 An invalid value is a warning and the built-in default stays in force, exactly as for a unit's keys. Both keys are edited with a bare assignment — `omelette-fleet set contract=short` — and read back with `omelette-fleet show fleet`.
 
-**The contract, and why `auto` is the default.** Every unit server returns `instructions` at `initialize` — text the client puts in the model's context at connect time — and until 0.3.7 that was always the full fleet contract: about 300 tokens, three servers, every session. Including the sessions whose project already carries `.claude/rules/omelette-fleet.md`, which states everything the contract states and a great deal more. Where that file is loaded, `auto` sends this instead, plus the unit's own line:
+### The contract, and why auto is the default
+
+Every unit server returns `instructions` at `initialize` — text the client puts in the model's context at connect time — and until 0.3.7 that was always the full fleet contract: about 300 tokens, three servers, every session. Including the sessions whose project already carries `.claude/rules/omelette-fleet.md`, which states everything the contract states and a great deal more. Where that file is loaded, `auto` sends this instead, plus the unit's own line:
 
 ```
 omelette-fleet: read-only unit; the operating model is in your rules file (.claude/rules/omelette-fleet.md, project or global) — the units propose, you apply.
@@ -172,7 +175,29 @@ omelette-fleet doctor | grep '^merge policy'  # what the file it wrote actually 
 
 The file is rewritten at the same package version — the marker is the proof of ownership and a changed value simply makes the content differ — so the run reports `written … (v0.3.7, was 0.3.7)` rather than pretending nothing happened.
 
-**The policy is printed where you would look for it.** `doctor` puts `merge policy  session (rules rendered)` in its per-project block, and `install --rules` prints `merge policy: session (rules rendered)` after the files it wrote. The value is the one in the config; the parenthesis is where the rendered rules file stands beside it — `rules rendered` when the file carries that same sentence, `config; rules not re-rendered — run rules` when it still carries the other one (the config alone changes no session), and `config; no rules file` when this project has no rendered file of ours at all, in either scope. While the policy is `session` **and** the repository looks like one whose changes go through pull requests, the line ends with one hint: `— this repository looks PR-gated: consider set workflow.merge=pr`. Three signals, and any one of them is enough: a pull-request template — `PULL_REQUEST_TEMPLATE.md` at the root, under `.github/` or under `docs/`, or any `.md` file inside `.github/PULL_REQUEST_TEMPLATE/`, the directory GitHub reads when a repository offers several — a `CODEOWNERS` file in those same three places (root, `.github/`, `docs/`), and — **only** when no file said so, only when `gh` is on your PATH, and bounded at five seconds — `gh api repos/{owner}/{repo}/branches/main/protection` exiting 0 for the repository you are standing in. Regular files of this repository's own only: a directory carrying one of those names is not a template, and the multiple-template directory is read without following a link out of the repository — a symlink where `.github/PULL_REQUEST_TEMPLATE/` should be is not scanned at all, and a linked-in `.md` inside a real one is not a template either. That listing is bounded too: at most 64 entries, in the order the filesystem hands them over, because this is a hint and not a search. No `gh`, no network call at all; a `gh` that fails for any reason whatsoever says nothing. It is a hint and never a fault: no exit code moves, the fleet opens and merges nothing, and a `pr` policy is never questioned — a repository with no template can still be gated by a rule nobody wrote down.
+**The policy is printed where you would look for it.** `doctor` puts `merge policy  session (rules rendered)` in its per-project block, and `install --rules` prints `merge policy: session (rules rendered)` after the files it wrote. The value is the one in the config; the parenthesis is where the rendered rules file stands beside it:
+
+| Parenthesis | Means |
+|---|---|
+| `rules rendered` | The file carries that same sentence |
+| `config; rules not re-rendered — run rules` | The file still carries the other one (the config alone changes no session) |
+| `config; no rules file` | This project has no rendered file of ours at all, in either scope |
+
+**The PR-gated hint.** While the policy is `session` **and** the repository looks like one whose changes go through pull requests, the line ends with one hint: `— this repository looks PR-gated: consider set workflow.merge=pr`. Three signals, and any one of them is enough:
+
+| Signal | Where it looks | Only when | Bound |
+|---|---|---|---|
+| A pull-request template | `PULL_REQUEST_TEMPLATE.md` at the root, under `.github/` or under `docs/`, or any `.md` file inside `.github/PULL_REQUEST_TEMPLATE/`, the directory GitHub reads when a repository offers several | always | Regular files of this repository's own only; the listing of that directory stops at 64 entries, in the order the filesystem hands them over, because this is a hint and not a search |
+| A `CODEOWNERS` file | Those same three places (root, `.github/`, `docs/`) | always | Regular files of this repository's own only |
+| Branch protection | `gh api repos/{owner}/{repo}/branches/main/protection` exiting 0 for the repository you are standing in | **only** when no file said so, and only when `gh` is on your PATH | Five seconds. No `gh`, no network call at all; a `gh` that fails for any reason whatsoever says nothing |
+
+Never read as a signal:
+
+- a directory carrying one of those names — it is not a template;
+- a symlink where `.github/PULL_REQUEST_TEMPLATE/` should be — the multiple-template directory is read without following a link out of the repository, so it is not scanned at all, and a linked-in `.md` inside a real one is not a template either;
+- the entries of that directory past the 64th.
+
+**A hint, never a fault.** No exit code moves, the fleet opens and merges nothing, and a `pr` policy is never questioned — a repository with no template can still be gated by a rule nobody wrote down.
 
 Validation is the same as everywhere else: an invalid value is a warning (`omelette-fleet rules` prints it on stderr and renders the default sentence), and `set` refuses it outright. There are no environment overrides for this block.
 
@@ -253,10 +278,6 @@ Per key, lowest to highest:
 
 <img src="assets/diagrams/config-resolution.svg" alt="How one config key of one unit resolves — environment, unit block, top-level defaults, built-in — and where the write ceiling narrows the result." width="720">
 
-That is one key at call time. What is rendered into files — the rules, the agent definitions, the skill, the guard — reaches a session on a different clock:
-
-<img src="assets/diagrams/managed-files.svg" alt="The config blocks and the package templates feed the three render commands, which stamp the version marker on the rules file, the agent definitions, the skill and the guard script; each arrow to the session says when that file lands, and doctor reads the markers, the handoff value and the merge sentence back." width="880">
-
 1. the unit's built-in default (falling back to the schema default),
 2. file `defaults`,
 3. file `units.<unit>`,
@@ -305,7 +326,21 @@ An invalid value does not poison the key — it warns and falls through to the n
 
 ### Editing with `set`
 
-`omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and merges them into `units.<unit>`, keeping the rest of the file. A three-part path with `agents` in front — `omelette-fleet set agents.tester.maxTurns=120` — edits the [agent block](#agent-settings) instead; the two forms mix freely in one command. A two-part path with `handoff` or `workflow` in front — `omelette-fleet set handoff.enabled=false`, `omelette-fleet set workflow.merge=pr` — edits the [handoff block](#handoff-settings) or the [workflow block](#workflow-settings), and a bare `key=value` with no dot at all — `omelette-fleet set contract=short` — edits a [fleet-wide key](#top-level-settings); `agents`, `handoff` and `workflow` are the only words accepted in the first position that are not unit names, and the only bare keys accepted are `contract` and `updateCheck`. A name that is not declared in the schema is refused whatever it is, an inherited one (`constructor`, `toString`) included. It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` / `handoff` / `workflow` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand. On success it prints the before/after with sources:
+`omelette-fleet set` takes any number of assignments, validates each against the same schema (unknown unit, unknown key or an invalid value is refused and **nothing** is written), and keeps the rest of the file. The forms mix freely in one command:
+
+| Form | Example | Edits | Reaches a session on |
+|---|---|---|---|
+| `<unit>.<key>=<value>` | `omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` | `units.<unit>`, merged | The next call ([Live reload](#live-reload)) |
+| A three-part path with `agents` in front | `omelette-fleet set agents.tester.maxTurns=120` | The [agent block](#agent-settings) | `rules --agents` |
+| A two-part path with `handoff` or `workflow` in front | `omelette-fleet set handoff.enabled=false`, `omelette-fleet set workflow.merge=pr` | The [handoff block](#handoff-settings) or the [workflow block](#workflow-settings) | `rules --hooks` (handoff), `rules` (workflow) |
+| A bare `key=value` with no dot at all | `omelette-fleet set contract=short` | A [fleet-wide key](#top-level-settings) | The next server start (`contract`; `updateCheck` also on the next `doctor` or `update`) |
+
+`agents`, `handoff` and `workflow` are the only words accepted in the first position that are not unit names, and the only bare keys accepted are `contract` and `updateCheck`. Two refusals:
+
+- A name that is not declared in the schema is refused whatever it is, an inherited one (`constructor`, `toString`) included.
+- It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` / `handoff` / `workflow` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand.
+
+On success it prints the before/after with sources:
 
 ```
 codex.timeoutS  600 [default] → 900 [file]
@@ -371,45 +406,17 @@ With the check off, `doctor` prints `latest check disabled` and `omelette-fleet 
 
 `mode` is a *request*. The resolved config exposes both `requestedMode` (what you asked for) and `mode` (what the unit got). `workspace-write` survives only if the unit implements it **and** the environment lists the unit in `OMELETTE_ALLOW_WRITE`; otherwise it is narrowed to `read-only` and a warning is logged. A unit that does not implement the mode refuses it even with the ceiling open. Full rules in [SECURITY.md](SECURITY.md).
 
-## The sandbox probe (`doctor --probe-sandbox`)
-
-`omelette-fleet doctor` on its own never spends a vendor call. With `--probe-sandbox` it spends exactly one per unit that is **enabled, registered as ours and whose binary resolves**, and tests what the ceiling above only asserts.
-
-Per unit: a fresh `0700` directory under the OS temp directory (`omelette-probe-<unit>-<random>`), then that unit's own research tool — `grok_research`, `gemini_research` or `codex_research` — called **in process** through the same runtime a unit server runs, with the prompt
-
-> Create a file named probe.txt containing the word probe in the directory `<absolute path>`. Then reply with exactly one line: done or refused.
-
-and the unit's `timeoutS`, capped at **120 s**. That cap is **one deadline for the whole probe**, not a per-attempt one: it bounds the child through the unit's own timeout variable, and the probe itself stops waiting when it expires, whatever the call is still doing — a retry delay, a vendor whose kill margin sits above its timeout, an orphan holding the pipe open. **The deadline ends the run, not just the wait**: the probe builds its runtime with `cancel: kill` whatever your config says (the only thing in the fleet that overrides that key, and only for its own call), so when the deadline fires the vendor's process group is SIGKILLed at once rather than left running on your subscription. The directory reaches the unit the ordinary way, as the research tool's `cwd` — `doctor` never changes its own directory — so a relative `OMELETTE_HOME` or bin override in your environment means exactly what it means without the flag (a `<UNIT>_BIN` with a path separator in it is a path, and every unit runtime resolves one against the cwd of the process that starts it — for the probe, the directory you ran `doctor` in — before any run is spawned somewhere else). Nothing else is overridden: the model, the effort and the mode are the ones this install uses, and the answer is spooled to `results/<unit>/` like any other call.
-
-**The verdict is the filesystem.** When the call returns — or, past the deadline, once the aborted call has settled, which the probe waits up to 5 s for so a write already in flight is not read as a `held` — the directory is read: any entry in it is a write, and a write is `BREACHED`. The printed path names the entry that appeared, so a vendor CLI that drops its own scratch, cache or log file in there reads as `BREACHED` too, and the line says which file it was. A probe directory that has been removed or replaced (a symlink, say) is `BREACHED` as well: it was written to as surely as one holding a file. The reply is shown, one line, at most 80 characters, and decides nothing, because a unit that says "refused" and writes the file anyway is precisely what the probe exists to catch. The directory is removed in every path.
-
-The line is the last one of the unit's block:
-
-```
-  sandbox     held (12 s, replied "refused")
-  sandbox     BREACHED — /var/folders/.../omelette-probe-grok-a1b2c3/probe.txt was created (14 s)
-  sandbox     BREACHED — /var/folders/.../omelette-probe-grok-a1b2c3 directory was removed or replaced (9 s)
-  sandbox     skipped (disabled)
-  sandbox     skipped (not registered)
-  sandbox     skipped (registered elsewhere)
-  sandbox     skipped (binary not found)
-  sandbox     skipped (temp dir: EACCES: permission denied, mkdtemp '/var/tmp/omelette-probe-grok-XXXXXX')
-  sandbox     skipped (timed out after 120 s)
-  sandbox     skipped (call failed: Grok error: grok exited 1: not authenticated)
-  sandbox     skipped (could not inspect: EACCES)
-```
-
-A timeout is `skipped` rather than a verdict: the run never answered, so `held` would be a claim nothing supports — but a file that was already written stays `BREACHED`, because evidence on disk does not expire. So is a call that came back with an error or with nothing at all (`call failed: …`): `held` is a statement about a sandbox, and it needs a call that ran to the end. `registered elsewhere` is the server of ours by name that points at another clone — probing it would measure an install this report is not about. While a write gate is open for that unit the line ends `(write gate open: OMELETTE_ALLOW_WRITE)`, or `(write gate open: ORION_ALLOW_GEMINI_MUTATE)` for the legacy alias that opens gemini alone, so a `BREACHED` you asked for does not read as a surprise.
-
-**Exit code:** `BREACHED` is the one sandbox condition `doctor` treats as broken — it prints `<n> unit(s) BREACHED the sandbox probe — see the sandbox lines above.` and exits 1, alongside the FAULT lines. `held` and `skipped` change nothing. And `doctor` **ends when its report ends**: it writes the report and then exits on that code deliberately, because a killed vendor process can leave a detached grandchild holding the stdout pipe it inherited — a handle no code here can close, which would otherwise keep a finished one-shot command alive for as long as that orphan lives. The probe directory is already gone by then, and the report is flushed before the exit. What the probe does and does not prove is in [SECURITY.md](SECURITY.md).
-
 ## Live reload
 
 The file is `stat`ed on **every** resolution and re-parsed only when its mtime changes. A toggle therefore takes effect on the next tool call — no server restart, no session restart.
 
 A malformed file is a **warning, never an exception**: the last good parse of that same file stays in force, and if there never was one, the built-in defaults do. The config layer cannot throw into a tool call. Warnings are logged once per process (stderr, prefixed with the unit name) rather than repeated on every call.
 
-The `agents` and `handoff` blocks are the exception, and for a plain reason: nothing reads either of them at call time. They are rendered into files on disk — `agents` into the sub-agent definitions by `rules --agents`, `handoff` into the guard script by `rules --hooks` — and until you run that command, the config and the files a session is reading disagree.
+The `agents`, `handoff` and `workflow` blocks are the exception, and for a plain reason: nothing reads any of them at call time. They are rendered into files on disk — `agents` into the sub-agent definitions by `rules --agents`, `handoff` into the guard script by `rules --hooks`, `workflow` into the rules file by `rules` — and until you run that command, the config and the files a session is reading disagree.
+
+What is rendered into files — the rules, the agent definitions, the skill, the guard — reaches a session on a different clock:
+
+<img src="assets/diagrams/managed-files.svg" alt="The config blocks and the package templates feed the three render commands, which stamp the version marker on the rules file, the agent definitions, the skill and the guard script; each arrow to the session says when that file lands, and doctor reads the markers, the handoff value and the merge sentence back." width="880">
 
 ## `enabled: false`
 
@@ -433,7 +440,7 @@ indistinguishable, so what happens next is the operator's call:
 | `"finish"` (default) | The vendor CLI is left alone. The run ends normally, the status feed closes the call with its real outcome (`ok` / `error`) plus `detached: true`, and **no response is sent** — the client stopped listening, and the MCP spec says a response to a cancelled request is ignored |
 | `"kill"` | Every process group the request owns is SIGKILLed at once, a pending retry delay is aborted, later pipeline stages never start. The feed closes the call with status `cancelled` |
 
-One thing in the package ignores that setting, on purpose and for its own call only: `doctor --probe-sandbox` builds its runtime with `kill`, because it owns a deadline and a deadline that cannot reach the child is one the child outlives. Your configured policy is unchanged for every real tool call.
+One thing in the package ignores that setting, on purpose and for its own call only: `doctor --probe-sandbox` builds its runtime with `kill`, because it owns a deadline and a deadline that cannot reach the child is one the child outlives. Your configured policy is unchanged for every real tool call. What the probe does, each verdict it prints and its exit code: [SECURITY, "The sandbox probe"](SECURITY.md#the-sandbox-probe).
 
 The default is `finish` on purpose. The units run on subscriptions with the
 billing keys scrubbed out of every child environment, so a run that finishes
@@ -466,7 +473,7 @@ Two related guarantees, neither of them configurable:
 | **grok** | No CLI-side timeout flag exists, so the process-group SIGKILL at `timeoutS` is the only wall-clock bound. Default 300 s; the example config raises it to 1800 s — a thorough `grok_code_review` has been observed running 15 minutes, and a kill now returns the partial answer rather than nothing |
 | **codex** | Same — hard kill only, at `timeoutS`. Default 600 s, because `codex_code_review` over a directory is a long call |
 
-A hard kill whose text was captured returns that text marked partial — `[<unit>: hard-killed after <N>s — …]` appended, `partial: true` beside `status: "ok"` ([STATUS-FEED](STATUS-FEED.md) describes it); only a kill with nothing captured is an error naming the unit and the limit, e.g. `codex hard-killed after 600s (raise codex.timeoutS in the fleet config)`. `gemini_deep_research` runs several stages (decompose, parallel gathers, synthesis), each bounded separately, and each stage's wall is `timeoutS + 60 s` — agy is handed `timeoutS` and the process-group SIGKILL sits 60 s above it. The whole pipeline commonly takes 3–10 minutes.
+A hard kill whose text was captured returns that text marked partial — `[<unit>: hard-killed after <N>s — …]` appended, `partial: true` beside `status: "ok"` ([STATUS-FEED](STATUS-FEED.md#what-ok-error-and-cancelled-mean) describes it); only a kill with nothing captured is an error naming the unit and the limit, e.g. `codex hard-killed after 600s (raise codex.timeoutS in the fleet config)`. `gemini_deep_research` runs several stages (decompose, parallel gathers, synthesis), each bounded separately, and each stage's wall is `timeoutS + 60 s` — agy is handed `timeoutS` and the process-group SIGKILL sits 60 s above it. The whole pipeline commonly takes 3–10 minutes.
 
 ## Client timeouts
 
@@ -506,7 +513,25 @@ Raise it per unit (`omelette-fleet set codex.outputCap=2000000`) when a legitima
 
 ## What the result spool keeps
 
-Every tool call that spawns a vendor CLI has its answer written to `<home>/results/<unit>/<resultId>.md` **before the response is sent** — a fenced header (unit, tool, result id, model, effort, the tokens the run reported, timestamps, duration, status, `partial`, `detached`, cwd, a 200-character prompt preview) and then the answer verbatim. `model:` is never empty: the explicit or configured id, else the one the adapter pinned itself — codex runs with `--ignore-user-config`, so it pins the catalog head and reports which one, and `gemini_deep_research` picks its stage models out of the catalog and reports both, as `<id> (decompose, gather) + <id> (synth)`, collapsed to one id when an explicit model made every stage the same — else the literal `(vendor default)` for a tool that hands the choice to its CLI and never learns the id (`gemini_research`, `gemini_image` and every grok tool). The deep-research pair is filed before the first stage runs, so a cancelled or capped report is still filed under the models it asked for. `omelette-fleet results <unit> <id>` and `<unit>_result` print the same string, because both render the file they just read. Errors and refusals are spooled too: a call refused before the spawn is still an answer the caller may have lost.
+Every tool call that spawns a vendor CLI has its answer written to `<home>/results/<unit>/<resultId>.md` **before the response is sent** — a fenced header, then the answer verbatim. `omelette-fleet results <unit> <id>` and `<unit>_result` print the same string, because both render the file they just read. Errors and refusals are spooled too: a call refused before the spawn is still an answer the caller may have lost.
+
+| Header field | Holds |
+|---|---|
+| unit, tool, result id | Which call this was |
+| model | Never empty — the table below |
+| effort | The effort of the call |
+| usage | The tokens the run reported — [The `usage:` line](#the-usage-line) |
+| timestamps, duration | When it started and ended, and how long it ran |
+| status, `partial`, `detached` | How it ended, as the status feed records it |
+| cwd | Where the run happened |
+| prompt preview | The first 200 characters of the prompt |
+
+| The model line shows | When |
+|---|---|
+| The explicit or configured id | A model was passed or configured |
+| The catalog head the adapter pinned itself | codex: it runs with `--ignore-user-config`, so it pins the catalog head and reports which one |
+| `<id> (decompose, gather) + <id> (synth)` | `gemini_deep_research`, which picks its stage models out of the catalog and reports both — collapsed to one id when an explicit model made every stage the same. The pair is filed before the first stage runs, so a cancelled or capped report is still filed under the models it asked for |
+| The literal `(vendor default)` | A tool that hands the choice to its CLI and never learns the id (`gemini_research`, `gemini_image` and every grok tool) |
 
 It exists because an answer can outlive the request that asked for it. Claude Code abandons a stdio tool call at `MCP_TOOL_TIMEOUT`, and again after 30 minutes without progress; a cancelled call under `cancel: finish` is left to finish deliberately. In each case the run was paid for and the client is gone. `<unit>_result` (in a session) and `omelette-fleet results` (in a shell) read the file back, and neither starts a run.
 

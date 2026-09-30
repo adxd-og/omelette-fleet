@@ -7,6 +7,8 @@ Readers are built against a versioned contract: **schema 2** (since 1.6.0; schem
 | Question | Where |
 |---|---|
 | What fields does the per-process status snapshot carry? | [`status-<unit>-<pid>.json` — per-process snapshot](#status-unit-pidjson--per-process-snapshot) |
+| I maintain a schema-1 reader. What changed? | [What changed from schema 1](#what-changed-from-schema-1) |
+| My call came back: is it finished, partial, cancelled or an error, and was a response sent? | [What ok, error and cancelled mean](#what-ok-error-and-cancelled-mean) |
 | What does each line of the shared event log look like? | [`fleet-log.ndjson` — shared append log](#fleet-logndjson--shared-append-log) |
 | How reliable is the feed — does it ever crash or grow forever? | [Guarantees](#guarantees) |
 | How do I turn the status feed off? | [Turning it off](#turning-it-off) |
@@ -64,16 +66,37 @@ One file per unit server process, rewritten on every event.
 | `lastEvent.durationMs` | Wall-clock milliseconds |
 | `lastEvent.error` | Error text, truncated to **500** characters, or `null` |
 | `lastEvent.usage` | Present only when the unit reports token usage — Codex: `{input, cachedInput, output, reasoning}`; Gemini and Grok: `{input, output}`. Grok reported none before 0.3.1; its research and review runs now read the counts off the streaming output, merging the lines that carry them, so a run whose last message reported only output tokens does not erase the input count. Of the image tools, `codex_image` and `gemini_image` report usage when the CLI prints it; `grok_image` and `grok_image_edit` never do. The same object is written to the spooled result as its `usage:` header line (`input=<n> output=<n> [cachedInput=<n>] [reasoning=<n>]`), which is what `omelette-fleet results --stats` totals |
-| `lastEvent.partial` | `true` if and only if the answer's text carries an incompleteness marker (`core/partial.mjs`, one rule for the three units): `[<unit>: output capped at <N> chars …]`, `[<unit>: hard-killed after <N>s …]`, `[<unit>: cancelled by the client …]`, `[<unit>: CLI exited <N> — treat the answer as partial]`, `[grok: run ended early — stopReason=<s>]`, `[gemini: run ended early — status=<s>]`, `[codex: run ended before turn.completed — treat as partial]`, `[gemini: N of M stages returned partial answers]`, `[gemini: N of M gathers failed: …]` — more than one on a run that managed more than one. `status` is `"ok"` where there is an answer to read, and `"cancelled"` where the client is what ended the run. **The image tools are the exception**: their answer is a bare path by contract (`gemini_image`, `grok_image`, `grok_image_edit`, `codex_image`), so they carry no marker and this flag is the only record that the run behind that file was cut short — capped, killed, cancelled, a non-zero exit, or a vendor status that is not success, with the file already saved. Absent on a normal call — never `false`. The flag says what the adapter observed; a model that quotes one of these markers inside its own answer is not flagged. |
+| `lastEvent.partial` | `true` if and only if the answer's text carries an incompleteness marker from [the table below](#what-ok-error-and-cancelled-mean) (`core/partial.mjs`, one rule for the three units) — more than one on a run that managed more than one; the image tools carry the flag with no marker (the table's last row). Absent on a normal call — never `false`. The flag says what the adapter observed; a model that quotes one of these markers inside its own answer is not flagged. |
 | `lastEvent.resultId` | The same id as the matching `active[]` entry and the `start` line — the join key to the result itself |
 | `lastEvent.detached` | `true` when the client cancelled the request and the unit's `cancel` is `finish`: the run was left to finish and its result was recorded, but no response was sent. Absent otherwise — never `false` |
 | `updatedAt` | When this snapshot was written |
 
-**Schema 1 → 2 (1.6.0).** One file per process instead of one per unit: two server processes of one unit used to overwrite each other's `active` and `lastEvent`. A reader asking *what is running now* takes the union of `active` over `status-*.json` (the recipes below already do); a reader asking *the last event of a unit* takes the newest `endedAt` across that unit's files. A process removes its file when it exits cleanly; a file left by a killed process is swept when the next process of that unit boots (a pid the OS has reused delays that sweep; the file's `updatedAt` shows its age). A `status-<unit>.json` left by a pre-1.6.0 server is not touched by the sweep; delete it once after every server of that install has restarted.
-
 Only tools that **spawn a CLI** are tracked. `<unit>_models` and any other local tool (catalog reads, result fetches) never appear.
 
-A hard-killed run that had already produced text is **not** an error: it ends `"ok"` with `partial: true`, because there is an answer to read — just not a finished one. A cancelled one ends `"cancelled"` with the same flag, for the same reason. A run that exited non-zero with text reads the same way: `"ok"`, marked, `partial: true`. A hard kill with nothing captured is an error like any other failed run. An output-capped run reads the same way, with one exception, and it is the same exception in all three units: when the cap cut into the run's own answer — Grok's final `result` line, agy's envelope, Codex's last `agent_message` — nothing parses at all, and that call is an error rather than an answer with a marker, because there is no answer left to read.
+### What changed from schema 1
+
+**Schema 1 → 2 (1.6.0).** One file per process instead of one per unit: two server processes of one unit used to overwrite each other's `active` and `lastEvent`. A reader asking *what is running now* takes the union of `active` over `status-*.json` (the recipes below already do); a reader asking *the last event of a unit* takes the newest `endedAt` across that unit's files. A process removes its file when it exits cleanly; a file left by a killed process is swept when the next process of that unit boots (a pid the OS has reused delays that sweep; the file's `updatedAt` shows its age). A `status-<unit>.json` left by a pre-1.6.0 server is not touched by the sweep; delete it once after every server of that install has restarted.
+
+### What ok, error and cancelled mean
+
+A run that had already produced text is **not** an error: there is an answer to read — just not a finished one. Every way a run can end, one row each (`partial` and `detached` are absent when not `true` — never `false`):
+
+| How the run ended | Text captured | `status` | `partial` | `detached` | Marker appended | Response sent |
+|---|---|---|---|---|---|---|
+| Clean end | yes | `"ok"` | — | — | none | yes |
+| Non-zero exit | yes | `"ok"` | `true` | — | `[<unit>: CLI exited <N> — treat the answer as partial]` | yes |
+| Non-zero exit, or any other failed run | none | `"error"` | — | — | none: the error text | yes, as an error |
+| Early stop | yes | `"ok"` | `true` | — | `[grok: run ended early — stopReason=<s>]`, `[gemini: run ended early — status=<s>]`, `[codex: run ended before turn.completed — treat as partial]` | yes |
+| Hard kill at the wall clock (`timeoutS`) | yes | `"ok"` | `true` | — | `[<unit>: hard-killed after <N>s …]` | yes |
+| Hard kill | none | `"error"` | — | — | none: the error names the unit and the limit | yes, as an error |
+| Output cap, the answer intact | yes | `"ok"` | `true` | — | `[<unit>: output capped at <N> chars …]` | yes |
+| Output cap cut into the answer itself — Grok's final `result` line, agy's envelope, Codex's last `agent_message` — so nothing parses at all; the same exception in all three units | no answer left to read | `"error"` | — | — | none: the error names the unit's `outputCap` key | yes, as an error |
+| `gemini_deep_research` with a partial stage or a failed gather | yes | `"ok"` | `true` | — | `[gemini: N of M stages returned partial answers]`, `[gemini: N of M gathers failed: …]` | yes |
+| Client cancel under `cancel: finish` | whatever the run produced | the run's own (`"ok"` / `"error"`) | as the run produced | `true` | as the run produced | **no**: recorded, not sent |
+| Client cancel under `cancel: kill` | yes, or none | `"cancelled"` | `true` with text | — | `[<unit>: cancelled by the client …]` with text | **no** |
+| Refusal or validation error: a missing `prompt`, a bad `cwd`, a rejected model or effort, a prompt the mutate gate refused | — | `"error"` | — | — | none | yes, as an error |
+| Unit disabled in the config | — | `"error"` | — | — | none | yes, as an error |
+| Image tool (`gemini_image`, `grok_image`, `grok_image_edit`, `codex_image`) whose run did not finish — capped, killed, cancelled, a non-zero exit, or a vendor status that is not success — with the file already saved | the path | `"ok"` (a client cancel: the client-cancel rows) | `true` | — | **none**: the answer is a bare path by contract, so this flag is the only record that the run behind that file was cut short; no file saved is an error ([ADAPTERS](ADAPTERS.md#image-tools-return-a-bare-path)) | yes |
 
 `status: "error"` covers everything that did not return a clean answer: a failed run, a rejected model or effort, a prompt the mutate gate refused, and a refusal the adapter made itself (a missing `prompt`, a `cwd` that is not an absolute existing directory). A call rejected after the config check — an unknown model, a gated prompt — still produces a matching `start`/`end` pair even though nothing spawned. A unit disabled in the config is refused after the feed has started the call, so it too writes a `start`/`end` pair, ending `"error"`; only an unknown tool name is refused before the feed and never reaches it. `status: "cancelled"` is the fourth case and a different animal: the client withdrew the request and the unit's `cancel` is `kill`, so the run was killed rather than allowed to fail. Under `cancel: finish` the status stays whatever the run produced and `detached: true` records that nobody was listening for it.
 

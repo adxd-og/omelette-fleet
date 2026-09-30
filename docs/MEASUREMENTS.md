@@ -2,15 +2,11 @@
 
 What has actually been measured on this project, how each number was taken, and what has not been measured yet. Nothing here is an estimate unless it says so.
 
+**Process cost** — planning, a task lead, coder effort, sub-agents and their context:
+
 | Question | Where |
 |---|---|
-| What does planning cost today — the number the scout map is aimed at? | [Planning cost before the scout map](#planning-cost-before-the-scout-map) |
-| What did the 1.1.0 review rounds change that a clock can see? | [`check` before and after its reviews](#check-before-and-after-its-reviews) |
-| What are three release reviews worth? | [Review yield per release](#review-yield-per-release) |
-| Does a security brief find what a plain review and a plugin miss? | [Security audit: plain, brief and plugin over one revision](#security-audit-plain-brief-and-plugin-over-one-revision) |
-| What does the short fleet contract save in every session? | [The fleet contract, full and short](#the-fleet-contract-full-and-short) |
-| How big is the rules file every session loads, before and after 1.2.0? | [The rules file, before and after](#the-rules-file-before-and-after) |
-| What did the session carry per request in 1.3.0, and did the rules file cause it? | [Rent and the rules file, 1.2.0 to 1.3.0](#rent-and-the-rules-file-120-to-130) |
+| What did planning cost before 1.1.0 — the number the scout map is aimed at? | [Planning cost before the scout map](#planning-cost-before-the-scout-map) |
 | What does planning cost with the scout map, and did a fork do better? | [Planning cost with the scout map](#planning-cost-with-the-scout-map) |
 | What does a task lead cost against the session running the coder and tester itself? | [A task lead between the session and the coder](#a-task-lead-between-the-session-and-the-coder) |
 | Does a coder's effort level change what it builds? | [Coder effort: medium, high, xhigh on one task](#coder-effort-medium-high-xhigh-on-one-task) |
@@ -18,12 +14,38 @@ What has actually been measured on this project, how each number was taken, and 
 | Where do sub-agent tokens go, by role? | [Sub-agents by role](#sub-agents-by-role) |
 | What fills a sub-agent's context — reading, its own output, the harness? | [Where a sub-agent's context goes](#where-a-sub-agents-context-goes) |
 | Who runs past 200 k tokens, and doing what? | [Past 200 k](#past-200-k) |
-| Does the guard's context estimate match the engine's? | [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) |
+
+**Review value** — `check`, review yield, the security audit:
+
+| Question | Where |
+|---|---|
+| What did the 1.1.0 review rounds change that a clock can see? | [`check` before and after its reviews](#check-before-and-after-its-reviews) |
+| What are three release reviews worth? | [Review yield per release](#review-yield-per-release) |
+| Does a security brief find what a plain review and a plugin miss? | [Security audit: plain, brief and plugin over one revision](#security-audit-plain-brief-and-plugin-over-one-revision) |
+
+**Resident context** — the contract, the rules file, the rent:
+
+| Question | Where |
+|---|---|
+| What does the short fleet contract save in every session? | [The fleet contract, full and short](#the-fleet-contract-full-and-short) |
+| How big is the rules file every session loads, before and after 1.2.0? | [The rules file, before and after](#the-rules-file-before-and-after) |
+| What did the session carry per request in 1.3.0, and did the rules file cause it? | [Rent and the rules file, 1.2.0 to 1.3.0](#rent-and-the-rules-file-120-to-130) |
+
+**Runtime behaviour** — the hooks, Codex web mode, unit processes, `initialize`, vendor CLI versions:
+
+| Question | Where |
+|---|---|
+| Did the guard's context estimate (removed in 1.5.0) match the engine's? | [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) |
 | What did the handoff hooks do across every compaction the project has had? | [The handoff hooks over five compactions](#the-handoff-hooks-over-five-compactions) |
 | Which web mode does a Codex research run get when none is set? | [The Codex web default mode](#the-codex-web-default-mode) |
 | What outlives a killed unit server, per vendor CLI? | [Unit processes after the server is gone](#unit-processes-after-the-server-is-gone) |
 | Which MCP protocol version does Claude Code ask for, and which does the server claim? | [What Claude Code sends at `initialize`](#what-claude-code-sends-at-initialize) |
 | Which vendor CLI versions was each release live-gated on? | [Vendor CLI versions per release](#vendor-cli-versions-per-release) |
+
+**About these numbers:**
+
+| Question | Where |
+|---|---|
 | How do I repeat these on my own sessions? | [How the numbers are taken](#how-the-numbers-are-taken) |
 | Which claims has nobody measured? | [Not measured yet](#not-measured-yet) |
 
@@ -86,9 +108,23 @@ Two runs over the same revision, `d7180b2` (v1.2.0), on 2026-09-24: Codex with n
 | Verified | 18 | 9 | 4 |
 | Refuted | 16 | 7 | 0 |
 
-**Refutation.** Seven fresh agents on `claude-opus-5-5`, each with a clean context, one per file cluster (guard-io, guard-git, core-fs, adapters, spawn-rpc, cli-text, cli-fs), each told to disprove every finding in its cluster against the code at `d7180b2`; `verified` means the attempt failed. Confound: the findings of one cluster shared one agent's context, so a ruling on one could lean on another. A defect both runs reported is one finding in each run's count and one in the overlap. Among the verified: S3 was already known and documented, C3 is narrow (both runs), S17 is conditional (brief), and S2 and G6 (plain) came back `needs-check` and were then settled — S2 by a vendor probe, G6 documented as a fail-open by design. The plugin's four went another way: its panel had already re-read the code, so one live check on `omelette-coder-medium` (`claude-opus-5-5`, effort medium) ran the vendors through the real adapter against bait files and a loopback listener — F2 (grok's `read_file` reaches outside `--cwd`), F3 (the recommended agy rules read a file outside `cwd` with no prompt) and F4 (raw ESC bytes on `doctor`'s stdout) reproduced; F1 narrowed: grok's `web_fetch` runs headless with no prompt, but grok's own guard blocks private addresses, so the loopback variant is refuted and the public-exfil leg stayed unresolved (the sub-agent's sandbox had no egress). Two answers where the model declined a credential framing are policy, not an adapter boundary, and count as nothing.
+**Refutation.** Seven fresh agents on `claude-opus-5-5`, each with a clean context, one per file cluster (guard-io, guard-git, core-fs, adapters, spawn-rpc, cli-text, cli-fs), each told to disprove every finding in its cluster against the code at `d7180b2`; `verified` means the attempt failed. The plugin's four went another way: its panel had already re-read the code, so one live check on `omelette-coder-medium` (`claude-opus-5-5`, effort medium) ran the vendors through the real adapter against bait files and a loopback listener. Confound: the findings of one cluster shared one agent's context, so a ruling on one could lean on another.
 
-**Overlap.** Verified defects both runs found — G4, G5, S3, C3, C5, C7: plain and brief 6; plugin and either Codex run 0.
+| Finding | Run | Verdict | Settled by | Note |
+|---|---|---|---|---|
+| S2 | plain | verified, after coming back `needs-check` | a vendor probe | — |
+| S3 | plain and brief | verified | the refuting agent | already known and documented |
+| C3 | plain and brief | verified | the refuting agent | narrow |
+| G6 | plain | verified, after coming back `needs-check` | documented as a fail-open by design | — |
+| S17 | brief | verified | the refuting agent | conditional |
+| F1 | plugin | narrowed | the live check | grok's `web_fetch` runs headless with no prompt, but grok's own guard blocks private addresses, so the loopback variant is refuted and the public-exfil leg stayed unresolved (the sub-agent's sandbox had no egress) |
+| F2 | plugin | reproduced | the live check | grok's `read_file` reaches outside `--cwd` |
+| F3 | plugin | reproduced | the live check | the recommended agy rules read a file outside `cwd` with no prompt |
+| F4 | plugin | reproduced | the live check | raw ESC bytes on `doctor`'s stdout |
+
+Two answers where the model declined a credential framing are policy, not an adapter boundary, and count as nothing.
+
+**Overlap.** A defect both runs reported is one finding in each run's count and one in the overlap. Verified defects both runs found — G4, G5, S3, C3, C5, C7: plain and brief 6; plugin and either Codex run 0.
 
 **Verified by the brief only.** 3 — S17: a bare vendor name is resolved from the caller's `cwd` when `PATH` holds an empty or relative entry (Task 8); S18: the `GOOGLE_*` passthrough admits `GOOGLE_CREDENTIALS` (Task 6); S19: a gemini retry replays an accept-edits run (Task 6).
 
@@ -344,7 +380,7 @@ Each release adds its row at the live gate (a step of the release procedure the 
 - **What `subagent_tokens` means.** It is the harness's count for the agent at the moment it stopped. A resumed agent reports again with a larger number (the 1.1.0 coder reported 139 834, 184 245, 286 692 and 320 000 across four rounds), so the script keeps the largest. Read it as the size of the context the agent ended with — a floor on what it had to read — not as a bill: the billed total, with cache reads on every turn, is larger and is not in the transcript in this form.
 - **`check` timings.** A throwaway harness imports `core/check.mjs` from each commit, builds the fixture in a temp directory, and times `checkPointers` with `process.hrtime`; memory is `process.resourceUsage().maxRSS` from a fresh process per run (an idle Node process on that machine: 33 MiB). The fixtures are the ones described in the table; the timing one is also a test (`test/check.test.mjs`, "the worst case is bounded").
 - **Review yield.** The `review yield:` line of each release's ledger (`.omelette/ledger-<release>.md`, kept by the orchestrator, not in the repository).
-- **Security-audit counts.** The P0 lines of the 1.3.0 ledger (same place): one `candidate` line per finding per run, then its `verified` or `refuted` ruling once a fresh agent had tried to disprove it (the plugin's four: one live check that ran the vendors, ledger 2026-09-25) — seven agents on `claude-opus-5-5`, one per file cluster (guard-io, guard-git, core-fs, adapters, spawn-rpc, cli-text, cli-fs), each clean-context and handed every finding in its cluster. The confound: findings in one cluster shared one agent's context, so the rulings within a cluster are not independent. Duplicates within a run are merged before counting; the overlap is matched by the session, by location and scenario. Two runs only: the plugin run waits for the operator's own `/claude-security` invocation.
+- **Security-audit counts.** The P0 lines of the 1.3.0 ledger (same place): one `candidate` line per finding per run, then its `verified` or `refuted` ruling once a fresh agent had tried to disprove it (the plugin's four: one live check that ran the vendors, ledger 2026-09-25) — the refuting agents, their clusters and the confound are under [Refutation](#security-audit-plain-brief-and-plugin-over-one-revision). Duplicates within a run are merged before counting; the overlap is matched by the session, by location and scenario. Three runs: the plugin run ran on the operator's own `/claude-security` invocation on 2026-09-25, over `3b01e32`.
 - **Matched-repeat numbers.** Per-request usage from each sub-agent's own transcript, priced at the list prices of the day ([above](#a-task-lead-between-the-session-and-the-coder)); output tokens are taken as the maximum per message id, so they are under-counted, equally in both arms. Acceptance is the tester's tests, written before either arm ran, run against each arm's tree.
 - **Rent.** Per-request context from the orchestrating session's own transcript, counted as under "Per-request usage, by source" above; the 1.3.0 rules sizes are `renderRulesFile` under each merge policy, as above.
 - **Contract sizes.** `FLEET_CONTRACT.length` and `SHORT_CONTRACT.length` from `core/rules.mjs`.
@@ -357,4 +393,5 @@ Each release adds its row at the live gate (a step of the release procedure the 
 - **Whether the five-section report shortens the orchestrator's reading.** The orchestrator's own tokens per release have not been separated out of its single long session.
 - **Whether `check` catches wrong evidence in practice.** In 1.1.0 it caught one off-by-one pointer in the orchestrator's own documentation and one weak fragment in the coder's own report. Two is an anecdote.
 - **A second judgement-heavy effort trial.** [The matched repeat](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) is one task, N = 1; the two-bucket rule rests on it and on an observational bucket log. A second judgement-heavy pair is what would make it a ranking.
-- **The plugin run of the security audit.** [The row](#security-audit-plain-brief-and-plugin-over-one-revision) has two runs; the `claude-security` plugin waits for the operator's own `/claude-security` invocation.
+
+The plugin run of the security audit, listed here until 1.6.1, ran on 2026-09-25 on the operator's own `/claude-security` invocation: [the row](#security-audit-plain-brief-and-plugin-over-one-revision) has all three runs.
