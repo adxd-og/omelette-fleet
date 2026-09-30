@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The guard verdict · omelette-fleet</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #f3f3f1;
+      --color-ink:    #012357;
+      --color-muted:  #4a6187;
+      --color-accent: #fac440;
+      --font-sans:   Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+      --font-serif:  'Instrument Serif', Georgia, 'Times New Roman', serif;
+      --font-mono:   'Geist Mono', 'SF Mono', Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · omelette-fleet</p>
+    <h1>The guard, from the event on stdin to an exit code</h1>
+
+    <svg viewBox="0 0 1000 776" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="guard-verdict-title guard-verdict-desc">
+      <title id="guard-verdict-title">The guard hook, from stdin event to verdict</title>
+      <desc id="guard-verdict-desc">Flowchart of the guard script that rules --hooks writes. It reads the event on stdin, at most 8 MiB and giving up after 5 s; malformed or oversized stdin, or a pipe that never closes, exits 0, a fail-open by design on a PreToolUse event past 8 MiB. On PreToolUse with matcher Bash it exits 2, with one stderr line naming the role, only when agent_type is one of the four roles (omelette-coder, omelette-coder-medium, omelette-tester, omelette-reviewer) and the command is a git write per the grammar table in SECURITY; the main session, every other caller and every read exit 0. On PreCompact, when handoff.enabled holds and a ledger is a regular file, it appends the compaction stamp and prints a one-line reminder. On SessionStart with source compact and handoff.enabled, it prints the last ## Handoff block of each ledger, capped at 40 lines / 4 KB per ledger and 12 KB in all. The retired PostToolUse, Stop and PostCompact events and any unknown event exit 0. Every path but the refusal ends in exit 0: the guard never fails a session.</desc>
+      <defs>
+        <marker id="guard-verdict-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4a6187"/></marker>
+        <marker id="guard-verdict-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#b8860b"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f3f3f1"/>
+
+      <!-- ===== Arrows and rails (drawn before the nodes) ===== -->
+      <line x1="500" y1="76" x2="500" y2="98" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <path d="M 620,52 H 950 V 628" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <path d="M 590,138 H 950" fill="none" stroke="#4a6187" stroke-width="1.2"/>
+      <circle cx="950" cy="138" r="2.5" fill="#4a6187"/>
+      <path d="M 500,178 V 196" fill="none" stroke="#4a6187" stroke-width="1.2"/>
+      <path d="M 200,196 H 790" fill="none" stroke="#4a6187" stroke-width="1.2"/>
+      <line x1="200" y1="196" x2="200" y2="230" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <line x1="500" y1="196" x2="500" y2="230" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <line x1="790" y1="196" x2="790" y2="230" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <line x1="200" y1="354" x2="200" y2="392" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <path d="M 70,292 H 52 V 628" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <path d="M 70,446 H 52" fill="none" stroke="#4a6187" stroke-width="1.2"/>
+      <circle cx="52" cy="446" r="2.5" fill="#4a6187"/>
+      <line x1="200" y1="500" x2="200" y2="532" stroke="#b8860b" stroke-width="1.6" marker-end="url(#guard-verdict-arrow-accent)"/>
+      <line x1="500" y1="362" x2="500" y2="392" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <path d="M 625,296 H 645 V 628" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <line x1="500" y1="460" x2="500" y2="628" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <line x1="790" y1="362" x2="790" y2="392" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+      <path d="M 915,296 H 950" fill="none" stroke="#4a6187" stroke-width="1.2"/>
+      <circle cx="950" cy="296" r="2.5" fill="#4a6187"/>
+      <line x1="790" y1="460" x2="790" y2="628" stroke="#4a6187" stroke-width="1.2" marker-end="url(#guard-verdict-arrow)"/>
+
+      <!-- ===== Arrow labels ===== -->
+      <rect x="668" y="32" width="234" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="785" y="41" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">malformed, over 8 MiB, or no close in 5 s</text>
+      <text x="785" y="67" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">fail-open by design on a PreToolUse past 8 MiB</text>
+      <rect x="623" y="118" width="294" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="770" y="127" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">PostToolUse · Stop · PostCompact (retired) · unknown</text>
+      <text x="770" y="152" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">doctor names a retired entry for removal</text>
+      <rect x="201" y="209" width="147" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="206" y="218" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.08em">PreToolUse · matcher Bash</text>
+      <rect x="501" y="209" width="65" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="506" y="218" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.08em">PreCompact</text>
+      <rect x="615" y="209" width="174" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="784" y="218" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end" letter-spacing="0.08em">SessionStart · matcher compact</text>
+      <rect x="205" y="367" width="27" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="210" y="376" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">YES</text>
+      <rect x="205" y="510" width="27" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="210" y="519" fill="#8a6200" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">YES</text>
+      <rect x="505" y="372" width="27" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="510" y="381" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">YES</text>
+      <rect x="795" y="372" width="27" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="800" y="381" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">YES</text>
+      <rect x="57" y="302" width="22" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="62" y="311" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">NO</text>
+      <text x="60" y="333" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">main session,</text>
+      <text x="60" y="344" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">any other caller</text>
+      <rect x="57" y="456" width="22" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="62" y="465" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">NO</text>
+      <text x="60" y="486" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">every read passes</text>
+      <rect x="650" y="312" width="22" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="655" y="321" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">NO</text>
+      <text x="651" y="338" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">nothing stamped,</text>
+      <text x="651" y="349" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">nothing printed</text>
+      <rect x="919" y="276" width="22" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="930" y="285" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+      <text x="944" y="330" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">startup · resume</text>
+      <text x="944" y="341" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">/clear · fork</text>
+
+      <!-- ===== Nodes ===== -->
+      <!-- Start: the event on stdin -->
+      <rect x="380" y="28" width="240" height="48" rx="24" fill="rgba(1,35,87,0.03)" stroke="rgba(1,35,87,0.30)" stroke-width="1"/>
+      <text x="500" y="49" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">stdin event</text>
+      <text x="500" y="64" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">read at most 8 MiB · give up after 5 s</text>
+      <!-- D0: which event -->
+      <polygon points="500,98 590,138 500,178 410,138" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="500" y="135" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">event?</text>
+      <text x="500" y="148" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">one script, three events</text>
+      <!-- PreToolUse — D1: the caller -->
+      <polygon points="200,230 330,292 200,354 70,292" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="200" y="280" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">agent_type is one of</text>
+      <text x="200" y="294" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">the four roles?</text>
+      <text x="200" y="310" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">omelette-coder, -coder-medium,</text>
+      <text x="200" y="321" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">-tester, -reviewer</text>
+      <!-- PreToolUse — D2: the command -->
+      <polygon points="200,392 330,446 200,500 70,446" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="200" y="443" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">a git write per the</text>
+      <text x="200" y="457" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">grammar table?</text>
+      <!-- The refusal (focal) -->
+      <rect x="90" y="532" width="220" height="64" rx="32" fill="rgba(250,196,64,0.20)" stroke="#b8860b" stroke-width="1.4"/>
+      <text x="200" y="556" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">exit 2</text>
+      <text x="200" y="571" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">one stderr line naming the role</text>
+      <text x="200" y="583" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the call never runs</text>
+      <!-- PreCompact — D3 -->
+      <polygon points="500,230 625,296 500,362 375,296" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="500" y="283" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">handoff.enabled, and a</text>
+      <text x="500" y="297" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">ledger that is a</text>
+      <text x="500" y="311" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">regular file?</text>
+      <!-- PreCompact — the stamp -->
+      <rect x="390" y="392" width="220" height="68" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="500" y="411" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">append the stamp</text>
+      <text x="500" y="426" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">## Compaction &lt;ISO&gt; (trigger: …)</text>
+      <text x="500" y="438" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">+ a one-line reminder on stdout</text>
+      <text x="500" y="450" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">a symlink or a FIFO is skipped</text>
+      <!-- SessionStart — D4 -->
+      <polygon points="790,230 915,296 790,362 665,296" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="790" y="290" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">source is compact,</text>
+      <text x="790" y="304" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">and handoff.enabled?</text>
+      <!-- SessionStart — the print -->
+      <rect x="680" y="392" width="220" height="68" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="790" y="410" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">print the last ## Handoff</text>
+      <text x="790" y="424" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">of each ledger</text>
+      <text x="790" y="439" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">40 lines / 4 KB per ledger, 12 KB in all</text>
+      <text x="790" y="451" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">writes nothing</text>
+      <!-- End: exit 0, the path everything else takes -->
+      <rect x="40" y="628" width="920" height="48" rx="24" fill="rgba(1,35,87,0.03)" stroke="rgba(1,35,87,0.30)" stroke-width="1"/>
+      <text x="500" y="649" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">exit 0</text>
+      <text x="500" y="665" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">never fails a session</text>
+
+      <!-- ===== Legend ===== -->
+      <line x1="40" y1="708" x2="960" y2="708" stroke="rgba(1,35,87,0.12)" stroke-width="0.8"/>
+      <text x="40" y="724" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.18em">LEGEND · SHAPE CARRIES TYPE</text>
+      <rect x="40" y="740" width="24" height="12" rx="6" fill="rgba(1,35,87,0.03)" stroke="rgba(1,35,87,0.30)" stroke-width="1"/>
+      <text x="72" y="750" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Start / end (oval)</text>
+      <rect x="200" y="740" width="24" height="12" rx="2" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="232" y="750" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Step (rectangle)</text>
+      <polygon points="360,746 372,740 384,746 372,752" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="392" y="750" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Decision (diamond)</text>
+      <rect x="530" y="740" width="24" height="12" rx="6" fill="rgba(250,196,64,0.20)" stroke="#b8860b" stroke-width="1"/>
+      <text x="562" y="750" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">The refusal: exit 2</text>
+      <circle cx="700" cy="746" r="2.5" fill="#4a6187"/>
+      <text x="710" y="750" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Paths join; the rails end in exit 0</text>
+    </svg>
+  </div>
+</body>
+</html>

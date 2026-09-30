@@ -54,7 +54,7 @@
 
     <svg viewBox="0 0 1000 608" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="security-layers-title security-layers-desc">
       <title id="security-layers-title">Compensating layers under the write ceiling</title>
-      <desc id="security-layers-desc">Layer stack read from the outside in: the config ceiling, closed by default and only ever narrowing; the child-environment allowlist and billing-key scrub built at every spawn; the per-unit sandbox, kernel-enforced for Codex, toolset-level for Grok and only a permission policy for Gemini, which is the weakest layer; and the guard hook, which is containment for the shipped coder and tester sub-agents rather than a security boundary. Each layer is labelled with what enforces it and the gap it leaves, and the residual risk that no layer removes is prompt injection through the content a unit reads.</desc>
+      <desc id="security-layers-desc">Layer stack read from the outside in: the config ceiling, closed by default and only ever narrowing; the child-environment allowlist and billing-key scrub built at every spawn; the per-unit sandbox, kernel-enforced for Codex, toolset-level for Grok and only a permission policy for Gemini, which is the weakest layer; and the guard hook, which is containment for the four shipped sub-agent roles (omelette-coder, omelette-coder-medium, omelette-tester and omelette-reviewer) rather than a security boundary. Each layer is labelled with what enforces it and the gap it leaves, and the residual risk that no layer removes is prompt injection through the content a unit reads.</desc>
       <defs>
         <marker id="sl-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4a6187"/></marker>
       </defs>
@@ -97,8 +97,9 @@
 
       <!-- ===== L4 — the guard hook ===== -->
       <text x="132" y="360" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">L4</text>
-      <text x="180" y="354" fill="#012357" font-size="14" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">The guard hook</text>
-      <text x="180" y="372" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace">PreToolUse · omelette-coder and omelette-tester never commit</text>
+      <text x="180" y="350" fill="#012357" font-size="14" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">The guard hook</text>
+      <text x="180" y="366" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace">PreToolUse · the four shipped sub-agent roles never commit</text>
+      <text x="180" y="379" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace">omelette-coder · omelette-coder-medium · omelette-tester · omelette-reviewer</text>
       <text x="932" y="363" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">gap: containment, not a security boundary</text>
 
       <!-- ===== Residual risk ===== -->

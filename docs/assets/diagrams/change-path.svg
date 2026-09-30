@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1000 936" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="change-path-title change-path-desc">
+  <title id="change-path-title">Which path a change takes</title>
+  <desc id="change-path-desc">Flowchart of the path a change takes before the operating model's lanes. A change of at most 20 lines, with no behaviour beyond the fix, its test in the same commit (or docs and comments only) and none of the six excluded areas (the guard's refusal logic, the env allowlist, the billing scrub, the write gates, a tool's schema, a doc section rewritten) takes the small-change lane: fix/&lt;name&gt; with its test, the suite green on Linux, fast-forward main and one ledger line, with no spec, plan, reviews or tag. Everything else goes through the flow: spec approved, then plan. Short of all four delegate conditions (independent, its own files or question; resolves a named uncertainty; a wrong answer would cost something material; the output fits one sentence) the session does it itself rather than paying a delegate's overhead, and the tester still runs (a docs-only edit needs none). Otherwise omelette-coder-medium takes the section when it prints the exact text, diff, tests and numbers, and omelette-coder takes it otherwise; a required decision left open gets NEEDS_CONTEXT at any effort. Then come the tester, review and the session's commit.</desc>
+  <defs>
+    <marker id="change-path-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4a6187"/></marker>
+    <marker id="change-path-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#b8860b"/></marker>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#f3f3f1"/>
+
+  <!-- ===== The lane frame, painted first ===== -->
+  <rect x="610" y="112" width="350" height="262" rx="4" fill="#012357" fill-opacity="0.02" stroke="#012357" stroke-opacity="0.22" stroke-width="1"/>
+  <text x="626" y="130" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.16em">THE SMALL-CHANGE LANE</text>
+
+  <!-- ===== Arrows (drawn before the nodes) ===== -->
+  <line x1="380" y1="72" x2="380" y2="92" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="550" y1="172" x2="634" y2="172" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="784" y1="194" x2="784" y2="218" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="784" y1="262" x2="784" y2="286" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="380" y1="252" x2="380" y2="282" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="380" y1="326" x2="380" y2="350" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="380" y1="394" x2="380" y2="418" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="530" y1="466" x2="620" y2="466" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="380" y1="514" x2="380" y2="540" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <path d="M 210,592 H 140 V 672" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <path d="M 550,592 H 620 V 672" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <path d="M 140,736 V 760 H 620 V 736" fill="none" stroke="#4a6187" stroke-width="1.2"/>
+  <path d="M 760,490 V 760 H 620" fill="none" stroke="#4a6187" stroke-width="1.2"/>
+  <circle cx="620" cy="760" r="2.5" fill="#4a6187"/>
+  <line x1="380" y1="760" x2="380" y2="790" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="480" y1="812" x2="540" y2="812" stroke="#4a6187" stroke-width="1.2" marker-end="url(#change-path-arrow)"/>
+  <line x1="740" y1="812" x2="800" y2="812" stroke="#b8860b" stroke-width="1.6" marker-end="url(#change-path-arrow-accent)"/>
+
+  <!-- ===== Arrow labels ===== -->
+  <rect x="579" y="154" width="27" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="592" y="163" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">YES</text>
+  <rect x="385" y="261" width="22" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="390" y="270" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">NO</text>
+  <rect x="564" y="448" width="22" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="575" y="457" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+  <rect x="385" y="521" width="27" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="390" y="530" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">YES</text>
+  <rect x="162" y="574" width="27" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="175" y="583" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">YES</text>
+  <rect x="574" y="574" width="22" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="585" y="583" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+  <text x="768" y="516" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the tester still runs;</text>
+  <text x="768" y="528" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">a docs-only edit needs none</text>
+
+  <!-- ===== Annotations: the conditions each diamond tests ===== -->
+  <text x="40" y="122" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.16em">THE SIX EXCLUDED AREAS</text>
+  <text x="40" y="136" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the guard's refusal logic</text>
+  <text x="40" y="148" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the env allowlist</text>
+  <text x="40" y="160" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the billing scrub</text>
+  <text x="40" y="172" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the write gates</text>
+  <text x="40" y="184" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">a tool's schema</text>
+  <text x="40" y="196" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">a doc section rewritten</text>
+  <text x="40" y="216" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">no test needed for</text>
+  <text x="40" y="227" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">docs and comments only</text>
+  <text x="40" y="434" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.16em">THE FOUR CONDITIONS</text>
+  <text x="40" y="448" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">independent: its own files or question</text>
+  <text x="40" y="460" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">resolves a named uncertainty</text>
+  <text x="40" y="472" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">a wrong answer costs something</text>
+  <text x="40" y="484" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the output fits one sentence</text>
+
+  <!-- ===== Nodes ===== -->
+  <rect x="280" y="28" width="200" height="44" rx="22" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="380" y="48" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">A change</text>
+  <text x="380" y="62" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">which path to main?</text>
+  <!-- D1: does it qualify for the lane -->
+  <polygon points="380,92 550,172 380,252 210,172" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="380" y="152" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">at most 20 lines,</text>
+  <text x="380" y="166" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">no behaviour beyond the fix,</text>
+  <text x="380" y="180" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">test in the same commit,</text>
+  <text x="380" y="194" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">none of the six excluded areas?</text>
+  <!-- The lane -->
+  <rect x="634" y="150" width="300" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="784" y="169" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">fix/&lt;name&gt;</text>
+  <text x="784" y="183" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the session writes it, with its test</text>
+  <rect x="634" y="218" width="300" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="784" y="237" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">suite on Linux</text>
+  <text x="784" y="251" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">green: Docker or the pushed branch's CI</text>
+  <rect x="634" y="286" width="300" height="44" rx="6" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1.4"/>
+  <text x="784" y="305" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">fast-forward main</text>
+  <text x="784" y="319" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">+ one ledger line</text>
+  <text x="784" y="348" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">no spec, no plan, no reviews, no tag</text>
+  <text x="784" y="360" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the next release's whole-branch review covers it</text>
+  <!-- The flow -->
+  <rect x="280" y="282" width="200" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="380" y="301" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">spec approved</text>
+  <text x="380" y="315" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">before any build</text>
+  <rect x="280" y="350" width="200" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="380" y="369" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">plan</text>
+  <text x="380" y="383" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the coder gets its task's section</text>
+  <!-- D2: is a delegate justified -->
+  <polygon points="380,418 530,466 380,514 230,466" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="380" y="470" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">all four delegate conditions?</text>
+  <rect x="620" y="442" width="280" height="48" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="760" y="462" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">The session does it itself</text>
+  <text x="760" y="477" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">rather than a delegate's overhead</text>
+  <!-- D3: which coder -->
+  <polygon points="380,540 550,592 380,644 210,592" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="380" y="589" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">the section prints exact text,</text>
+  <text x="380" y="603" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">diff, tests and numbers?</text>
+  <rect x="40" y="672" width="200" height="64" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="140" y="690" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">omelette-coder-medium</text>
+  <text x="140" y="704" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">effort: medium</text>
+  <text x="140" y="716" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">executes the section</text>
+  <rect x="520" y="672" width="200" height="64" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="620" y="690" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">omelette-coder</text>
+  <text x="620" y="704" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">effort: xhigh</text>
+  <text x="620" y="716" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">no written shape · unknown cause</text>
+  <text x="620" y="728" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">or a decision the brief delegates</text>
+  <text x="776" y="690" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">a required decision left open:</text>
+  <text x="776" y="702" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">NEEDS_CONTEXT at any effort</text>
+  <text x="776" y="714" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the bucket and its reason go</text>
+  <text x="776" y="726" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">into the brief and the ledger</text>
+  <rect x="280" y="790" width="200" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="380" y="809" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">tester</text>
+  <text x="380" y="823" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the spec + the git diff</text>
+  <rect x="540" y="790" width="200" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="640" y="809" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">review</text>
+  <text x="640" y="823" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">four-part findings, each ruled</text>
+  <rect x="800" y="790" width="160" height="44" rx="6" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1.4"/>
+  <text x="880" y="809" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">commit</text>
+  <text x="880" y="823" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the session, on the branch</text>
+
+  <!-- ===== Legend ===== -->
+  <line x1="40" y1="866" x2="960" y2="866" stroke="#012357" stroke-opacity="0.12" stroke-width="0.8"/>
+  <text x="40" y="882" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.18em">LEGEND · SHAPE CARRIES TYPE</text>
+  <rect x="40" y="898" width="24" height="12" rx="6" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="72" y="908" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Start (oval)</text>
+  <rect x="170" y="898" width="24" height="12" rx="2" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="202" y="908" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Step (rectangle)</text>
+  <polygon points="330,904 342,898 354,904 342,910" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="362" y="908" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Decision (diamond)</text>
+  <rect x="490" y="898" width="24" height="12" rx="2" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1"/>
+  <text x="522" y="908" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">The session lands it</text>
+  <rect x="650" y="898" width="24" height="12" rx="2" fill="#012357" fill-opacity="0.02" stroke="#012357" stroke-opacity="0.22" stroke-width="1"/>
+  <text x="682" y="908" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">The small-change lane</text>
+  <circle cx="820" cy="904" r="2.5" fill="#4a6187"/>
+  <text x="830" y="908" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Paths join</text>
+</svg>

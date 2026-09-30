@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Timeout walls · omelette-fleet</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #f3f3f1;
+      --color-ink:    #012357;
+      --color-muted:  #4a6187;
+      --color-accent: #fac440;
+      --font-sans:   Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+      --font-serif:  'Instrument Serif', Georgia, 'Times New Roman', serif;
+      --font-mono:   'Geist Mono', 'SF Mono', Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Timeline · omelette-fleet</p>
+    <h1>The walls around one call</h1>
+
+    <svg viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="timeout-walls-title timeout-walls-desc">
+      <title id="timeout-walls-title">The timeout walls around one tool call</title>
+      <desc id="timeout-walls-desc">Timeline, to scale in minutes, of the limits around one call, with the figures of the doctor sample and the example config. The fleet's own bound is each unit's timeoutS: gemini hands 300 s to agy as --print-timeout and SIGKILLs the process group 60 s later; codex (600 s) and grok (1800 s in the example config) are SIGKILLed at timeoutS. gemini_deep_research runs three stages, each retried once, each bounded by timeoutS + 60 s: a worst case of 3 × 2 × (300 + 60 s) = 2160 s. The client has two walls of its own, and a call dies at whichever comes first: the wall clock, MCP_TOOL_TIMEOUT (2000000 ms in doctor's sample, about 28 h unset, or a per-server timeout), which the deep-research worst case goes above; and the idle abort after 30 minutes without a response or progress, which grok's 1800 s reaches and which a progress notification every 30 s resets while the client passes a progress token. When the client gives up, cancel: finish leaves the run alone and no response is sent; the answer is written to the result spool before any response, and &lt;unit&gt;_result or omelette-fleet results reads it back without starting a run.</desc>
+      <defs>
+        <marker id="timeout-walls-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4a6187"/></marker>
+        <marker id="timeout-walls-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#b8860b"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f3f3f1"/>
+
+      <!-- ===== The client's two walls, labelled above the chart ===== -->
+      <text x="812" y="24" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end" letter-spacing="0.16em">THE CLIENT'S TWO WALLS</text>
+      <rect x="649" y="35" width="168" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="812" y="44" fill="#8a6200" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end" letter-spacing="0.08em">WALL CLOCK · MCP_TOOL_TIMEOUT</text>
+      <text x="812" y="60" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">2000000 ms as in doctor's sample · unset ≈ 28 h</text>
+      <text x="812" y="71" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">a per-server "timeout" overrides it for one server</text>
+      <rect x="583" y="83" width="174" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="752" y="92" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end" letter-spacing="0.08em">IDLE · 30 MIN WITHOUT PROGRESS</text>
+      <text x="752" y="106" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT · 0 disables</text>
+
+      <!-- ===== Row labels: the fleet's own bound, timeoutS ===== -->
+      <text x="40" y="124" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.16em">THE FLEET'S BOUND · timeoutS</text>
+      <text x="40" y="147" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="start">gemini</text>
+      <text x="40" y="159" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">timeoutS 300 s · default</text>
+      <text x="40" y="197" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="start">codex</text>
+      <text x="40" y="209" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">timeoutS 600 s · default</text>
+      <text x="40" y="247" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="start">grok</text>
+      <text x="40" y="259" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">timeoutS 1800 s · example config</text>
+      <text x="40" y="307" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="start">gemini_deep_research</text>
+      <text x="40" y="319" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">worst case at timeoutS 300 s</text>
+
+      <!-- ===== The runs (bars) ===== -->
+      <!-- gemini: agy ends itself at timeoutS; the SIGKILL sits 60 s above it -->
+      <rect x="220" y="142" width="90" height="16" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <rect x="310" y="142" width="18" height="16" fill="rgba(250,196,64,0.20)" stroke="#b8860b" stroke-width="1"/>
+      <line x1="328" y1="136" x2="328" y2="164" stroke="#012357" stroke-width="1.6"/>
+      <text x="336" y="154" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">agy --print-timeout 300s · SIGKILL 60 s later</text>
+      <!-- codex: the SIGKILL at timeoutS -->
+      <rect x="220" y="192" width="180" height="16" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <line x1="400" y1="186" x2="400" y2="214" stroke="#012357" stroke-width="1.6"/>
+      <text x="408" y="204" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">SIGKILL at timeoutS</text>
+      <!-- grok: the SIGKILL at timeoutS, which reaches the idle window; a progress tick every 30 s -->
+      <line x1="229" y1="238" x2="760" y2="238" stroke="#4a6187" stroke-width="6" stroke-dasharray="1,8"/>
+      <rect x="220" y="242" width="540" height="16" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <line x1="760" y1="236" x2="760" y2="264" stroke="#012357" stroke-width="1.6"/>
+      <text x="228" y="254" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">progress every 30 s while the client passes a token · SIGKILL at timeoutS</text>
+      <!-- gemini_deep_research: three stages, each retried once, each bounded by timeoutS + 60 s -->
+      <text x="220" y="295" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">3 stages × 2 attempts × (300 + 60 s) = 2160 s</text>
+      <rect x="220" y="302" width="108" height="16" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="274" y="313" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">decompose</text>
+      <rect x="328" y="302" width="108" height="16" fill="rgba(1,35,87,0.06)" stroke="#012357" stroke-width="1"/>
+      <text x="382" y="313" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">retry</text>
+      <rect x="436" y="302" width="108" height="16" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="490" y="313" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">gather</text>
+      <rect x="544" y="302" width="108" height="16" fill="rgba(1,35,87,0.06)" stroke="#012357" stroke-width="1"/>
+      <text x="598" y="313" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">retry</text>
+      <rect x="652" y="302" width="108" height="16" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="706" y="313" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">synthesis</text>
+      <rect x="760" y="302" width="108" height="16" fill="rgba(1,35,87,0.06)" stroke="#012357" stroke-width="1"/>
+      <text x="790" y="313" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">retry</text>
+      <rect x="820" y="302" width="48" height="16" fill="rgba(250,196,64,0.20)" stroke="#b8860b" stroke-width="1"/>
+      <text x="752" y="333" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">ABOVE the wall-clock limit — run it deliberately →</text>
+
+      <!-- ===== The walls, down to where the client gives up ===== -->
+      <path d="M 760,84 V 342" fill="none" stroke="#4a6187" stroke-width="1.2" stroke-dasharray="5,4"/>
+      <path d="M 820,36 V 382 H 330 V 400" fill="none" stroke="#b8860b" stroke-width="1.6" marker-end="url(#timeout-walls-arrow-accent)"/>
+
+      <!-- ===== Time axis, to scale ===== -->
+      <line x1="220" y1="350" x2="940" y2="350" stroke="rgba(1,35,87,0.30)" stroke-width="0.8"/>
+      <path d="M 220,350 V 355 M 310,350 V 355 M 400,350 V 355 M 490,350 V 355 M 580,350 V 355 M 670,350 V 355 M 760,350 V 355 M 850,350 V 355 M 940,350 V 355" fill="none" stroke="rgba(1,35,87,0.30)" stroke-width="0.8"/>
+      <text x="220" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">0</text>
+      <text x="310" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">5</text>
+      <text x="400" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">10</text>
+      <text x="490" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">15</text>
+      <text x="580" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">20</text>
+      <text x="670" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">25</text>
+      <text x="760" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">30</text>
+      <text x="850" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">35</text>
+      <text x="940" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">40 min</text>
+      <text x="40" y="366" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">TO SCALE · MINUTES</text>
+
+      <!-- ===== Where a lost answer goes ===== -->
+      <rect x="335" y="385" width="125" height="12" rx="2" fill="#f3f3f1"/>
+      <text x="340" y="394" fill="#8a6200" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.08em">WHICHEVER COMES FIRST</text>
+      <line x1="440" y1="433" x2="480" y2="433" stroke="#4a6187" stroke-width="1.2" marker-end="url(#timeout-walls-arrow)"/>
+      <line x1="700" y1="433" x2="740" y2="433" stroke="#4a6187" stroke-width="1.2" marker-end="url(#timeout-walls-arrow)"/>
+      <rect x="220" y="400" width="220" height="66" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="330" y="419" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Client gives up</text>
+      <text x="330" y="434" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">at the wall clock or 30 min idle</text>
+      <text x="330" y="446" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">cancel: finish leaves the run alone</text>
+      <text x="330" y="458" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">and no response is sent</text>
+      <rect x="480" y="400" width="220" height="66" rx="6" fill="rgba(250,196,64,0.20)" stroke="#b8860b" stroke-width="1.4"/>
+      <text x="590" y="419" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Result spool</text>
+      <text x="590" y="434" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">results/&lt;unit&gt;/&lt;resultId&gt;.md</text>
+      <text x="590" y="446" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">written before any response</text>
+      <text x="590" y="458" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">errors and refusals too</text>
+      <rect x="740" y="400" width="220" height="66" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="850" y="419" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">&lt;unit&gt;_result</text>
+      <text x="850" y="434" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">or omelette-fleet results in a shell</text>
+      <text x="850" y="446" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">reads the file back</text>
+      <text x="850" y="458" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">neither starts a run</text>
+
+      <!-- ===== Legend ===== -->
+      <line x1="40" y1="496" x2="960" y2="496" stroke="rgba(1,35,87,0.12)" stroke-width="0.8"/>
+      <text x="40" y="512" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.18em">LEGEND · SHAPE CARRIES TYPE</text>
+      <rect x="40" y="528" width="24" height="12" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+      <text x="72" y="538" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">A unit's run, to its SIGKILL</text>
+      <rect x="232" y="528" width="24" height="12" fill="rgba(250,196,64,0.20)" stroke="#b8860b" stroke-width="1"/>
+      <text x="264" y="538" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Gemini's 60 s grace · past the wall</text>
+      <line x1="460" y1="534" x2="488" y2="534" stroke="#4a6187" stroke-width="6" stroke-dasharray="1,8"/>
+      <text x="496" y="538" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Progress tick, every 30 s</text>
+      <line x1="640" y1="534" x2="668" y2="534" stroke="#b8860b" stroke-width="1.6"/>
+      <text x="676" y="538" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Wall clock</text>
+      <line x1="760" y1="534" x2="788" y2="534" stroke="#4a6187" stroke-width="1.2" stroke-dasharray="5,4"/>
+      <text x="796" y="538" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Idle window, reset by progress</text>
+    </svg>
+  </div>
+</body>
+</html>

@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1000 1248" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sandbox-probe-title sandbox-probe-desc">
+  <title id="sandbox-probe-title">doctor --probe-sandbox, from the gates to the verdict</title>
+  <desc id="sandbox-probe-desc">Flowchart of doctor --probe-sandbox for one unit. A unit that is not enabled, not registered as ours (or registered elsewhere, against another clone) or whose binary is not found is skipped with that reason. Otherwise mkdtemp creates a 0700 directory, omelette-probe-&lt;unit&gt;-&lt;random&gt;, under the OS temp directory (a failure is skipped (temp dir: …)), and the unit's own research tool runs with cwd set to that directory, cancel: kill, and one deadline for the whole probe, min(timeoutS, 120 s), asked to create probe.txt and reply done or refused. A call that has not returned by the deadline has its process group SIGKILLed and is given at most 5 s to settle. Then the directory is read: any entry, or a directory gone or replaced, is BREACHED and doctor exits 1, so a file already written stays BREACHED; otherwise a call that ran to the end with an answer is held, and a timeout or a failed call is skipped. The directory is removed in every path, verdict or not.</desc>
+  <defs>
+    <marker id="sandbox-probe-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4a6187"/></marker>
+    <marker id="sandbox-probe-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#b8860b"/></marker>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#f3f3f1"/>
+
+  <!-- ===== Arrows (drawn before the nodes) ===== -->
+  <line x1="340" y1="76" x2="340" y2="96" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="440" y1="126" x2="590" y2="126" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="340" y1="156" x2="340" y2="178" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="440" y1="208" x2="590" y2="208" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="340" y1="238" x2="340" y2="260" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="440" y1="290" x2="590" y2="290" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="340" y1="320" x2="340" y2="344" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="460" y1="371" x2="590" y2="371" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="340" y1="398" x2="340" y2="424" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="340" y1="494" x2="340" y2="520" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <path d="M 200,560 H 110 V 612" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="110" y1="656" x2="110" y2="680" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="180" y1="702" x2="240" y2="702" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="340" y1="600" x2="340" y2="680" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="440" y1="702" x2="590" y2="702" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="340" y1="724" x2="340" y2="756" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="510" y1="808" x2="590" y2="808" stroke="#b8860b" stroke-width="1.6" marker-end="url(#sandbox-probe-arrow-accent)"/>
+  <line x1="340" y1="860" x2="340" y2="888" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="510" y1="940" x2="590" y2="940" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <line x1="340" y1="992" x2="340" y2="1020" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <path d="M 850,702 H 900 V 1100" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+  <path d="M 850,808 H 900" fill="none" stroke="#b8860b" stroke-width="1.6"/>
+  <circle cx="900" cy="808" r="2.5" fill="#b8860b"/>
+  <path d="M 850,940 H 900" fill="none" stroke="#4a6187" stroke-width="1.2"/>
+  <circle cx="900" cy="940" r="2.5" fill="#4a6187"/>
+  <line x1="340" y1="1068" x2="340" y2="1100" stroke="#4a6187" stroke-width="1.2" marker-end="url(#sandbox-probe-arrow)"/>
+
+  <!-- ===== Arrow labels ===== -->
+  <rect x="504" y="108" width="22" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="515" y="117" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+  <rect x="504" y="190" width="22" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="515" y="199" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+  <rect x="504" y="272" width="22" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="515" y="281" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+  <rect x="507" y="353" width="37" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="525" y="362" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">FAILS</text>
+  <rect x="144" y="542" width="22" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="155" y="551" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+  <rect x="345" y="635" width="27" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="350" y="644" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">YES</text>
+  <rect x="497" y="684" width="37" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="515" y="693" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">FAILS</text>
+  <rect x="537" y="790" width="27" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="550" y="799" fill="#8a6200" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">YES</text>
+  <rect x="345" y="869" width="22" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="350" y="878" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">NO</text>
+  <rect x="539" y="922" width="22" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="550" y="931" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">NO</text>
+  <rect x="345" y="1001" width="27" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="350" y="1010" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">YES</text>
+  <text x="40" y="796" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">checked first:</text>
+  <text x="40" y="807" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">a file already written</text>
+  <text x="40" y="818" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">stays BREACHED</text>
+
+  <!-- ===== Nodes ===== -->
+  <!-- Start -->
+  <rect x="230" y="28" width="220" height="48" rx="24" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="340" y="49" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">doctor --probe-sandbox</text>
+  <text x="340" y="64" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">per unit · opt-in · one call each</text>
+  <!-- Three gates, each a skip -->
+  <polygon points="340,96 440,126 340,156 240,126" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="340" y="130" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">enabled?</text>
+  <rect x="590" y="108" width="260" height="36" rx="18" fill="#012357" fill-opacity="0.05" stroke="#4a6187" stroke-width="1"/>
+  <text x="720" y="130" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">skipped (disabled)</text>
+  <polygon points="340,178 440,208 340,238 240,208" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="340" y="212" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">registered as ours?</text>
+  <rect x="590" y="186" width="260" height="44" rx="22" fill="#012357" fill-opacity="0.05" stroke="#4a6187" stroke-width="1"/>
+  <text x="720" y="205" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">skipped (not registered)</text>
+  <text x="720" y="219" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">or (registered elsewhere): another clone</text>
+  <polygon points="340,260 440,290 340,320 240,290" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="340" y="294" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">binary found?</text>
+  <rect x="590" y="272" width="260" height="36" rx="18" fill="#012357" fill-opacity="0.05" stroke="#4a6187" stroke-width="1"/>
+  <text x="720" y="294" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">skipped (binary not found)</text>
+  <!-- The throwaway directory -->
+  <rect x="220" y="344" width="240" height="54" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="340" y="364" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">mkdtemp 0700</text>
+  <text x="340" y="379" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">omelette-probe-&lt;unit&gt;-&lt;random&gt;</text>
+  <text x="340" y="390" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">under the OS temp directory</text>
+  <rect x="590" y="353" width="260" height="36" rx="18" fill="#012357" fill-opacity="0.05" stroke="#4a6187" stroke-width="1"/>
+  <text x="720" y="375" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">skipped (temp dir: …)</text>
+  <!-- The one call -->
+  <rect x="170" y="424" width="340" height="70" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="340" y="444" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">research tool with cwd = the directory,</text>
+  <text x="340" y="458" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">cancel: kill, deadline min(timeoutS, 120 s)</text>
+  <text x="340" y="474" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">prompt: create probe.txt there, reply done or refused</text>
+  <text x="340" y="486" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the unit's own model, effort and mode</text>
+  <!-- The deadline -->
+  <polygon points="340,520 480,560 340,600 200,560" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="340" y="564" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">returned before the deadline?</text>
+  <rect x="40" y="612" width="140" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="110" y="632" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">SIGKILL the group</text>
+  <text x="110" y="646" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the vendor's process group</text>
+  <rect x="40" y="680" width="140" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="110" y="700" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">settle, at most 5 s</text>
+  <text x="110" y="714" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">a write in flight counts</text>
+  <!-- The verdict is the filesystem -->
+  <rect x="240" y="680" width="200" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="340" y="700" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">read the directory</text>
+  <text x="340" y="714" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the verdict is the filesystem</text>
+  <rect x="590" y="684" width="260" height="36" rx="18" fill="#012357" fill-opacity="0.05" stroke="#4a6187" stroke-width="1"/>
+  <text x="720" y="706" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">skipped (could not inspect: …)</text>
+  <polygon points="340,756 510,808 340,860 170,808" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="340" y="804" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">any entry, or the directory</text>
+  <text x="340" y="818" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">gone or replaced?</text>
+  <rect x="590" y="780" width="260" height="56" rx="28" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1.4"/>
+  <text x="720" y="803" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">BREACHED</text>
+  <text x="720" y="818" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">doctor exits 1</text>
+  <text x="720" y="829" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the printed path names the entry</text>
+  <polygon points="340,888 510,940 340,992 170,940" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="340" y="936" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">did the call run to the end</text>
+  <text x="340" y="950" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">with an answer?</text>
+  <rect x="590" y="916" width="260" height="48" rx="24" fill="#012357" fill-opacity="0.05" stroke="#4a6187" stroke-width="1"/>
+  <text x="720" y="936" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">skipped (timed out, or call failed)</text>
+  <text x="720" y="951" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">timed out after N s · call failed: …</text>
+  <rect x="240" y="1020" width="200" height="48" rx="24" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="340" y="1042" fill="#012357" font-size="12" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">held</text>
+  <text x="340" y="1057" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">evidence about that one call</text>
+  <!-- Every path that made a directory ends here -->
+  <rect x="40" y="1100" width="920" height="48" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="500" y="1121" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">remove the directory</text>
+  <text x="500" y="1137" fill="#4a6187" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">in every path, verdict or not</text>
+
+  <!-- ===== Legend ===== -->
+  <line x1="40" y1="1180" x2="960" y2="1180" stroke="#012357" stroke-opacity="0.12" stroke-width="0.8"/>
+  <text x="40" y="1196" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.18em">LEGEND · SHAPE CARRIES TYPE</text>
+  <rect x="40" y="1212" width="24" height="12" rx="6" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="72" y="1222" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Start / verdict (oval)</text>
+  <rect x="220" y="1212" width="24" height="12" rx="2" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="252" y="1222" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Step (rectangle)</text>
+  <polygon points="380,1218 392,1212 404,1218 392,1224" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="412" y="1222" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Decision (diamond)</text>
+  <rect x="560" y="1212" width="24" height="12" rx="6" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1"/>
+  <text x="592" y="1222" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">BREACHED: doctor exits 1 · held and skipped move no exit code</text>
+</svg>

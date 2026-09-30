@@ -25,7 +25,9 @@ How to run a session with a fleet: who decides, who proposes, and which unit get
 
 Your Claude Code session is the **orchestrator and the reviewer**. It plans, decomposes, routes, and it is the only thing that changes code — directly or through its own sub-agents, under whatever approval flow you already have. The units are **read-only proposers**: they research, analyse, review and give second opinions, and they hand back text. Nothing a unit says reaches your repository except by passing through you.
 
-<img src="assets/diagrams/operating-model.svg" alt="Five lanes — operator, session, omelette-coder, omelette-tester, fleet units — with the commit and merge step sitting only in the session lane." width="880">
+<img src="assets/diagrams/change-path.svg" alt="Which path a change takes: at most 20 lines with its test and outside the six excluded areas takes the small-change lane; everything else goes spec, plan, then the session itself when the four delegate conditions do not all hold, or omelette-coder-medium or omelette-coder by what the section prints, and on to tester, review and commit." width="720">
+
+<img src="assets/diagrams/operating-model.svg" alt="Six lanes — operator, session, omelette-coder, omelette-tester, omelette-reviewer, fleet units — with the commit and merge step sitting only in the session lane." width="880">
 
 That split is what makes the fleet cheap to supervise. A unit's worst case is a wrong answer, not a wrong commit — so you review claims, not diffs. And because every unit reads untrusted material by design (web pages, repositories), keeping the mutating surface in one place is also the injection containment.
 

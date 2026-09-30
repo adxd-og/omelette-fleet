@@ -253,6 +253,10 @@ Per key, lowest to highest:
 
 <img src="assets/diagrams/config-resolution.svg" alt="How one config key of one unit resolves — environment, unit block, top-level defaults, built-in — and where the write ceiling narrows the result." width="720">
 
+That is one key at call time. What is rendered into files — the rules, the agent definitions, the skill, the guard — reaches a session on a different clock:
+
+<img src="assets/diagrams/managed-files.svg" alt="The config blocks and the package templates feed the three render commands, which stamp the version marker on the rules file, the agent definitions, the skill and the guard script; each arrow to the session says when that file lands, and doctor reads the markers, the handoff value and the merge sentence back." width="880">
+
 1. the unit's built-in default (falling back to the schema default),
 2. file `defaults`,
 3. file `units.<unit>`,
@@ -467,6 +471,8 @@ A hard kill whose text was captured returns that text marked partial — `[<unit
 ## Client timeouts
 
 `timeoutS` is the fleet's own bound. The **client** has two more, and a call dies at whichever comes first — `omelette-fleet doctor` prints both, as `mcp timeout`, and never as a fault:
+
+<img src="assets/diagrams/timeout-walls.svg" alt="One call on a time axis, to scale: each unit's timeoutS and its SIGKILL (gemini 60 s later), deep research at 3 × 2 × (timeoutS + 60 s), the client's MCP_TOOL_TIMEOUT wall and its 30-minute idle window reset by a progress tick every 30 s; the call dies at whichever comes first, and its answer waits in the result spool." width="880">
 
 ```
 mcp timeout   wall-clock: MCP_TOOL_TIMEOUT=2000000 ms (~/.claude/settings.json env) ≥ 1800000 needed · ok

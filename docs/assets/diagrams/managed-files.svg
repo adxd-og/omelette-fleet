@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1000 712" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="managed-files-title managed-files-desc">
+  <title id="managed-files-title">The managed files, from config to a running session</title>
+  <desc id="managed-files-desc">Data flow of the files the CLI renders. The workflow, agents and handoff blocks of fleet.config.json and the package templates feed three render commands, each stamping a version marker on line 1: rules writes the rules file (filling {{merge}}), rules --agents writes the four agent definitions and the /omelette-test skill (filling {{model}}, {{effort}} and {{maxTurns}}), and rules --hooks writes the guard script with handoff.enabled substituted into it. The rules file loads at the next session start; agent definitions and the skill are picked up by Claude Code's watcher, usually within seconds, sometimes minutes, with a restart if the directory is new; the guard script works as soon as your settings call it, from the snippet you paste. The contract block is not rendered: a unit server resolves it at start from the rules marker, so it reaches the session on the next Claude Code restart. doctor reads back each kind's marker, the handoff value from the installed script and the merge sentence from the rules file, and update prints the refresh command when a marked file is behind the installed package.</desc>
+  <defs>
+    <marker id="managed-files-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4a6187"/></marker>
+    <marker id="managed-files-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#b8860b"/></marker>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#f3f3f1"/>
+
+  <!-- ===== Group frames and column captions ===== -->
+  <rect x="40" y="60" width="200" height="412" rx="4" fill="#012357" fill-opacity="0.02" stroke="#012357" stroke-opacity="0.22" stroke-width="1"/>
+  <text x="52" y="78" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.16em">FLEET.CONFIG.JSON</text>
+  <rect x="276" y="150" width="176" height="322" rx="4" fill="#012357" fill-opacity="0.02" stroke="#012357" stroke-opacity="0.22" stroke-width="1"/>
+  <text x="288" y="168" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">RENDER · MARKER ON LINE 1</text>
+  <rect x="482" y="150" width="228" height="322" rx="4" fill="#012357" fill-opacity="0.02" stroke="#012357" stroke-opacity="0.22" stroke-width="1"/>
+  <text x="494" y="168" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.12em">ON DISK · .claude/</text>
+  <text x="778" y="78" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.16em">WHEN IT LANDS</text>
+
+  <!-- ===== Arrows (drawn before the nodes) ===== -->
+  <line x1="228" y1="110" x2="490" y2="110" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="228" y1="200" x2="288" y2="200" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="228" y1="316" x2="288" y2="316" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="228" y1="430" x2="288" y2="430" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <path d="M 240,548 H 364 V 473" fill="none" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="440" y1="200" x2="490" y2="200" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="440" y1="282" x2="490" y2="282" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="440" y1="350" x2="490" y2="350" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="440" y1="430" x2="490" y2="430" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="660" y1="178" x2="660" y2="134" stroke="#4a6187" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#managed-files-arrow)"/>
+  <line x1="702" y1="110" x2="856" y2="110" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="702" y1="200" x2="856" y2="200" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="702" y1="282" x2="856" y2="282" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="702" y1="350" x2="856" y2="350" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <line x1="702" y1="430" x2="856" y2="430" stroke="#b8860b" stroke-width="1.6" marker-end="url(#managed-files-arrow-accent)"/>
+  <line x1="596" y1="472" x2="596" y2="504" stroke="#4a6187" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#managed-files-arrow)"/>
+
+  <!-- ===== Arrow labels ===== -->
+  <rect x="268" y="92" width="185" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="360" y="101" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">no render · read at server start</text>
+  <rect x="367" y="491" width="174" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="372" y="500" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.08em">each render fills its template</text>
+  <rect x="661" y="137" width="97" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="666" y="146" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.08em">reads the marker</text>
+  <rect x="597" y="483" width="59" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="602" y="492" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start" letter-spacing="0.08em">READ BACK</text>
+  <rect x="709" y="92" width="141" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="779" y="101" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">next Claude Code restart</text>
+  <text x="779" y="124" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">as MCP Server Instructions</text>
+  <rect x="725" y="182" width="108" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="779" y="191" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">next session start</text>
+  <text x="779" y="214" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">loaded like CLAUDE.md</text>
+  <rect x="717" y="264" width="125" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="779" y="273" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">Claude Code's watcher</text>
+  <text x="779" y="305" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">usually within seconds,</text>
+  <text x="779" y="316" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">sometimes minutes;</text>
+  <text x="779" y="327" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">restart if the directory is new</text>
+  <rect x="744" y="332" width="70" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="779" y="341" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">watched too</text>
+  <rect x="705" y="412" width="149" height="12" rx="2" fill="#f3f3f1"/>
+  <text x="779" y="421" fill="#8a6200" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.04em">as soon as settings call it</text>
+  <text x="779" y="444" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">you paste the snippet</text>
+
+  <!-- ===== Config blocks ===== -->
+  <rect x="52" y="88" width="176" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="140" y="107" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">contract</text>
+  <text x="140" y="121" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">auto · full · short</text>
+  <rect x="52" y="178" width="176" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="140" y="197" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">workflow</text>
+  <text x="140" y="211" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">merge: session · pr</text>
+  <rect x="52" y="294" width="176" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="140" y="313" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">agents</text>
+  <text x="140" y="327" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">model · effort · maxTurns</text>
+  <rect x="52" y="408" width="176" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="140" y="427" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">handoff</text>
+  <text x="140" y="441" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">enabled: true · false</text>
+  <!-- Package templates -->
+  <rect x="40" y="504" width="200" height="88" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="140" y="524" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">package templates</text>
+  <text x="140" y="540" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">rules/omelette-fleet.md</text>
+  <text x="140" y="552" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">agents/*.md</text>
+  <text x="140" y="564" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">skills/omelette-test/SKILL.md</text>
+  <text x="140" y="576" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">hooks/omelette-guard.mjs</text>
+
+  <!-- ===== The three render commands ===== -->
+  <rect x="288" y="178" width="152" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="364" y="197" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">rules</text>
+  <text x="364" y="211" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">fills {{merge}}</text>
+  <rect x="288" y="260" width="152" height="112" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="364" y="306" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">rules --agents</text>
+  <text x="364" y="322" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">fills {{model}} {{effort}}</text>
+  <text x="364" y="334" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">{{maxTurns}}</text>
+  <rect x="288" y="408" width="152" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="364" y="427" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">rules --hooks</text>
+  <text x="364" y="441" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">substitutes handoff.enabled</text>
+
+  <!-- ===== What lands on disk, and the server that is not a file ===== -->
+  <rect x="490" y="88" width="212" height="44" rx="6" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="596" y="107" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Unit server start</text>
+  <text x="596" y="121" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">resolves the contract once</text>
+  <rect x="490" y="178" width="212" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="596" y="197" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">The rules file</text>
+  <text x="596" y="211" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">rules/omelette-fleet.md</text>
+  <rect x="490" y="260" width="212" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="596" y="279" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">Agent definitions (4)</text>
+  <text x="596" y="293" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">agents/omelette-*.md</text>
+  <rect x="490" y="328" width="212" height="44" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="596" y="347" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">The /omelette-test skill</text>
+  <text x="596" y="361" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">skills/omelette-test/SKILL.md</text>
+  <rect x="490" y="408" width="212" height="44" rx="6" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1.4"/>
+  <text x="596" y="427" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">The guard script</text>
+  <text x="596" y="441" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">hooks/omelette-guard.mjs</text>
+
+  <!-- ===== The session ===== -->
+  <rect x="856" y="88" width="104" height="364" rx="6" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="908" y="262" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle">The session</text>
+  <text x="908" y="278" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Claude Code</text>
+
+  <!-- ===== doctor and update read back ===== -->
+  <rect x="482" y="504" width="478" height="88" rx="6" fill="#012357" fill-opacity="0.03" stroke="#012357" stroke-opacity="0.30" stroke-width="1"/>
+  <text x="496" y="524" fill="#012357" font-size="11" font-weight="600" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="start">doctor · update</text>
+  <text x="496" y="541" fill="#012357" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">markers</text>
+  <text x="580" y="541" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the version marker of each kind, both scopes</text>
+  <text x="496" y="553" fill="#012357" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">handoff</text>
+  <text x="580" y="553" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the value, read out of the installed script</text>
+  <text x="496" y="565" fill="#012357" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">merge policy</text>
+  <text x="580" y="565" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">the sentence, read out of the rules file</text>
+  <text x="496" y="577" fill="#012357" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">update</text>
+  <text x="580" y="577" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" text-anchor="start">prints the refresh command when a marked file is behind</text>
+
+  <!-- ===== Legend ===== -->
+  <line x1="40" y1="624" x2="960" y2="624" stroke="#012357" stroke-opacity="0.12" stroke-width="0.8"/>
+  <text x="40" y="640" fill="#4a6187" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.18em">LEGEND · SHAPE CARRIES TYPE</text>
+  <rect x="40" y="656" width="24" height="12" rx="2" fill="#ffffff" stroke="#012357" stroke-width="1"/>
+  <text x="72" y="666" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Config block, command or file</text>
+  <rect x="250" y="656" width="24" height="12" rx="2" fill="#fac440" fill-opacity="0.20" stroke="#b8860b" stroke-width="1"/>
+  <text x="282" y="666" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Inert until your settings call it</text>
+  <line x1="470" y1="662" x2="498" y2="662" stroke="#4a6187" stroke-width="1.2" marker-end="url(#managed-files-arrow)"/>
+  <text x="506" y="666" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Render, or lands in a session</text>
+  <line x1="680" y1="662" x2="708" y2="662" stroke="#4a6187" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#managed-files-arrow)"/>
+  <text x="716" y="666" fill="#4a6187" font-size="9" font-family="Geist, Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Read back, never written</text>
+</svg>
