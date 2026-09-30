@@ -54,7 +54,7 @@ defineUnit({
   extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },          // unit-only config keys (grok's; codex declares none)
   supportedModes: { 'read-only': true, 'workspace-write': true|null },     // null = refuse that level
   auth: { detect: (stderr) => bool, help: 'run `codex login`' },           // checked on empty-stdout runs only
-  pairedEffort: true,                  // codex only: an omitted effort takes the model's catalog pairing (core/unit.mjs, EFFORT)
+  pairedEffort: true,                  // codex only: an omitted effort takes the model's catalog pairing unless the operator configured an effort (core/unit.mjs, EFFORT)
   catalog: makeCatalog({ models, efforts, guide, title }),
   tools: [{ name, description, inputSchema, kind, mutateGate?, run(args, ctx) }],
 })

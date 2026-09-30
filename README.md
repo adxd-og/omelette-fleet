@@ -48,7 +48,8 @@ Read in this order the first time: ORCHESTRATION, CONFIG, SECURITY, STATUS-FEED,
 | How strong each unit's read-only enforcement actually is | [docs/SECURITY.md](docs/SECURITY.md) |
 | What the guard hook blocks | [SECURITY, The guard hook](docs/SECURITY.md#the-guard-hook) |
 | Letting Gemini read local files | [SECURITY, Recommended agy allow-rules](docs/SECURITY.md#recommended-agy-allow-rules) |
-| What the fleet sends over the network, and what it writes to disk | [SECURITY, Network](docs/SECURITY.md#network) |
+| What the fleet sends over the network | [SECURITY, Network](docs/SECURITY.md#network) |
+| What the fleet writes to disk | [SECURITY, What the fleet writes down locally](docs/SECURITY.md#what-the-fleet-writes-down-locally) |
 | What the status feed looks like and how to read it | [docs/STATUS-FEED.md](docs/STATUS-FEED.md) |
 | Whether a call finished, came back partial, was cancelled or failed | [STATUS-FEED, What ok, error and cancelled mean](docs/STATUS-FEED.md#what-ok-error-and-cancelled-mean) |
 | How the pieces fit and what one call goes through | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |

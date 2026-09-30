@@ -64,7 +64,7 @@ test('the agent defaults: exact model ids for every role, the tester at high wit
 
 // ── the tester template: the second pass and the stop rule ───────────────────
 
-const SECOND_PASS_HEAD = 'Second pass — only when the orchestrator continues you with the words "Second pass", after your first report:';
+const SECOND_PASS_HEAD = 'Second pass — only when the orchestrator continues you with the words "Second pass" after your first report, or when a brief OPENS with those words and hands you another tester\'s test file (then skip your own first pass and take that file as your own):';
 const SECOND_PASS = [
   "1. **Mutation check.** In a plain copy of the repository outside the tree under test (not a `git worktree`), make about a dozen small breaking changes to the code the diff touches, one at a time, and run your tests and the implementer's against each — as several shorter commands, not one long sweep: a command running past about five minutes lets your cache go cold. Report every mutation no test catches, and add a test to your own file for each miss the spec requires.",
   "2. **Reviewer pass over what the diff writes** — strings, docs, changelog, examples, config. Is each claim consistent with the rest of the diff and with the spec's stated facts? Is any stale, undated, unverified, inferred rather than checked, or contradicted elsewhere? What does an operator upgrading meet that nothing tells them? Which behaviour did neither test file exercise? Each finding in four parts — `location · scenario · consequence · how to confirm` — the location a pointer line as in your first report.",
@@ -190,7 +190,7 @@ test('ORCHESTRATION\'s tester section sends the second pass by its trigger word 
   for (const fact of ['"Second pass"', 'docs-only diff', 'small-change exception', '(MEASUREMENTS.md#the-testers-effort-a-second-pass-and-an-advisor)', 'was not tried', 'dispatch a fresh `omelette-tester` with the words "Second pass", the spec, the diff and the first tester\'s test file']) {
     assert.ok(paras[second].includes(fact), `it says: ${fact}`);
   }
-  for (const fact of ['31.5 minutes idle', '76 439 cache tokens and read none', 'sent 4 s after its report, wrote 58 878 in all', 'past about five minutes', 'several shorter commands']) {
+  for (const fact of ['31.5 minutes idle', '76 439 cache tokens and read none', 'sent within ten seconds of its report, wrote 58 878 in all', 'past about five minutes', 'several shorter commands']) {
     assert.ok(paras[atOnce].includes(fact), `it says: ${fact}`);
   }
   for (const p of [paras[second], paras[atOnce]]) assert.ok(p.split(/\s+/).length <= 250, 'not a wall');

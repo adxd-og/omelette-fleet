@@ -52,6 +52,11 @@
  * It is resolved before the status feed's `start`, so the feed, the spooled
  * record and `ctx.effort` agree on what was sent. `ctx.effortFrom` names the
  * step that decided: 'call' | 'config' | 'pairing' | 'builtin' | ''.
+ * The MODEL of such a unit is resolved the same way for the feed and the
+ * record — the explicit or configured model, else the catalog head, which is
+ * what its adapter pins — while `ctx.model` stays the explicit or configured
+ * one ('' when nothing named a model). Any other unit's unnamed model stays
+ * `null` in the feed: the vendor's own default.
  * `ctx.spawn({ args, cwd?, stdinText?, extraEnv?, hardKillMs?, outputCap? })`
  * resolves to core/spawn.mjs's result — `{ stdout, stderr, code, signal,
  * killed, capped }`. Both bounds come from the unit's config (`timeoutS`,
@@ -430,6 +435,13 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       if (unit.catalog.isAllowedModel(cfg.values.model)) model = cfg.values.model;
       else warnOnce(`config: default model "${cfg.values.model}" is not in the catalog — using the vendor default`);
     }
+    // The model the run is pinned to. A paired unit's adapter pins the catalog
+    // head when nothing names a model (codex: `--ignore-user-config` leaves no
+    // vendor default to fall back on), so core names that head here — the
+    // feed's start, the record and the argv then agree. `ctx.model` stays
+    // `model`, so an adapter still knows nothing named one. Any other unit's
+    // unnamed model is the vendor's own choice, and stays unnamed (`null`).
+    const pinnedModel = model || (unit.pairedEffort ? unit.catalog.ids[0] || '' : '');
     // effort: see EFFORT in the header. Resolved HERE, before the status feed's
     // `start`, so the feed, the record and ctx.effort name what is sent.
     // An image run of a paired unit sends no effort at all, so it claims none
@@ -447,7 +459,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       } else {
         // The operator's effort, else the model's pairing, else the built-in —
         // the unit's own, which a refused configured value shadows in `values`.
-        const paired = unit.catalog.pairedEffort(model || unit.catalog.ids[0]);
+        const paired = unit.catalog.pairedEffort(pinnedModel);
         const builtin = unit.catalog.isAllowedEffort(unit.builtin.effort) ? unit.builtin.effort : '';
         if (allowed && !fromBuiltin) { effort = configured; effortFrom = 'config'; }
         else if (paired) { effort = paired; effortFrom = 'pairing'; }
@@ -468,7 +480,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
     const resultId = makeResultId(++resultSeq);
     const startedAt = new Date().toISOString();
     const t0 = Date.now();
-    const token = status.start(name, promptText, model, effort, resultId);
+    const token = status.start(name, promptText, pinnedModel, effort, resultId);
     if (token) openTokens.add(token);
     // Progress exists for one reason: a stdio tool call that sends neither a
     // response nor a `notifications/progress` for 30 minutes is aborted for
@@ -545,7 +557,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
           tool: name,
           // Never empty: what the caller or the config asked for, else what
           // the adapter says it pinned, else the vendor's own choice, named.
-          model: model || reportedModel || VENDOR_DEFAULT_MODEL,
+          model: pinnedModel || reportedModel || VENDOR_DEFAULT_MODEL,
           effort,
           // The tokens the adapter reported — the SAME object the status feed's
           // `end` event carries — or null when the vendor said nothing about

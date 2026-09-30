@@ -119,7 +119,7 @@ test('MEASUREMENTS iteration table: five variants with the ledger numbers, each 
   assert.equal(rows.length, 5);
   const numbers = (r) => [r[0], ...r.slice(2)];
   assert.deepEqual(numbers(rows[0]), ['xhigh, one pass', '44', '16', '30.8', '2.90', '10']);
-  assert.deepEqual(numbers(rows[1]), ['high, one pass (3 samples)', '28 / 28 / 14–24 headless', '0', '8–12', '0.6', '4 / 4 / 1–2']);
+  assert.deepEqual(numbers(rows[1]), ['high, one pass (3 samples)', '28 / 28 / 14–24 headless', '0', '7.5–11.5', '0.54–0.64', '4 / 4 / 1–2']);
   assert.deepEqual(numbers(rows[2]), ['high, two passes', '31', '39', '24.8', '1.46', '13']);
   assert.deepEqual(numbers(rows[3]), ['medium, two passes', '26', '22', '~35', '1.62', '9']);
   assert.deepEqual(numbers(rows[4]), ['high + Opus advisor, asked twice', '22', '1', '12.8', '2.06 (billed, exact)', '4']);
@@ -214,7 +214,7 @@ test('ruling A: the cache lesson is told in the measured numbers, the same ones 
   const meas = read('docs/MEASUREMENTS.md');
   for (const doc of [orch, meas]) {
     assert.ok(doc.includes('31.5 minutes idle'), 'the pause');
-    assert.ok(doc.includes('sent 4 s after its report') || doc.includes('sent 4 s after its report, wrote 58 878 in all'), 'the contrast');
+    assert.ok(doc.includes('sent within ten seconds of its report, wrote 58 878 in all'), 'the contrast'); // moved by the session (release fix C, T8: the resume came 9 s after the report)
   }
   // the lesson in the template and the rules: the threshold is "about five minutes", never a bare "5 minutes" or a TTL claim
   const tester = read('agents/omelette-tester.md');
@@ -225,12 +225,15 @@ test('ruling A: the cache lesson is told in the measured numbers, the same ones 
 test('ruling in the ledger: the sub-agent arms and the alias lag are not dated 2.1.285, and the alias lag rests on one run', () => {
   for (const [name, text] of Object.entries(SHIPPED())) {
     if (name === 'docs/MEASUREMENTS.md') continue; // its headless rows legitimately say 2.1.285: pinned in the table tests
-    assert.ok(!text.includes('2.1.285'), `${name}: 2.1.285 belongs to the headless advisor arms only`);
+    // moved by the session (release fix C, T7): ORCHESTRATION's advisor paragraph dates its measurement 2.1.285 — the headless runs' version.
+    const allowed = name === 'docs/ORCHESTRATION.md' ? text.replace(/Measured on Claude Code 2\.1\.285, 2026-09-30/g, '') : text;
+    assert.ok(!allowed.includes('2.1.285'), `${name}: 2.1.285 belongs to the headless advisor arms only`);
     assert.ok(!/three sub-agents/i.test(text), `${name}: the alias lag is evidenced by one sub-agent run`);
     assert.ok(!/(both|two) 2026-09-26 audit reviewers/i.test(text), `${name}: those reviewers ran before 5.5 shipped and prove nothing`);
   }
   const orch = read('docs/ORCHESTRATION.md');
-  assert.ok(orch.includes('a sub-agent spawned on `sonnet` in a Claude Code 2.1.284 session still ran on Sonnet 5'));
+  // moved by the session (release fix C, T6): the sentence now states the measurement in CONFIG's words.
+  assert.ok(orch.includes('on 2026-09-30, on Claude Code 2.1.284, two days after Sonnet 5.5 shipped, a sub-agent spawned with the `sonnet` alias ran on Sonnet 5'));
   const meas = read('docs/MEASUREMENTS.md');
   const version = /Claude Code 2\.1\.28[45]/g;
   for (const m of meas.matchAll(version)) assert.ok(m[0].endsWith('284'), `MEASUREMENTS "${m[0]}": only the T1b flow sentence names a session version in prose, and it was 2.1.284`);

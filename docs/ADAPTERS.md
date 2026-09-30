@@ -58,7 +58,7 @@ export const GUIDE =
   'Omit `model` to keep the fleet default.';
 ```
 
-A model entry's `effort` is applied only when the unit opts in with `pairedEffort: true` in its definition (an omitted effort then takes that model's pairing, core/unit.mjs, EFFORT); otherwise it is a label that `<unit>_models` prints. `GUIDE` rides in **every** `tools/list` payload — keep it to a paragraph. Record in the file header which CLI version you verified the ids against, on what date, and how. See [ARCHITECTURE.md](ARCHITECTURE.md#how-catalogs-are-curated) for the curation rules.
+A model entry's `effort` is applied only when the unit opts in with `pairedEffort: true` in its definition (an omitted effort then takes that model's pairing unless the operator configured an effort, core/unit.mjs, EFFORT); otherwise it is a label that `<unit>_models` prints. `GUIDE` rides in **every** `tools/list` payload — keep it to a paragraph. Record in the file header which CLI version you verified the ids against, on what date, and how. See [ARCHITECTURE.md](ARCHITECTURE.md#how-catalogs-are-curated) for the curation rules.
 
 ## 2. `units/<unit>/adapter.mjs`
 

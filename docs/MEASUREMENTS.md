@@ -264,7 +264,7 @@ The advisor attached to the second run was never called — its tool calls were 
 | Variant | Model · Claude Code | Tests | Mutations run | Minutes | Cost, ≥ $ | Findings of 17 |
 |---|---|---|---:|---|---|---|
 | xhigh, one pass | `claude-sonnet-5-5` · 2.1.284 | 44 | 16 | 30.8 | 2.90 | 10 |
-| high, one pass (3 samples) | `claude-sonnet-5-5` · 2.1.284, headless 2.1.285 | 28 / 28 / 14–24 headless | 0 | 8–12 | 0.6 | 4 / 4 / 1–2 |
+| high, one pass (3 samples) | `claude-sonnet-5-5` · 2.1.284, headless 2.1.285 | 28 / 28 / 14–24 headless | 0 | 7.5–11.5 | 0.54–0.64 | 4 / 4 / 1–2 |
 | high, two passes | `claude-sonnet-5-5` · 2.1.284 | 31 | 39 | 24.8 | 1.46 | 13 |
 | medium, two passes | `claude-sonnet-5-5` · 2.1.284 | 26 | 22 | ~35 | 1.62 | 9 |
 | high + Opus advisor, asked twice | `claude-sonnet-5-5` + `claude-opus-5-5` advisor · 2.1.285 | 22 | 1 | 12.8 | 2.06 (billed, exact) | 4 |
@@ -273,7 +273,7 @@ A directed second pass bought what effort did not: high in two passes found 13 o
 
 **The flow on a second diff.** The Task 1b tester (`omelette-tester`, `claude-sonnet-5-5` at high, Claude Code 2.1.284) ran both passes as the rules now describe them. First pass: 43 tests, suite green, 11.3 min. Second pass: 45 tests, 33 mutants in a scratch copy — 31 killed by the three existing test files, 2 missed, tests added, none surviving — and six prose findings the first pass had not made, all verified by the session and accepted. Both passes: 39 min by the harness's clock. No single-pass arm ran beside it, so it shows the flow holding on another diff, not a margin.
 
-**The cache between and within passes** (each transcript's per-request cache fields). The one measured long pause — 31.5 minutes idle before the medium arm's second pass — made that pass's first request write 76 439 cache tokens and read none; the high arm's second pass, sent 4 s after its report, wrote 58 878 in all. A tool call that runs past about five minutes cools the cache the same way: in the Task 1b run three tool calls ran 6.2, 10.0 and 6.5 minutes, and the request after each read nothing from cache. So the second pass is sent at once, and a long mutation sweep is better run as several shorter commands.
+**The cache between and within passes** (each transcript's per-request cache fields). The one measured long pause — 31.5 minutes idle before the medium arm's second pass — made that pass's first request write 76 439 cache tokens and read none; the high arm's second pass, sent within ten seconds of its report, wrote 58 878 in all. A tool call that runs past about five minutes cools the cache the same way: in the Task 1b run three tool calls ran 6.2, 10.0 and 6.5 minutes, and the request after each read nothing from cache. So the second pass is sent at once, and a long mutation sweep is better run as several shorter commands.
 
 **Limits.**
 
@@ -425,7 +425,7 @@ The versions the live gate ran on, from the ledgers' live-gate lines and the CHA
 
 Each release adds its row at the live gate (a step of the release procedure the ledger records; this repository's own checklist is the operator's, not a published file).
 
-**Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since <ISO time of the branch's first commit, with milliseconds: 2026-09-25T18:47:00.000Z>` (calls, wall-clock, spool per unit); a unit whose call count equals `resultsKeep` (50) is a floor, not a count, because the spool prunes as it fills. 1.6.0, from the branch's first commit (2026-09-25T18:47Z) to the merge — the U1 measurement's runs, the live gate and the release reviews included: gemini 5 calls / 10 min 20 s / 10 KB; grok 4 / 3 min 7 s / 11 KB (one of them the live gate's hard kill: `status: error`, nothing salvaged; another the 60 s kill with text, `partial: true`); codex 14 / 1 h 5 min 7 s / 54 KB — 23 calls, 1 h 18 min of vendor wall-clock, none at the cap. The row taken with `--since 2026-09-25` (the whole day) read 78 calls and 5 h 58 min, most of it 1.5.0's release day and codex's 50 the cap — the wrong window, kept here as the reason the rule names the commit time.
+**Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since "$(git log -1 --format=%cI <first commit>)"` — the ISO time of the branch's first commit with its offset (`2026-09-25T18:47:00+03:00`); UTC, with or without milliseconds, reads the same (calls, wall-clock, spool per unit); a unit whose call count equals `resultsKeep` (50) is a floor, not a count, because the spool prunes as it fills. 1.6.0, from the branch's first commit (2026-09-25T18:47Z) to the merge — the U1 measurement's runs, the live gate and the release reviews included: gemini 5 calls / 10 min 20 s / 10 KB; grok 4 / 3 min 7 s / 11 KB (one of them the live gate's hard kill: `status: error`, nothing salvaged; another the 60 s kill with text, `partial: true`); codex 14 / 1 h 5 min 7 s / 54 KB — 23 calls, 1 h 18 min of vendor wall-clock, none at the cap. The row taken with `--since 2026-09-25` (the whole day) read 78 calls and 5 h 58 min, most of it 1.5.0's release day and codex's 50 the cap — the wrong window, kept here as the reason the rule names the commit time.
 
 ## How the numbers are taken
 

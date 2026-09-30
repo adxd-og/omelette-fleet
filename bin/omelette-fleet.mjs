@@ -240,7 +240,9 @@ const COMMANDS = {
       'one row per unit and a total — calls, ok/error/cancelled, partial,',
       'wall time, bytes, and tokens in / out where every call in the row',
       'reported them. --since 24h, --since 7d or --since 2026-09-09 narrows',
-      'that on startedAt. Reads the files directly: no server, nothing spent.',
+      'that on startedAt; a whole ISO timestamp works too, in UTC or with',
+      'the offset git log --format=%cI prints (2026-09-25T18:47:00+03:00).',
+      'Reads the files directly: no server, nothing spent.',
     ],
   },
   check: {
@@ -408,7 +410,7 @@ async function probeVersion(unit, binPath) {
  * Beside the verdict, grok's and codex's probes report the CLI's own default
  * model (`defaultModel`) for doctor's `models` line: grok reads it off the
  * same `grok models` output, codex asks a second process for it
- * (probeCodexDefault) that can never change the login verdict.
+ * (probeCodexBundled) that can never change the login verdict.
  */
 async function probeLogin(unit, binPath) {
   const name = unit.name;
@@ -3048,8 +3050,8 @@ function cmdSet(argv) {
     if (!c.ok) { errors.push(`invalid value for ${name}.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(schema[key])}`); continue; }
     // An effort the unit's catalog does not list is refused here, as a call
     // refuses it, rather than written and then ignored at every call. A unit
-    // with no effort list (gemini) takes any string, and an empty value clears
-    // the key.
+    // with no effort list (gemini) takes any string, and an empty value writes
+    // an empty string, which the runtime reads as unset (`show`: `(unset) file`).
     const efforts = UNITS[name].catalog.efforts;
     if (key === 'effort' && c.value && efforts.length && !efforts.includes(c.value)) {
       errors.push(`invalid value for ${name}.effort: ${JSON.stringify(raw)} — expected one of the catalog's effort levels: ${efforts.join(' | ')}`);
@@ -3274,7 +3276,7 @@ const SINCE_MAX = { h: 87600, d: 3650 };
 
 /**
  * `--since`: a window (`24h`, `7d`) or a date the reader wrote (`2026-09-09`,
- * or a whole ISO timestamp) → the epoch in milliseconds. `null` for a value
+ * or a whole ISO timestamp, in UTC or with an offset) → the epoch in milliseconds. `null` for a value
  * that is neither, which the caller refuses rather than quietly reporting on
  * everything. A relative window is measured from NOW — `24h` is the last 24
  * hours, not "since midnight".
@@ -3282,7 +3284,8 @@ const SINCE_MAX = { h: 87600, d: 3650 };
  * A DATE HAS TO BE THE DATE IT SPELLS. `Date.parse` rolls a bad day over —
  * `2026-02-30` is 2 March and `2026-09-31` is 1 October — so the parse is only
  * accepted when it round-trips to exactly what was typed: the ISO date for a
- * bare `YYYY-MM-DD`, the whole ISO timestamp for the longer form. A window
+ * bare `YYYY-MM-DD`, the whole ISO timestamp for the longer form — rendered in
+ * the offset it was typed with, when it carries one. A window
  * silently shifted by two days is worse than a refusal an operator can fix.
  */
 function parseSince(raw, now = Date.now()) {
@@ -3297,10 +3300,18 @@ function parseSince(raw, now = Date.now()) {
   if (!/^\d{4}-\d\d-\d\d/.test(s)) return null; // a date, or nothing this reads
   const t = Date.parse(s);
   if (!Number.isFinite(t)) return null;
+  // An offset (`+03:00`, `-05:00`) is what `git log --format=%cI` prints. The
+  // instant is re-rendered in THAT offset and must spell what was typed, so a
+  // day that does not exist is refused here as it is in UTC.
+  const off = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d{3})?([+-])(\d\d):(\d\d)$/.exec(s);
+  if (off) {
+    const minutes = (off[3] === '-' ? -1 : 1) * (Number(off[4]) * 60 + Number(off[5]));
+    return new Date(t + minutes * 60000).toISOString() === `${off[1]}${off[2] || '.000'}Z` ? t : null;
+  }
   const iso = new Date(t).toISOString();
   // The round trip is what refuses a day that does not exist (2026-02-30) and
   // a form this does not read. A whole timestamp may leave its milliseconds
-  // out: `…T18:47:00Z` is what `git log --format=%cI` and most tools print.
+  // out: `…T18:47:00Z` is what most tools print.
   if (s.length === 10) return iso.slice(0, 10) === s ? t : null;
   return iso === s || iso.replace('.000Z', 'Z') === s ? t : null;
 }
@@ -3354,7 +3365,7 @@ function cmdResults(argv) {
     else {
       sinceMs = parseSince(flags.since);
       if (sinceMs === null) {
-        errors.push(`--since "${visible(flags.since)}" is neither a window (24h, 7d — at most ${SINCE_MAX.h}h / ${SINCE_MAX.d}d) nor a date (2026-09-09, or a whole ISO timestamp, spelling a day that exists)`);
+        errors.push(`--since "${visible(flags.since)}" is neither a window (24h, 7d — at most ${SINCE_MAX.h}h / ${SINCE_MAX.d}d) nor a date (2026-09-09, or a whole ISO timestamp in UTC or with an offset, spelling a day that exists)`);
       }
     }
   }
