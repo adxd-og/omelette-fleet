@@ -207,16 +207,25 @@ for (const u of UNITS) {
 // Fetched at test time from the commit BEFORE this feature (9b2f9f9), so the
 // comparison is against git history, not a hand transcription that could
 // carry the same slip the new code does.
-const oldGemini = execFileSync('git', ['show', '9b2f9f9:units/gemini/adapter.mjs'], { cwd: ROOT, encoding: 'utf8' });
-const oldGrok = execFileSync('git', ['show', '9b2f9f9:units/grok/adapter.mjs'], { cwd: ROOT, encoding: 'utf8' });
-const oldCodex = execFileSync('git', ['show', '9b2f9f9:units/codex/adapter.mjs'], { cwd: ROOT, encoding: 'utf8' });
+// A shallow clone (CI's checkout, depth 1) may not hold that commit: then the
+// history comparison is skipped as a whole rather than failing on `git show`
+// (1.6.1 lane fix: one of four CI jobs lacked it on the v1.6.1 run).
+const showOld = (path) => {
+  try { return execFileSync('git', ['show', `9b2f9f9:${path}`], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
+  catch { return null; }
+};
+const oldGemini = showOld('units/gemini/adapter.mjs');
+const oldGrok = showOld('units/grok/adapter.mjs');
+const oldCodex = showOld('units/codex/adapter.mjs');
+const HISTORY = oldGemini !== null && oldGrok !== null && oldCodex !== null;
+const historyTest = (name, fn) => test(name, { skip: HISTORY ? false : 'commit 9b2f9f9 is not in this clone (shallow checkout)' }, fn);
 
 /** Every fixed (non-interpolated) piece of the old template must survive verbatim. */
 const assertAnchors = (src, anchors, where) => {
   for (const a of anchors) assert.ok(src.includes(a), `${where}: expected the pre-1.6.0 source to contain ${JSON.stringify(a)}`);
 };
 
-test('partialMark: capped is byte-identical to every pre-1.6.0 adapter (fixed text either side of the number)', () => {
+historyTest('partialMark: capped is byte-identical to every pre-1.6.0 adapter (fixed text either side of the number)', () => {
   const anchors = ['output capped at ', ' chars — the beginning of the stream was dropped; treat the answer as partial'];
   assertAnchors(oldGemini, anchors, 'gemini 9b2f9f9');
   assertAnchors(oldGrok, anchors, 'grok 9b2f9f9');
@@ -227,7 +236,7 @@ test('partialMark: capped is byte-identical to every pre-1.6.0 adapter (fixed te
   }
 });
 
-test('partialMark: killed is byte-identical to every pre-1.6.0 adapter', () => {
+historyTest('partialMark: killed is byte-identical to every pre-1.6.0 adapter', () => {
   for (const unit of ['gemini', 'grok', 'codex']) {
     const src = { gemini: oldGemini, grok: oldGrok, codex: oldCodex }[unit];
     assertAnchors(src, ['hard-killed after ', 's — treat the answer as partial; raise ', `${unit}.timeoutS in the fleet config`], `${unit} 9b2f9f9`);
@@ -236,7 +245,7 @@ test('partialMark: killed is byte-identical to every pre-1.6.0 adapter', () => {
   }
 });
 
-test('partialMark: cancelled (default tail) is byte-identical to every pre-1.6.0 adapter', () => {
+historyTest('partialMark: cancelled (default tail) is byte-identical to every pre-1.6.0 adapter', () => {
   for (const unit of ['gemini', 'grok', 'codex']) {
     const src = { gemini: oldGemini, grok: oldGrok, codex: oldCodex }[unit];
     assertAnchors(src, ['cancelled by the client'], `${unit} 9b2f9f9`);
@@ -250,7 +259,7 @@ test('partialMark: cancelled (default tail) is byte-identical to every pre-1.6.0
   );
 });
 
-test('partialMark: exited is byte-identical to every pre-1.6.0 adapter', () => {
+historyTest('partialMark: exited is byte-identical to every pre-1.6.0 adapter', () => {
   for (const unit of ['gemini', 'grok', 'codex']) {
     const src = { gemini: oldGemini, grok: oldGrok, codex: oldCodex }[unit];
     assertAnchors(src, ['CLI exited ', ' — treat the answer as partial'], `${unit} 9b2f9f9`);
@@ -258,7 +267,7 @@ test('partialMark: exited is byte-identical to every pre-1.6.0 adapter', () => {
   }
 });
 
-test('partialMark: grok\'s early stop, gemini\'s status, codex\'s unfinished and gemini\'s stages line are byte-identical', () => {
+historyTest('partialMark: grok\'s early stop, gemini\'s status, codex\'s unfinished and gemini\'s stages line are byte-identical', () => {
   assertAnchors(oldGrok, ['run ended early — stopReason='], 'grok 9b2f9f9');
   assert.equal(partialMark('grok', 'early', { stopReason: 'max_tokens' }), '[grok: run ended early — stopReason=max_tokens]');
 
