@@ -54,12 +54,13 @@ defineUnit({
   extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },          // unit-only config keys (grok's; codex declares none)
   supportedModes: { 'read-only': true, 'workspace-write': true|null },     // null = refuse that level
   auth: { detect: (stderr) => bool, help: 'run `codex login`' },           // checked on empty-stdout runs only
+  pairedEffort: true,                  // codex only: an omitted effort takes the model's catalog pairing (core/unit.mjs, EFFORT)
   catalog: makeCatalog({ models, efforts, guide, title }),
   tools: [{ name, description, inputSchema, kind, mutateGate?, run(args, ctx) }],
 })
 ```
 
-Defaults filled in by `defineUnit`: `version`: the package version (`VERSION` from `core/update.mjs`), `serverName: 'omelette-<name>'`, `label: <name>`, empty `riskEnv` / `envPassthrough` / `envMap` / `builtin` / `extraSchema`, `supportedModes: { 'read-only': true, 'workspace-write': null }`, `auth: null`. A string `bin` is normalised to `{ env: null, default: bin }`.
+Defaults filled in by `defineUnit`: `version`: the package version (`VERSION` from `core/update.mjs`), `serverName: 'omelette-<name>'`, `label: <name>`, empty `riskEnv` / `envPassthrough` / `envMap` / `builtin` / `extraSchema`, `supportedModes: { 'read-only': true, 'workspace-write': null }`, `auth: null`, `pairedEffort: false`. A string `bin` is normalised to `{ env: null, default: bin }`.
 
 **Tool kinds** — `research | review | image | pipeline | catalog | local`: a `catalog` tool never spawns (the runtime answers it locally with `catalog.render()`), and every other kind supplies `run(args, ctx)` — what `ctx` holds, what `spawn` resolves to and each shape `run()` may return, `isError` and `partial` included, are tabled in [ADAPTERS, "What `ctx`, `spawn` and `run()` hand each other"](ADAPTERS.md#what-ctx-spawn-and-run-hand-each-other).
 

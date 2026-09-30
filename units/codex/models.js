@@ -48,8 +48,11 @@
  *   2026-10-14 in favour of gpt-5.6-sol). Codex's own default reasoning per
  *   model, in the server-refreshed catalog (the binary's `--bundled` one says
  *   low for astra): gpt-6.1-sol low, gpt-6-astra, gpt-6-sol and gpt-6-luna medium —
- *   the fleet runs its own — the unit's built-in xhigh — and each entry's
- *   `effort` is the pairing it recommends for that model. Effort levels
+ *   the fleet runs its own: each entry's `effort` is that model's pairing, and
+ *   since 1.6.1 it is APPLIED — a run's effort is the call's, else the one the
+ *   operator configured (file or CODEX_EFFORT), else the pairing of the model
+ *   it resolved to, else the unit's built-in xhigh (the adapter's
+ *   `pairedEffort: true`; core/unit.mjs, EFFORT). Effort levels
  *   low … max plus `ultra` on every model here except the two lunas, which
  *   stop at max. The context window inside Codex is 272000 for every model,
  *   against 1.05M on the API: the long-context figures below are API
@@ -240,7 +243,7 @@ export const CODEX_MODELS = [
       'Anything spanning modules or files — sharp degradation on cross-module dependencies and multi-file diffs. ' +
       'Long inputs: retrieval collapses past ~200K tokens (~41% recall across the full window vs terra\'s ~91%). ' +
       'Higher hallucination on code-symbol resolution and drift on negative constraints ("do not touch X") in multi-turn ' +
-      'sessions — never the unit for a review whose brief is mostly prohibitions. Step up to terra.',
+      'sessions — never the unit for a review whose brief is mostly prohibitions. Step up to gpt-6-sol, which supersedes terra.',
   },
   {
     id: 'gpt-5.6-sol',
@@ -284,13 +287,15 @@ export function effortEnum() {
 
 export const GUIDE =
   'Pick by task, not by name. gpt-6.1-sol (xhigh)=THE FLEET DEFAULT for delegated review and research on Codex — ' +
-  'AA Intelligence Index 52 against astra\'s 53 at $0.72 per Index task against astra\'s $3.26, kernel-enforced ' +
+  'AA Intelligence Index 52 against astra\'s 53 at max effort, at $0.72 per Index task against astra\'s $3.26 ' +
+  '(AA, read 2026-09-30), kernel-enforced ' +
   'read-only sandbox; gpt-6-astra (xhigh)=heavy reviews only — the pre-release security audit, root-cause hunts, ' +
   'the reviews the session names — strongest on security and exploit research; gpt-6-sol (high)=the regression ' +
   'fallback when 6.1-sol regresses on a task; gpt-6-luna (medium)=the cheap fast tier for single-file questions, ' +
   'lookups, routing and short summaries — NOT for multi-file work, long inputs or prohibition-heavy briefs (inherited ' +
   'from gpt-5.6-luna until measured). gpt-5.6-terra, gpt-5.6-luna and gpt-5.6-sol are superseded by the GPT-6 tiers ' +
-  'and stay for regression comparison. Use `effort` to trade depth for speed: low or medium for sweeps, xhigh (the ' +
-  'fleet default) for review and research; do not raise above xhigh by default: ultra and max are manual escalation ' +
+  'and stay for regression comparison. Use `effort` to trade depth for speed: low or medium for sweeps, xhigh for ' +
+  'review and research; omit it and the named model\'s pairing applies (gpt-6.1-sol and gpt-6-astra xhigh, ' +
+  'gpt-6-sol high, the lunas medium) unless the operator configured an effort; do not raise above xhigh by default: ultra and max are manual escalation ' +
   'for architecture, proofs, or root-cause hunts in obfuscated code (the lunas stop at max). Codex is the fleet\'s ' +
   'strongest coder but never its source of record — verify facts. Omit `model` to keep the fleet default.';

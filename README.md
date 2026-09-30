@@ -102,8 +102,9 @@ mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1800000 nee
 
 ── codex (Codex) ──────────────────────────────────────────────
   bin         codex → ~/.local/bin/codex   [CODEX_BIN=(unset)]
-  version     codex-cli 0.157.0
+  version     codex-cli 0.159.2
   login       OK — Logged in using ChatGPT
+  models      CLI default gpt-6.1-sol — in the catalog; the fleet pins gpt-6.1-sol (fleet config)
   config      closed — OMELETTE_ALLOW_WRITE does not list "codex" · effective mode: read-only
   mcp         omelette-codex registered (user) → node ~/omelette-fleet/servers/codex.mjs [file exists]
 
@@ -283,7 +284,7 @@ The vendor CLIs update *themselves*; this package deliberately does not. `doctor
 |---|---|---|---|---|---|
 | **gemini** | `agy` (Antigravity) | agy has no `login` subcommand — sign in through the OAuth flow on your first interactive `agy` run; credentials land under `~/.gemini/` | `gemini_research`, `gemini_deep_research`, `gemini_image`, `gemini_models` | Grounded web research and fact synthesis; multi-source deep research; reading local files **including images and PDFs** (give an absolute path — needs `read_file(*)` in the agy allow-rules, the opt-in set in [SECURITY](docs/SECURITY.md#recommended-agy-allow-rules)); inputs past 1M tokens and formal/scientific reasoning via `Gemini 3.1 Pro (High)`; a non-Google second opinion via `GPT-OSS 120B (Medium)`; image generation | Writing anything. agy has no kernel sandbox — read-only here rests on your own agy `settings.json` permission policy plus a prompt preamble, the weakest posture in the fleet. Deep-research sources are **asserted by the model**; verify them. Anything it read off the web is untrusted input |
 | **grok** | `grok` (Grok Build) | `grok login`, or `grok login --device-code` | `grok_research`, `grok_code_review`, `grok_image`, `grok_image_edit`, `grok_models` | A cheap, fast second opinion; mechanical code analysis; math/STEM checks (AIME 93–100%, GPQA Diamond 84.6–88%); high-volume research sweeps; image generation **and image-to-image editing** — the only unit in the fleet that edits images. Research and review runs stream their output, so a hard-killed run comes back with the text it had produced, and token usage now reaches the status feed | Fact-critical claims: roughly one factual answer in three is wrong, and it is overconfident — the measurements: [ORCHESTRATION, "Never a sole source"](docs/ORCHESTRATION.md#never-a-sole-source). Never the sole source of a fact. Also: architecture calls, long-horizon engineering (DeepSWE v1.1 71.0% at high on xAI's own 4.7 table, behind GPT-5.6 Sol Max's 72.7%), UI/front-end taste. Prompt-injection susceptible; `workspace-write` is **declared unsupported** and refused even with the ceiling open |
-| **codex** | `codex` (Codex CLI) | `codex login` (ChatGPT account) | `codex_research`, `codex_code_review`, `codex_image`, `codex_models` | The strongest code review in the fleet and agentic terminal analysis, on `gpt-6.1-sol` (xhigh) by default — AA Intelligence Index 52 against astra's 53, at $0.72 per Index task against $3.26 — with `gpt-6-astra` for heavy reviews only (the pre-release security audit, root-cause hunts); directory-scoped review with an explicit `cwd`; grounded research with web search; image generation via the CLI's built-in **gpt-image-2** tool, saved to a temp directory outside every project; reports the fullest token usage in the fleet (input, cached, output, reasoning) | Being a source of record — verify factual claims. `gpt-6-luna` on anything multi-file, long inputs or prohibition-heavy briefs (limits inherited from gpt-5.6-luna until measured). `effort: max` or `ultra` on routine work |
+| **codex** | `codex` (Codex CLI) | `codex login` (ChatGPT account) | `codex_research`, `codex_code_review`, `codex_image`, `codex_models` | The strongest code review in the fleet and agentic terminal analysis, on `gpt-6.1-sol` (xhigh) by default — AA Intelligence Index 52 against astra's 53 at max effort, at $0.72 per Index task against $3.26 (AA, read 2026-09-30) — with `gpt-6-astra` for heavy reviews only (the pre-release security audit, root-cause hunts); directory-scoped review with an explicit `cwd`; grounded research with web search; image generation via the CLI's built-in **gpt-image-2** tool, saved to a temp directory outside every project; reports the fullest token usage in the fleet (input, cached, output, reasoning) | Being a source of record — verify factual claims. `gpt-6-luna` on anything multi-file, long inputs or prohibition-heavy briefs (limits inherited from gpt-5.6-luna until measured). `effort: max` or `ultra` on routine work |
 
 Model ids, benchmark numbers and routing advice live in `units/<unit>/models.js` and are served by each unit's `<unit>_models` tool — call it when you are unsure which model a task belongs on.
 
@@ -325,7 +326,6 @@ One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.
       "enabled": true,
       "mode": "read-only",
       "model": "gpt-6.1-sol",
-      "effort": "xhigh",
       "webSearch": true,
       "timeoutS": 600
     }
@@ -333,7 +333,7 @@ One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.
 }
 ```
 
-One consequence worth knowing: because the Codex unit runs with `--ignore-user-config`, leaving `codex.model` unset does **not** fall back to your `~/.codex/config.toml` default — the adapter pins the first catalog entry (`gpt-6.1-sol`) instead and logs that it did.
+One consequence worth knowing: because the Codex unit runs with `--ignore-user-config`, leaving `codex.model` unset does **not** fall back to your `~/.codex/config.toml` default — the adapter pins the first catalog entry (`gpt-6.1-sol`) instead and logs that it did. The sample sets no `codex.effort` on purpose: each model then runs at its catalog pairing (`gpt-6.1-sol` at `xhigh`, `gpt-6-luna` at `medium`), and a `codex.effort` would force that one effort on every model.
 
 Every key, its default, the resolution order, and the per-unit environment overrides: **[docs/CONFIG.md](docs/CONFIG.md)**.
 
@@ -385,7 +385,7 @@ Only deliberately, and only where it is actually enforceable. Write mode takes t
 **What if my ChatGPT plan rejects a Codex model?**
 The Codex catalog lists what exists in the current generation, not what one account happens to accept. A refused id fails fast, before any work, with `The '<id>' model is not supported when using Codex with a ChatGPT account`.
 
-- On 2026-09-30 the ChatGPT plan these probes ran on accepted every id in the catalog, including `gpt-5.6-sol`, which it had refused on 2026-09-03.
+- On 2026-09-30 the ChatGPT plan these probes ran on accepted every id in the catalog, each in a one-shot call: `gpt-6-sol` and `gpt-6-luna` at effort `low` and `gpt-6-astra` and the three 5.6 tiers under `doctor --probe-models` on codex-cli 0.157.1, and `gpt-6.1-sol`, which 0.157.1 refused, on codex-cli 0.159.2 at `low` and at `ultra`. `gpt-5.6-sol` had been refused on 2026-09-03 (codex-cli 0.146.0).
 - The default `gpt-6.1-sol` needs a codex-cli that carries its metadata, which older ones lack: an older CLI refuses it with that same message, not because of the plan — update Codex. Which versions, probed when: [ORCHESTRATION, "Model and effort escalation"](docs/ORCHESTRATION.md#model-and-effort-escalation).
 - `gpt-6-astra-pro`, `gpt-6-pro` and `gpt-6` are rejected on a ChatGPT plan and are not in the catalog ([when last probed](docs/ORCHESTRATION.md#model-and-effort-escalation)).
 - `omelette-fleet doctor --probe-models` tells you exactly which ids your account accepts. Plain `doctor` prints your installed CLI's bundled default beside the model the fleet pins — since 0.159.1 the CLI's is `gpt-6.1-sol`, the same catalog head the fleet pins when no `codex.model` is configured, and the fleet pins its model explicitly regardless, because it runs with `--ignore-user-config`.

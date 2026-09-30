@@ -23,6 +23,7 @@
  *   extraSchema: { imageMaxTurns: { type: 'posint', default: 8 } },        // unit-only config keys
  *   supportedModes: { 'read-only': true, 'workspace-write': true|null },   // null = refuse that level
  *   auth: { detect: (stderr) => bool, help: 'run `codex login`' },         // checked on empty-stdout runs only
+ *   pairedEffort: true,                  // optional boolean, default false: see EFFORT below
  *   catalog: makeCatalog({...}),
  *   tools: [{ name, description, inputSchema, kind, mutateGate?, run(args, ctx) }],
  * })
@@ -37,8 +38,20 @@
  * of its own to every unit — `<unit>_result`, which hands back an answer the
  * client dropped — unless the adapter already declares that name.
  * Every other kind gets `run(args, ctx)` with ctx = { cfg, mode, model, effort,
- * spawn, retry, log, catalog, home, signal, usedModel }
+ * effortFrom, spawn, retry, log, catalog, home, signal, usedModel }
  * and returns a string or { text, usage?, isError?, partial? }.
+ * EFFORT: `ctx.effort` is the call's `effort`, else the configured one (the
+ * built-in included) when the catalog lists it, else ''. A unit that declares
+ * `pairedEffort: true` (codex) resolves it differently, in order: the call's;
+ * else one the OPERATOR configured (file or env — not the built-in); else the
+ * catalog pairing of the model the run resolves to (the explicit or configured
+ * model, else the catalog head; `catalog.pairedEffort`); else the unit's
+ * built-in, a configured value the catalog refuses included — and an `image`
+ * tool of such a unit gets none at all, a call's own `effort` included,
+ * because it sends none.
+ * It is resolved before the status feed's `start`, so the feed, the spooled
+ * record and `ctx.effort` agree on what was sent. `ctx.effortFrom` names the
+ * step that decided: 'call' | 'config' | 'pairing' | 'builtin' | ''.
  * `ctx.spawn({ args, cwd?, stdinText?, extraEnv?, hardKillMs?, outputCap? })`
  * resolves to core/spawn.mjs's result — `{ stdout, stderr, code, signal,
  * killed, capped }`. Both bounds come from the unit's config (`timeoutS`,
@@ -137,6 +150,7 @@ export function defineUnit(spec) {
   }
   // riskEnv was billingRiskEnv through 1.4.0 and an alias through 1.5.0.
   if (spec.billingRiskEnv !== undefined) throw new Error(`${where}: billingRiskEnv was renamed riskEnv in 1.5.0`);
+  if (spec.pairedEffort !== undefined && typeof spec.pairedEffort !== 'boolean') throw new Error(`${where}: pairedEffort must be a boolean`);
   const rest = spec;
   return {
     // The package's own version (core/update.mjs reads package.json once at
@@ -153,6 +167,7 @@ export function defineUnit(spec) {
     extraSchema: {},
     supportedModes: { 'read-only': true, 'workspace-write': null },
     auth: null,
+    pairedEffort: false,
     ...rest,
     bin: typeof spec.bin === 'string' ? { env: null, default: spec.bin } : spec.bin,
   };
@@ -415,10 +430,29 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       if (unit.catalog.isAllowedModel(cfg.values.model)) model = cfg.values.model;
       else warnOnce(`config: default model "${cfg.values.model}" is not in the catalog — using the vendor default`);
     }
-    let effort = typeof args.effort === 'string' ? args.effort.trim().toLowerCase() : '';
-    if (!effort && unit.catalog.efforts.length && cfg.values.effort) {
-      if (unit.catalog.isAllowedEffort(cfg.values.effort)) effort = cfg.values.effort;
-      else warnOnce(`config: default effort "${cfg.values.effort}" is not allowed — using the vendor default`);
+    // effort: see EFFORT in the header. Resolved HERE, before the status feed's
+    // `start`, so the feed, the record and ctx.effort name what is sent.
+    // An image run of a paired unit sends no effort at all, so it claims none
+    // either — not even one a caller passed that the tool's schema never offered.
+    const noEffort = unit.pairedEffort && tool.kind === 'image';
+    let effort = !noEffort && typeof args.effort === 'string' ? args.effort.trim().toLowerCase() : '';
+    let effortFrom = effort ? 'call' : '';
+    if (!effort && !noEffort && unit.catalog.efforts.length) {
+      const configured = cfg.values.effort;
+      const allowed = !!configured && unit.catalog.isAllowedEffort(configured);
+      if (configured && !allowed) warnOnce(`config: default effort "${configured}" is not in the catalog's list — ignored`);
+      const fromBuiltin = cfg.sources.effort === 'default';
+      if (!unit.pairedEffort) {
+        if (allowed) { effort = configured; effortFrom = fromBuiltin ? 'builtin' : 'config'; }
+      } else {
+        // The operator's effort, else the model's pairing, else the built-in —
+        // the unit's own, which a refused configured value shadows in `values`.
+        const paired = unit.catalog.pairedEffort(model || unit.catalog.ids[0]);
+        const builtin = unit.catalog.isAllowedEffort(unit.builtin.effort) ? unit.builtin.effort : '';
+        if (allowed && !fromBuiltin) { effort = configured; effortFrom = 'config'; }
+        else if (paired) { effort = paired; effortFrom = 'pairing'; }
+        else if (builtin) { effort = builtin; effortFrom = 'builtin'; }
+      }
     }
 
     // What the adapter actually asked the vendor for, when the runtime named
@@ -556,6 +590,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       mode: cfg.values.mode,
       model,
       effort,
+      effortFrom,
       log,
       usedModel,
       catalog: unit.catalog,

@@ -439,7 +439,7 @@ async function probeLogin(unit, binPath) {
     // is asked whatever the verdict — but only once the login probe answered:
     // after one that hung (its 20 s already spent) or could not start, the
     // early returns above skip it.
-    return { ...verdict, defaultModel: await probeCodexDefault(unit, binPath) };
+    return { ...verdict, ...(await probeCodexBundled(unit, binPath)) };
   }
   if (name === 'grok') {
     if (/not authenticated|not signed in/i.test(both)) return { state: 'out', detail: 'signed out — run `grok login`' };
@@ -461,34 +461,43 @@ async function probeLogin(unit, binPath) {
 }
 
 /**
- * The codex CLI's own default model, from `codex debug models --bundled`: the
- * catalog compiled into THIS installed binary, read with no network and no
- * model run. It is the binary's catalog, not the server's: `codex debug
- * models` without the flag is the one refreshed from the server, and doctor
- * does not ask it. The default is the `visibility: "list"` entry
+ * The codex CLI's own default model and the ids it lists, from `codex debug
+ * models --bundled`: the catalog compiled into THIS installed binary, read with
+ * no network and no model run. It is the binary's catalog, not the server's:
+ * `codex debug models` without the flag is the one refreshed from the server,
+ * and doctor does not ask it. The default is the `visibility: "list"` entry
  * with the smallest `priority` (codex-cli 0.159.2: gpt-6.1-sol, and `codex
  * exec` with no `-m` prints the same); the array is not in priority order.
+ * `bundledModels` is every `list` slug, whatever its priority: doctor warns
+ * when the model the fleet pins is not among them (0.157.1 lacked gpt-6.1-sol
+ * and refused it).
  * Best-effort: a non-zero exit, a timeout, output that does not parse, or no
- * `list` entry is `null`, and doctor prints no line. The answer carries a
- * model-instructions text per entry — about 650 KB on 0.159.2 — past the
- * 400 000-character default cap, which keeps the TAIL and would cut off the
- * JSON's head; the unit's own cap (4 000 000) bounds it instead.
- * @returns {Promise<string|null>}
+ * `list` entry with a numeric priority is `{ defaultModel: null }`, and doctor
+ * prints no line. The answer carries a model-instructions text per entry —
+ * about 650 KB on 0.159.2 — past the 400 000-character default cap, which
+ * keeps the TAIL and would cut off the JSON's head; the unit's own cap
+ * (4 000 000) bounds it instead.
+ * @returns {Promise<{defaultModel: string|null, bundledModels?: string[]}>}
  */
-async function probeCodexDefault(unit, binPath) {
+async function probeCodexBundled(unit, binPath) {
+  const none = { defaultModel: null };
   let r;
   try {
     r = await runProcess({
       bin: binPath, args: ['debug', 'models', '--bundled'], hardKillMs: 20000, outputCap: unit.builtin.outputCap, ...probeEnv(unit),
     });
-  } catch { return null; }
-  if (r.killed || r.capped || r.code !== 0) return null;
+  } catch { return none; }
+  if (r.killed || r.capped || r.code !== 0) return none;
   let parsed;
-  try { parsed = JSON.parse(r.stdout); } catch { return null; }
+  try { parsed = JSON.parse(r.stdout); } catch { return none; }
   const listed = (isObj(parsed) && Array.isArray(parsed.models) ? parsed.models : [])
-    .filter((m) => isObj(m) && m.visibility === 'list' && typeof m.slug === 'string' && m.slug && Number.isFinite(m.priority));
-  if (!listed.length) return null;
-  return listed.reduce((best, m) => (m.priority < best.priority ? m : best)).slug;
+    .filter((m) => isObj(m) && m.visibility === 'list' && typeof m.slug === 'string' && m.slug);
+  const ranked = listed.filter((m) => Number.isFinite(m.priority));
+  if (!ranked.length) return none;
+  return {
+    defaultModel: ranked.reduce((best, m) => (m.priority < best.priority ? m : best)).slug,
+    bundledModels: listed.map((m) => m.slug),
+  };
 }
 
 /**
@@ -1040,8 +1049,22 @@ function configRows(name, cfg, indent = '  ') {
   const w = Math.max(...keys.map((k) => k.length), 5);
   const vw = Math.max(...keys.map((k) => shown(k).length), 5);
   const lines = [`${indent}${pad('KEY', w)}  ${pad('VALUE', vw)}  SOURCE`];
-  for (const k of keys) lines.push(`${indent}${pad(k, w)}  ${pad(shown(k), vw)}  ${cfg.sources[k]}`);
+  for (const k of keys) lines.push(`${indent}${pad(k, w)}  ${pad(shown(k), vw)}  ${cfg.sources[k]}${k === 'effort' ? effortMark(name, cfg) : ''}`);
   return lines;
+}
+
+/**
+ * A configured effort the unit's catalog does not list is ignored at call time
+ * (core/unit.mjs warns once) — a 1.6.0 codex config may hold `none`, and `set`
+ * refuses one only since 1.6.1. The row says so, and what applies instead:
+ * a unit with `pairedEffort` (codex) falls back to the model's catalog
+ * pairing (core/unit.mjs, EFFORT), the others to the vendor default.
+ */
+function effortMark(name, cfg) {
+  const { catalog } = UNITS[name];
+  const v = cfg.values.effort;
+  if (!catalog.efforts.length || !v || catalog.isAllowedEffort(v)) return '';
+  return ` — not in the catalog's list: ignored at call time, ${UNITS[name].pairedEffort ? "the model's pairing applies" : 'the vendor default applies'}`;
 }
 
 /**
@@ -2725,18 +2748,25 @@ async function cmdDoctor(argv) {
       // the catalog does not carry means every call that omits `model` runs on
       // an unknown model. Codex always passes -m, so its line names the model
       // the fleet pins instead — the configured one when the runtime would use
-      // it (in the catalog), else the catalog head — and where that came from.
+      // it (in the catalog), else the catalog head — and where that came from;
+      // and when the installed CLI's bundled list lacks that model, says so —
+      // 0.157.1 refused gpt-6.1-sol, which its bundle lacked; a hidden or
+      // server-refreshed entry can still be accepted, so it is not a verdict.
+      // "Calls are unaffected" is then not a claim the line can make, so the
+      // NOT-in-the-catalog form drops it.
       if (typeof login.defaultModel === 'string') {
         const ids = unit.catalog.modelEnum();
         const known = ids.includes(login.defaultModel);
         if (name === 'codex') {
           const source = cfg.sources.model || '';
-          const pinned = unit.catalog.isAllowedModel(cfg.values.model)
-            ? `${cfg.values.model} (${source.startsWith('env:') ? `env ${source.slice(4)}` : 'fleet config'})`
-            : `${ids[0]} (catalog head)`;
+          const configured = unit.catalog.isAllowedModel(cfg.values.model);
+          const pinnedId = configured ? cfg.values.model : ids[0];
+          const pinned = `${pinnedId} (${!configured ? 'catalog head' : source.startsWith('env:') ? `env ${source.slice(4)}` : 'fleet config'})`;
+          const refused = Array.isArray(login.bundledModels) && !login.bundledModels.includes(pinnedId);
+          const warn = refused ? " — NOT in this CLI's bundled catalog: update codex (codex-cli 0.157.1 refused a model its bundle lacked)" : '';
           out(known
-            ? `  models      CLI default ${visible(login.defaultModel)} — in the catalog; the fleet pins ${pinned}`
-            : `  models      CLI default ${visible(login.defaultModel)} — NOT in the catalog (units/${name}/models.js knows ${ids.join(', ')}); the fleet pins ${pinned}, so calls are unaffected — update the catalog`);
+            ? `  models      CLI default ${visible(login.defaultModel)} — in the catalog; the fleet pins ${pinned}${warn}`
+            : `  models      CLI default ${visible(login.defaultModel)} — NOT in the catalog (units/${name}/models.js knows ${ids.join(', ')}); the fleet pins ${pinned}${refused ? '' : ', so calls are unaffected'} — update the catalog${warn}`);
         } else {
           out(known
             ? `  models      CLI default ${visible(login.defaultModel)} — in the catalog`
@@ -3016,6 +3046,15 @@ function cmdSet(argv) {
     if (!Object.hasOwn(schema, key)) { errors.push(`unknown key "${key}" for unit "${name}" — known keys: ${Object.keys(schema).join(', ')}`); continue; }
     const c = coerce(schema[key], raw);
     if (!c.ok) { errors.push(`invalid value for ${name}.${key}: ${JSON.stringify(raw)} — expected ${describeSpec(schema[key])}`); continue; }
+    // An effort the unit's catalog does not list is refused here, as a call
+    // refuses it, rather than written and then ignored at every call. A unit
+    // with no effort list (gemini) takes any string, and an empty value clears
+    // the key.
+    const efforts = UNITS[name].catalog.efforts;
+    if (key === 'effort' && c.value && efforts.length && !efforts.includes(c.value)) {
+      errors.push(`invalid value for ${name}.effort: ${JSON.stringify(raw)} — expected one of the catalog's effort levels: ${efforts.join(' | ')}`);
+      continue;
+    }
     assignments.push({ name, key, value: c.value });
   }
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet set: ${e}`)); return 1; }

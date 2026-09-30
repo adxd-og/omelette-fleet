@@ -60,7 +60,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
   "units": {
     "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
     "grok":   { "enabled": true, "mode": "read-only", "timeoutS": 1800, "maxTurns": 30 },
-    "codex":  { "enabled": true, "mode": "read-only", "model": "gpt-6.1-sol", "effort": "xhigh", "webSearch": true, "timeoutS": 600 }
+    "codex":  { "enabled": true, "mode": "read-only", "model": "gpt-6.1-sol", "webSearch": true, "timeoutS": 600 }
   }
 }
 ```
@@ -260,14 +260,14 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 
 Keys that a unit ignores are still valid config — they are simply never read. An unknown key *name* warns and is ignored, in `defaults` as well as in `units.<unit>`. One consequence of `defaults` being checked per unit: a key that is valid for one unit only (`imageMaxTurns`) warns for the units that do not know it, so put unit-specific extras under `units.<unit>`.
 
-Leaving `model` unset means "the vendor's own default" for Gemini and Grok. **Not for Codex**: that unit runs with `--ignore-user-config`, so it pins the first catalog entry (`gpt-6.1-sol`) instead and logs that it did. Its built-in `effort` is `xhigh`, the fleet default since 2026-09-30.
+Leaving `model` unset means "the vendor's own default" for Gemini and Grok. **Not for Codex**: that unit runs with `--ignore-user-config`, so it pins the first catalog entry (`gpt-6.1-sol`) instead and logs that it did. Its built-in `effort` is `xhigh`, the fleet default since 2026-09-30, and a named model brings its own pairing unless an effort is configured: a run's effort is the call's `effort`, else one the operator configured (the file or `CODEX_EFFORT`), else the catalog pairing of the model the run resolved to (`gpt-6-luna` medium, `gpt-6-sol` high — each entry's `effort` in `codex_models`), else the built-in. `show codex` still prints the built-in with its source. A `codex.effort` in the file forces that one effort on every model, which is why the shipped example leaves it unset.
 
 **doctor's `models` line** compares a vendor CLI's own default model with the catalog:
 
 | Unit | Where the CLI's default comes from | What the line adds |
 |---|---|---|
 | grok | the `Default model:` line of `grok models` | a default the catalog lacks is what every call that omits `model` runs on |
-| codex | the `visibility: "list"` entry with the smallest `priority` in `codex debug models --bundled` | the model the fleet pins — `(fleet config)` when `codex.model` is set and in the catalog, `(env CODEX_DEFAULT_MODEL)` when that variable set it, else `(catalog head)`. Codex always passes `-m`, so a default the catalog lacks leaves calls unaffected and only says the catalog is behind |
+| codex | the `visibility: "list"` entry with the smallest `priority` in `codex debug models --bundled` | the model the fleet pins — `(fleet config)` when `codex.model` is set and in the catalog, `(env CODEX_DEFAULT_MODEL)` when that variable set it, else `(catalog head)`. Codex always passes `-m`, so a default the catalog lacks leaves calls unaffected and only says the catalog is behind. When the pinned model is not in the bundled list the line ends `— NOT in this CLI's bundled catalog: update codex (codex-cli 0.157.1 refused a model its bundle lacked)` and no longer says calls are unaffected |
 | gemini | — | no line |
 
 The codex line reads `--bundled`: the installed binary's catalog, not the server's, read with no network — `codex debug models` without the flag is the one refreshed from the server. It says what this binary ships with. The probe is a second process after `codex login status`, best-effort: a failure prints no line and never changes the login verdict.
@@ -335,9 +335,10 @@ An invalid value does not poison the key — it warns and falls through to the n
 | A two-part path with `handoff` or `workflow` in front | `omelette-fleet set handoff.enabled=false`, `omelette-fleet set workflow.merge=pr` | The [handoff block](#handoff-settings) or the [workflow block](#workflow-settings) | `rules --hooks` (handoff), `rules` (workflow) |
 | A bare `key=value` with no dot at all | `omelette-fleet set contract=short` | A [fleet-wide key](#top-level-settings) | The next server start (`contract`; `updateCheck` also on the next `doctor` or `update`) |
 
-`agents`, `handoff` and `workflow` are the only words accepted in the first position that are not unit names, and the only bare keys accepted are `contract` and `updateCheck`. Two refusals:
+`agents`, `handoff` and `workflow` are the only words accepted in the first position that are not unit names, and the only bare keys accepted are `contract` and `updateCheck`. Three refusals:
 
 - A name that is not declared in the schema is refused whatever it is, an inherited one (`constructor`, `toString`) included.
+- An `effort` the unit's catalog does not list is refused with the list, as a call refuses it: codex takes `low`…`ultra`, grok `low`…`xhigh`, and gemini, whose catalog declares no levels, any string; an empty value clears the key. A value written by hand (a 1.6.0 config may hold `none`) is marked by `show` and `doctor` — `effort  none  file — not in the catalog's list: ignored at call time, the model's pairing applies` (grok: the vendor default applies).
 - It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` / `handoff` / `workflow` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand.
 
 On success it prints the before/after with sources:

@@ -165,7 +165,7 @@ export const catalog = makeCatalog({
   efforts: EFFORTS,
   guide: GUIDE,
   title: 'CODEX MODEL CATALOG',
-  vendorDefaultNote: 'omit `model` for the fleet default, else the first id below — this unit ignores ~/.codex/config.toml',
+  vendorDefaultNote: 'omit `model` for the fleet default, else the first id below — this unit ignores ~/.codex/config.toml; omit `effort` for the named model\'s pairing, the `<level> effort` tag on its entry, unless the operator configured one',
 });
 
 /**
@@ -364,7 +364,9 @@ const isDeterministic = (e) => /not authenticated|turn failed|hard-killed|not fo
  * it has to explain the RUN — and `killed` / `capped` / `cancelled` live on
  * the spawn result, never on the text. `webSearch` / `effort` default to the
  * resolved config and may be overridden per tool (review passes web=false;
- * image runs pass web=false, no effort and `excludeTmp`).
+ * image runs pass web=false, no effort and `excludeTmp`). The runtime resolves
+ * `effort` with this unit's `pairedEffort` (core/unit.mjs, EFFORT): a model
+ * named with no effort configured brings its catalog pairing.
  * @returns {Promise<{out:object, res:object}>}
  */
 async function runOnceRaw(ctx, { prompt, cwd, mode, webSearch, effort, excludeTmp = false }) {
@@ -380,7 +382,8 @@ async function runOnceRaw(ctx, { prompt, cwd, mode, webSearch, effort, excludeTm
   const web = webSearch === undefined ? ctx.cfg.webSearch : webSearch;
   const eff = effort === undefined ? ctx.effort : effort;
   const args = buildArgs({ model, effort: eff, cwd, mode, webSearch: web, excludeTmp });
-  ctx.log(`codex exec · sandbox=${mode} · model=${model}${ctx.model ? '' : ' (catalog default)'} · effort=${eff || '(default)'} · web=${web} · cwd=${cwd || '(process cwd)'}`);
+  const why = eff && effort === undefined && ctx.effortFrom === 'pairing' ? ` (${model}'s pairing)` : '';
+  ctx.log(`codex exec · sandbox=${mode} · model=${model}${ctx.model ? '' : ' (catalog default)'} · effort=${eff ? eff + why : '(default)'} · web=${web} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd: cwd || undefined, stdinText: prompt });
   const out = extractResult(res, { timeoutS: ctx.cfg.timeoutS, outputCap: ctx.cfg.outputCap });
   if (out.usage) ctx.log(`codex done · tokens in=${out.usage.input} (cached ${out.usage.cachedInput}) out=${out.usage.output} reasoning=${out.usage.reasoning} · web_search=${out.searches}`);
@@ -404,9 +407,11 @@ const EFFORT_PROP = {
   enum: catalog.effortEnum(),
   description:
     'Optional reasoning effort: low = fast sweeps, medium, high = deeper analysis, ' +
-    'xhigh = the fleet default for review and research, max/ultra = manual escalation ' +
-    'for the hardest problems (slow, discouraged for routine work; the luna tiers ' +
-    'stop at max). OMIT for the fleet default.',
+    'xhigh = review and research, max/ultra = manual escalation for the hardest ' +
+    'problems (slow, discouraged for routine work; the luna tiers stop at max). ' +
+    'OMIT for the fleet default: the named model\'s pairing — gpt-6.1-sol and ' +
+    'gpt-6-astra xhigh, gpt-6-sol high, the lunas medium — unless the operator ' +
+    'configured an effort.',
 };
 
 /**
@@ -430,6 +435,9 @@ export default defineUnit({
   builtin: { timeoutS: 600, effort: 'xhigh', webSearch: true, outputCap: CODEX_OUTPUT_CAP },
   supportedModes: { 'read-only': true, 'workspace-write': true },
   auth: { detect: (stderr) => AUTH_RE.test(stderr), help: AUTH_HELP },
+  // A named model brings its catalog pairing unless an effort is configured
+  // (1.6.1; core/unit.mjs, EFFORT). codex_image sends no effort and gets none.
+  pairedEffort: true,
   catalog,
   tools: [
     {

@@ -30,6 +30,11 @@ export function makeCatalog({ models, efforts = [], guide = '', title = 'MODEL C
     isAllowedEffort: (e) => typeof e === 'string' && efforts.includes(e),
     effortEnum: () => efforts.slice(),
     find: (id) => models.find((m) => m.id === id) || null,
+    /** The effort a model's entry pairs it with, when the effort list allows it; else ''. */
+    pairedEffort: (id) => {
+      const m = models.find((x) => x.id === id);
+      return m && typeof m.effort === 'string' && efforts.includes(m.effort) ? m.effort : '';
+    },
     /** Human-readable dump for the `<unit>_models` tool. */
     render() {
       const lines = [`${title} (pass any \`id\` below as the \`model\` arg; ${vendorDefaultNote}):`, ''];

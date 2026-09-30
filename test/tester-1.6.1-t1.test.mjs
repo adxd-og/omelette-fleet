@@ -181,7 +181,7 @@ test('a call that names no model and no effort reaches the CLI with -m gpt-6.1-s
   }
 });
 
-test('the spooled result of a default call is filed under gpt-6.1-sol at xhigh (what `results --stats` groups by)', async () => {
+test('the spooled result of a default call is filed under gpt-6.1-sol at xhigh (the record carries its own model and effort lines)', async () => {
   const st = station();
   const rt = runtimeOn(st);
   const r = await rt.callTool('codex_research', { prompt: 'file me' });
@@ -252,8 +252,9 @@ test('a 1.6.0 config with effort:"none" (valid then, out now) never sends "none"
   assert.ok(!r.isError, r.text);
   const [c] = st.execs();
   assert.equal(argAfter(c.argv, '-m'), HEAD);
-  assert.notEqual(effortArg(c.argv), 'model_reasoning_effort="none"');
   assert.ok(!c.argv.some((x) => /"none"/.test(String(x))), c.argv.join(' '));
+  // 1b rule 1: a refused configured value falls through to the resolved model's pairing, not to no flag.
+  assert.equal(effortArg(c.argv), 'model_reasoning_effort="xhigh"');
 });
 
 test('CODEX_EFFORT=ultra sets the effort; CODEX_EFFORT=none is ignored, never forwarded', async () => {
@@ -262,19 +263,20 @@ test('CODEX_EFFORT=ultra sets the effort; CODEX_EFFORT=none is ignored, never fo
   assert.equal(effortArg(a.execs()[0].argv), 'model_reasoning_effort="ultra"');
   const b = station();
   assert.ok(!(await runtimeOn(b, { env: { CODEX_EFFORT: 'none' } }).callTool('codex_research', { prompt: 'x' })).isError);
-  assert.notEqual(effortArg(b.execs()[0].argv), 'model_reasoning_effort="none"');
+  assert.equal(effortArg(b.execs()[0].argv), 'model_reasoning_effort="xhigh"', 'a refused CODEX_EFFORT falls through to the head\'s pairing');
 });
 
-test('a per-call model with no effort takes the unit built-in xhigh, not the catalog tag: gpt-6-sol (tag high) still runs at xhigh', async () => {
+// Re-pinned by the session in 1.6.1 Task 1b (rule 1): the pairing is APPLIED since the two-pass
+// tester found the "cheap tier" running at the unit's xhigh — this test used to pin the opposite.
+test('a per-call model with no effort brings its catalog pairing: gpt-6-sol runs at high, not the unit built-in xhigh', async () => {
   const st = station();
   const rt = runtimeOn(st);
   const r = await rt.callTool('codex_research', { prompt: 'x', model: 'gpt-6-sol' });
   assert.ok(!r.isError, r.text);
   const [c] = st.execs();
   assert.equal(argAfter(c.argv, '-m'), 'gpt-6-sol');
-  // The catalog's `effort` is a display tag (core/catalog.mjs render), the runtime's
-  // effort comes from config / built-in: pinned so a tag edit can never change a run.
-  assert.equal(effortArg(c.argv), 'model_reasoning_effort="xhigh"');
+  // core resolves it before the feed's start (pairedEffort: true on the codex unit).
+  assert.equal(effortArg(c.argv), 'model_reasoning_effort="high"');
 });
 
 test('gpt-6-luna with effort ultra (the catalog says luna has no ultra): refused before the spawn, or sent verbatim — never silently swapped for another effort', async (t) => {
@@ -718,10 +720,12 @@ test('CONFIG.md\'s effort row lists exactly EFFORTS, in the allowlist\'s order',
 test('the shipped example and both docs\' config samples agree, and every value in them is one the unit accepts', () => {
   const ex = JSON.parse(read('examples/fleet.config.json')).units.codex;
   assert.ok(isAllowedModel(ex.model));
-  assert.ok(EFFORTS.includes(ex.effort));
-  assert.deepEqual([ex.model, ex.effort], [HEAD, 'xhigh']);
-  assert.ok(read('README.md').includes(`"model": "${ex.model}",\n      "effort": "${ex.effort}",`));
-  assert.ok(read('docs/CONFIG.md').includes(`"model": "${ex.model}", "effort": "${ex.effort}"`));
+  // Re-pinned by the session (1b round 3, item 4): the example sets no codex effort, so the
+  // pairings apply — a configured effort would force one level on every model.
+  assert.equal(ex.model, HEAD);
+  assert.equal(ex.effort, undefined);
+  assert.ok(read('README.md').includes(`"model": "${ex.model}"`));
+  assert.ok(read('docs/CONFIG.md').includes(`"model": "${ex.model}"`));
   // The example is a real config: the runtime accepts it without a warning about model or effort.
   const st = station();
   const rt = runtimeOn(st, { config: { version: 1, units: { codex: ex } } });

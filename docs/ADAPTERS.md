@@ -58,7 +58,7 @@ export const GUIDE =
   'Omit `model` to keep the fleet default.';
 ```
 
-`GUIDE` rides in **every** `tools/list` payload — keep it to a paragraph. Record in the file header which CLI version you verified the ids against, on what date, and how. See [ARCHITECTURE.md](ARCHITECTURE.md#how-catalogs-are-curated) for the curation rules.
+A model entry's `effort` is applied only when the unit opts in with `pairedEffort: true` in its definition (an omitted effort then takes that model's pairing, core/unit.mjs, EFFORT); otherwise it is a label that `<unit>_models` prints. `GUIDE` rides in **every** `tools/list` payload — keep it to a paragraph. Record in the file header which CLI version you verified the ids against, on what date, and how. See [ARCHITECTURE.md](ARCHITECTURE.md#how-catalogs-are-curated) for the curation rules.
 
 ## 2. `units/<unit>/adapter.mjs`
 
@@ -151,7 +151,8 @@ export default defineUnit({
 |---|---|---|
 | `cfg` | The resolved value bag | yes |
 | `mode` | The *effective* mode after the ceiling | yes |
-| `model`, `effort` | The resolved model and effort for this call | no |
+| `model`, `effort` | The resolved model and effort for this call. With `pairedEffort: true` in the definition (codex), a model named with no effort configured brings its catalog pairing, and an `image` tool gets no effort — core/unit.mjs, EFFORT | no |
+| `effortFrom` | Which step decided `effort`: `call`, `config` (the operator's), `pairing`, `builtin`, or empty when there is none — read-only, for a log line | no |
 | `spawn(o)` | The bounded child-process call (below) | no |
 | `retry(fn, { skipIf })` | The one-shot retry | no |
 | `log` | stderr logging; stdout is JSON-RPC only | yes |
