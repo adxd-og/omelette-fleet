@@ -230,6 +230,8 @@ The frontmatter keys that matter:
 | `disallowedTools` | Comma-separated denylist, applied **before** `tools` resolves — the harness enforces it, so it is the only way to make "does not spawn sub-agents" true rather than requested |
 | `maxTurns` | How many turns the sub-agent may take before the harness stops it |
 
+The shipped definitions name the aliases `opus` and `sonnet`, which Claude Code resolves to the newest model of each line for your provider — Opus 5.5 and Sonnet 5.5 on the Anthropic API as of 2026-09-30 (Sonnet 5.5 from Claude Code 2.1.284) — so a new generation reaches a role with no change here; pin an exact id in `agents.<role>.model` when you want one.
+
 `omelette-fleet rules --agents` writes four of these next to the rules file:
 
 - **`omelette-coder`** — `model: opus`, `effort: xhigh`, `disallowedTools: Agent`, otherwise the default tools. Implements one task from the brief the orchestrator gives it (a file path or the text itself), follows the brief's test cycle, does not commit unless told to, and cannot spawn anything.
@@ -259,7 +261,7 @@ Nesting is allowed three levels deep by default (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN
 | Multi-source deep research | **Gemini** → `gemini_deep_research` | Decompose → parallel gather → synthesise, returning Summary / Findings / Sources / Gaps & Confidence. **Costs ~5 CLI runs per call** and commonly takes 3–10 minutes — deliberate use, not the default research mode |
 | Reading local images, PDFs, screenshots, diagrams | **Gemini** → `gemini_research`, needs the opt-in agy rule set (SECURITY, Recommended agy allow-rules) | Multimodal. Give an **absolute path** and say "view the file directly, no terminal commands" — shell tools are auto-denied headless |
 | Cheap fast second opinion, mechanical review, high-volume sweeps | **Grok** → `grok_research` / `grok_code_review` | Inexpensive per token and fine for volume — with the caveat below. Two profiles: `grok_research` is web-only and reads no local files; `grok_code_review` reads the tree and has no web |
-| Math / STEM cross-check | **Grok** (AIME 93–100%, GPQA Diamond 84.6–88%) or **Gemini** → `GPT-OSS 120B (Medium)` | Two independent non-Google/non-OpenAI voices for the same check |
+| Math / STEM cross-check | **Grok** → `grok_research` or **Gemini** → `GPT-OSS 120B (Medium)` | Two independent non-Google/non-OpenAI voices for the same check; each model's figures are in its catalog (`grok_models`, `gemini_models`), dated there |
 | Strongest code review, agentic terminal analysis | **Codex** → `codex_code_review` with an absolute `cwd` | The fleet's strongest reviewer, on `gpt-6-astra` by default (AA Intelligence Index 55 vs sol 51, terra 47); reads, greps and runs read-only shell commands inside an OS sandbox |
 | Research where the answer depends on running things | **Codex** → `codex_research` | Same sandbox, plus web search, and it reports real token usage per call |
 | Final pre-release security audit | **Codex** on its default `gpt-6-astra` | Leads sol on the vendor's own cyber evals (ExploitBench 100.0 vs 78.5, ExploitGym 42.4 vs 30.3) and on 512K–1M recall (MRCR v2 8-needle 96.3 vs 73.8). Slow and ~5x terra's price — two or three runs per release, not one per PR |
