@@ -1248,9 +1248,9 @@ test('set writes the agents block, show reads it back with sources, and the note
   assert.equal(shown.code, 0, shown.err);
   assert.match(shown.out, /^agents$/m);
   assert.match(shown.out, /^\s+tester\.maxTurns\s+120\s+file$/m);
-  assert.match(shown.out, /^\s+coder\.model\s+opus\s+default$/m);
+  assert.match(shown.out, /^\s+coder\.model\s+claude-opus-5-5\s+default$/m); // exact ids since 1.6.1 Task 2
   assert.match(shown.out, /^\s+coder\.effort\s+xhigh\s+default$/m);
-  assert.match(shown.out, /^\s+tester\.model\s+sonnet\s+default$/m);
+  assert.match(shown.out, /^\s+tester\.model\s+claude-sonnet-5-5\s+default$/m);
   assert.doesNotMatch(shown.out, /^codex$/m, 'show agents shows the block and nothing else');
   // a bare `show` lists it after the units, and a unit selection never does
   assert.match(cli(['show'], { dir }).out, /^agents$/m);
@@ -1737,7 +1737,7 @@ test('rules --agents renders the configured agent settings, and a later `set` ma
   const r1 = rules();
   assert.equal(r1.status, 0, r1.stderr);
   assert.match(readFileSync(testerFile, 'utf8'), /^maxTurns: 80$/m, 'the built-in default with no config');
-  assert.match(readFileSync(coderFile, 'utf8'), /^model: opus$/m);
+  assert.match(readFileSync(coderFile, 'utf8'), /^model: claude-opus-5-5$/m); // the exact id since 1.6.1 Task 2
 
   assert.equal(cli(['set', 'agents.tester.maxTurns=120'], { dir }).code, 0);
   const r2 = rules();

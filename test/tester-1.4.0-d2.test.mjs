@@ -63,7 +63,7 @@ test('rules --agents --print with a C1 control in agents.coder.model prints no r
   assert.ok(!r.err.includes('\u009b'), 'raw U+009B on stderr');
   assert.match(r.err, /agents\.coder\.model = .* is invalid — ignored/);
   const coder = r.out.slice(r.out.indexOf('===== omelette-coder.md ====='));
-  assert.match(coder, /\nmodel: opus\n/);
+  assert.match(coder, /\nmodel: claude-opus-5-5\n/); // the default, an exact id since 1.6.1 Task 2
 });
 
 test('the unit log sink writes a control character as its escape', () => {

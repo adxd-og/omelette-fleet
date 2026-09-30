@@ -43,6 +43,8 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 
 ## Shape
 
+The full map of keys. The shipped `examples/fleet.config.json`, which `install` copies into a new fleet home, carries only what an operator decides — which units run, their mode, timeouts and web search, the status feed, and Gemini's model, which has no built-in default — and every key it omits follows the package's defaults, release by release.
+
 ```json
 {
   "version": 1,
@@ -50,10 +52,10 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
   "contract": "auto",
   "defaults": { "status": true },
   "agents": {
-    "coder":  { "model": "opus", "effort": "xhigh" },
-    "coderMedium": { "model": "opus", "effort": "medium" },
-    "tester": { "model": "sonnet", "effort": "xhigh", "maxTurns": 80 },
-    "reviewer": { "model": "opus", "effort": "xhigh" }
+    "coder":  { "model": "claude-opus-5-5", "effort": "xhigh" },
+    "coderMedium": { "model": "claude-opus-5-5", "effort": "medium" },
+    "tester": { "model": "claude-sonnet-5-5", "effort": "high", "maxTurns": 80 },
+    "reviewer": { "model": "claude-opus-5-5", "effort": "xhigh" }
   },
   "handoff": { "enabled": true },
   "workflow": { "merge": "session" },
@@ -103,17 +105,19 @@ The `agents` block is the other top-level one, and it configures something diffe
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `agents.coder.model` | one printable line | `"opus"` | The `model:` line of `omelette-coder.md` |
+| `agents.coder.model` | one printable line | `"claude-opus-5-5"` | The `model:` line of `omelette-coder.md` |
 | `agents.coder.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line — the only place a sub-agent's effort can be set |
-| `agents.coderMedium.model` | one printable line | `"opus"` | The `model:` line of `omelette-coder-medium.md` — the coder's own template, rendered under a second name |
+| `agents.coderMedium.model` | one printable line | `"claude-opus-5-5"` | The `model:` line of `omelette-coder-medium.md` — the coder's own template, rendered under a second name |
 | `agents.coderMedium.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"medium"` | Its `effort:` line. Medium because on a plan-driven task medium built the same behaviour as xhigh, which took 2.5× the cache reads and 3.6× the wall clock ([MEASUREMENTS](MEASUREMENTS.md#coder-effort-medium-high-xhigh-on-one-task), N = 1) |
-| `agents.tester.model` | one printable line | `"sonnet"` | The `model:` line of `omelette-tester.md` |
-| `agents.tester.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line |
+| `agents.tester.model` | one printable line | `"claude-sonnet-5-5"` | The `model:` line of `omelette-tester.md` |
+| `agents.tester.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"high"` | Its `effort:` line — `high` plus the second pass the template carries, measured against one `xhigh` pass ([MEASUREMENTS](MEASUREMENTS.md#the-testers-effort-a-second-pass-and-an-advisor)) |
 | `agents.tester.maxTurns` | positive int | `80` | Its `maxTurns:` line — how many turns the tester gets before the harness stops it. It is honoured: the agent stops at the limit and the orchestrator is told it can continue it (measured 2026-09-06) |
-| `agents.reviewer.model` | one printable line | `"opus"` | The `model:` line of `omelette-reviewer.md` |
+| `agents.reviewer.model` | one printable line | `"claude-opus-5-5"` | The `model:` line of `omelette-reviewer.md` |
 | `agents.reviewer.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line — review is judgement, the thing a release pays for |
 
 **Two coders, one text.** `omelette-coder-medium` is `omelette-coder`'s template rendered under a second name, so its instructions are the coder's word for word and only its `name:` and this block are its own. It ships *beside* the coder, not instead of it: one plan-driven trial suggests a medium bucket and does not license a new default, so `agents.coder.effort` stays `"xhigh"`. Which of the two a brief goes to is the rule in [ORCHESTRATION](ORCHESTRATION.md#what-each-agent-is-handed). `set` reads the role name without regard to case, so `agents.codermedium.effort` is the same key as `agents.coderMedium.effort`.
+
+**Exact ids, not aliases.** Since 1.6.1 the model defaults are exact ids — `claude-opus-5-5` and `claude-sonnet-5-5` — because on 2026-09-30, on Claude Code 2.1.284, a sub-agent spawned with the `sonnet` alias ran on Sonnet 5 two days after 5.5 shipped, while `opus` resolved to Opus 5.5 ([ORCHESTRATION](ORCHESTRATION.md#spawning-sub-agents-model-and-effort)); `omelette-fleet set agents.tester.model=sonnet` still renders the alias for an install that prefers it. These are first-party ids: on a provider that names models differently (Bedrock, Vertex, Foundry), set `agents.<role>.model` to that provider's id or back to the alias — not tested here. Which effort each role runs at, and why: [ORCHESTRATION, Effort by role and model](ORCHESTRATION.md#effort-by-role-and-model).
 
 The templates carry `{{model}}`, `{{effort}}` and `{{maxTurns}}` where those values go, and **`rules --agents` renders from the config as it is at that moment**. So a change here does not reach a session until you re-render:
 
@@ -131,7 +135,7 @@ agents.tester.maxTurns  80 [default] → 120 [file]
   note: `omelette-fleet rules --agents` re-renders the definitions with the new value.
 ```
 
-**When a default changes.** A definition on disk is a rendered file, so a new default in the package reaches it only when `omelette-fleet rules --agents` runs — an upgrade alone rewrites nothing, and `update` only prints the refresh command. At that refresh a key you never set follows the new default: the file is rewritten with the new value and the run reports it `written`. A key you set yourself keeps your value — `omelette-fleet set agents.coder.effort=xhigh` survives any later change of the default, because a value in the config file beats the built-in one. A config file that `install` created from the shipped example already sets `agents.coder` and `agents.tester` explicitly, so it counts as set. `doctor` counts the definitions and reads their markers; it does not compare what they say with the config, so `omelette-fleet show agents` is where you see what the next refresh will write.
+**When a default changes.** A definition on disk is a rendered file, so a new default in the package reaches it only when `omelette-fleet rules --agents` runs — an upgrade alone rewrites nothing, and `update` only prints the refresh command. At that refresh a key you never set follows the new default: the file is rewritten with the new value and the run reports it `written`. A key you set yourself keeps your value — `omelette-fleet set agents.coder.effort=xhigh` survives any later change of the default, because a value in the config file beats the built-in one. A config file that `install` created from an example before 1.6.1 already sets `agents.coder` and `agents.tester` explicitly, so it counts as set: delete those keys from the file to follow the defaults — `set` refuses an empty value for an agents key. The 1.6.1 example has no `agents` block. `doctor` counts the definitions and reads their markers; it does not compare what they say with the config, so `omelette-fleet show agents` is where you see what the next refresh will write.
 
 Validation is deliberately forgiving in one direction: an unknown agent, an unknown key or an invalid value in the file is a **warning**, and the built-in default is used — because the alternative is `rules --agents` refusing to write a definition the session needs. Through `set` the same mistakes are refused outright and nothing is written. There are no environment overrides for this block.
 
@@ -338,7 +342,7 @@ An invalid value does not poison the key — it warns and falls through to the n
 `agents`, `handoff` and `workflow` are the only words accepted in the first position that are not unit names, and the only bare keys accepted are `contract` and `updateCheck`. Three refusals:
 
 - A name that is not declared in the schema is refused whatever it is, an inherited one (`constructor`, `toString`) included.
-- An `effort` the unit's catalog does not list is refused with the list, as a call refuses it: codex takes `low`…`ultra`, grok `low`…`xhigh`, and gemini, whose catalog declares no levels, any string; an empty value clears the key. A value written by hand (a 1.6.0 config may hold `none`) is marked by `show` and `doctor` — `effort  none  file — not in the catalog's list: ignored at call time, the model's pairing applies` (grok: the vendor default applies).
+- An `effort` the unit's catalog does not list is refused with the list, as a call refuses it: codex takes `low`…`ultra`, grok `low`…`xhigh`, and gemini, whose catalog declares no levels, any string; an empty value (`set <unit>.effort=`) writes an empty string, which the runtime reads as unset — `show` prints `(unset) file`. A value written by hand (a 1.6.0 config may hold `none`) is marked by `show` and `doctor` — `effort  none  file — not in the catalog's list: ignored at call time, the model's pairing applies` (grok: the vendor default applies).
 - It refuses to touch a file it cannot merge into — one that is not valid JSON, or whose `units` / `agents` / `handoff` / `workflow` (or the `units.<unit>` / `agents.<agent>` it would edit) is something other than an object — because writing there would delete what is present rather than edit it. Fix those by hand.
 
 On success it prints the before/after with sources:

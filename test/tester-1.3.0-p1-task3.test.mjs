@@ -57,7 +57,8 @@ function section(md, heading) {
 // ── the two rules lines land, and name what the spec says ───────────────────
 
 const P1_REVIEWS_LINE = "- **A sub-agent review goes to `omelette-reviewer`.** It writes nothing but `.omelette/reports/<name>-review.md`; run `git status --porcelain` and compare `git rev-parse HEAD` and `git symbolic-ref -q HEAD` after it, and reject the review outright if anything but that report changed.";
-const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus, `effort: xhigh`), **`omelette-coder-medium`** (Opus, `effort: medium`), **`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus, `effort: xhigh`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
+// Re-pinned in 1.6.1 Task 2: the tester at high, the generations named, the ids pinned.
+const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus 5.5, `effort: xhigh`), **`omelette-coder-medium`** (Opus 5.5, `effort: medium`), **`omelette-tester`** (Sonnet 5.5, `effort: high`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus 5.5, `effort: xhigh`), each model pinned by exact id (`claude-opus-5-5`, `claude-sonnet-5-5`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
 const CODER_PARENTHETICAL = '(Opus-class, xhigh — the shipped `omelette-coder`)';
 
 for (const merge of POLICIES) {
@@ -67,12 +68,12 @@ for (const merge of POLICIES) {
     assert.ok(reviewsSection.split('\n').includes(P1_REVIEWS_LINE), `the line sits inside "## Reviews" (${merge})`);
   });
 
-  test(`"Spawning sub-agents" still names the coder as Opus/xhigh and the tester as Sonnet/xhigh with maxTurns 80, beside the reviewer (${merge})`, () => {
+  test(`"Spawning sub-agents" still names the coder as Opus/xhigh and the tester as Sonnet/high (since 1.6.1) with maxTurns 80, beside the reviewer (${merge})`, () => {
     const text = rendered(merge);
     const spawnSection = section(text, '## Spawning sub-agents: model and effort');
     assert.ok(spawnSection.includes(P1_DEFINITIONS_LINE), `the definitions line, whole (${merge})`);
-    assert.ok(spawnSection.includes('**`omelette-coder`** (Opus, `effort: xhigh`)'), `the coder is still Opus xhigh (${merge})`);
-    assert.ok(spawnSection.includes('**`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config))'), `the tester is still Sonnet xhigh, maxTurns 80 (${merge})`);
+    assert.ok(spawnSection.includes('**`omelette-coder`** (Opus 5.5, `effort: xhigh`)'), `the coder is still Opus xhigh (${merge})`);
+    assert.ok(spawnSection.includes('**`omelette-tester`** (Sonnet 5.5, `effort: high`, `maxTurns: 80` by default (config))'), `the tester is Sonnet high since 1.6.1 Task 2, maxTurns 80 (${merge})`);
   });
 
   test(`line 9's "Opus-class, xhigh" parenthetical for the coder is unchanged (${merge})`, () => {
@@ -145,9 +146,10 @@ for (const merge of POLICIES) {
 // ── the ceiling is a ceiling, never an exact size ───────────────────────────
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file is at most 14 030 characters, a ceiling not an exact pin (${merge})`, () => {
+  test(`the rendered rules file is at most 14 590 characters, a ceiling not an exact pin (${merge})`, () => {
     const text = rendered(merge);
-    assert.ok(text.length <= 14030, `${merge}: ${text.length} characters, expected <= 14030`);
+    // Re-pinned in 1.6.1 Task 2: the ceiling moved 14 030 -> 14 590 with the second-pass step (test/rules-size.test.mjs says why).
+    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters, expected <= 14590`);
     assert.ok(text.length > 0, `${merge}: sanity — the file is not empty`);
   });
 }

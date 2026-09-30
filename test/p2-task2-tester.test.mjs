@@ -78,9 +78,10 @@ for (const merge of POLICIES) {
 }
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file stays at or under the 14 030-character ceiling (${merge})`, () => {
+  test(`the rendered rules file stays at or under the 14 590-character ceiling (${merge})`, () => {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 14030, `${merge}: ${text.length} characters, expected <= 14030`);
+    // Re-pinned in 1.6.1 Task 2: the ceiling moved 14 030 -> 14 590 with the second-pass step (test/rules-size.test.mjs says why).
+    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters, expected <= 14590`);
   });
 }
 

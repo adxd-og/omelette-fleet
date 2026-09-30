@@ -99,7 +99,8 @@ test('the built-in effort is xhigh; the tool description says an omitted effort 
   assert.match(desc, /max\/ultra = manual escalation/);
   assert.match(desc, /OMIT for the fleet default: the named model's pairing — gpt-6\.1-sol and gpt-6-astra xhigh, gpt-6-sol high, the lunas medium — unless the operator configured an effort\./);
   const example = JSON.parse(read('examples/fleet.config.json'));
-  assert.equal(example.units.codex.model, HEAD);
+  // Re-pinned in 1.6.1 Task 2 (ruling B): the example sets no codex model either — the catalog head follows the package.
+  assert.ok(!('model' in example.units.codex), JSON.stringify(example.units.codex));
   assert.ok(!('effort' in example.units.codex), JSON.stringify(example.units.codex));
 });
 
@@ -500,7 +501,8 @@ test('1b rule 4: the text items — README\'s probe claim is versioned, 5.6-luna
   assert.doesNotMatch(find('gpt-5.6-luna').avoid, /Step up to terra/);
   const entry = read('CHANGELOG.md').split(/^## /m).find((s) => s.startsWith('1.6.1'));
   // Re-pinned in 1b round 3 (ruling 4): the upgrade clears codex.effort so the pairings apply.
-  assert.ok(entry.includes('omelette-fleet set codex.model=gpt-6.1-sol codex.effort='), entry);
+  // Re-pinned in 1.6.1 Task 2 (ruling B): it clears codex.model too, so the catalog head follows the package.
+  assert.ok(entry.includes('omelette-fleet set codex.model= codex.effort='), entry);
   assert.ok(!entry.includes('codex.effort=xhigh'), entry);
   assert.ok(entry.includes('omelette-fleet rules --agents --hooks'), entry);
   assert.match(entry, /catalog pairing/);

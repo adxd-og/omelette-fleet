@@ -61,7 +61,7 @@ test('the reviewer\'s frontmatter: its name, opus at xhigh by default, a read-an
   );
   for (const line of [
     'name: omelette-reviewer',
-    'model: opus',
+    'model: claude-opus-5-5', // the exact id since 1.6.1 Task 2
     'effort: xhigh',
     'disallowedTools: Agent, Edit, NotebookEdit',
     'tools: Read, Grep, Glob, Bash, Write',
@@ -92,7 +92,7 @@ test('the reviewer\'s definition says the one file it writes, the check after it
 
 test('agents.reviewer: built-in defaults, the file wins key by key, and the render follows it', () => {
   const none = agentSettings({ OMELETTE_HOME: home() });
-  assert.deepEqual(none.reviewer, { model: 'opus', effort: 'xhigh' });
+  assert.deepEqual(none.reviewer, { model: 'claude-opus-5-5', effort: 'xhigh' }); // exact id since 1.6.1 Task 2
   assert.deepEqual(none.sources.reviewer, { model: 'default', effort: 'default' });
   const set = agentSettings({ OMELETTE_HOME: home({ version: 1, agents: { reviewer: { model: 'sonnet', effort: 'high' } } }) });
   assert.deepEqual(set.reviewer, { model: 'sonnet', effort: 'high' });
@@ -105,7 +105,7 @@ test('agents.reviewer: built-in defaults, the file wins key by key, and the rend
 
 test('agents.reviewer: an invalid value or an unknown key warns, and the default stays in force', () => {
   const s = agentSettings({ OMELETTE_HOME: home({ agents: { reviewer: { effort: 'turbo', model: '', nope: 1 } } }) });
-  assert.deepEqual(s.reviewer, { model: 'opus', effort: 'xhigh' });
+  assert.deepEqual(s.reviewer, { model: 'claude-opus-5-5', effort: 'xhigh' }); // exact id since 1.6.1 Task 2
   assert.ok(s.warnings.some((w) => /agents\.reviewer\.effort = "turbo" is invalid — ignored/.test(w)));
   assert.ok(s.warnings.some((w) => /agents\.reviewer\.model = "" is invalid — ignored/.test(w)));
   assert.ok(s.warnings.some((w) => /agents\.reviewer\.nope is not a known key — ignored/.test(w)));
@@ -116,7 +116,7 @@ test('set and show round-trip agents.reviewer.*, and set refuses an invalid valu
   const dir = home();
   const s = cli(['set', 'agents.reviewer.model=sonnet', 'agents.reviewer.effort=high'], { dir });
   assert.equal(s.code, 0, s.err);
-  assert.match(s.out, /^agents\.reviewer\.model {2}opus \[default\] → sonnet \[file\]$/m);
+  assert.match(s.out, /^agents\.reviewer\.model {2}claude-opus-5-5 \[default\] → sonnet \[file\]$/m); // exact id since 1.6.1 Task 2
   assert.match(s.out, /^agents\.reviewer\.effort {2}xhigh \[default\] → high \[file\]$/m);
   assert.deepEqual(JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8')).agents, { reviewer: { model: 'sonnet', effort: 'high' } });
   const shown = cli(['show', 'agents'], { dir });
@@ -126,7 +126,7 @@ test('set and show round-trip agents.reviewer.*, and set refuses an invalid valu
 
   const fresh = home();
   const defaults = cli(['show', 'agents'], { dir: fresh });
-  assert.match(defaults.out, /^\s+reviewer\.model\s+opus\s+default$/m);
+  assert.match(defaults.out, /^\s+reviewer\.model\s+claude-opus-5-5\s+default$/m);
   assert.match(defaults.out, /^\s+reviewer\.effort\s+xhigh\s+default$/m);
   const bad = cli(['set', 'agents.reviewer.effort=turbo'], { dir: fresh });
   assert.equal(bad.code, 1);
@@ -145,7 +145,7 @@ test('rules --agents writes omelette-reviewer.md with the configured values, and
   const text = readFileSync(file, 'utf8');
   assert.equal(text.split('\n')[1], AGENT_MARKER(pkgVersion));
   assert.match(text, /^effort: max$/m);
-  assert.match(text, /^model: opus$/m);
+  assert.match(text, /^model: claude-opus-5-5$/m, 'the default model, an exact id since 1.6.1 Task 2');
   const d = cli(['doctor'], { dir, cwd: proj });
   assert.match(d.out, /^agents {8}project: v\d+\.\d+\.\d+\S* \(4\) · global: absent$/m, d.out);
 });

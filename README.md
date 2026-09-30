@@ -39,6 +39,7 @@ Read in this order the first time: ORCHESTRATION, CONFIG, SECURITY, STATUS-FEED,
 | Who decides, who proposes, and which unit gets which task | [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md) |
 | How the rules, the sub-agents and the guard reach my session | [ORCHESTRATION, How the rules reach a session](docs/ORCHESTRATION.md#how-the-rules-reach-a-session) |
 | Which model or effort a task wants | [ORCHESTRATION, Model and effort escalation](docs/ORCHESTRATION.md#model-and-effort-escalation) |
+| Which model and effort each shipped sub-agent runs on, and why | [ORCHESTRATION, Effort by role and model](docs/ORCHESTRATION.md#effort-by-role-and-model) |
 | How to keep a plan across a compaction | [ORCHESTRATION, Ledger and handoff](docs/ORCHESTRATION.md#ledger-and-handoff) |
 | Which config keys exist, what they default to, and how they resolve | [docs/CONFIG.md](docs/CONFIG.md) |
 | Which client timeout cut my call short | [CONFIG, Client timeouts](docs/CONFIG.md#client-timeouts) |
@@ -252,7 +253,7 @@ Use your own `--prefix` if you installed with one. If you register the servers p
 | `install [--prefix <name>] [--units <a,b,c>] [--rules] [--dry-run] [--force]` | Registers one MCP server per unit as `<prefix>-<unit>` with `claude mcp add -s user`, and creates `<home>/fleet.config.json` from the shipped example if it does not exist yet (an existing file is never overwritten). A unit whose vendor CLI is not in `PATH` is skipped unless `--force`. `--rules` then runs `rules --agents --hooks` in the current directory and prints the settings snippet, so the whole first run is one command; it happens even when `claude` is missing, since the project files do not depend on it. `--dry-run` prints every command and every write — both halves — and runs nothing. Exits 1 if a `claude mcp add` fails, or if a managed file is refused | [Quickstart](#quickstart) |
 | `uninstall [--prefix <name>] [--units <a,b,c>] [--dry-run]` | `claude mcp remove -s user` for those servers. Removing one that was never registered is a no-op; a removal that **fails for one that is registered** prints "Still registered" and exits 1. The fleet config and the status files are never touched | — |
 | `update [--check]` | Reports the latest released version, then brings **this** install up to date. A git checkout is fast-forwarded (`git pull --ff-only`); a dirty tree or a diverged branch is refused, never overwritten. An npm install is left alone and the exact `npm i -g` line is printed. MCP registrations are never rewritten — they hold absolute paths a pull does not move. `--check` fetches but pulls nothing and exits 3 when an update is available, 0 when there is none | [Keeping it up to date](#keeping-it-up-to-date) |
-| `rules [--global] [--agents] [--hooks] [--print] [--remove] [--force] [--dry-run]` | Writes the fleet's operating rules — units propose and this session applies, the ledger and handoff rule, the tester flow, the routing table — to `<cwd>/.claude/rules/omelette-fleet.md`, which Claude Code loads like CLAUDE.md. `--global` writes it under `$CLAUDE_CONFIG_DIR` or `~/.claude` instead. `--agents` also writes four sub-agent definitions (`omelette-coder`: Opus xhigh; `omelette-coder-medium`: Opus medium; `omelette-tester`: Sonnet xhigh; `omelette-reviewer`: Opus xhigh; all four `disallowedTools: Agent`, the reviewer also `Edit, NotebookEdit`) into `.claude/agents` — a definition is where a sub-agent's effort is set — and the `/omelette-test` skill into `.claude/skills`. `--hooks` writes the guard script into `.claude/hooks` and prints the settings snippet that calls it. `--force` replaces a file that lacks the version marker; `--remove` deletes only files that carry it; `--print` sends the text to stdout; `--dry-run` prints every path and action and writes nothing | [ORCHESTRATION, Layer 2](docs/ORCHESTRATION.md#layer-2-the-rules-file-and-its-marker) |
+| `rules [--global] [--agents] [--hooks] [--print] [--remove] [--force] [--dry-run]` | Writes the fleet's operating rules — units propose and this session applies, the ledger and handoff rule, the tester flow, the routing table — to `<cwd>/.claude/rules/omelette-fleet.md`, which Claude Code loads like CLAUDE.md. `--global` writes it under `$CLAUDE_CONFIG_DIR` or `~/.claude` instead. `--agents` also writes four sub-agent definitions (`omelette-coder`: Opus 5.5 xhigh; `omelette-coder-medium`: Opus 5.5 medium; `omelette-tester`: Sonnet 5.5 high; `omelette-reviewer`: Opus 5.5 xhigh; each model pinned by exact id; all four `disallowedTools: Agent`, the reviewer also `Edit, NotebookEdit`) into `.claude/agents` — a definition is where a sub-agent's effort is set — and the `/omelette-test` skill into `.claude/skills`. `--hooks` writes the guard script into `.claude/hooks` and prints the settings snippet that calls it. `--force` replaces a file that lacks the version marker; `--remove` deletes only files that carry it; `--print` sends the text to stdout; `--dry-run` prints every path and action and writes nothing | [ORCHESTRATION, Layer 2](docs/ORCHESTRATION.md#layer-2-the-rules-file-and-its-marker) |
 | `doctor [--prefix <name>] [--probe-models] [--probe-sandbox]` | Checks the install: per unit the binary, `--version`, login state, resolved config with sources, ceiling, MCP registration and status-feed writability; above them the managed files at both scopes, the client's two timeout walls and — while anything is missing — one `next` line, which is a hint and never a fault. `--probe-models` spends real Codex calls to test every catalog id; `--probe-sandbox` spends one real call per unit to test its read-only sandbox. Exits 1 only for a unit that is enabled, registered and broken, or one the sandbox probe caught writing | [What doctor tells you](#what-doctor-tells-you) |
 | `show [<unit> \| fleet \| agents \| handoff \| workflow]` | Every config key for one unit or all of them: value, where it came from, and the ceiling. `show fleet` prints the top-level keys (`contract`, `updateCheck`); `show agents` prints the `agents` block that `rules --agents` renders the sub-agent definitions from; `show handoff` prints the auto-handoff block that `rules --hooks` renders into the guard; `show workflow` prints the merge policy that `rules` renders into the rules file | [docs/CONFIG.md](docs/CONFIG.md) |
 | `set <key>=<value> \| <unit>.<key>=<value> \| agents.<agent>.<key>=<value> \| handoff.<key>=<value> \| workflow.<key>=<value> [...]` | Changes keys in the config file: a bare `<key>=<value>` is a top-level fleet key (`contract`, `updateCheck`), and the dotted forms edit a unit, an agent, the handoff block or the workflow block. Unknown units, unknown agents, unknown keys and invalid values are refused; the rest of the file is kept | [CONFIG, Editing with set](docs/CONFIG.md#editing-with-set) |
@@ -290,24 +291,13 @@ Model ids, benchmark numbers and routing advice live in `units/<unit>/models.js`
 
 ## Configuration
 
-One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.json`), read fresh on every call. `examples/fleet.config.json`:
+One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.json`), read fresh on every call; `install` creates it from `examples/fleet.config.json`, which carries only what an operator decides — which units run, their mode, timeouts and web search, the status feed, and Gemini's model, which has no built-in default — so every key it omits follows the package's defaults, release by release:
 
 ```json
 {
   "version": 1,
   "defaults": {
     "status": true
-  },
-  "agents": {
-    "coder": {
-      "model": "opus",
-      "effort": "xhigh"
-    },
-    "tester": {
-      "model": "sonnet",
-      "effort": "xhigh",
-      "maxTurns": 80
-    }
   },
   "units": {
     "gemini": {
@@ -325,7 +315,6 @@ One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.
     "codex": {
       "enabled": true,
       "mode": "read-only",
-      "model": "gpt-6.1-sol",
       "webSearch": true,
       "timeoutS": 600
     }
@@ -333,7 +322,7 @@ One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.
 }
 ```
 
-One consequence worth knowing: because the Codex unit runs with `--ignore-user-config`, leaving `codex.model` unset does **not** fall back to your `~/.codex/config.toml` default — the adapter pins the first catalog entry (`gpt-6.1-sol`) instead and logs that it did. The sample sets no `codex.effort` on purpose: each model then runs at its catalog pairing (`gpt-6.1-sol` at `xhigh`, `gpt-6-luna` at `medium`), and a `codex.effort` would force that one effort on every model.
+One consequence worth knowing: because the Codex unit runs with `--ignore-user-config`, leaving `codex.model` unset does **not** fall back to your `~/.codex/config.toml` default — the adapter pins the first catalog entry (`gpt-6.1-sol`) instead and logs that it did. The sample sets neither `codex.model` nor `codex.effort` on purpose: the catalog head runs, each model at its catalog pairing (`gpt-6.1-sol` at `xhigh`, `gpt-6-luna` at `medium`), and a `codex.effort` would force that one effort on every model.
 
 Every key, its default, the resolution order, and the per-unit environment overrides: **[docs/CONFIG.md](docs/CONFIG.md)**.
 

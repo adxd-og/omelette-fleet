@@ -54,7 +54,7 @@ test('agents.coderMedium, agents.codermedium and agents.CODERMEDIUM all reach th
 
   const c = cli(['set', 'agents.CODERMEDIUM.model=sonnet'], { dir });
   assert.equal(c.code, 0, c.err);
-  assert.match(c.out, /agents\.coderMedium\.model\s+opus \[default\] → sonnet \[file\]/);
+  assert.match(c.out, /agents\.coderMedium\.model\s+claude-opus-5-5 \[default\] → sonnet \[file\]/); // default: exact id since 1.6.1 Task 2
 
   // Written under the schema's own spelling, never the input's case.
   const written = JSON.parse(readFileSync(configFile(dir), 'utf8'));
@@ -68,7 +68,7 @@ test('agents.coderMedium, agents.codermedium and agents.CODERMEDIUM all reach th
   assert.match(shown.out, /^\s+coderMedium\.model\s+sonnet\s+file$/m);
   // The deep coder is untouched by any of the three spellings.
   assert.match(shown.out, /^\s+coder\.effort\s+xhigh\s+default$/m);
-  assert.match(shown.out, /^\s+coder\.model\s+opus\s+default$/m);
+  assert.match(shown.out, /^\s+coder\.model\s+claude-opus-5-5\s+default$/m);
 
   const proj = join(dir, 'proj'); mkdirSync(proj);
   const r = cli(['rules', '--agents'], { dir, cwd: proj });
@@ -78,7 +78,7 @@ test('agents.coderMedium, agents.codermedium and agents.CODERMEDIUM all reach th
   assert.match(medium, /^model: sonnet$/m);
   const coder = readFileSync(join(proj, '.claude', 'agents', 'omelette-coder.md'), 'utf8');
   assert.match(coder, /^effort: xhigh$/m, 'the deep coder keeps its default effort');
-  assert.match(coder, /^model: opus$/m, 'the deep coder keeps its default model');
+  assert.match(coder, /^model: claude-opus-5-5$/m, 'the deep coder keeps its default model (an exact id since 1.6.1 Task 2)');
 });
 
 // ── An unknown role keeps the message shape, and writes nothing ─────────────

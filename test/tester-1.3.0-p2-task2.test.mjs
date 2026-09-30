@@ -84,7 +84,7 @@ test('omelette-coder-medium vs omelette-coder: every line is identical except na
 test('omelette-coder-medium frontmatter: name, model, effort and disallowedTools as whole lines', () => {
   const medium = renderAgentFile('omelette-coder-medium.md', V).split('\n');
   assert.ok(medium.includes('name: omelette-coder-medium'), medium.join('\n'));
-  assert.ok(medium.includes('model: opus'), medium.join('\n'));
+  assert.ok(medium.includes('model: claude-opus-5-5'), medium.join('\n')); // the exact id since 1.6.1 Task 2
   assert.ok(medium.includes('effort: medium'), medium.join('\n'));
   assert.ok(medium.includes('disallowedTools: Agent'), medium.join('\n'));
 });
@@ -118,19 +118,20 @@ test('omelette-coder still renders effort: xhigh by default, unchanged from befo
   const coder = renderAgentFile('omelette-coder.md', V);
   assert.match(coder, /^name: omelette-coder$/m);
   assert.match(coder, /^effort: xhigh$/m);
-  assert.match(coder, /^model: opus$/m);
+  assert.match(coder, /^model: claude-opus-5-5$/m); // the exact id since 1.6.1 Task 2
 });
 
 test('omelette-tester and omelette-reviewer frontmatter is unchanged by this release', () => {
   const tester = renderAgentFile('omelette-tester.md', V);
   assert.match(tester, /^name: omelette-tester$/m);
-  assert.match(tester, /^model: sonnet$/m);
-  assert.match(tester, /^effort: xhigh$/m);
+  // Re-pinned in 1.6.1 Task 2: exact model ids, and the tester at high.
+  assert.match(tester, /^model: claude-sonnet-5-5$/m);
+  assert.match(tester, /^effort: high$/m);
   assert.match(tester, /^disallowedTools: Agent$/m);
 
   const reviewer = renderAgentFile('omelette-reviewer.md', V);
   assert.match(reviewer, /^name: omelette-reviewer$/m);
-  assert.match(reviewer, /^model: opus$/m);
+  assert.match(reviewer, /^model: claude-opus-5-5$/m);
   assert.match(reviewer, /^effort: xhigh$/m);
   assert.match(reviewer, /^disallowedTools: Agent, Edit, NotebookEdit$/m);
 });
@@ -141,7 +142,7 @@ test('agents.coderMedium.effort=high and agents.coderMedium.model=sonnet change 
   const dir = home({ version: 1, agents: { coderMedium: { effort: 'high', model: 'sonnet' } } });
   const settings = agentSettings({ OMELETTE_HOME: dir });
   assert.deepEqual(settings.coderMedium, { model: 'sonnet', effort: 'high' });
-  assert.deepEqual(settings.coder, { model: 'opus', effort: 'xhigh' }, 'untouched by the medium block');
+  assert.deepEqual(settings.coder, { model: 'claude-opus-5-5', effort: 'xhigh' }, 'untouched by the medium block'); // default model: exact id since 1.6.1 Task 2
 
   const medium = renderAgentFile('omelette-coder-medium.md', V, settings);
   assert.match(medium, /^model: sonnet$/m);
@@ -149,7 +150,7 @@ test('agents.coderMedium.effort=high and agents.coderMedium.model=sonnet change 
   assert.match(medium, /^name: omelette-coder-medium$/m);
 
   const coder = renderAgentFile('omelette-coder.md', V, settings);
-  assert.match(coder, /^model: opus$/m);
+  assert.match(coder, /^model: claude-opus-5-5$/m);
   assert.match(coder, /^effort: xhigh$/m);
 });
 
@@ -187,7 +188,7 @@ test('show agents (temp home) lists coderMedium.model and coderMedium.effort wit
   const dir = home({ version: 1, agents: { coderMedium: { effort: 'low' } } });
   const r = cli(['show', 'agents'], { dir });
   assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /coderMedium\.model\s+opus\s+default/, r.out);
+  assert.match(r.out, /coderMedium\.model\s+claude-opus-5-5\s+default/, r.out); // exact id since 1.6.1 Task 2
   assert.match(r.out, /coderMedium\.effort\s+low\s+file/, r.out);
   assert.match(r.out, /coder\.effort\s+xhigh\s+default/, r.out);
 });

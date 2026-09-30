@@ -215,10 +215,16 @@ const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
  * `model` is passed through verbatim (an alias like `opus`, or a full model
  * id, spaces and all), so it is only checked for being one printable line —
  * see the `line` case in `coerce` for why that check is not cosmetic.
+ *
+ * The defaults are EXACT ids since 1.6.1, not the aliases: on 2026-09-30 a
+ * sub-agent spawned on `sonnet` still ran on Sonnet 5 two days after Sonnet 5.5
+ * shipped, while `opus` ran on Opus 5.5. The fleet pins its sub-agents' models
+ * the way it pins its units' models — a new generation is a release of this
+ * package (docs/ORCHESTRATION.md, "Spawning sub-agents: model and effort").
  */
 export const AGENT_SETTINGS_SCHEMA = {
   coder: {
-    model: { type: 'line', default: 'opus' },
+    model: { type: 'line', default: 'claude-opus-5-5' },
     effort: { type: 'enum', values: EFFORT_LEVELS, default: 'xhigh' },
   },
   // The coder's own template under a second name (1.3.0): same instructions,
@@ -227,18 +233,22 @@ export const AGENT_SETTINGS_SCHEMA = {
   // high, xhigh on one task"); `coder` keeps xhigh until a judgement-heavy
   // repeat says otherwise.
   coderMedium: {
-    model: { type: 'line', default: 'opus' },
+    model: { type: 'line', default: 'claude-opus-5-5' },
     effort: { type: 'enum', values: EFFORT_LEVELS, default: 'medium' },
   },
+  // High, not xhigh (1.6.1): on one task's diff a directed second pass at high
+  // found more than one xhigh pass at about half the cost, and the template
+  // carries that pass (docs/MEASUREMENTS.md, "The tester's effort, a second pass
+  // and an advisor"). 80 turns: a two-pass high run took 42.
   tester: {
-    model: { type: 'line', default: 'sonnet' },
-    effort: { type: 'enum', values: EFFORT_LEVELS, default: 'xhigh' },
+    model: { type: 'line', default: 'claude-sonnet-5-5' },
+    effort: { type: 'enum', values: EFFORT_LEVELS, default: 'high' },
     maxTurns: { type: 'posint', default: 80 },
   },
   // The clean-context reviewer (1.3.0): one review of one thing. Opus at xhigh
   // by default — review is judgement, the thing a release pays for.
   reviewer: {
-    model: { type: 'line', default: 'opus' },
+    model: { type: 'line', default: 'claude-opus-5-5' },
     effort: { type: 'enum', values: EFFORT_LEVELS, default: 'xhigh' },
   },
 };

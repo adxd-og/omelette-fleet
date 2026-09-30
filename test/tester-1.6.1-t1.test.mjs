@@ -719,20 +719,18 @@ test('CONFIG.md\'s effort row lists exactly EFFORTS, in the allowlist\'s order',
 
 test('the shipped example and both docs\' config samples agree, and every value in them is one the unit accepts', () => {
   const ex = JSON.parse(read('examples/fleet.config.json')).units.codex;
-  assert.ok(isAllowedModel(ex.model));
-  // Re-pinned by the session (1b round 3, item 4): the example sets no codex effort, so the
-  // pairings apply — a configured effort would force one level on every model.
-  assert.equal(ex.model, HEAD);
+  // Re-pinned by the session (1b round 3 item 4, then Task 2 round 2 ruling B): the example
+  // carries only what an operator decides — no codex model, no codex effort — so an install made
+  // from it follows the package's defaults, release by release.
+  assert.ok(!('model' in ex));
   assert.equal(ex.effort, undefined);
-  assert.ok(read('README.md').includes(`"model": "${ex.model}"`));
-  assert.ok(read('docs/CONFIG.md').includes(`"model": "${ex.model}"`));
   // The example is a real config: the runtime accepts it without a warning about model or effort.
   const st = station();
   const rt = runtimeOn(st, { config: { version: 1, units: { codex: ex } } });
   return rt.callTool('codex_research', { prompt: 'x' }).then((r) => {
     assert.ok(!r.isError, r.text);
     const [c] = st.execs();
-    assert.deepEqual([argAfter(c.argv, '-m'), effortArg(c.argv)], [ex.model, 'model_reasoning_effort="xhigh"']);
+    assert.deepEqual([argAfter(c.argv, '-m'), effortArg(c.argv)], [HEAD, 'model_reasoning_effort="xhigh"']);
   });
 });
 

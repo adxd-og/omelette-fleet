@@ -166,7 +166,7 @@ test('show agents prints a warning line and the default value when the config fi
   const r = cli(['show', 'agents'], { dir });
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /warning\s+fleet config: agents\.tester\.effort = "bogus" is invalid/);
-  assert.match(r.out, /^\s+tester\.effort\s+xhigh\s+default$/m);
+  assert.match(r.out, /^\s+tester\.effort\s+high\s+default$/m, 'the default since 1.6.1 Task 2');
 });
 
 test('show agents on a config file that is not even valid JSON still answers with defaults and a warning', () => {

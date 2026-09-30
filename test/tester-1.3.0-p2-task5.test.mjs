@@ -96,9 +96,10 @@ for (const merge of POLICIES) {
     assert.ok(codeAt < lines.indexOf(PLANNER_LINE), 'and it comes before the planner line');
   });
 
-  test(`the rendered rules file stays within its ceiling — 14 030 characters, never an exact pin (${merge})`, () => {
+  test(`the rendered rules file stays within its ceiling — 14 590 characters, never an exact pin (${merge})`, () => {
     const text = rendered(merge);
-    assert.ok(text.length <= 14030, `${merge}: ${text.length} characters, expected <= 14030 (a ceiling, not an exact size)`);
+    // Re-pinned in 1.6.1 Task 2: the ceiling moved 14 030 -> 14 590 with the second-pass step (test/rules-size.test.mjs says why).
+    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters, expected <= 14590 (a ceiling, not an exact size)`);
     assert.ok(text.length > 13000, `${merge}: ${text.length} characters — sanity floor, catches a truncated render`);
   });
 

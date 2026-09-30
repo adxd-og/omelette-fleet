@@ -57,7 +57,7 @@ test('`rules --help` names four sub-agent definitions and the reviewer by name, 
   assert.equal(help.code, 0, help.err);
   assert.match(help.out, /^\s*--agents also writes four sub-agent definitions \(omelette-coder:\s*$/m);
   assert.match(help.out, /^\s*Opus xhigh; omelette-coder-medium: Opus medium; omelette-tester:\s*$/m);
-  assert.match(help.out, /^\s*Sonnet xhigh; omelette-reviewer: Opus xhigh; all four disallow\s*$/m);
+  assert.match(help.out, /^\s*Sonnet high; omelette-reviewer: Opus xhigh; all four disallow\s*$/m); // the tester at high since 1.6.1 Task 2
   assert.match(help.out, /^\s*Agent, the reviewer also Edit and NotebookEdit\) into \.claude\/agents,\s*$/m);
 });
 
@@ -164,7 +164,7 @@ test('`rules --agents` with no fleet config at all still writes omelette-reviewe
   const file = join(proj, '.claude', 'agents', 'omelette-reviewer.md');
   const text = readFileSync(file, 'utf8');
   assert.equal(text.split('\n')[1], AGENT_MARKER(pkgVersion));
-  assert.match(text, /^model: opus$/m);
+  assert.match(text, /^model: claude-opus-5-5$/m); // the exact id since 1.6.1 Task 2
   assert.match(text, /^effort: xhigh$/m);
   assert.match(text, /^disallowedTools: Agent, Edit, NotebookEdit$/m);
   assert.match(text, /^tools: Read, Grep, Glob, Bash, Write$/m);

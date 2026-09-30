@@ -11,6 +11,7 @@ What has actually been measured on this project, how each number was taken, and 
 | What does a task lead cost against the session running the coder and tester itself? | [A task lead between the session and the coder](#a-task-lead-between-the-session-and-the-coder) |
 | Does a coder's effort level change what it builds? | [Coder effort: medium, high, xhigh on one task](#coder-effort-medium-high-xhigh-on-one-task) |
 | Does medium hold against xhigh when the coder has to judge, not follow? | [The matched repeat: medium and xhigh on a judgement-heavy task](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) |
+| Which effort should the tester run at, and does a second pass or an advisor buy more depth? | [The tester's effort, a second pass and an advisor](#the-testers-effort-a-second-pass-and-an-advisor) |
 | Where do sub-agent tokens go, by role? | [Sub-agents by role](#sub-agents-by-role) |
 | What fills a sub-agent's context — reading, its own output, the harness? | [Where a sub-agent's context goes](#where-a-sub-agents-context-goes) |
 | Who runs past 200 k tokens, and doing what? | [Past 200 k](#past-200-k) |
@@ -231,6 +232,59 @@ The release's largest security fix — the guard's git classifier, T4 of the P0 
 
 Reading: the acceptance tests could not tell the arms apart (39/39 each); the blind review could; N = 1. Arm A cost a fifth of arm B and left a fail-open class in the guard; arm B cost 5.5× and shipped after one fix round. Bucket log: 21 plan-driven tasks ran at medium in one round each with 0 acceptance defects and 1 tester-found defect (a line-splitting disagreement the printed diff missed), 4 stopped for a ruling the plan lacked (all stale test pins), and docs went to Sonnet 5 times. The coder default does not move: the spec moves it only if the matched repeat holds for medium, and it did not — `omelette-coder` stays at xhigh, and `omelette-coder-medium` is the plan-driven bucket. The shipped reviewer's release review of 1.3.0 found 14 findings, all accepted, against 1.2.0's three reviews together at 24 found / 17 accepted (that release did not record the Opus review's own share).
 
+## The tester's effort, a second pass and an advisor
+
+One diff tested over and over on 2026-09-30: 1.6.1 Task 1's (the Codex catalog and doctor's `models` line), with the Task 1 tester's brief word for word, each arm in its own scratch worktree at `7427e9d` plus the diff; the extra arms ran from temporary copies of the rendered tester definition, the marker dropped and only `name`, `model` and `effort` changed. Model and effort were read from each transcript, not taken from the definition. The scoring frame was fixed before the results — tests written, suite green, the ten review-grade findings the session had ruled on in Task 1, a mutation check or none, files touched outside the arm's own test file, turns, minutes, cost — and then replaced by the union of distinct valid findings across all arms, because nine of the frame's ten came from one arm's report (the Task 1 tester itself, Sonnet 5.5 at xhigh): 13 after the single-pass arms, 17 once the two-pass arm added four that no single-pass arm made. Every single-pass sub-agent arm ran the suite green and touched no file but its own test file.
+
+**One pass, six arms** (sub-agents; cost is list price over each transcript's cache writes, cache reads and recorded output — a lower bound):
+
+| Model · effort | Claude Code | Tests | Turns | Minutes | Cost, ≥ $ | Findings of 13 | Mutation check |
+|---|---|---:|---:|---:|---:|---:|---|
+| `claude-sonnet-5-5` · medium | 2.1.284 | 19 | 20 | 6.7 | 0.40 | 3 | no |
+| `claude-sonnet-5-5` · high | 2.1.284 | 28 | 21 | 11.5 | 0.64 | 4 | no |
+| `claude-sonnet-5-5` · xhigh | 2.1.284 | 44 | 56 | 30.8 | 2.90 | 10 | yes (16, 14 caught) |
+| `claude-opus-5-5` · medium | 2.1.284 | 20 | 27 | 9.0 | 1.01 | 5 | no |
+| `claude-opus-5-5` · high | 2.1.284 | 24 | 28 | 9.7 | 1.07 | 4 | no |
+| `claude-opus-5-5` · xhigh | 2.1.284 | 24 | 57 | 24.1 | 2.60 | 8 | no |
+
+One pass bought depth only at xhigh: Sonnet 5.5 at xhigh found 10 of 13 and ran the only mutation check; medium and high found 3 to 5 on either model, and Opus 5.5 found more than Sonnet 5.5 at the same effort only at medium (5 against 3). The four findings the second pass later added were found by no single-pass arm, so each count here is also its count of 17.
+
+**The advisor, three headless runs** (`claude --agent pair-tester-sonnet-high -p <brief>`: main sessions, not sub-agents — hence the control; cost as the harness bills it, exact):
+
+| Run | Model · effort | Claude Code | Advisor calls | Tests | Turns | Minutes | Cost, billed $ | Findings of 13 |
+|---|---|---|---:|---:|---:|---:|---|---:|
+| Control, no advisor | `claude-sonnet-5-5` · high | 2.1.285 | — | 14 | 17 | 7.5 | 0.54 | 1 |
+| `--advisor opus` | `claude-sonnet-5-5` · high, `claude-opus-5-5` advisor | 2.1.285 | 0 | 24 | 20 | 7.6 | 0.80 | 2 |
+| `--advisor opus`, the brief asking for two consultations | `claude-sonnet-5-5` · high, `claude-opus-5-5` advisor | 2.1.285 | 2 | 22 | 19 | 12.8 | 2.06 = Sonnet 0.96 + advisor 1.10 | 4 |
+
+The advisor attached to the second run was never called — its tool calls were Read 2, Bash 15, Write 1, Edit 1, and the bill is Sonnet's alone — so the first two rows are two runs of one configuration, and 14 against 24 tests is run-to-run spread. Asked to consult twice, the third run did: the two reads cost $1.10 (202 437 uncached input tokens, 14 334 output), the advice comes back encrypted in the transcript (`advisor_redacted_result`), and the run found what an unadvised high run finds — the `none` downgrade, luna with `ultra`, the priority tie, terra's stale text — plus one mutation of its own regex test; it also wrote a report file under the worktree's `.omelette/reports/`, outside its test file. The harness reports real output tokens — 12 700 and 16 640 on the first two runs, about 23 % and 21 % of their cost — which is how the sub-agent costs above are known to be lower bounds by roughly a fifth to a quarter.
+
+**A second pass in the same agent** (one generic round-2 message to both arms — a mutation check in a scratch copy with tests added for the misses, then a reviewer's pass over the diff's prose, new findings only — with no hint at the known answers):
+
+| Variant | Model · Claude Code | Tests | Mutations run | Minutes | Cost, ≥ $ | Findings of 17 |
+|---|---|---|---:|---|---|---|
+| xhigh, one pass | `claude-sonnet-5-5` · 2.1.284 | 44 | 16 | 30.8 | 2.90 | 10 |
+| high, one pass (3 samples) | `claude-sonnet-5-5` · 2.1.284, headless 2.1.285 | 28 / 28 / 14–24 headless | 0 | 8–12 | 0.6 | 4 / 4 / 1–2 |
+| high, two passes | `claude-sonnet-5-5` · 2.1.284 | 31 | 39 | 24.8 | 1.46 | 13 |
+| medium, two passes | `claude-sonnet-5-5` · 2.1.284 | 26 | 22 | ~35 | 1.62 | 9 |
+| high + Opus advisor, asked twice | `claude-sonnet-5-5` + `claude-opus-5-5` advisor · 2.1.285 | 22 | 1 | 12.8 | 2.06 (billed, exact) | 4 |
+
+A directed second pass bought what effort did not: high in two passes found 13 of 17 — among them the four no single-pass arm made, the one that mattered a catalog effort that was displayed and never applied — at about half one xhigh pass's cost and 80 % of its time; medium's second pass was slower, no cheaper and reached 9.
+
+**The flow on a second diff.** The Task 1b tester (`omelette-tester`, `claude-sonnet-5-5` at high, Claude Code 2.1.284) ran both passes as the rules now describe them. First pass: 43 tests, suite green, 11.3 min. Second pass: 45 tests, 33 mutants in a scratch copy — 31 killed by the three existing test files, 2 missed, tests added, none surviving — and six prose findings the first pass had not made, all verified by the session and accepted. Both passes: 39 min by the harness's clock. No single-pass arm ran beside it, so it shows the flow holding on another diff, not a margin.
+
+**The cache between and within passes** (each transcript's per-request cache fields). The one measured long pause — 31.5 minutes idle before the medium arm's second pass — made that pass's first request write 76 439 cache tokens and read none; the high arm's second pass, sent 4 s after its report, wrote 58 878 in all. A tool call that runs past about five minutes cools the cache the same way: in the Task 1b run three tool calls ran 6.2, 10.0 and 6.5 minutes, and the request after each read nothing from cache. So the second pass is sent at once, and a long mutation sweep is better run as several shorter commands.
+
+**Limits.**
+
+- One task, one run per cell; the second diff is one more run, unpaired.
+- Sub-agent costs are lower bounds by roughly a fifth to a quarter: the transcript under-records streamed output tokens, which the headless runs report.
+- The headless runs are main sessions, not sub-agents.
+- The cheap runs' hits are correlated: the two sub-agent runs at high found the same four findings and the headless pair at high found one and two, so repeating the brief buys nothing new and the spread between two runs of one configuration is large; six medium and high runs together found 5 of the 13.
+- The scoring frame favoured the Sonnet xhigh arm by construction; the union count is the fairer one.
+
+**Decision (1.6.1).** `agents.tester.effort` is `high`; the second pass ships in the tester template and in the rules' tester flow, sent by continuing the same tester; the tester's model is pinned by exact id; the advisor is documented, not adopted. One task's evidence, N = 1 per cell: a second task can move it ([Not measured yet](#not-measured-yet)).
+
 ## Sub-agents by role
 
 Every sub-agent the orchestrating session of releases 0.3.3 → 1.1.0 saw finish: 76 agents.
@@ -393,5 +447,8 @@ Each release adds its row at the live gate (a step of the release procedure the 
 - **Whether the five-section report shortens the orchestrator's reading.** The orchestrator's own tokens per release have not been separated out of its single long session.
 - **Whether `check` catches wrong evidence in practice.** In 1.1.0 it caught one off-by-one pointer in the orchestrator's own documentation and one weak fragment in the coder's own report. Two is an anecdote.
 - **A second judgement-heavy effort trial.** [The matched repeat](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) is one task, N = 1; the two-bucket rule rests on it and on an observational bucket log. A second judgement-heavy pair is what would make it a ranking.
+- **The second pass on another task, against one xhigh pass.** [The tester measurement](#the-testers-effort-a-second-pass-and-an-advisor) is one task, one run per cell; the flow held on 1.6.1 Task 1b, but with no single-pass arm beside it. A matched pair on a second task is what would make the margin a ranking.
+- **The second pass after a skill-forked first pass.** Every measured second pass continued a tester dispatched by hand through the Agent tool; whether a tester forked by the `/omelette-test` skill can be continued was not tried, and the fallback — a fresh `omelette-tester` given the first one's test file — is unmeasured too.
+- **Opus as the second-pass reader.** Only Sonnet 5.5 has run the second pass; whether `claude-opus-5-5` reads what a diff writes better for its price is unmeasured.
 
 The plugin run of the security audit, listed here until 1.6.1, ran on 2026-09-25 on the operator's own `/claude-security` invocation: [the row](#security-audit-plain-brief-and-plugin-over-one-revision) has all three runs.

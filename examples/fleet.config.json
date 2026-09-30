@@ -3,17 +3,6 @@
   "defaults": {
     "status": true
   },
-  "agents": {
-    "coder": {
-      "model": "opus",
-      "effort": "xhigh"
-    },
-    "tester": {
-      "model": "sonnet",
-      "effort": "xhigh",
-      "maxTurns": 80
-    }
-  },
   "units": {
     "gemini": {
       "enabled": true,
@@ -30,7 +19,6 @@
     "codex": {
       "enabled": true,
       "mode": "read-only",
-      "model": "gpt-6.1-sol",
       "webSearch": true,
       "timeoutS": 600
     }

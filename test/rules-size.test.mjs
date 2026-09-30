@@ -90,10 +90,14 @@ const DUTIES = [
 // 1.3.0 P2: 13 620 -> 14 030 — the coder line's bucket clause (+405: 13 922 /
 // 13 890), plus headroom; the release's review fixes lengthened the Reviews
 // line to 13 987 / 13 955, still under it.
-test('the rendered rules file is at most 14 030 characters under either merge policy', () => {
+// 1.6.1 Task 2: 14 030 -> 14 590 — the tester flow's second-pass step with
+// its measured cold-cache clause and the fallback for a tester that cannot be
+// continued, the tester at high and the definitions line's exact ids (+820:
+// 13 672 / 13 640 -> 14 492 / 14 460), plus headroom.
+test('the rendered rules file is at most 14 590 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 14030, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters`);
   }
 });
 
@@ -184,7 +188,9 @@ test('ORCHESTRATION "Evidence with pointers" says what each agent is handed, and
  */
 const P1_REVIEWS_LINE = "- **A sub-agent review goes to `omelette-reviewer`.** It writes nothing but `.omelette/reports/<name>-review.md`; run `git status --porcelain` and compare `git rev-parse HEAD` and `git symbolic-ref -q HEAD` after it, and reject the review outright if anything but that report changed.";
 // 1.3.0 P2: four definitions, the medium coder right after the coder.
-const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus, `effort: xhigh`), **`omelette-coder-medium`** (Opus, `effort: medium`), **`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus, `effort: xhigh`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
+// Re-pinned in 1.6.1 Task 2: the tester at high, the models named by generation
+// and pinned by exact id.
+const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus 5.5, `effort: xhigh`), **`omelette-coder-medium`** (Opus 5.5, `effort: medium`), **`omelette-tester`** (Sonnet 5.5, `effort: high`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus 5.5, `effort: xhigh`), each model pinned by exact id (`claude-opus-5-5`, `claude-sonnet-5-5`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
 const CODER_LINE = "- **Code changes go to a strong coding sub-agent** (Opus-class, xhigh — the shipped `omelette-coder`), briefed with the approved plan and the constraints. Never to a fleet unit.";
 
 for (const merge of ['session', 'pr']) {
@@ -234,24 +240,24 @@ test('the operating model\'s coder line stays byte for byte, and no 1.3.0 line c
 
 // ── 1.3.0 P1: the reviewer in the docs ───────────────────────────────────────
 
-/** ORCHESTRATION "Reviews": what the shipped reviewer is and does, and what keeps it read-only — each a whole paragraph line. */
+/** ORCHESTRATION "Reviews": what the shipped reviewer is and does, and what keeps it read-only — each a whole paragraph line. Re-pinned in 1.6.1 Task 2: the model default is the exact id `claude-opus-5-5`. */
 const REVIEWER_DOC = [
-  "**The shipped reviewer.** `omelette-fleet rules --agents` writes `omelette-reviewer` — the clean-context second reader on our own model, the Opus review 1.2.0 briefed by hand, now a definition (`model: opus` and `effort: xhigh` by default, tools `Read, Grep, Glob, Bash, Write`, `disallowedTools: Agent, Edit, NotebookEdit`). One spawn is one review of one thing: a plan, a task's diff or a branch. Its brief carries the base and head (or the file) and the spec's path, and, for a re-review only, the earlier findings and the rulings on them. It reads what it reviews, runs the suite when the brief says so, and reports findings only, ranked, each `location · scenario · consequence · how to confirm` with the location as a pointer line `omelette-fleet check` can verify, then one verdict line: `ship`, `do not ship` or `needs-check`. The report goes to `.omelette/reports/<name>-review.md`; the reply is the verdict line and the count. The Routing table's code-review row stays Codex: this adds a reader, it replaces none.",
+  "**The shipped reviewer.** `omelette-fleet rules --agents` writes `omelette-reviewer` — the clean-context second reader on our own model, the Opus review 1.2.0 briefed by hand, now a definition (`model: claude-opus-5-5` and `effort: xhigh` by default, tools `Read, Grep, Glob, Bash, Write`, `disallowedTools: Agent, Edit, NotebookEdit`). One spawn is one review of one thing: a plan, a task's diff or a branch. Its brief carries the base and head (or the file) and the spec's path, and, for a re-review only, the earlier findings and the rulings on them. It reads what it reviews, runs the suite when the brief says so, and reports findings only, ranked, each `location · scenario · consequence · how to confirm` with the location as a pointer line `omelette-fleet check` can verify, then one verdict line: `ship`, `do not ship` or `needs-check`. The report goes to `.omelette/reports/<name>-review.md`; the reply is the verdict line and the count. The Routing table's code-review row stays Codex: this adds a reader, it replaces none.",
   "**Read-only by definition and by check, not by enforcement.** Claude Code's tool filtering cannot scope `Write` to one path or make `Bash` read-only, and the guard refuses only the git commands it names. So the definition says the only file the reviewer writes is its report; the guard refuses its `git commit`, `stash`, branch creation and `worktree` by name, as it does the coder's, and its `reset --hard`/`--merge`/`--keep`, `update-ref` and writing `symbolic-ref`, which move HEAD or a ref and leave the tree clean; and the session runs `git status --porcelain` after every review and rejects the review outright if anything but that report changed, and compares `git rev-parse HEAD` and `git symbolic-ref -q HEAD` from before the review with their values after it (two branches at one commit would otherwise hide a switch). The check sees what git sees: `git status --porcelain` lists tracked and untracked paths — not ignored ones, and not a moved HEAD, which is what the `rev-parse` comparison is for. The report itself lives in the ignored `.omelette/`, and a write elsewhere under an ignored path is not caught (containment, not enforcement).",
 ];
-/** ORCHESTRATION "Spawning sub-agents": the reviewer's item in the list of shipped definitions. */
-const SPAWN_BULLET = "- **`omelette-reviewer`** — `model: opus`, `effort: xhigh`, `disallowedTools: Agent, Edit, NotebookEdit`, tools `Read, Grep, Glob, Bash, Write`. One review of one thing with a clean context: findings only, ranked, in four parts, then `ship`, `do not ship` or `needs-check`; the one file it writes is its report ([Reviews](#reviews)).";
-/** CONFIG "Agent settings": the reviewer's two keys. */
+/** ORCHESTRATION "Spawning sub-agents": the reviewer's item in the list of shipped definitions (1.6.1 Task 2: `model: claude-opus-5-5`). */
+const SPAWN_BULLET = "- **`omelette-reviewer`** — `model: claude-opus-5-5`, `effort: xhigh`, `disallowedTools: Agent, Edit, NotebookEdit`, tools `Read, Grep, Glob, Bash, Write`. One review of one thing with a clean context: findings only, ranked, in four parts, then `ship`, `do not ship` or `needs-check`; the one file it writes is its report ([Reviews](#reviews)).";
+/** CONFIG "Agent settings": the reviewer's two keys (1.6.1 Task 2: the model default is `"claude-opus-5-5"`). */
 const CONFIG_ROWS = [
-  '| `agents.reviewer.model` | one printable line | `"opus"` | The `model:` line of `omelette-reviewer.md` |',
+  '| `agents.reviewer.model` | one printable line | `"claude-opus-5-5"` | The `model:` line of `omelette-reviewer.md` |',
   '| `agents.reviewer.effort` | `low` \\| `medium` \\| `high` \\| `xhigh` \\| `max` | `"xhigh"` | Its `effort:` line — review is judgement, the thing a release pays for |',
 ];
 /** SECURITY "The guard hook": what the guard does, and does not do, for the reviewer. */
 const SECURITY_REVIEWER = "The reviewer is contained the same way, and this guard is all the enforcement it gets: Claude Code cannot scope `Write` to one path or make `Bash` read-only, so its read-only is the definition's text — the only file it writes is `.omelette/reports/<name>-review.md` — and the session's check after every review: `git status --porcelain`, which rejects the review if anything but that report changed, and `git rev-parse HEAD` and `git symbolic-ref -q HEAD` compared with their values before the review. The status sees tracked and untracked paths, not ignored ones and not a moved HEAD — hence the `rev-parse` comparison, and hence the guard refuses, for the reviewer as for every role, the writes that move HEAD or a ref and leave the tree clean: `reset --hard`/`--merge`/`--keep`, `update-ref` and a writing `symbolic-ref`.";
 /** What SECURITY keeps of it since 1.6.1 Task 5a: the writes the guard refuses for the reviewer as for every role. */
 const SECURITY_REVIEWER_KEPT = "The reviewer is contained the same way, and this guard is all the enforcement it gets: for the reviewer as for every role, the guard refuses the writes that move HEAD or a ref and leave the tree clean — `reset --hard`/`--merge`/`--keep`, `update-ref` and a writing `symbolic-ref`.";
-/** README's `rules` row: the four definitions `--agents` writes. */
-const README_AGENTS = "`--agents` also writes four sub-agent definitions (`omelette-coder`: Opus xhigh; `omelette-coder-medium`: Opus medium; `omelette-tester`: Sonnet xhigh; `omelette-reviewer`: Opus xhigh; all four `disallowedTools: Agent`, the reviewer also `Edit, NotebookEdit`)";
+/** README's `rules` row: the four definitions `--agents` writes. Re-pinned in 1.6.1 Task 2: the tester at high, the generations named, the ids pinned. */
+const README_AGENTS = "`--agents` also writes four sub-agent definitions (`omelette-coder`: Opus 5.5 xhigh; `omelette-coder-medium`: Opus 5.5 medium; `omelette-tester`: Sonnet 5.5 high; `omelette-reviewer`: Opus 5.5 xhigh; each model pinned by exact id; all four `disallowedTools: Agent`, the reviewer also `Edit, NotebookEdit`)";
 
 test('ORCHESTRATION "Reviews" describes the shipped reviewer and what keeps it read-only, and the map asks for it', () => {
   const md = read('docs/ORCHESTRATION.md');
@@ -278,7 +284,7 @@ test('CONFIG "Agent settings" documents agents.reviewer.model and agents.reviewe
   for (const row of CONFIG_ROWS) assert.ok(lines.includes(row), `a key row: ${row.slice(0, 40)}`);
   assert.ok(lines.some((l) => l.includes('the four Claude Code sub-agent definitions `omelette-fleet rules --agents` writes')), 'the intro counts four');
   assert.ok(md.split('\n').includes('| How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |'), 'the map row names the reviewer');
-  assert.ok(md.includes('    "reviewer": { "model": "opus", "effort": "xhigh" }'), 'the Shape block shows the reviewer entry');
+  assert.ok(md.includes('    "reviewer": { "model": "claude-opus-5-5", "effort": "xhigh" }'), 'the Shape block shows the reviewer entry');
 });
 
 test('SECURITY: the PreToolUse row names the four guarded roles and says what the guard does not do for the reviewer', () => {

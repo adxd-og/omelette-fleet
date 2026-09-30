@@ -69,15 +69,16 @@ test('coerce: a `line` spec is one printable line — no blank, no control chara
 test('AGENT_SETTINGS_SCHEMA: the shipped roles, their keys and the defaults the templates render', () => {
   assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA), ['coder', 'coderMedium', 'tester', 'reviewer']);
   assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.reviewer), ['model', 'effort']);
-  assert.equal(AGENT_SETTINGS_SCHEMA.reviewer.model.default, 'opus');
+  // 1.6.1 Task 2: exact model ids by default, and the tester at high.
+  assert.equal(AGENT_SETTINGS_SCHEMA.reviewer.model.default, 'claude-opus-5-5');
   assert.equal(AGENT_SETTINGS_SCHEMA.reviewer.effort.default, 'xhigh');
   assert.deepEqual(AGENT_SETTINGS_SCHEMA.reviewer.effort.values, AGENT_SETTINGS_SCHEMA.coder.effort.values, 'the same effort ladder as the coder');
   assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.coder), ['model', 'effort']);
   assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.tester), ['model', 'effort', 'maxTurns']);
-  assert.equal(AGENT_SETTINGS_SCHEMA.coder.model.default, 'opus');
+  assert.equal(AGENT_SETTINGS_SCHEMA.coder.model.default, 'claude-opus-5-5');
   assert.equal(AGENT_SETTINGS_SCHEMA.coder.effort.default, 'xhigh');
-  assert.equal(AGENT_SETTINGS_SCHEMA.tester.model.default, 'sonnet');
-  assert.equal(AGENT_SETTINGS_SCHEMA.tester.effort.default, 'xhigh');
+  assert.equal(AGENT_SETTINGS_SCHEMA.tester.model.default, 'claude-sonnet-5-5');
+  assert.equal(AGENT_SETTINGS_SCHEMA.tester.effort.default, 'high');
   assert.equal(AGENT_SETTINGS_SCHEMA.tester.maxTurns.default, 80);
   assert.deepEqual(AGENT_SETTINGS_SCHEMA.tester.effort.values, ['low', 'medium', 'high', 'xhigh', 'max']);
   // and the specs are ordinary `coerce` specs, so a turn limit of 0 is not a value
@@ -447,7 +448,7 @@ test('an agent model holding a C1 control or a bidi override is rejected — def
   for (const bad of ['op\u009bus', 'opus‮']) {
     const dir = home({ agents: { coder: { model: bad } } });
     const s = agentSettings({ OMELETTE_HOME: dir });
-    assert.equal(s.coder.model, 'opus');
+    assert.equal(s.coder.model, 'claude-opus-5-5', 'the default (an exact id since 1.6.1 Task 2) stays in force');
     assert.equal(s.sources.coder.model, 'default');
     assert.ok(s.warnings.some((w) => w.startsWith('fleet config: agents.coder.model = ') && w.endsWith('is invalid — ignored')), s.warnings.join('\n'));
   }

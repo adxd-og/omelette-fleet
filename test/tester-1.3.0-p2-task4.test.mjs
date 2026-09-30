@@ -46,8 +46,8 @@ function section(md, heading) {
 /** "Operating model": the coder line the spec says stays byte for byte in this release. */
 const CODER_LINE = "- **Code changes go to a strong coding sub-agent** (Opus-class, xhigh — the shipped `omelette-coder`), briefed with the approved plan and the constraints. Never to a fleet unit.";
 
-/** "Spawning sub-agents": the definitions bullet, four definitions, coder-medium right after the coder. */
-const DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus, `effort: xhigh`), **`omelette-coder-medium`** (Opus, `effort: medium`), **`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus, `effort: xhigh`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
+/** "Spawning sub-agents": the definitions bullet, four definitions, coder-medium right after the coder. Re-pinned in 1.6.1 Task 2: the tester at high, the generations named, the ids pinned. */
+const DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus 5.5, `effort: xhigh`), **`omelette-coder-medium`** (Opus 5.5, `effort: medium`), **`omelette-tester`** (Sonnet 5.5, `effort: high`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus 5.5, `effort: xhigh`), each model pinned by exact id (`claude-opus-5-5`, `claude-sonnet-5-5`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
 
 /** "Briefing a unit": the closing paragraph, whose last clause is the guard sentence naming every shipped role. */
 const GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it, and omelette-fleet never edits your settings files itself. The guard covers `omelette-coder`, `omelette-coder-medium`, `omelette-tester` and `omelette-reviewer` and names the one it caught.";
@@ -73,9 +73,10 @@ const HEADINGS_IN_ORDER = [
 // ── the ceiling is a ceiling, never an exact pin ─────────────────────────────
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file stays at most 14 030 characters under ${merge}, and is not implausibly small`, () => {
+  test(`the rendered rules file stays at most 14 590 characters under ${merge}, and is not implausibly small`, () => {
     const text = rendered(merge);
-    assert.ok(text.length <= 14030, `${merge}: ${text.length} characters, expected <= 14030`);
+    // Re-pinned in 1.6.1 Task 2: the ceiling moved 14 030 -> 14 590 with the second-pass step (test/rules-size.test.mjs says why).
+    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters, expected <= 14590`);
     assert.ok(text.length > 10000, `${merge}: ${text.length} characters — sanity floor, catches a truncated render`);
   });
 }
@@ -94,11 +95,11 @@ for (const merge of POLICIES) {
     assert.notEqual(line, undefined, 'the definitions line is present');
     assert.ok(line.includes('installs four definitions'), 'says four definitions');
     assert.ok(
-      line.includes('**`omelette-coder`** (Opus, `effort: xhigh`), **`omelette-coder-medium`** (Opus, `effort: medium`)'),
+      line.includes('**`omelette-coder`** (Opus 5.5, `effort: xhigh`), **`omelette-coder-medium`** (Opus 5.5, `effort: medium`)'),
       'the medium coder is named right after the coder, with its own model and effort',
     );
-    assert.ok(line.includes('**`omelette-tester`** (Sonnet, `effort: xhigh`, `maxTurns: 80` by default (config))'), 'the tester keeps its model, effort and maxTurns');
-    assert.ok(line.includes('**`omelette-reviewer`** (Opus, `effort: xhigh`)'), 'the reviewer keeps its model and effort');
+    assert.ok(line.includes('**`omelette-tester`** (Sonnet 5.5, `effort: high`, `maxTurns: 80` by default (config))'), 'the tester: its model, its effort (high since 1.6.1 Task 2) and maxTurns');
+    assert.ok(line.includes('**`omelette-reviewer`** (Opus 5.5, `effort: xhigh`)'), 'the reviewer keeps its model and effort');
     assert.ok(
       line.includes('Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.'),
       'the select clause lists all four subagent_type names, in order',

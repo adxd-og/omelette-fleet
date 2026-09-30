@@ -203,8 +203,9 @@ test('agent templates render with a YAML-comment marker on line 2 and valid fron
     assert.match(lines[1], /^# omelette-fleet agent v1\.2\.3 /);
     assert.equal(parseAgentMarker(text), '1.2.3');
     assert.match(text, new RegExp(`^name: ${name.replace(/\.md$/, '')}$`, 'm'), 'the name is the file name');
-    assert.match(text, name === 'omelette-coder-medium.md' ? /^effort: medium$/m : /^effort: xhigh$/m);
-    assert.match(text, /^model: (opus|sonnet)$/m);
+    // 1.6.1 Task 2: the tester runs at high, and every role pins an exact model id.
+    assert.match(text, { 'omelette-coder-medium.md': /^effort: medium$/m, 'omelette-tester.md': /^effort: high$/m }[name] ?? /^effort: xhigh$/m);
+    assert.match(text, /^model: claude-(opus|sonnet)-5-5$/m);
     // Enforced by the harness, not by prose: no shipped role may spawn.
     assert.match(text, /^disallowedTools: Agent(, \w+)*$/m);
     assert.ok(text.indexOf('\n---\n', 4) > 0, 'frontmatter is closed');
@@ -241,8 +242,9 @@ test('agentsTarget mirrors rulesTarget', () => {
 
 test('agentSettings: no file at all is the built-in defaults, sourced "default", with no warnings', () => {
   const s = agentSettings({ OMELETTE_HOME: home() });
-  assert.deepEqual(s.coder, { model: 'opus', effort: 'xhigh' });
-  assert.deepEqual(s.tester, { model: 'sonnet', effort: 'xhigh', maxTurns: 80 });
+  // 1.6.1 Task 2: exact model ids, the tester at high.
+  assert.deepEqual(s.coder, { model: 'claude-opus-5-5', effort: 'xhigh' });
+  assert.deepEqual(s.tester, { model: 'claude-sonnet-5-5', effort: 'high', maxTurns: 80 });
   assert.deepEqual(s.warnings, []);
   assert.equal(s.sources.tester.maxTurns, 'default');
   assert.equal(s.sources.coder.model, 'default');
@@ -254,16 +256,16 @@ test('agentSettings: the file wins key by key, and the source says so', () => {
   assert.equal(s.tester.maxTurns, 120);
   assert.equal(s.sources.tester.maxTurns, 'file');
   assert.equal(s.tester.model, 'haiku');
-  assert.equal(s.tester.effort, 'xhigh');
+  assert.equal(s.tester.effort, 'high'); // the default since 1.6.1 Task 2
   assert.equal(s.sources.tester.effort, 'default', 'a key the file does not set stays the default');
-  assert.deepEqual(s.coder, { model: 'opus', effort: 'xhigh' });
+  assert.deepEqual(s.coder, { model: 'claude-opus-5-5', effort: 'xhigh' });
   assert.deepEqual(s.warnings, []);
 });
 
 test('agentSettings: an invalid value is a warning and the default stays in force — never a throw', () => {
   const s = agentSettings({ OMELETTE_HOME: home({ agents: { coder: { effort: 'turbo', model: '' }, tester: { maxTurns: 0, nope: 1 } } }) });
   assert.equal(s.coder.effort, 'xhigh');
-  assert.equal(s.coder.model, 'opus');
+  assert.equal(s.coder.model, 'claude-opus-5-5'); // the default, an exact id since 1.6.1 Task 2
   assert.equal(s.tester.maxTurns, 80);
   assert.ok(s.warnings.some((w) => /agents\.coder\.effort = "turbo" is invalid/.test(w)));
   assert.ok(s.warnings.some((w) => /agents\.coder\.model = "" is invalid/.test(w)));
@@ -273,7 +275,7 @@ test('agentSettings: an invalid value is a warning and the default stays in forc
 
 test('agentSettings: a block of the wrong shape, an unknown role and a malformed file all warn and default', () => {
   const arr = agentSettings({ OMELETTE_HOME: home({ agents: ['coder'] }) });
-  assert.equal(arr.coder.model, 'opus');
+  assert.equal(arr.coder.model, 'claude-opus-5-5'); // the default, an exact id since 1.6.1 Task 2
   assert.ok(arr.warnings.some((w) => /agents is not an object/.test(w)));
 
   const str = agentSettings({ OMELETTE_HOME: home({ agents: { tester: 'sonnet', docwriter: { model: 'x' } } }) });
@@ -314,8 +316,8 @@ test('renderAgentFile without a settings argument reads the fleet config, so `ru
 test('renderAgentFile: a partial settings object still renders a usable definition', () => {
   const text = renderAgentFile('omelette-tester.md', '1.2.3', { tester: { maxTurns: 200 } });
   assert.match(text, /^maxTurns: 200$/m);
-  assert.match(text, /^model: sonnet$/m);
-  assert.match(text, /^effort: xhigh$/m);
+  assert.match(text, /^model: claude-sonnet-5-5$/m); // the defaults since 1.6.1 Task 2
+  assert.match(text, /^effort: high$/m);
   assert.ok(!renderAgentFile('omelette-coder.md', '1.2.3', {}).includes('{{'));
 });
 
@@ -329,7 +331,7 @@ test('agentSettings + renderAgentFile: a model smuggling a newline cannot break 
   // closed it early would leave the rest of the definition in the BODY — prose
   // the harness does not enforce — in a file whose marker still says it is ours.
   const s = agentSettings({ OMELETTE_HOME: home({ agents: { coder: { model: 'opus\n---\ninjected: 1' } } }) });
-  assert.equal(s.coder.model, 'opus');
+  assert.equal(s.coder.model, 'claude-opus-5-5'); // the default, an exact id since 1.6.1 Task 2
   assert.equal(s.sources.coder.model, 'default');
   assert.ok(s.warnings.some((w) => /agents\.coder\.model = "opus\\n---\\ninjected: 1" is invalid/.test(w)));
 
@@ -339,7 +341,7 @@ test('agentSettings + renderAgentFile: a model smuggling a newline cannot break 
   assert.equal(lines.filter((l) => l === '---').length, 2, 'the frontmatter opens once and closes once');
   const close = lines.indexOf('---', 1);
   assert.ok(lines.slice(1, close).includes('disallowedTools: Agent'), 'the guard stays INSIDE the frontmatter');
-  assert.ok(lines.slice(1, close).includes('model: opus'));
+  assert.ok(lines.slice(1, close).includes('model: claude-opus-5-5'));
   assert.equal(lines[close + 1], '', 'the closing --- is followed by the body');
 });
 
@@ -766,6 +768,6 @@ test('an agent setting holding `$\'`, `$&`, `` $` `` or `$$` renders literally �
     // The `line` type accepts every one of them, so the renderer is where the line has to hold.
     assert.deepEqual(coerce(AGENT_SETTINGS_SCHEMA.coder.model, model), { ok: true, value: model });
     const text = renderAgentFile('omelette-coder.md', '1.2.3', { coder: { model } });
-    assert.equal(text, plain.replace(/^model: opus$/m, () => `model: ${model}`), `${model} was expanded`);
+    assert.equal(text, plain.replace(/^model: claude-opus-5-5$/m, () => `model: ${model}`), `${model} was expanded`); // the default model line since 1.6.1 Task 2
   }
 });

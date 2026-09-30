@@ -63,7 +63,8 @@ function section(md, heading) {
 }
 
 /** ORCHESTRATION's "Spawning sub-agents" item for the medium coder, whole. */
-const MEDIUM_BULLET = "- **`omelette-coder-medium`** — `model: opus`, `effort: medium`, `disallowedTools: Agent`, otherwise the default tools: the coder's own template rendered under a second name, from its own `agents.coderMedium` block, so its instructions are the coder's word for word and the two cannot drift apart. Which one a brief goes to is the rule under [What each agent is handed](#what-each-agent-is-handed).";
+// Re-pinned in 1.6.1 Task 2: the model is the exact id.
+const MEDIUM_BULLET = "- **`omelette-coder-medium`** — `model: claude-opus-5-5`, `effort: medium`, `disallowedTools: Agent`, otherwise the default tools: the coder's own template rendered under a second name, from its own `agents.coderMedium` block, so its instructions are the coder's word for word and the two cannot drift apart. Which one a brief goes to is the rule under [What each agent is handed](#what-each-agent-is-handed).";
 /** The guarded roles, as ORCHESTRATION's Layer 3 and SECURITY's PreToolUse row list them. */
 const FOUR_ROLES = '`omelette-coder`, `omelette-coder-medium`, `omelette-tester` or `omelette-reviewer`';
 
@@ -86,7 +87,7 @@ test('omelette-coder-medium is the coder text with its own name and effort: medi
   const medium = renderAgentFile('omelette-coder-medium.md', '1.3.0');
   assert.match(medium, /^name: omelette-coder-medium$/m);
   assert.match(medium, /^effort: medium$/m);
-  assert.match(medium, /^model: opus$/m);
+  assert.match(medium, /^model: claude-opus-5-5$/m); // the exact id since 1.6.1 Task 2
   assert.match(medium, /^disallowedTools: Agent$/m, 'it may not spawn, exactly as the coder may not');
   assert.match(coder, /^name: omelette-coder$/m);
   assert.match(coder, /^effort: xhigh$/m);
@@ -102,13 +103,13 @@ test('the medium coder has no template of its own: it renders from agents/omelet
 
 test('agents.coderMedium: opus at medium by default, on the same effort ladder, and the deep coder keeps xhigh', () => {
   assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.coderMedium), ['model', 'effort']);
-  assert.equal(AGENT_SETTINGS_SCHEMA.coderMedium.model.default, 'opus');
+  assert.equal(AGENT_SETTINGS_SCHEMA.coderMedium.model.default, 'claude-opus-5-5'); // exact id since 1.6.1 Task 2
   assert.equal(AGENT_SETTINGS_SCHEMA.coderMedium.effort.default, 'medium');
   assert.deepEqual(AGENT_SETTINGS_SCHEMA.coderMedium.effort.values, ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.equal(AGENT_SETTINGS_SCHEMA.coder.effort.default, 'xhigh', 'the default does not move in this release');
   const s = agentSettings({ OMELETTE_HOME: home() });
-  assert.deepEqual(s.coderMedium, { model: 'opus', effort: 'medium' });
-  assert.deepEqual(s.coder, { model: 'opus', effort: 'xhigh' });
+  assert.deepEqual(s.coderMedium, { model: 'claude-opus-5-5', effort: 'medium' });
+  assert.deepEqual(s.coder, { model: 'claude-opus-5-5', effort: 'xhigh' });
   assert.equal(s.sources.coderMedium.effort, 'default');
   assert.deepEqual(s.warnings, []);
 });
@@ -118,19 +119,19 @@ test('agents.coderMedium in the config file reaches the medium definition only, 
   assert.deepEqual(s.coderMedium, { model: 'sonnet', effort: 'high' });
   assert.equal(s.sources.coderMedium.model, 'file');
   assert.equal(s.sources.coderMedium.effort, 'file');
-  assert.deepEqual(s.coder, { model: 'opus', effort: 'xhigh' }, 'the deep coder is a block of its own');
+  assert.deepEqual(s.coder, { model: 'claude-opus-5-5', effort: 'xhigh' }, 'the deep coder is a block of its own');
   assert.deepEqual(s.warnings, []);
   const medium = renderAgentFile('omelette-coder-medium.md', '1.3.0', s);
   assert.match(medium, /^model: sonnet$/m);
   assert.match(medium, /^effort: high$/m);
   const coder = renderAgentFile('omelette-coder.md', '1.3.0', s);
-  assert.match(coder, /^model: opus$/m);
+  assert.match(coder, /^model: claude-opus-5-5$/m);
   assert.match(coder, /^effort: xhigh$/m);
 });
 
 test('an invalid agents.coderMedium value is a warning and the medium default stays in force — never a throw', () => {
   const s = agentSettings({ OMELETTE_HOME: home({ agents: { coderMedium: { effort: 'turbo', model: '', maxTurns: 5 } } }) });
-  assert.deepEqual(s.coderMedium, { model: 'opus', effort: 'medium' });
+  assert.deepEqual(s.coderMedium, { model: 'claude-opus-5-5', effort: 'medium' });
   assert.ok(s.warnings.some((w) => /agents\.coderMedium\.effort = "turbo" is invalid — ignored/.test(w)));
   assert.ok(s.warnings.some((w) => /agents\.coderMedium\.model = "" is invalid — ignored/.test(w)));
   assert.ok(s.warnings.some((w) => /agents\.coderMedium\.maxTurns is not a known key — ignored/.test(w)));
@@ -162,7 +163,7 @@ test('show agents lists coderMedium.model and coderMedium.effort, each with its 
   const dir = home({ version: 1, agents: { coderMedium: { effort: 'high' } } });
   const r = cli(['show', 'agents'], { dir });
   assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /^\s+coderMedium\.model\s+opus\s+default$/m);
+  assert.match(r.out, /^\s+coderMedium\.model\s+claude-opus-5-5\s+default$/m);
   assert.match(r.out, /^\s+coderMedium\.effort\s+high\s+file$/m);
   assert.match(r.out, /^\s+coder\.effort\s+xhigh\s+default$/m);
 });
@@ -255,7 +256,7 @@ test('CONFIG "Agent settings": agents.coderMedium.* rows, the 1.2.0 trial as the
   assert.ok(agentSection.includes('the four Claude Code sub-agent definitions'), 'the intro counts four');
   const effortRow = lines.findIndex((l) => l.startsWith('| `agents.coder.effort` |'));
   assert.notEqual(effortRow, -1, 'the coder effort row');
-  assert.ok(lines[effortRow + 1].startsWith('| `agents.coderMedium.model` | one printable line | `"opus"` |'), 'the model row follows the coder rows');
+  assert.ok(lines[effortRow + 1].startsWith('| `agents.coderMedium.model` | one printable line | `"claude-opus-5-5"` |'), 'the model row follows the coder rows (an exact id since 1.6.1 Task 2)');
   assert.ok(lines[effortRow + 2].startsWith('| `agents.coderMedium.effort` | `low` \\| `medium` \\| `high` \\| `xhigh` \\| `max` | `"medium"` |'), 'the effort row, default medium');
   assert.ok(agentSection.includes('(MEASUREMENTS.md#coder-effort-medium-high-xhigh-on-one-task)'), 'the 1.2.0 trial is the reason');
   assert.ok(read('docs/MEASUREMENTS.md').includes('\n## Coder effort: medium, high, xhigh on one task\n'), 'and the anchor is a heading there');
