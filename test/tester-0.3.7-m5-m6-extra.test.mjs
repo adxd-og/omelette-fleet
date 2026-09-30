@@ -135,13 +135,20 @@ test('docs: CONFIG, README, ORCHESTRATION, the rules template and CHANGELOG all 
 
   const orchestration = readFileSync(join(ROOT, 'docs', 'ORCHESTRATION.md'), 'utf8');
   assert.ok(orchestration.includes('`workflow.merge` in the fleet config'), 'ORCHESTRATION explains the config key');
-  // Spec: "ORCHESTRATION carries both variants in one paragraph" — find the
-  // single line/paragraph that mentions the branch-merge policy and assert
-  // BOTH rendered sentences live inside it, not in two separate places.
+  // Spec: "ORCHESTRATION carries both variants in one place". Re-pinned in 1.6.1
+  // Task 5a (plan Task 5, F10): the policy is a two-row table under
+  // "### How a branch reaches main", so every paragraph that names the key sits
+  // in that subsection, and the table holds each rendered sentence in its own row.
+  const branchAt = orchestration.indexOf('\n### How a branch reaches main\n');
+  assert.notEqual(branchAt, -1, 'the subsection is there');
+  const branchEnd = orchestration.slice(branchAt + 1).search(/\n#{1,3} /);
+  const branch = orchestration.slice(branchAt, branchEnd === -1 ? undefined : branchAt + 1 + branchEnd);
   const mergeParas = orchestration.split(/\n{2,}/).filter((p) => p.includes('workflow.merge'));
-  assert.equal(mergeParas.length, 1, 'exactly one paragraph should discuss workflow.merge');
-  assert.ok(mergeParas[0].includes('The session merges the branch into main itself'), 'the session sentence is in that paragraph');
-  assert.ok(mergeParas[0].includes('opens a pull request from the feature branch and never merges into main itself'), 'the pr sentence is in the SAME paragraph');
+  assert.ok(mergeParas.length >= 1 && mergeParas.every((p) => branch.includes(p)), 'every paragraph that discusses workflow.merge is in that subsection');
+  const rows = branch.split('\n').filter((l) => l.startsWith('| `session`') || l.startsWith('| `pr`'));
+  assert.equal(rows.length, 2, 'one table row per policy');
+  assert.ok(rows[0].includes('The session merges the branch into main itself'), 'the session sentence is in the session row');
+  assert.ok(rows[1].includes('opens a pull request from the feature branch and never merges into main itself'), 'the pr sentence is in the pr row');
   assert.ok(orchestration.includes('**The small-change lane.**'), 'ORCHESTRATION mirrors the lane bullet');
   assert.ok(orchestration.includes('**What stays out of the lane.**'), 'ORCHESTRATION mirrors the stays-out bullet');
 

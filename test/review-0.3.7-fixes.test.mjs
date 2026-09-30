@@ -450,8 +450,11 @@ test('M: ORCHESTRATION carries the rules template\'s lane bullets verbatim', () 
   );
 });
 
-test('M: the ORCHESTRATION doctor sample shows the lines doctor actually prints', () => {
-  const sample = doc('docs', 'ORCHESTRATION.md').split('\n');
+// Re-pinned in 1.6.1 Task 5a (plan Task 5, F3): README's "What doctor tells you"
+// is the home of doctor's lines; ORCHESTRATION's copy of the sample became a link.
+test('M: the README doctor sample shows the lines doctor actually prints, and ORCHESTRATION links to it', () => {
+  assert.match(doc('docs', 'ORCHESTRATION.md'), /\(\.\.\/README\.md#what-doctor-tells-you\)/, 'ORCHESTRATION links the home');
+  const sample = doc('README.md').split('\n');
   const at = (prefix) => sample.findIndex((l) => l.startsWith(prefix));
   assert.ok(at('handoff  ') > 0, 'the sample block is still there');
   assert.ok(at('contract  ') === at('handoff  ') + 1, 'contract follows handoff');

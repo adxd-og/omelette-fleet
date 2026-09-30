@@ -157,7 +157,11 @@ test('rules/omelette-fleet.md (rendered): the tester step says the guard refuses
 test('docs/ORCHESTRATION.md: the guard section names omelette-tester as a guarded role', () => {
   const text = readFileSync(join(ROOT, 'docs', 'ORCHESTRATION.md'), 'utf8');
   assert.match(text, /`omelette-coder`, `omelette-coder-medium`, `omelette-tester`\s+or\s+`omelette-reviewer`/, 'the PreToolUse description must list every guarded role (the reviewer and the medium coder since 1.3.0)');
-  assert.match(text, /The refusal names the agent it caught/);
+  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F1): Layer 3 is two sentences and a
+  // link; the refusal naming its role is said in "Spawning sub-agents" here and
+  // in SECURITY's PreToolUse row.
+  assert.match(text, /The refusal names the role it caught/);
+  assert.match(readFileSync(join(ROOT, 'docs', 'SECURITY.md'), 'utf8'), /naming the agent it caught, so no role reads another's rule/);
 });
 
 test('docs/SECURITY.md: the PreToolUse bullet names omelette-tester as a guarded role and explains why', () => {

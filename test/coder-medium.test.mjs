@@ -273,7 +273,8 @@ test('CONFIG "Agent settings": agents.coderMedium.* rows, the 1.2.0 trial as the
 
 test('SECURITY: the PreToolUse row names the four guarded roles, and rules --agents writes the medium coder too', () => {
   const lines = read('docs/SECURITY.md').split('\n');
-  const pre = lines.find((l) => l.startsWith('- **`PreToolUse`, matcher `Bash`.**'));
+  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F1): the PreToolUse bullet is a row of the event table.
+  const pre = lines.find((l) => l.startsWith('| `PreToolUse` (`Bash`) |'));
   assert.ok(pre, 'the PreToolUse row');
   assert.ok(pre.includes(`When the caller is one of the four sub-agent roles this package ships — ${FOUR_ROLES} — *and* the command is`), 'four roles, each by name');
   const writes = lines.find((l) => l.includes('The one command that writes into a project is'));

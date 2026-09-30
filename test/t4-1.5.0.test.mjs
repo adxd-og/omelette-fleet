@@ -26,7 +26,11 @@ test('README: the doctor sample names the three events and the stamp-and-print h
   assert.doesNotMatch(md, /wired: PreToolUse, PreCompact, SessionStart, PostToolUse/);
   assert.doesNotMatch(md, /nudge at 90%|Stop gate on|summary on/);
   assert.doesNotMatch(md, /90 % of (the|its) (context )?window/);
-  assert.match(md, /\(\[MEASUREMENTS\]\(docs\/MEASUREMENTS\.md#the-handoff-hooks-over-five-compactions\)\)/);
+  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F1): the 1.5.0 removal and its
+  // MEASUREMENTS link have one home, SECURITY's guard table; README links there.
+  assert.doesNotMatch(md, /five compactions/);
+  assert.match(md, /\(\[SECURITY, "The guard hook"\]\(docs\/SECURITY\.md#the-guard-hook\)\)/);
+  assert.match(read('docs/SECURITY.md'), /\(\[MEASUREMENTS\]\(MEASUREMENTS\.md#the-handoff-hooks-over-five-compactions\)\)/);
 });
 
 test('SECURITY: the guard section names no transcript read, no state file and no PostCompact handler', () => {
@@ -35,8 +39,10 @@ test('SECURITY: the guard section names no transcript read, no state file and no
   assert.doesNotMatch(guard, /handoff-state\.json/);
   assert.doesNotMatch(guard, /^- \*\*`PostCompact`/m);
   assert.doesNotMatch(guard, /^- \*\*`PostToolUse` and `Stop`/m);
-  assert.match(guard, /^- \*\*`PreCompact`\.\*\*/m);
-  assert.match(guard, /^- \*\*`SessionStart`, matcher `compact`\.\*\*[^\n]*1 MiB[^\n]*40 lines \/ 4 KB per ledger and 12 KB in all/m);
+  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F1): the per-event bullets became
+  // the rows of one event table; the same facts, one row each.
+  assert.match(guard, /^\| `PreCompact` \|/m);
+  assert.match(guard, /^\| `SessionStart` \(`compact`\) \|[^\n]*1 MiB[^\n]*40 lines \/ 4 KB per ledger and 12 KB in all/m);
   assert.match(guard, /It reads no transcript, keeps no state file/);
 });
 

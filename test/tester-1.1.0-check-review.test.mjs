@@ -258,14 +258,21 @@ test('README: the check row names its flags, statuses, the exit-0 rule and the O
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
   const row = readme.split('\n').find((l) => l.startsWith('| `check <file.md>'));
   assert.ok(row, 'a check row is present in the CLI table');
+  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F18): the README row keeps what the
+  // command does and its exit codes, and its Details cell links the home; the
+  // list of statuses lives once, in ORCHESTRATION's `check` row.
   for (const needle of [
     '--strict', '--require <n>', '--root <dir>',
-    '`ok`', '`moved`', '`mismatch`', '`missing`', '`outside`', '`too-large`', '`stale`',
+    '`ok`', '`stale`', 'Exit `0`', '`1` otherwise', '`2` for a usage error',
     'Read-only', '(docs/ORCHESTRATION.md#evidence-with-pointers)',
   ]) {
     assert.ok(row.includes(needle), `check row mentions ${needle}`);
   }
   const orch = readFileSync(join(ROOT, 'docs/ORCHESTRATION.md'), 'utf8');
+  const orchRow = orch.split('\n').find((l) => l.startsWith('| **`omelette-fleet check <file.md>`** |'));
+  for (const status of ['`ok`', '`moved`', '`mismatch`', '`missing`', '`outside`', '`too-large`', '`stale`']) {
+    assert.ok(orchRow.includes(status), `ORCHESTRATION's check row names ${status}`);
+  }
   assert.match(orch, /^## Evidence with pointers$/m, 'the linked heading actually exists');
 });
 

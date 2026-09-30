@@ -268,18 +268,19 @@ test('MEASUREMENTS has the security-audit row: plain and brief over d7180b2 and 
   assert.ok(section(md, '## How the numbers are taken').includes('\n- **Security-audit counts.** '), 'and says how the counts are taken');
 });
 
-test("SECURITY carries the row's one-line summary word for word, linked to the row", () => {
+// Re-pinned in 1.6.1 Task 5a (plan Task 5, F26): MEASUREMENTS is the one home of
+// the audit's numbers; SECURITY keeps the decision sentence and links the row.
+test("SECURITY keeps the audit's decision and links MEASUREMENTS' row, which keeps the summary and the numbers", () => {
   const line = section(read('docs/MEASUREMENTS.md'), ROW).split('\n').find((l) => SUMMARY.test(l));
-  assert.ok(line, 'the summary line');
-  const summary = line.match(SUMMARY)[1];
+  assert.ok(line, 'the summary line, in MEASUREMENTS');
   const result = section(read('docs/SECURITY.md'), AUDITED).split('\n').find((l) => l.startsWith('**Result.** '));
-  assert.ok(result.startsWith(`**Result.** ${summary} `), 'the summary, word for word, first');
+  assert.ok(result, 'the result line');
   assert.match(result, /omelette-auditor. is not built/, 'what the result decided');
+  assert.ok(result.endsWith(`[MEASUREMENTS](MEASUREMENTS.md#${ROW_ANCHOR}).`), 'linked to the row');
+  assert.ok(!SUMMARY.test(result) && !/\d+ found, \d+ verified/.test(result), 'the counts are not copied back into SECURITY');
   // The brief carried 12 of the plain run's 34 candidates and dropped 22 —
   // two in three, not the "seven in ten" 1.3.0 first printed (release review).
   const carried = "carried 12 of the plain review's 34 candidates and dropped 22 (two in three) before refutation";
-  assert.ok(result.includes(carried), 'SECURITY says what the brief carried and dropped');
   const reading = section(read('docs/MEASUREMENTS.md'), ROW).split('\n').find((l) => l.startsWith('Reading: '));
-  assert.ok(reading.includes(carried), 'and so does the row, in the same words');
-  assert.ok(result.endsWith(` The row, with the overlap and what only the brief found: [MEASUREMENTS](MEASUREMENTS.md#${ROW_ANCHOR}).`), 'linked to the row');
+  assert.ok(reading.includes(carried), 'the row says what the brief carried and dropped');
 });

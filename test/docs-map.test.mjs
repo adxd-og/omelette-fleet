@@ -68,13 +68,17 @@ for (const rel of DOCS) {
   });
 }
 
-test('README maps the docs set: every row points at a file that exists', () => {
+// 1.6.1 Task 5a (plan Task 5, F20): the set table asks questions too, so a Read
+// cell may link a section of a doc; the anchor must be a heading of that file.
+test('README maps the docs set: every row points at a file that exists, and at a heading of it when it names one', () => {
   const md = read('README.md');
   const rows = mapRows(md, SET_HEADER);
-  const targets = rows.map(([, where]) => where.match(/^\[[^\]]+\]\(([^)#]+)\)$/)?.[1]);
-  for (const t of targets) {
-    assert.ok(t, 'Read cell is a file link');
-    assert.ok(fs.existsSync(path.join(ROOT, t)), `${t} exists`);
+  const links = rows.map(([, where]) => where.match(/^\[[^\]]+\]\(([^)#]+)(?:#([^)]+))?\)$/));
+  const targets = links.map((m) => m?.[1]);
+  for (const m of links) {
+    assert.ok(m, 'Read cell is a file link');
+    assert.ok(fs.existsSync(path.join(ROOT, m[1])), `${m[1]} exists`);
+    if (m[2]) assert.ok(headingIds(read(m[1])).has(m[2]), `#${m[2]} is a heading of ${m[1]}`);
   }
   for (const doc of DOCS.slice(1).concat('CHANGELOG.md')) assert.ok(targets.includes(doc), `${doc} is mapped`);
 });
