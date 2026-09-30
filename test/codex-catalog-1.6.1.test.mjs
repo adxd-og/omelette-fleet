@@ -257,7 +257,7 @@ test('docs: no Codex step-down to gpt-5.6-terra, no "plan-gated" sol; the defaul
   assert.match(read('docs/CONFIG.md'), /^\| codex \| — \| `timeoutS: 600`, `effort: "xhigh"`, /m);
   assert.match(read('docs/CONFIG.md'), /installed binary's catalog, not the server's/);
   assert.match(read('README.md'), /on `gpt-6\.1-sol` \(xhigh\) by default/);
-  assert.match(read('CHANGELOG.md'), /^## 1\.6\.1 — unreleased$/m);
+  assert.match(read('CHANGELOG.md'), /^## 1\.6\.1 — (unreleased|\d{4}-\d\d-\d\d)$/m);
 });
 
 // =============================================================================

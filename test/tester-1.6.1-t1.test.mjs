@@ -741,7 +741,7 @@ test('every price, speed and index figure the docs print for Codex is in the cat
   assert.ok(from > 0 && to > from, 'the Codex block is where it was');
   const readme = read('README.md').split('\n').find((l) => l.startsWith('| **codex**'));
   const change = read('CHANGELOG.md');
-  const changelog = change.slice(change.indexOf('## 1.6.1 — unreleased'), change.indexOf('\n## 1.6.0'));
+  const changelog = change.slice(change.search(/^## 1\.6\.1 — /m), change.indexOf('\n## 1.6.0'));
   const rows = read('docs/ORCHESTRATION.md').split('\n').filter((l) => /^\| (?:Strongest code review|Research where the answer|Final pre-release security audit)\b/.test(l)).join('\n');
   const catalogText = read('units/codex/models.js');
   const figures = (text) => [
@@ -761,7 +761,7 @@ test('every price, speed and index figure the docs print for Codex is in the cat
 
 test('CHANGELOG 1.6.1 names the behaviour change and the effort-list change where an operator upgrading will look', () => {
   const change = read('CHANGELOG.md');
-  const entry = change.slice(change.indexOf('## 1.6.1 — unreleased'), change.indexOf('\n## 1.6.0'));
+  const entry = change.slice(change.search(/^## 1\.6\.1 — /m), change.indexOf('\n## 1.6.0'));
   assert.match(entry, /\*\*Behaviour change:\*\*|\*\*Behavior change:\*\*/);
   assert.match(entry, /now runs `gpt-6\.1-sol` instead of `gpt-6-astra`/);
   assert.match(entry, /built-in effort is `xhigh` instead of `high`/);
