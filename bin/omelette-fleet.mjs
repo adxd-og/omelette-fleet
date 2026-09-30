@@ -405,6 +405,10 @@ async function probeVersion(unit, binPath) {
  * reasons that are not "no session", and telling an operator to run `codex
  * login` when the real problem is a broken install wastes their afternoon.
  * 20s ceiling: these are local calls or a cheap API round-trip, never a model run.
+ * Beside the verdict, grok's and codex's probes report the CLI's own default
+ * model (`defaultModel`) for doctor's `models` line: grok reads it off the
+ * same `grok models` output, codex asks a second process for it
+ * (probeCodexDefault) that can never change the login verdict.
  */
 async function probeLogin(unit, binPath) {
   const name = unit.name;
@@ -428,9 +432,14 @@ async function probeLogin(unit, binPath) {
     // guard earns its keep because that phrase contains "logged in" too.
     const loggedIn = both.split('\n').map((x) => x.trim())
       .find((x) => /logged in/i.test(x) && !/not logged in/i.test(x));
-    if (r.code === 0 && loggedIn) return { state: 'in', detail: loggedIn };
-    if (/not logged in|login required|logged out/i.test(both)) return { state: 'out', detail: 'signed out — run `codex login`' };
-    return unknown;
+    const verdict = r.code === 0 && loggedIn ? { state: 'in', detail: loggedIn }
+      : /not logged in|login required|logged out/i.test(both) ? { state: 'out', detail: 'signed out — run `codex login`' }
+        : unknown;
+    // The bundled default is a fact about the binary, not the account, so it
+    // is asked whatever the verdict — but only once the login probe answered:
+    // after one that hung (its 20 s already spent) or could not start, the
+    // early returns above skip it.
+    return { ...verdict, defaultModel: await probeCodexDefault(unit, binPath) };
   }
   if (name === 'grok') {
     if (/not authenticated|not signed in/i.test(both)) return { state: 'out', detail: 'signed out — run `grok login`' };
@@ -449,6 +458,37 @@ async function probeLogin(unit, binPath) {
   if (r.code === 0 && lines.length) return { state: 'in', detail: `${cmd} listed ${lines.length} line(s)` };
   if (/not authenticated|not signed in|not logged in/i.test(both)) return { state: 'out', detail: 'signed out — run `agy` once and sign in' };
   return unknown;
+}
+
+/**
+ * The codex CLI's own default model, from `codex debug models --bundled`: the
+ * catalog compiled into THIS installed binary, read with no network and no
+ * model run. It is the binary's catalog, not the server's: `codex debug
+ * models` without the flag is the one refreshed from the server, and doctor
+ * does not ask it. The default is the `visibility: "list"` entry
+ * with the smallest `priority` (codex-cli 0.159.2: gpt-6.1-sol, and `codex
+ * exec` with no `-m` prints the same); the array is not in priority order.
+ * Best-effort: a non-zero exit, a timeout, output that does not parse, or no
+ * `list` entry is `null`, and doctor prints no line. The answer carries a
+ * model-instructions text per entry — about 650 KB on 0.159.2 — past the
+ * 400 000-character default cap, which keeps the TAIL and would cut off the
+ * JSON's head; the unit's own cap (4 000 000) bounds it instead.
+ * @returns {Promise<string|null>}
+ */
+async function probeCodexDefault(unit, binPath) {
+  let r;
+  try {
+    r = await runProcess({
+      bin: binPath, args: ['debug', 'models', '--bundled'], hardKillMs: 20000, outputCap: unit.builtin.outputCap, ...probeEnv(unit),
+    });
+  } catch { return null; }
+  if (r.killed || r.capped || r.code !== 0) return null;
+  let parsed;
+  try { parsed = JSON.parse(r.stdout); } catch { return null; }
+  const listed = (isObj(parsed) && Array.isArray(parsed.models) ? parsed.models : [])
+    .filter((m) => isObj(m) && m.visibility === 'list' && typeof m.slug === 'string' && m.slug && Number.isFinite(m.priority));
+  if (!listed.length) return null;
+  return listed.reduce((best, m) => (m.priority < best.priority ? m : best)).slug;
 }
 
 /**
@@ -2681,13 +2721,27 @@ async function cmdDoctor(argv) {
       const label = login.label || (login.state === 'in' ? 'OK' : login.state === 'out' ? 'SIGNED OUT' : 'unknown');
       out(`  login       ${label} — ${login.detail}`);
       if (login.state === 'out') problems.push('signed out');
-      // Only grok's probe reports the CLI's default; a default the catalog does
-      // not carry means every call that omits `model` runs on an unknown model.
+      // grok's and codex's probes report the CLI's default. For grok, a default
+      // the catalog does not carry means every call that omits `model` runs on
+      // an unknown model. Codex always passes -m, so its line names the model
+      // the fleet pins instead — the configured one when the runtime would use
+      // it (in the catalog), else the catalog head — and where that came from.
       if (typeof login.defaultModel === 'string') {
         const ids = unit.catalog.modelEnum();
-        out(ids.includes(login.defaultModel)
-          ? `  models      CLI default ${visible(login.defaultModel)} — in the catalog`
-          : `  models      CLI default ${visible(login.defaultModel)} — NOT in the catalog (units/${name}/models.js knows ${ids.join(', ')}) — every call that omits \`model\` runs on it; update the catalog`);
+        const known = ids.includes(login.defaultModel);
+        if (name === 'codex') {
+          const source = cfg.sources.model || '';
+          const pinned = unit.catalog.isAllowedModel(cfg.values.model)
+            ? `${cfg.values.model} (${source.startsWith('env:') ? `env ${source.slice(4)}` : 'fleet config'})`
+            : `${ids[0]} (catalog head)`;
+          out(known
+            ? `  models      CLI default ${visible(login.defaultModel)} — in the catalog; the fleet pins ${pinned}`
+            : `  models      CLI default ${visible(login.defaultModel)} — NOT in the catalog (units/${name}/models.js knows ${ids.join(', ')}); the fleet pins ${pinned}, so calls are unaffected — update the catalog`);
+        } else {
+          out(known
+            ? `  models      CLI default ${visible(login.defaultModel)} — in the catalog`
+            : `  models      CLI default ${visible(login.defaultModel)} — NOT in the catalog (units/${name}/models.js knows ${ids.join(', ')}) — every call that omits \`model\` runs on it; update the catalog`);
+        }
       }
     } else {
       out('  version     — (no binary)');

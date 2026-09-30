@@ -172,9 +172,12 @@ test('unit contract: four tools, catalog non-empty, efforts fixed, tools/list is
   assert.ok(!image.mutateGate);
   assert.deepEqual(Object.keys(image.inputSchema.properties), ['prompt', 'model']);
   assert.ok(catalog.models.length >= 1);
-  // The API's own list (its rejection message names them); 'minimal' was dropped 2026-09-03.
-  assert.deepEqual(catalog.effortEnum(), ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+  // `codex debug models`' own list since 1.6.1 (2026-09-30): 'ultra' in (probed
+  // on gpt-6.1-sol), 'none' out (no model in the catalog offers it);
+  // 'minimal' was dropped 2026-09-03.
+  assert.deepEqual(catalog.effortEnum(), ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
   assert.ok(!catalog.isAllowedEffort('minimal'));
+  assert.ok(!catalog.isAllowedEffort('none'));
   assert.deepEqual(unit.riskEnv, ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL']);
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': true });
   // Codex's JSONL prints a line per item — every reasoning step, every
@@ -440,15 +443,19 @@ test('runtime with a fake codex: a run whose final message the cap ate is refuse
 
 // --- catalog ----------------------------------------------------------------
 
-test('catalog: gpt-6-astra is the catalog head (= the fleet default) at effort high, terra second', () => {
-  const astra = CODEX_MODELS.find((m) => m.id === 'gpt-6-astra');
-  assert.ok(astra, 'gpt-6-astra missing');
-  assert.equal(astra.effort, 'high');
-  assert.match(astra.avoid, /xhigh/);
+// Re-pinned in 1.6.1: the operator moved the fleet default from gpt-6-astra
+// (high) to gpt-6.1-sol (xhigh) on 2026-09-30; astra stays, second, for heavy
+// reviews only (test/codex-catalog-1.6.1.test.mjs pins the rest).
+test('catalog: gpt-6.1-sol is the catalog head (= the fleet default) at effort xhigh, astra second at xhigh', () => {
+  const head = CODEX_MODELS.find((m) => m.id === 'gpt-6.1-sol');
+  assert.ok(head, 'gpt-6.1-sol missing');
+  assert.equal(head.effort, 'xhigh');
+  assert.match(head.avoid, /xhigh/);
   assert.ok(ALLOWLIST.includes('gpt-6-astra'));
   assert.equal(DEFAULT_MODEL, '');
-  assert.equal(CODEX_MODELS[0].id, 'gpt-6-astra', 'the catalog head is what the adapter pins when no model is configured');
-  assert.equal(CODEX_MODELS[1].id, 'gpt-5.6-terra');
+  assert.equal(CODEX_MODELS[0].id, 'gpt-6.1-sol', 'the catalog head is what the adapter pins when no model is configured');
+  assert.equal(CODEX_MODELS[1].id, 'gpt-6-astra');
+  assert.equal(CODEX_MODELS[1].effort, 'xhigh');
 });
 
 // --- the model a spooled codex result is filed under (P3 · spec 3a) ----------

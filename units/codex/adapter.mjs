@@ -403,9 +403,10 @@ const EFFORT_PROP = {
   type: 'string',
   enum: catalog.effortEnum(),
   description:
-    'Optional reasoning effort: none/low = fast sweeps, medium, high = deeper ' +
-    'analysis (the fleet default), xhigh/max = hardest problems (slow, discouraged ' +
-    'for routine work). OMIT for the fleet default.',
+    'Optional reasoning effort: low = fast sweeps, medium, high = deeper analysis, ' +
+    'xhigh = the fleet default for review and research, max/ultra = manual escalation ' +
+    'for the hardest problems (slow, discouraged for routine work; the luna tiers ' +
+    'stop at max). OMIT for the fleet default.',
 };
 
 /**
@@ -421,12 +422,12 @@ const PASSTHROUGH = ['CODEX_HOME', 'CODEX_ACCESS_TOKEN', 'RUST_LOG', 'CODEX_EXEC
 export default defineUnit({
   name: 'codex',
   label: 'Codex',
-  instructions: 'This unit: Codex via the codex CLI, inside a kernel-enforced read-only sandbox. The fleet\'s strongest code review and agentic terminal analysis (codex_code_review needs an absolute cwd), research that depends on running things (codex_research), image generation (codex_image). Reports real token usage per call. Route the final pre-release security audit here on gpt-6-astra.',
+  instructions: 'This unit: Codex via the codex CLI, inside a kernel-enforced read-only sandbox. The fleet\'s strongest code review and agentic terminal analysis (codex_code_review needs an absolute cwd), research that depends on running things (codex_research), image generation (codex_image). Reports real token usage per call. Default gpt-6.1-sol at xhigh; route the final pre-release security audit and the heaviest reviews here on gpt-6-astra.',
   bin: { env: 'CODEX_BIN', default: 'codex' },
   riskEnv: ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL'],
   envPassthrough: PASSTHROUGH,
   envMap: { model: 'CODEX_DEFAULT_MODEL', effort: 'CODEX_EFFORT', timeoutS: 'CODEX_TIMEOUT_S', webSearch: 'CODEX_WEB_SEARCH' },
-  builtin: { timeoutS: 600, effort: 'high', webSearch: true, outputCap: CODEX_OUTPUT_CAP },
+  builtin: { timeoutS: 600, effort: 'xhigh', webSearch: true, outputCap: CODEX_OUTPUT_CAP },
   supportedModes: { 'read-only': true, 'workspace-write': true },
   auth: { detect: (stderr) => AUTH_RE.test(stderr), help: AUTH_HELP },
   catalog,

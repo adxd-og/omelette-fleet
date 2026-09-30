@@ -221,7 +221,10 @@ test('doctor: a grok "models" call that exits non-zero (even with a Default mode
   assert.doesNotMatch(r.grok, /^  models /m, r.grok);
 });
 
-test('doctor: codex and gemini never print a models line, even when their probe output contains the words "Default model:"', () => {
+// Retitled in 1.6.1: codex gained a models line of its own, read from
+// `codex debug models --bundled` (test/codex-catalog-1.6.1.test.mjs); this
+// fake does not answer that subcommand, so the pin below still holds for it.
+test('doctor: gemini never prints a models line; codex prints one only when `debug models` answers — never from "Default model:" in its login output', () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-t5b-others-'));
   const sneaky = 'Default model: sneaky\n';
   const agy = fakeBin(dir, 'fake-agy', { modelsOut: `model-a\n${sneaky}` });

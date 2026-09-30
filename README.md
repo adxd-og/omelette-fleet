@@ -251,7 +251,7 @@ The vendor CLIs update *themselves*; this package deliberately does not. `doctor
 |---|---|---|---|---|---|
 | **gemini** | `agy` (Antigravity) | agy has no `login` subcommand — sign in through the OAuth flow on your first interactive `agy` run; credentials land under `~/.gemini/` | `gemini_research`, `gemini_deep_research`, `gemini_image`, `gemini_models` | Grounded web research and fact synthesis; multi-source deep research; reading local files **including images and PDFs** (give an absolute path — needs `read_file(*)` in the agy allow-rules, the opt-in set in [SECURITY](docs/SECURITY.md#recommended-agy-allow-rules)); inputs past 1M tokens and formal/scientific reasoning via `Gemini 3.1 Pro (High)`; a non-Google second opinion via `GPT-OSS 120B (Medium)`; image generation | Writing anything. agy has no kernel sandbox — read-only here rests on your own agy `settings.json` permission policy plus a prompt preamble, the weakest posture in the fleet. Deep-research sources are **asserted by the model**; verify them. Anything it read off the web is untrusted input |
 | **grok** | `grok` (Grok Build) | `grok login`, or `grok login --device-code` | `grok_research`, `grok_code_review`, `grok_image`, `grok_image_edit`, `grok_models` | A cheap, fast second opinion; mechanical code analysis; math/STEM checks (AIME 93–100%, GPQA Diamond 84.6–88%); high-volume research sweeps; image generation **and image-to-image editing** — the only unit in the fleet that edits images. Research and review runs stream their output, so a hard-killed run comes back with the text it had produced, and token usage now reaches the status feed | Fact-critical claims. AA-Omniscience measures Grok 4.7 at **47.5% accuracy / 29.3% hallucination** at xhigh (read 2026-09-26; 4.6 was 48.2% / 34.3%, 4.5 ~54% hallucination) — better each time, and still roughly one factual answer in three wrong — and it is overconfident. Never the sole source of a fact. Also: architecture calls, long-horizon engineering (DeepSWE v1.1 71.0% at high on xAI's own 4.7 table, behind GPT-5.6 Sol Max's 72.7%), UI/front-end taste. Prompt-injection susceptible; `workspace-write` is **declared unsupported** and refused even with the ceiling open |
-| **codex** | `codex` (Codex CLI) | `codex login` (ChatGPT account) | `codex_research`, `codex_code_review`, `codex_image`, `codex_models` | The strongest code review in the fleet and agentic terminal analysis, on `gpt-6-astra` (high) by default — AA Intelligence Index 55 against sol's 51 and terra's 47, and accepted on a ChatGPT Plus plan; directory-scoped review with an explicit `cwd`; grounded research with web search; image generation via the CLI's built-in **gpt-image-2** tool, saved to a temp directory outside every project; reports the fullest token usage in the fleet (input, cached, output, reasoning) | Being a source of record — verify factual claims. `gpt-5.6-luna` on anything multi-file or past ~200K tokens. `gpt-5.6-sol` unless your plan is ChatGPT Pro/Enterprise (Plus/Team gets an explicit rejection). `effort: xhigh` or `max` on routine work |
+| **codex** | `codex` (Codex CLI) | `codex login` (ChatGPT account) | `codex_research`, `codex_code_review`, `codex_image`, `codex_models` | The strongest code review in the fleet and agentic terminal analysis, on `gpt-6.1-sol` (xhigh) by default — AA Intelligence Index 52 against astra's 53, at $0.72 per Index task against $3.26 — with `gpt-6-astra` for heavy reviews only (the pre-release security audit, root-cause hunts); directory-scoped review with an explicit `cwd`; grounded research with web search; image generation via the CLI's built-in **gpt-image-2** tool, saved to a temp directory outside every project; reports the fullest token usage in the fleet (input, cached, output, reasoning) | Being a source of record — verify factual claims. `gpt-6-luna` on anything multi-file, long inputs or prohibition-heavy briefs (limits inherited from gpt-5.6-luna until measured). `effort: max` or `ultra` on routine work |
 
 Model ids, benchmark numbers and routing advice live in `units/<unit>/models.js` and are served by each unit's `<unit>_models` tool — call it when you are unsure which model a task belongs on.
 
@@ -292,8 +292,8 @@ One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.
     "codex": {
       "enabled": true,
       "mode": "read-only",
-      "model": "gpt-6-astra",
-      "effort": "high",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
       "webSearch": true,
       "timeoutS": 600
     }
@@ -301,7 +301,7 @@ One JSON file, `~/.omelette/fleet.config.json` (or `$OMELETTE_HOME/fleet.config.
 }
 ```
 
-One consequence worth knowing: because the Codex unit runs with `--ignore-user-config`, leaving `codex.model` unset does **not** fall back to your `~/.codex/config.toml` default — the adapter pins the first catalog entry (`gpt-6-astra`) instead and logs that it did.
+One consequence worth knowing: because the Codex unit runs with `--ignore-user-config`, leaving `codex.model` unset does **not** fall back to your `~/.codex/config.toml` default — the adapter pins the first catalog entry (`gpt-6.1-sol`) instead and logs that it did.
 
 Every key, its default, the resolution order, and the per-unit environment overrides: **[docs/CONFIG.md](docs/CONFIG.md)**.
 
@@ -342,10 +342,13 @@ Only deliberately, and only where it is actually enforceable. Write mode takes t
 - **Grok** does not. `workspace-write` is declared unsupported and refused even with the ceiling open.
 - **Gemini** maps it to agy's `--mode accept-edits`, which is agy's own permission layer inside the run's cwd — real, but not kernel-enforced, and used only when the call passes a `cwd` (without one, research runs read-only in a fresh empty directory). `ORION_ALLOW_GEMINI_MUTATE=1` is honoured as a legacy alias for opening the ceiling for `gemini` only.
 
-**What if my ChatGPT plan rejects `gpt-5.6-sol`?**
-The Codex catalog lists what exists in the current generation, not what one account happens to accept. `gpt-5.6-sol` is plan-gated to ChatGPT Pro/Enterprise; on a Plus or Team plan the call fails fast, before any work, with `The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account`.
+**What if my ChatGPT plan rejects a Codex model?**
+The Codex catalog lists what exists in the current generation, not what one account happens to accept. A refused id fails fast, before any work, with `The '<id>' model is not supported when using Codex with a ChatGPT account`.
 
-You are not missing much. The fleet default is `gpt-6-astra` at `effort: high`, which is **accepted on Plus** — probed live 2026-09-05 on codex-cli 0.153.4 at effort low, high, xhigh and max — and scores above sol on the AA Intelligence Index (55 vs 51). `gpt-5.6-terra` is the cheaper step-down for sweeps and routine review, since astra costs ~5x terra per token and is markedly slower. The heavier `gpt-6-astra-pro`, `gpt-6-pro` and `gpt-6` are rejected on a ChatGPT plan exactly like sol; only `gpt-6-astra` is embedded in the CLI binary. codex-cli 0.153.4 also made astra its own bundled default, so a fleet call and a bare `codex` run now land on the same model — the fleet pins it explicitly regardless, because it runs with `--ignore-user-config`. `omelette-fleet doctor --probe-models` tells you exactly which ids your account accepts.
+- On 2026-09-30 the ChatGPT plan these probes ran on accepted every id in the catalog, including `gpt-5.6-sol`, which it had refused on 2026-09-03.
+- The default `gpt-6.1-sol` needs a codex-cli that carries its metadata: 0.159.1 added it (release note), 0.159.2 accepted it here (probed 2026-09-30). 0.157.1 refused it with that same message because it lacked the model's metadata, not because of the plan: update Codex.
+- `gpt-6-astra-pro`, `gpt-6-pro` and `gpt-6` were rejected on a ChatGPT plan when last probed (2026-09-05, codex-cli 0.153.4) and are not in the catalog.
+- `omelette-fleet doctor --probe-models` tells you exactly which ids your account accepts. Plain `doctor` prints your installed CLI's bundled default beside the model the fleet pins — since 0.159.1 the CLI's is `gpt-6.1-sol`, the same catalog head the fleet pins when no `codex.model` is configured, and the fleet pins its model explicitly regardless, because it runs with `--ignore-user-config`.
 
 **How do I add a unit?**
 Three files and a test: `units/<unit>/models.js` (the model allowlist and cheat-sheet), `units/<unit>/adapter.mjs` (a `defineUnit({...})` call), `servers/<unit>.mjs` (a two-line entrypoint). The runtime gives you config, the ceiling, catalog validation, the mutate gate, the status feed, bounded spawn with the env allowlist and billing scrub, and JSON-RPC. Step by step, with a skeleton and the fake-binary test pattern: [docs/ADAPTERS.md](docs/ADAPTERS.md).

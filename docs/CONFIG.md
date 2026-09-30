@@ -14,6 +14,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | What config keys exist and what do they default to? | [Keys](#keys) |
 | What extra keys does one unit have, and what's its built-in default? | [Unit-specific extras and built-in overrides](#unit-specific-extras-and-built-in-overrides) |
 | Which config keys does a given unit actually read? | [Which unit actually uses which key](#which-unit-actually-uses-which-key) |
+| Which model does Codex pin when none is set, and what does doctor's `models` line compare? | [Which unit actually uses which key](#which-unit-actually-uses-which-key) |
 | In what order do env, file and defaults get resolved? | [Resolution order](#resolution-order) |
 | How do I change a config value from the command line? | [Editing with `set`](#editing-with-set) |
 | Which environment variables override which config keys? | [Environment overrides](#environment-overrides) |
@@ -58,7 +59,7 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
   "units": {
     "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
     "grok":   { "enabled": true, "mode": "read-only", "timeoutS": 1800, "maxTurns": 30 },
-    "codex":  { "enabled": true, "mode": "read-only", "model": "gpt-6-astra", "effort": "high", "webSearch": true, "timeoutS": 600 }
+    "codex":  { "enabled": true, "mode": "read-only", "model": "gpt-6.1-sol", "effort": "xhigh", "webSearch": true, "timeoutS": 600 }
   }
 }
 ```
@@ -216,7 +217,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 |---|---|---|
 | gemini | — | `timeoutS: 300` |
 | grok | `imageMaxTurns` (positive int, default `8`) — turn cap for image runs only | `timeoutS: 300`, `maxTurns: 30`, `outputCap: 10000000` |
-| codex | — | `timeoutS: 600`, `effort: "high"`, `webSearch: true`, `outputCap: 4000000` |
+| codex | — | `timeoutS: 600`, `effort: "xhigh"`, `webSearch: true`, `outputCap: 4000000` |
 
 ### Which unit actually uses which key
 
@@ -224,7 +225,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 |---|---|---|---|
 | `enabled`, `status`, `model`, `results`, `resultsKeep`, `resultsMaxBytes` | yes | yes | yes |
 | `mode` | `workspace-write` → `--mode accept-edits`, only when the call passes `cwd` | declared unsupported; always read-only | `workspace-write` → OS sandbox, review-with-`cwd` only |
-| `effort` | **ignored** — the catalog bakes effort into the model id and declares no effort levels | `--reasoning-effort` (`low`/`medium`/`high`/`xhigh`) | `model_reasoning_effort` (`none`/`low`/`medium`/`high`/`xhigh`/`max`) |
+| `effort` | **ignored** — the catalog bakes effort into the model id and declares no effort levels | `--reasoning-effort` (`low`/`medium`/`high`/`xhigh`) | `model_reasoning_effort` (`low`/`medium`/`high`/`xhigh`/`max`/`ultra`) |
 | `timeoutS` | yes (see below) | yes | yes |
 | `maxTurns` | — | `--max-turns` | — |
 | `outputCap` | bounds stdout; a capped run is marked partial or refused — see below | bounds stdout (built-in `10000000`); same — see below | bounds stdout (built-in `4000000`); same — see below |
@@ -234,7 +235,17 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 
 Keys that a unit ignores are still valid config — they are simply never read. An unknown key *name* warns and is ignored, in `defaults` as well as in `units.<unit>`. One consequence of `defaults` being checked per unit: a key that is valid for one unit only (`imageMaxTurns`) warns for the units that do not know it, so put unit-specific extras under `units.<unit>`.
 
-Leaving `model` unset means "the vendor's own default" for Gemini and Grok. **Not for Codex**: that unit runs with `--ignore-user-config`, so it pins the first catalog entry (`gpt-6-astra`) instead and logs that it did.
+Leaving `model` unset means "the vendor's own default" for Gemini and Grok. **Not for Codex**: that unit runs with `--ignore-user-config`, so it pins the first catalog entry (`gpt-6.1-sol`) instead and logs that it did. Its built-in `effort` is `xhigh`, the fleet default since 2026-09-30.
+
+**doctor's `models` line** compares a vendor CLI's own default model with the catalog:
+
+| Unit | Where the CLI's default comes from | What the line adds |
+|---|---|---|
+| grok | the `Default model:` line of `grok models` | a default the catalog lacks is what every call that omits `model` runs on |
+| codex | the `visibility: "list"` entry with the smallest `priority` in `codex debug models --bundled` | the model the fleet pins — `(fleet config)` when `codex.model` is set and in the catalog, `(env CODEX_DEFAULT_MODEL)` when that variable set it, else `(catalog head)`. Codex always passes `-m`, so a default the catalog lacks leaves calls unaffected and only says the catalog is behind |
+| gemini | — | no line |
+
+The codex line reads `--bundled`: the installed binary's catalog, not the server's, read with no network — `codex debug models` without the flag is the one refreshed from the server. It says what this binary ships with. The probe is a second process after `codex login status`, best-effort: a failure prints no line and never changes the login verdict.
 
 ## Resolution order
 
@@ -269,7 +280,7 @@ codex
   enabled          true           default
   mode             read-only      default
   model            gpt-5.6-terra  file
-  effort           high           default
+  effort           xhigh          default
   timeoutS         333            env:CODEX_TIMEOUT_S
   maxTurns         30             default
   outputCap        4000000        default

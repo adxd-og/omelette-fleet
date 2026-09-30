@@ -30,8 +30,8 @@
     "codex": {
       "enabled": true,
       "mode": "read-only",
-      "model": "gpt-6-astra",
-      "effort": "high",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
       "webSearch": true,
       "timeoutS": 600
     }

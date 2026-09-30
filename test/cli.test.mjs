@@ -551,6 +551,9 @@ function probeBin(dir, { name = 'probe-cli', mode = 'refuse', sleepMs = 30000 } 
     "if (a[0] === '--version') { console.log('fake-cli 9.9.9'); process.exit(0); }",
     "if (a[0] === 'models') { console.log('model-a'); console.log('model-b'); process.exit(0); }",
     "if (a[0] === 'login' && a[1] === 'status') { process.stderr.write('Logged in using ChatGPT\\n'); process.exit(0); }",
+    // doctor's codex default probe (1.6.1) is a doctor probe like the three
+    // above, not a unit run: answered without touching the marker.
+    "if (a.join(' ') === 'debug models --bundled') { console.log('{\"models\":[]}'); process.exit(0); }",
     `fs.appendFileSync(${JSON.stringify(marker)}, process.cwd() + '\\n');`,
     ...(writes ? ["fs.writeFileSync(p.join(process.cwd(), 'probe.txt'), 'probe');"] : []),
     ...(hangs
@@ -678,7 +681,7 @@ test('doctor without --probe-sandbox prints no sandbox line and spawns no unit',
   const r = cli(['doctor'], { dir, env: { AGY_BIN: fake.path, GROK_BIN: fake.path, CODEX_BIN: fake.path } });
   assert.equal(r.code, 0, r.out + r.err);
   assert.doesNotMatch(r.out, /^\s+sandbox\s/m);
-  // --version, models and login status only: the marker file was never touched.
+  // --version, models, login status and codex's debug models only: the marker file was never touched.
   assert.equal(existsSync(fake.marker), false);
 });
 

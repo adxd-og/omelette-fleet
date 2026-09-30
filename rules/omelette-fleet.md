@@ -66,7 +66,7 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 | Cheap second opinion, mechanical review, volume sweeps | Grok `grok_research` / `grok_code_review`, then verify |
 | Strongest code review, sandboxed terminal analysis | Codex `codex_code_review`, absolute `cwd` |
 | Research that depends on running things | Codex `codex_research` |
-| Final pre-release security audit | Codex (its default, `gpt-6-astra`) — 2–3 runs per release, not per PR |
+| Final pre-release security audit | Codex on `gpt-6-astra` (heavy reviews only; the default is `gpt-6.1-sol`) — 2–3 runs per release, not per PR |
 | Tie-breaker when Grok and Gemini Flash disagree | Gemini `Gemini 3.1 Pro (High)` |
 | Image generation / editing | any `_image` tool / Grok `grok_image_edit` |
 | Architecture, planning, UI taste, any file edit, git, deploy, publish | **this session** |
