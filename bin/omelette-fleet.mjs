@@ -3259,7 +3259,11 @@ function parseSince(raw, now = Date.now()) {
   const t = Date.parse(s);
   if (!Number.isFinite(t)) return null;
   const iso = new Date(t).toISOString();
-  return (s.length === 10 ? iso.slice(0, 10) : iso) === s ? t : null;
+  // The round trip is what refuses a day that does not exist (2026-02-30) and
+  // a form this does not read. A whole timestamp may leave its milliseconds
+  // out: `…T18:47:00Z` is what `git log --format=%cI` and most tools print.
+  if (s.length === 10) return iso.slice(0, 10) === s ? t : null;
+  return iso === s || iso.replace('.000Z', 'Z') === s ? t : null;
 }
 
 function statsReport(name, sinceMs) {
