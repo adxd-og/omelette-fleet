@@ -180,9 +180,10 @@ test('SECURITY says what the P0 refutations found true: proxy URLs pass as they 
   assert.match(security, /Two things still outlive it[^\n]*a server that is SIGKILLed outright[^\n]*a shell command Codex is running/);
   assert.match(security, /`GOOGLE_APPLICATION_CREDENTIALS` and `GOOGLE_CREDENTIALS` and the Vertex switch `GOOGLE_GENAI_USE_VERTEXAI`/);
   assert.match(security, /git diff --name-only -z --relative <hash> --/);
-  for (const rel of ['docs/SECURITY.md', 'docs/ORCHESTRATION.md']) {
-    assert.match(read(rel), /alone or inside a cluster like `-qb`/, `${rel} lists the branch-creating flags as Task 4 reads them`);
-  }
+  // 1.6.1: the flag grammar lives once, in SECURITY's table; ORCHESTRATION links to it.
+  assert.match(security, /alone or inside a cluster like `-qb`/, 'SECURITY lists the branch-creating flags as Task 4 reads them');
+  assert.match(read('docs/ORCHESTRATION.md'), /SECURITY\.md#what-the-guard-reads-as-a-write/, 'ORCHESTRATION links to the SECURITY table instead of repeating the grammar');
+  assert.doesNotMatch(read('docs/ORCHESTRATION.md'), /alone or inside a cluster like `-qb`/, 'ORCHESTRATION no longer carries the grammar');
 });
 
 // ── Task 3: the row, and the line SECURITY carries from it ───────────────────
