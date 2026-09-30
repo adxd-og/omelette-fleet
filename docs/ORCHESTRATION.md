@@ -230,7 +230,7 @@ The frontmatter keys that matter:
 | `disallowedTools` | Comma-separated denylist, applied **before** `tools` resolves — the harness enforces it, so it is the only way to make "does not spawn sub-agents" true rather than requested |
 | `maxTurns` | How many turns the sub-agent may take before the harness stops it |
 
-The shipped definitions name the aliases `opus` and `sonnet`, which Claude Code resolves to the newest model of each line for your provider — Opus 5.5 and Sonnet 5.5 on the Anthropic API as of 2026-09-30 (Sonnet 5.5 from Claude Code 2.1.284) — so a new generation reaches a role with no change here; pin an exact id in `agents.<role>.model` when you want one.
+The shipped definitions name the aliases `opus` and `sonnet`, which Claude Code resolves to a model of each line for your provider — and the resolution lags a release: on 2026-09-30, two days after Sonnet 5.5 shipped and on Claude Code 2.1.285, a `sonnet` sub-agent still ran on Sonnet 5 (the `model` field of its transcript) while Claude Code's own alias table already said 5.5, and the `opus` one ran on Opus 5.5. So the alias is convenience, not currency: when the generation matters, pin the exact id — `omelette-fleet set agents.tester.model=claude-sonnet-5-5 && omelette-fleet rules --agents` — and when you need to know what actually ran, read the transcript, not the alias.
 
 `omelette-fleet rules --agents` writes four of these next to the rules file:
 
