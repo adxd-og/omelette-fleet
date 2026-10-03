@@ -218,12 +218,13 @@ export function parseAgyResult(out) {
 /**
  * Interpret one finished agy run. Exported for tests.
  * @param {{stdout:string, stderr:string, code:number|null, killed:boolean, capped?:boolean, cancelled?:boolean}} res
- * @param {{timeoutS:number, capped?:boolean, outputCap?:number}} o
+ * @param {{timeoutS:number, capped?:boolean, outputCap?:number, claude?:boolean}} o
+ *   claude marks a run on a Claude id, so an empty bucket is named as Claude's.
  *   capped defaults to the run's own flag; outputCap is the tail cap the run was
  *   spawned under and is quoted in the messages, because raising it is the fix.
  * @returns {{text:string, structured:*, usage:*, status:string, partial?:boolean}}
  */
-export function interpretAgy(res, { timeoutS, capped = res.capped, outputCap = OUTPUT_CAP }) {
+export function interpretAgy(res, { timeoutS, capped = res.capped, outputCap = OUTPUT_CAP, claude = false }) {
   const { stdout: out, stderr: errBuf, code, killed } = res;
   const parsed = parseAgyResult(out);
   // `response` is the answer with agy's own envelope stripped; raw stdout is
@@ -252,6 +253,9 @@ export function interpretAgy(res, { timeoutS, capped = res.capped, outputCap = O
   }
   // Failed turn — now the exhaustion patterns disambiguate the CAUSE.
   if (EXHAUSTED_PATTERNS.some((re) => re.test(`${errBuf}\n${out}`))) {
+    // A Claude run draws on Antigravity's separate Claude bucket, not Gemini's.
+    // Both messages keep "quota exhausted" so isDeterministic skips the retry.
+    if (claude) throw new Error('Claude quota exhausted — Antigravity\'s Claude bucket is empty (separate from Gemini\'s, and small); try after it resets.');
     throw new Error('Gemini quota exhausted — the Antigravity bucket is empty; try after the window resets.');
   }
   // A hard kill discards nothing it had already produced: `answer` came out of
@@ -324,7 +328,8 @@ async function runAgyRaw(ctx, { prompt, model, acceptEdits = false, schema, cwd 
   if (schema) args.push('--json-schema', JSON.stringify(schema));
   ctx.log(`agy spawn · model=${model || '(agy default)'} · acceptEdits=${acceptEdits} · schema=${schema ? 'yes' : 'no'} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd, hardKillMs: timeoutS * 1000 + HARD_KILL_GRACE_MS });
-  const r = interpretAgy(res, { timeoutS, outputCap: ctx.cfg.outputCap });
+  const entry = typeof model === 'string' && model.trim() ? ctx.catalog.find(model.trim()) : null;
+  const r = interpretAgy(res, { timeoutS, outputCap: ctx.cfg.outputCap, claude: !!entry && entry.family === 'claude' });
   if (r.usage) ctx.log(`agy done · status=${r.status} · tokens in=${r.usage.input ?? '?'} out=${r.usage.output ?? '?'}`);
   return { out: r, res };
 }
@@ -547,12 +552,22 @@ async function runDeepResearch(ctx, { question, maxSubquestions, model, cwd }) {
 
 // --- tool table ---------------------------------------------------------------
 
+// A Claude id is named per call, never spent by default: the configured
+// gemini.model reaches ctx.model only when the call names none. Returns the
+// refusal result, or null when the call may proceed.
+function configuredClaudeRefusal(ctx, args) {
+  const named = typeof args.model === 'string' ? args.model.trim() : '';
+  const configured = !named && ctx.model ? ctx.catalog.find(ctx.model) : null;
+  if (!configured || configured.family !== 'claude') return null;
+  return { text: 'Error: a Claude id is named per call, not configured as `gemini.model` ("' + ctx.model + '" is the configured default): Antigravity\'s Claude quota is small and separate, and a default would spend it on every call. Name the model in this call to use it once, or clear the default: `omelette-fleet set gemini.model=`, or unset the legacy `AGY_DEFAULT_MODEL` env override if that is where it comes from.', isError: true };
+}
+
 const MODEL_PROP = {
   type: 'string',
   enum: catalog.modelEnum(),
   description:
     'Optional. Pick a model per the cheat-sheet below; OMIT to use the fleet default ' +
-    '(`gemini.model` in the fleet config, else agy\'s own default). ' +
+    '(`gemini.model` in the fleet config, else the tool\'s own default: agy\'s for gemini_research and gemini_image, the Flash stages for gemini_deep_research — a configured Claude id is refused here; Claude is named per call, where the tool takes it). ' +
     'Must be an exact id (call gemini_models for the full guide). ' + GUIDE,
 };
 
@@ -618,6 +633,8 @@ export default defineUnit({
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
+        const refused = configuredClaudeRefusal(ctx, args);
+        if (refused) return refused;
         const c = checkCwd(args.cwd);
         if (c.error) return { text: c.error, isError: true };
         // workspace-write only with an explicit directory to scope it to — the
@@ -662,6 +679,8 @@ export default defineUnit({
       async run(args, ctx) {
         const prompt = String(args.prompt || '').trim();
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
+        const refused = configuredClaudeRefusal(ctx, args);
+        if (refused) return refused;
         // accept-edits + the MCP server's process cwd would mean a cwd-relative
         // save lands inside whatever project the server was started from. Give
         // the run its own temp directory instead, created before the spawn.
@@ -731,10 +750,10 @@ export default defineUnit({
       name: 'gemini_models',
       kind: 'catalog',
       description:
-        'List the Gemini/GPT-OSS models you can pass as `model` to gemini_research / ' +
+        'List the Gemini/GPT-OSS/Claude models you can pass as `model` to gemini_research / ' +
         'gemini_image, with a "which model for what" cheat-sheet (speed/cost/strengths ' +
         'and when to avoid each). No arguments. Call this first if unsure which model ' +
-        'to pick. Claude Sonnet is intentionally NOT exposed (the manager is Claude natively); Opus 4.6 IS available — separate Antigravity quota.',
+        'to pick. Claude Opus 5.5 and Sonnet 5.5 (High and Medium) are listed too: Antigravity\'s separate, small Claude quota — one named call per question, never a sweep, refused by gemini_deep_research.',
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -751,7 +770,8 @@ export default defineUnit({
         'one-shots (decompose + up to 3 gathers + synthesize) — a modest multiplier; ' +
         'use deliberately rather than as the default research mode. ' +
         'Every stage runs in a fresh empty directory; under the web-research agy rule set it reads no local files (under the opt-in read_file(*) set it can read what gemini_research can). ' +
-        'Optionally choose a model with `model` (omit for the per-stage defaults). ' + GUIDE,
+        'Optionally choose a model with `model` (omit for the per-stage defaults). ' +
+        'Claude ids are refused here — small separate quota, about five runs per call; use gemini_research for a single Claude read. ' + GUIDE,
       inputSchema: {
         type: 'object',
         properties: {
@@ -764,6 +784,13 @@ export default defineUnit({
       async run(args, ctx) {
         const question = String(args.question || '').trim();
         if (!question) return { text: 'Error: "question" is required.', isError: true };
+        // ctx.model is the explicit `model` argument, else the configured one —
+        // the id stageModels would hand every stage. Refused before any spawn.
+        const asked = ctx.model || '';
+        const entry = asked ? ctx.catalog.find(asked) : null;
+        if (entry && entry.family === 'claude') {
+          return { text: 'Error: gemini_deep_research does not run on a Claude model ("' + asked + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Flash id — a configured Claude `gemini.model` applies whenever `model` is omitted.', isError: true };
+        }
         // One empty directory for every stage of this call (see the header).
         const cwd = mkdtempSync(join(tmpdir(), 'omelette-gemini-research-'));
         let r;

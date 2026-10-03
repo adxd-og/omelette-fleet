@@ -6,11 +6,11 @@
  * The ids are the display-name form agy lists under "Available models" when it
  * rejects an unknown --model, written verbatim as `agy --model "<id>"`. Spawn
  * uses an args ARRAY (no shell), so spaces/parens in an id are one safe argv
- * element. Note `agy models` prints the SLUG form instead (gemini-3.6-flash-high);
- * --model accepts both, and the display names are kept here because they carry
+ * element. Note `agy models` prints both forms, slug then display name
+ * (gemini-3.8-flash-high, Gemini 3.8 Flash (High)); --model accepts both, and the display names are kept here because they carry
  * the effort level readably.
  *
- * SYNCED TO agy (verified 2026-09-03, agy 1.1.25). If agy adds/renames/removes
+ * SYNCED TO agy (verified 2026-10-03, agy 1.2.14). If agy adds/renames/removes
  * a model, re-check and update GEMINI_MODELS below (and re-confirm the bench
  * notes in useFor/avoid). The (Low/Medium/High) suffix is the model's
  * reasoning/thinking-effort level (Low=fast/cheap, High=more deliberation).
@@ -43,13 +43,16 @@
  * Fairwind Program to government and critical-infrastructure defenders only, and
  * agy does not list it.
  *
- * SCOPE: Gemini family + GPT-OSS + Claude Opus 4.6. Opus joined the allowlist
- * 2026-08-02: Antigravity gives the Claude family its OWN quota bucket, separate
- * from the shared Gemini pool (confirmed by two independent deep-research runs
- * and operator decision), so Opus-via-agy is otherwise-idle capacity — not a
- * drain on Gemini quota. Claude SONNET stays excluded: it duplicates what the
- * native manager session already is, and adds nothing Opus doesn't. The picker
- * (/api/models) still shows Sonnet; only the agy-spawn allowlist excludes it.
+ * SCOPE: Gemini family + GPT-OSS + Claude Opus 5.5 and Sonnet 5.5 via Antigravity.
+ * The Claude family runs on Antigravity's OWN quota bucket, separate from the shared
+ * Gemini pool (confirmed 2026-08-02 by two independent deep-research runs and operator
+ * decision) — and that bucket is SMALL (operator, 2026-10-03), where the Gemini pool is
+ * effectively unlimited for this fleet. So Claude-via-agy is a deliberate, named,
+ * one-call route: never the default, never a sweep, never a deep-research stage (the
+ * adapter refuses it). Sonnet joined on 2026-10-03, reversing the 2026-08-02 exclusion:
+ * a Sonnet 5.5 call on the Antigravity bucket costs the Claude Code pool nothing, and
+ * that pool is the expensive one. Neither is a fleet role — the coder, tester and
+ * reviewer stay native (guard, diff, transcript).
  *
  * Zero deps. Plain ESM (.js), importable by both .js modules and the .mjs MCP.
  */
@@ -133,15 +136,48 @@ export const GEMINI_MODELS = [
       'Latency-sensitive or routine work, lookups, summaries, and plain 128K retrieval (the Flash line led MRCR v2 128K 97.0 vs 84.9).',
   },
   {
-    id: 'Claude Opus 4.6 (Thinking)',
-    label: 'Claude Opus 4.6 · Thinking',
+    id: 'Claude Opus 5.5 (High)',
+    label: 'Claude Opus 5.5 · High',
     family: 'claude',
     effort: 'High',
     tier: 'heavy',
     useFor:
-      'Heavy-reasoning delegation on Antigravity\'s SEPARATE Claude quota bucket — deep analysis, hard verification passes, and Opus-grade second opinions that would otherwise burn the native Claude Code session or the shared Gemini pool. Verified working headless via agy 2026-08-02.',
+      'An independent Opus-class second opinion or a hard verification pass on Antigravity\'s SEPARATE Claude quota — the same generation as the fleet\'s own coder and reviewer, so it adds an independent read, not a stronger one. One named call per question, when the Claude Code pool is the constraint or the question deserves two Opus reads. Opus 5.5 (Medium) and Sonnet 5.5 (High) ran headless via agy 1.2.14 on 2026-10-03; the other two ids are listed by agy models and share the id form, and did not run — the bucket answered RESOURCE_EXHAUSTED to both that afternoon, after three calls, which is the point.',
     avoid:
-      'Routine research, lookups, and summaries (Flash is faster and the Claude bucket is the more restrictive one — spend it on hard problems). Not a substitute for the native manager: mutations, planning, and anything needing repo tools stay in Claude Code. Web-grounding quality via agy is unverified for the Claude family — prefer Gemini for citation-heavy research.',
+      'Anything routine, any sweep, any loop, and every deep-research stage (gemini_deep_research refuses Claude ids) and never as the configured default (gemini_research and gemini_image refuse it): the Antigravity Claude bucket is small and shared by all four Claude entries, where the Gemini pool is effectively unlimited for this fleet. Not a fleet role: the guard, the diff and the transcript live in Claude Code. Citation-heavy research goes to Gemini (web grounding via agy is unverified for the Claude family).',
+  },
+  {
+    id: 'Claude Opus 5.5 (Medium)',
+    label: 'Claude Opus 5.5 · Medium',
+    family: 'claude',
+    effort: 'Medium',
+    tier: 'heavy',
+    useFor:
+      'Antigravity\'s picker default for Claude (2026-10-03): an Opus-class second opinion where High\'s latency is not worth it — a plan section, a design question, an arbitration read. Same quota rule as High: one named call, never a sweep.',
+    avoid:
+      'As Opus 5.5 (High). Step up to High for a verification pass that has to be thorough; step down to Sonnet 5.5 for a cheap read.',
+  },
+  {
+    id: 'Claude Sonnet 5.5 (High)',
+    label: 'Claude Sonnet 5.5 · High',
+    family: 'claude',
+    effort: 'High',
+    tier: 'heavy',
+    useFor:
+      'A cheap second opinion or a volume read on the Antigravity Claude quota instead of the native Claude Code pool — reviewing a document, checking a set of claims, a second read of a tester report. Listed since 2026-10-03: the two pools are separate and the native one is the expensive one.',
+    avoid:
+      'Sweeps and loops all the same — the bucket is small and shared with Opus. Not a tester or a coder: those roles need the guard and the diff. Flash stays the default for research, Flash Low for anything cheap.',
+  },
+  {
+    id: 'Claude Sonnet 5.5 (Medium)',
+    label: 'Claude Sonnet 5.5 · Medium',
+    family: 'claude',
+    effort: 'Medium',
+    tier: 'heavy',
+    useFor:
+      'The lightest Claude read on the Antigravity bucket: a summary, a sanity check, a short classification — when Flash\'s answer wants a Claude cross-check and the native pool should stay untouched.',
+    avoid:
+      'As Sonnet 5.5 (High); prefer Flash Low or Medium for anything that does not need a Claude voice.',
   },
   {
     id: 'GPT-OSS 120B (Medium)',
@@ -157,21 +193,10 @@ export const GEMINI_MODELS = [
 ];
 
 /**
- * Claude-via-agy entries kept here ONLY so the /api/models picker can still
- * list them. NOT in GEMINI_MODELS and NOT in the ALLOWLIST. Opus 4.6 moved OUT
- * of this list into GEMINI_MODELS on 2026-08-02 (separate Antigravity Claude
- * quota — see the file header); Sonnet remains excluded-by-design.
+ * Empty since 2026-10-03: Sonnet 5.5 is in GEMINI_MODELS (the 2026-08-02 exclusion is lifted — see the header). Kept as an export so an importer does not break.
  * @type {{id:string,label:string,family:'claude',reason:string}[]}
  */
-export const EXCLUDED_CLAUDE_MODELS = [
-  {
-    id: 'Claude Sonnet 4.6 (Thinking)',
-    label: 'Claude Sonnet 4.6 · Thinking',
-    family: 'claude',
-    reason:
-      'Excluded from the agy bridge: the ORION manager IS a Claude session natively, and Sonnet-class work is exactly what it does — proxying it through agy adds a hop for nothing. For Opus-grade delegation use Claude Opus 4.6 (Thinking), which IS allowed (separate Antigravity quota bucket).',
-  },
-];
+export const EXCLUDED_CLAUDE_MODELS = [];
 
 /**
  * The agy default model is whatever is configured in agy's own settings.json. An
@@ -184,14 +209,15 @@ export const DEFAULT_MODEL = '';
 
 /**
  * The agy-spawn ALLOWLIST: exactly the ids in GEMINI_MODELS (Gemini + GPT-OSS +
- * Claude Opus; Sonnet sits outside, in EXCLUDED_CLAUDE_MODELS). The route
+ * Claude Opus 5.5 and Sonnet 5.5 at High and Medium). The route
  * validates against this BEFORE spawn, for two reasons — note
  * that "agy would silently fall back to its default" is NOT one of them any
  * more: as of 2026-07-29 an unknown --model makes agy exit 1 with an error on
  * stderr and an empty stdout, which callers surface loudly. What the allowlist
  * still buys:
- *   1. POLICY — it is what keeps Claude Sonnet out of the agy path (see the
- *      header). agy itself would happily run it.
+ *   1. POLICY — it keeps every Claude id agy lists but the catalog does not admit
+ *      (the Low tiers today, a next model tomorrow) out of the agy path until the
+ *      catalog says so. agy itself would happily run them.
  *   2. A local rejection with the valid ids instead of paying a process spawn
  *      to be told the same thing.
  * If a future agy release goes back to silent fallback, this gate is also the
@@ -203,7 +229,7 @@ export const ALLOWLIST = GEMINI_MODELS.map((m) => m.id);
 const _ALLOWED = new Set(ALLOWLIST);
 
 /**
- * True iff `id` is an exact, allowed agy model string (non-Claude). Trims first.
+ * True iff `id` is an exact, allowed agy model string. Trims first.
  * @param {*} id
  * @returns {boolean}
  */
@@ -239,12 +265,11 @@ export const GUIDE =
   'Pro (High)=ONLY for >1M-token inputs, formal/scientific reasoning where Flash has no numbers ' +
   '(GPQA 94.3, ARC-AGI-2 77.1), and as the tie-breaker when Grok and Flash disagree — not a code ' +
   'or agentic model (3.8 Flash 68.1 vs 46.2 coding, 67.6 vs 40.1 agentic); ' +
-  'Claude Opus 4.6 (Thinking)=heavy-reasoning delegation on Antigravity\'s SEPARATE Claude quota ' +
-  'bucket — deep analysis and Opus-grade second opinions without touching the Gemini pool or the ' +
-  'native session; the bucket is restrictive, spend it on hard problems, and prefer Gemini for ' +
-  'citation-heavy research; ' +
+  'Claude Opus 5.5 (High|Medium) and Claude Sonnet 5.5 (High|Medium)=Antigravity\'s SEPARATE Claude quota, and a ' +
+  'SMALL one: one named call per question — an independent Opus read, a hard verification pass, a cheap Sonnet ' +
+  'cross-check — when the Claude Code pool is the constraint; never the default, never a sweep, never a ' +
+  'deep-research stage (gemini_deep_research refuses Claude ids), never configured as gemini.model (gemini_research and gemini_image refuse a Claude default); the same generation as the fleet\'s own roles, so ' +
+  'an independent read, not a stronger one; prefer Gemini for citation-heavy research; ' +
   'GPT-OSS 120B (Medium)=non-Google open-weights second opinion / math cross-check (near o4-mini, ' +
   'MMLU ~90%), NOT a primary frontier researcher and no long-context edge. ' +
-  'Omit the model param to keep agy\'s default. ' +
-  'Claude Sonnet is intentionally NOT exposed here — the manager IS a Claude session; for ' +
-  'Opus-grade delegation use Claude Opus 4.6 (Thinking) above.';
+  'Omit the model param to keep agy\'s default.';
