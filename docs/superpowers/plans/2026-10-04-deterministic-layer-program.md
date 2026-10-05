@@ -1,4 +1,4 @@
-# The deterministic layer — program plan (1.7.0 → 1.11.0)
+# The deterministic layer — program plan (1.7.0 → 1.12.0)
 
 Date: 2026-10-04. Starts the week of 2026-10-05. Ledger of the first release: `.omelette/ledger-1.7.0.md`. Each release gets its own spec and plan when its turn comes; this file fixes the order, the mechanisms and the decisions that are already made, and names what is still to be measured.
 
@@ -9,6 +9,7 @@ Date: 2026-10-04. Starts the week of 2026-10-05. Ledger of the first release: `.
 | In what order, and what ships in each release? | [Releases](#releases) |
 | What does each gate do, exactly? | [1.8.0](#180--guard-v2-pins-and-the-handoff-delivery), [1.9.0](#190--the-gates) |
 | Which rules arrive by event, and what leaves the rules file? | [1.10.0](#1100--rules-by-event) |
+| How does a project get only the parts of the model it needs? | [1.12.0](#1120--project-profiles) |
 | What was already tried and retired? | [What the measurements already said](#what-the-measurements-already-said) |
 | What can stop the program? | [Risks and stop conditions](#risks-and-stop-conditions) |
 | What is measured, release by release? | [Measurements](#measurements) |
@@ -70,6 +71,7 @@ Count: 11 rules become gates or automatic, 4 become visible, 4 arrive by event, 
 | **1.9.0** | 2026-10-19 | **the gates**: tester-after-coder, `omelette-fleet gate` for the release and the merge, the lane's 20 lines, main is gated, ledger-before-coder, `check` on reports, the reviewer's tree compared; the pane's gates line | yes — each with a person's override |
 | **1.10.0** | 2026-10-26 | **rules by event**; the rules file loses what moved; the rent measured before and after | no |
 | **1.11.0** | 2026-11-02 | `/omelette-test` as a mod command, roles registered from the mod, cost per task and role as ledger lines, the task-size label | no |
+| **1.12.0** | 2026-11-09 | **project profiles**: `solo` / `standard` / `strict`, proposed by `init` from measurable signals, chosen by the operator, rendered by `rules` and subscribed by the mod | no — a lighter profile drops ceremony, never verification |
 
 The weeks are an order, not a promise: each release starts when the one before it is released and has run for at least two working days on the operator's sessions.
 
@@ -124,6 +126,19 @@ The rules file keeps the operating model, the routing table, the ledger vocabula
 - Cost per task and per role: at each coder / tester / reviewer stop and at each commit, one ledger line from the turn's usage and `session.measure`.
 - The task-size label (`size: S|M|L` in a plan's task section, the backlog's G3) read by the command, which picks the lane, `omelette-coder-medium` or `omelette-coder`.
 
+### 1.12.0 — project profiles
+
+Added 2026-10-05 (operator: "пора делать какую-то автонастройку, где агент будет смотреть и принимать решение, какой паттерн юзать для проекта, и переносит только нужные части"). Today every install gets the same 14 590 characters of rules, four roles, the tester in two passes and three release reviews; an evening project pays the same rent and the same ceremony as this package. The profile is the answer, and it comes last because 1.10.0 makes it cheap: once rules arrive by event, a profile is the set of events the mod subscribes and the sections `rules` renders, not three hand-kept copies of one text.
+
+- **Three profiles, in config** (`omelette-fleet set profile=solo|standard|strict`, default `standard` = the model as shipped today).
+  - `solo`: ledger and handoff, the guard, one coder bucket; no tester sub-agent (the session runs the suite itself), no spec/plan documents, no release reviews, no tags.
+  - `standard`: what 1.11.0 ships.
+  - `strict`: `standard` plus `omelette-reviewer` on every task's diff, Codex `gpt-6-astra` before every release, a module-boundary section in the rules (which folders may import which), the lane closed (everything goes through the flow).
+- **What no profile drops.** Nothing lands unverified (the session reads every delegated diff before it is committed); the tester, where it runs, gets the diff from git, never a summary; coder sub-agents never commit; the handoff before a compaction. A lighter profile removes ceremony, not the check — otherwise it is the self-confirming loop the program exists to avoid.
+- **The decision is deterministic; the agent proposes.** `omelette-fleet init` (new; `doctor` prints the same line) computes the signals and prints the proposed profile with each signal's value: tests present and a runner in `package.json`/`pyproject`; CI config present; the package is published (`name` on a registry, a `release` workflow, tags); commit authors in the last 90 days; a deploy target (`Dockerfile`, `fly.toml`, `vercel.json`, …); files under version control. Thresholds come from real projects, not from this document: this repository, Omelette, and two small personal projects are measured first, the thresholds written into the 1.12.0 spec with those four rows. The operator confirms or overrides; the choice is written to config and the ledger line says which signals carried it.
+- **Delivery.** `rules --agents --hooks` renders the profile's sections and roles; the mod reads `profile` from config at `session.start` and subscribes the profile's events (a `solo` install never sees the tester gate). An install without the mod is still complete: the rendered files carry the profile on their own.
+- **Not in 1.12.0:** a model reading the code to judge its domain, automatic profile changes over time, more than three profiles. A profile that is wrong is changed by hand, in one command.
+
 ## Risks and stop conditions
 
 - **The API moves** (13 186 → 20 422 declaration lines between two builds eight days apart). Each release re-runs the live gate on the build of the day; a release whose hooks no longer load is fixed before the next slice starts. If two consecutive builds break a shipped gate, the program pauses at the last release and the classic hooks carry the guard.
@@ -141,6 +156,7 @@ The rules file keeps the operating model, the routing table, the ledger vocabula
 | 1.9.0 | each gate: times fired, times right, times overridden; commits that reached main without a tester before and after | gates |
 | 1.10.0 | characters and tokens of rent per request, full file vs `--with-mod`; whether a rule handed by event was followed (the second pass's delay; findings in four parts) | rent, by-event |
 | 1.11.0 | cost per task by role from the ledger lines; the Opus-or-Fable orchestrator question answered with them | cost |
+| 1.12.0 | the four projects' signal rows and the profile each got; rent per request and ceremony steps per task by profile; profiles overridden by the operator and why | profiles |
 
 ## Backlog items absorbed
 
