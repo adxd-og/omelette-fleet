@@ -5,9 +5,11 @@
  * the graph — sub-agents above, the orchestrator, the three units below, bus
  * rows between them; below that the same actors as an indented tree. Under
  * either, the history, newest first. Also the status-line text for a closed
- * pane. Pure, no imports but its neighbours; every string is cleaned of the
- * characters a terminal acts on before it is measured (`clean`), and every
- * width is measured in terminal cells (`cells`, `cut`), never in string length.
+ * pane; the graph's boxes, the header and the history rows serve the other
+ * surfaces too (svg.mjs, register.tsx). Pure, no imports but its neighbours;
+ * every string is cleaned of the characters a terminal acts on before it is
+ * measured (`clean`), and every width is measured in terminal cells (`cells`,
+ * `cut`), never in string length.
  */
 import { MAIN } from './model.mjs';
 import { cells, clean, clock, cut, duration, familyOf, shortModel, shortRole } from './text.mjs';
@@ -64,24 +66,50 @@ export function layout(state, { columns, rows, isAscii = false, tzOffsetAt = () 
   const height = Math.floor(rows);
   if (!(width > 0) || !(height > 0)) return [];
   const sym = isAscii ? SYMBOLS.ascii : SYMBOLS.unicode;
-  const fit = (text) => fitted(text, width, sym);
 
-  const out = [textRow(fit(headerText(state.usage ?? {}, sym))), []];
+  const out = [headerRow(state, { columns: width, isAscii }), []];
   const graphHeight = graphRowsFor(state);
   if (width >= GRAPH_MIN && height >= 2 + graphHeight + 2) {
     out.push(...graph(state, width, sym, isAscii));
   } else {
     out.push(...tree(state, width, height - 2, sym));
   }
-  const room = height - out.length;
-  const history = Array.isArray(state.history) ? state.history : [];
-  if (room >= 2 && history.length > 0) {
-    out.push([]);
-    for (const link of history.slice(-(room - 1)).reverse()) {
-      out.push(textRow(fit(`${clock(link.at, tzOffsetAt(link.at))} ${roleOf(state, link.from)} ${sym.to} ${roleOf(state, link.to)}${sym.sep}${link.label}`)));
-    }
-  }
+  const history = historyRows(state, { columns: width, count: height - out.length - 1, isAscii, tzOffsetAt });
+  if (history.length > 0) out.push([], ...history);
   return out.slice(0, height);
+}
+
+/**
+ * The header row: `ctx 31% · 5h 11% · 7d 71% · $646`, each figure left out
+ * when absent, cut to `columns`; an empty row when there is no figure.
+ * @param {FleetState} state
+ * @param {{ columns: number, isAscii?: boolean }} options
+ * @returns {Segment[]}
+ */
+export function headerRow(state, { columns, isAscii = false }) {
+  const sym = isAscii ? SYMBOLS.ascii : SYMBOLS.unicode;
+  return textRow(fitted(headerText(state.usage ?? {}, sym), Math.floor(columns), sym));
+}
+
+/**
+ * The history, newest first, at most `count` links, one row each cut to
+ * `columns`: `HH:MM:SS <from role> → <to role> · <label>`, each time in the
+ * zone `tzOffsetAt` gives for it. The terminal draws it under the graph or the
+ * tree, the other surfaces under the Svg.
+ * @param {FleetState} state
+ * @param {{ columns: number, count: number, isAscii?: boolean, tzOffsetAt?: (at: number) => number }} options
+ * @returns {Segment[][]}
+ */
+export function historyRows(state, { columns, count, isAscii = false, tzOffsetAt = () => 0 }) {
+  const sym = isAscii ? SYMBOLS.ascii : SYMBOLS.unicode;
+  const history = Array.isArray(state.history) ? state.history : [];
+  const max = Math.floor(count);
+  if (!(max > 0)) return [];
+  return history.slice(-max).reverse().map((link) => textRow(fitted(
+    `${clock(link.at, tzOffsetAt(link.at))} ${roleOf(state, link.from)} ${sym.to} ${roleOf(state, link.to)}${sym.sep}${link.label}`,
+    Math.floor(columns),
+    sym,
+  )));
 }
 
 /**
@@ -206,6 +234,37 @@ function agentRow(agents, n) {
 // ---------------------------------------------------------------------------
 // The graph
 
+/** @typedef {{ actor: FleetNode, lines: string[], tone: Tone, isLive: boolean }} GraphBox */
+/** @typedef {{ hidden: FleetNode[], lines: string[], tone: Tone, isLive: boolean }} FoldBox */
+
+/**
+ * The graph's boxes, the terminal's and the desktop's: the agent row (at most
+ * `perRow` boxes; past that its first `perRow - 1` and a last `+K more` box
+ * folding the rest), the orchestrator and the units, by `order`. Each box has
+ * its lines as the model gives them (not yet cleaned or cut), its tone, and
+ * whether its link to the orchestrator is live — an agent's or the fold's when
+ * one it draws runs, a unit's when the orchestrator calls it.
+ * @param {FleetState} state
+ * @param {number} [perRow]
+ * @param {typeof SYMBOLS.unicode} [sym]
+ * @returns {{ agents: GraphBox[], fold: FoldBox | undefined, orchestrator: GraphBox, units: GraphBox[] }}
+ */
+export function graphBoxes(state, perRow = ROW_MAX, sym = SYMBOLS.unicode) {
+  const now = state.now;
+  const toneOf = (n) => /** @type {Tone} */ (isDim(n) ? 'dim' : 'plain');
+  const { shown, hidden } = agentRow(agentsOf(state), Math.min(ROW_MAX, perRow));
+  const agents = shown.map((actor) => ({ actor, lines: agentLines(actor, now, sym), tone: toneOf(actor), isLive: actor.status === 'running' }));
+  let fold;
+  if (hidden.length) {
+    const runs = hidden.filter((a) => a.status === 'running').length;
+    fold = { hidden, lines: [`+${hidden.length} more`, runs ? `${runs} running` : '', ''], tone: /** @type {Tone} */ (hidden.every(isDim) ? 'dim' : 'plain'), isLive: runs > 0 };
+  }
+  const main = orchestratorOf(state);
+  const orchestrator = { actor: main, lines: orchestratorLines(main, state.usage ?? {}, sym), tone: /** @type {Tone} */ ('plain'), isLive: false };
+  const units = unitsOf(state).map((actor) => ({ actor, lines: unitLines(state, actor, now, sym), tone: toneOf(actor), isLive: isLiveUnit(actor) }));
+  return { agents, fold, orchestrator, units };
+}
+
 /** The graph's rows: an agent row and its bus when there are agents, the orchestrator, the unit bus, the units. */
 const graphRowsFor = (state) => (state.nodes.some((n) => n.kind === 'agent') ? 6 : 0) + 4 + 1 + 5;
 
@@ -269,17 +328,9 @@ function bus(row, ups, downs, hub, liveCentres) {
 
 /** The graph, as rows of segments. */
 function graph(state, width, sym, isAscii) {
-  const now = state.now;
-  const usage = state.usage ?? {};
-  const n = Math.min(ROW_MAX, Math.floor((width + 1) / STEP));
-  const { shown, hidden } = agentRow(agentsOf(state), n);
-
-  /** @type {{ lines: string[], tone: Tone, isLive: boolean }[]} */
-  const boxes = shown.map((a) => ({ lines: agentLines(a, now, sym), tone: isDim(a) ? 'dim' : 'plain', isLive: a.status === 'running' }));
-  if (hidden.length) {
-    const runs = hidden.filter((a) => a.status === 'running').length;
-    boxes.push({ lines: [`+${hidden.length} more`, runs ? `${runs} running` : '', ''], tone: hidden.every(isDim) ? 'dim' : 'plain', isLive: runs > 0 });
-  }
+  const { agents, fold, orchestrator, units } = graphBoxes(state, Math.floor((width + 1) / STEP), sym);
+  /** @type {(GraphBox | FoldBox)[]} */
+  const boxes = fold ? [...agents, fold] : agents;
 
   const W = Math.max(GRAPH_MIN, boxes.length * STEP - 1);
   const hub = Math.floor(W / 2);
@@ -294,10 +345,9 @@ function graph(state, width, sym, isAscii) {
     y += 6;
   }
 
-  const units = unitsOf(state);
   const anyAgentLive = boxes.some((b) => b.isLive);
-  const anyUnitLive = units.some(isLiveUnit);
-  box(out, y, hub - Math.floor(ORCH / 2), ORCH, orchestratorLines(orchestratorOf(state), usage, sym), 'plain', sym, {
+  const anyUnitLive = units.some((u) => u.isLive);
+  box(out, y, hub - Math.floor(ORCH / 2), ORCH, orchestrator.lines, 'plain', sym, {
     top: boxes.length ? (anyAgentLive ? 'live' : 'plain') : undefined,
     bottom: anyUnitLive ? 'live' : 'plain',
   });
@@ -305,10 +355,9 @@ function graph(state, width, sym, isAscii) {
 
   const unitLeft = (W - (units.length * STEP - 1)) / 2;
   const unitCentres = units.map((_, i) => unitLeft + i * STEP + Math.floor(BOX / 2));
-  bus(out[y], [hub], unitCentres, hub, unitCentres.filter((_, i) => isLiveUnit(units[i])));
+  bus(out[y], [hub], unitCentres, hub, unitCentres.filter((_, i) => units[i].isLive));
   units.forEach((u, i) => {
-    const tone = isDim(u) ? 'dim' : 'plain';
-    box(out, y + 1, unitLeft + i * STEP, BOX, unitLines(state, u, now, sym), tone, sym, { top: isLiveUnit(u) ? 'live' : tone });
+    box(out, y + 1, unitLeft + i * STEP, BOX, u.lines, u.tone, sym, { top: u.isLive ? 'live' : u.tone });
   });
 
   return out.map((row) => segmentsOf(row, isAscii));

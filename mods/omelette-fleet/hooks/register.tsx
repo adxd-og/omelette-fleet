@@ -16,8 +16,9 @@ import type { EngineInterface, FsEntry, PluginOptions, Register, SessionUsage, T
 
 import type { FleetState } from '../types'
 import { parseSnapshot, snapshotNames } from './feed.mjs'
-import { layout, statusLine } from './layout.mjs'
+import { headerRow, historyRows, layout, statusLine } from './layout.mjs'
 import { initialState, MAIN, reduce } from './model.mjs'
+import { svgOf } from './svg.mjs'
 import { subjectOf } from './text.mjs'
 
 const PANE = 'omelette-fleet'
@@ -357,15 +358,36 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
     const state = (await read($, fleet)) ?? initialState(await $.clock.now())
+    const columns = e.props.bodyColumns
+    const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24
+
+    // The desktop, VS Code and mobile draw the graph as one Svg, between the header and the history as text.
+    if (e.surface !== 'terminal') {
+      const { Box, Svg, Text } = $.ui.resolve(e)
+      const drawing = svgOf(state, { tzOffsetAt })
+      const header = headerRow(state, { columns }).map(segment => segment.text).join('')
+      // How tall the Svg is in rows is the surface's to say: the history gets the pane's rows, at least three.
+      const history = historyRows(state, { columns, count: Math.max(3, bodyRows), tzOffsetAt })
+
+      return (
+        <Box flexDirection="column">
+          {header ? <Text wrap="truncate-end">{header}</Text> : null}
+          <Svg source={drawing.source} alt={drawing.alt} width={drawing.width} />
+          {history.length > 0 ? (
+            <Box flexDirection="column" marginTop={1}>
+              {history.map(row => (
+                <Text wrap="truncate-end">{row.map(segment => segment.text).join('')}</Text>
+              ))}
+            </Box>
+          ) : null}
+        </Box>
+      )
+    }
+
+    const { Box, Text } = $.ui.resolve(e)
     const isAscii = Boolean(await $.env.get('NO_COLOR')) || (await $.env.get('TERM')) === 'dumb'
-    const rows = layout(state, {
-      columns: e.props.bodyColumns,
-      rows: e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24,
-      isAscii,
-      tzOffsetAt,
-    })
+    const rows = layout(state, { columns, rows: bodyRows, isAscii, tzOffsetAt })
 
     return (
       <Box flexDirection="column">

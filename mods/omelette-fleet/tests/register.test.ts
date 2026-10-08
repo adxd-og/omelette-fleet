@@ -352,6 +352,29 @@ describe('the pane', () => {
     await pane.unmount()
   })
 
+  test('on the desktop, VS Code and mobile: the header, one Svg of the graph with its alt and width, then the history as Text', async ($, on) => {
+    worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    on('agent.spawn', () => SPAWNED)
+    await $.session.start(SESSION)
+    await $.agent.spawn(SPAWN as never)
+
+    for (const surface of ['desktop', 'vscode', 'mobile'] as const) {
+      const pane = await $.ui.mount({ ...PANE, surface, plugin: PLUGIN })
+      const svgs = await pane.findAll({ type: 'Svg' })
+
+      expect(svgs, surface).toHaveLength(1)
+      expect(String(svgs[0]?.props.source)).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" [^>]*>.*<\/svg>$/)
+      expect(String(svgs[0]?.props.alt)).toContain('│ ▶ coder-medium│')
+      expect(typeof svgs[0]?.props.width).toBe('number')
+      expect(await pane.find({ type: 'Text', text: 'ctx 31% · 5h 11% · 7d 71% · $646' }), surface).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: /^\d\d:\d\d:\d\d orchestrator → coder-medium · Agent$/ }), surface).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: '┌───────────────┐' }), 'no terminal frame drawn as text').toBeUndefined()
+      await pane.unmount()
+    }
+  })
+
   test('with NO_COLOR the frames are ASCII and no segment carries a colour', async ($, on) => {
     worldOf(on)
     mock.clock(on, { now: NOW })
