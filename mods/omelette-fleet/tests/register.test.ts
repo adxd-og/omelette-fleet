@@ -573,6 +573,7 @@ describe('the tick', () => {
     await $.command.run(command())
     await $.session.start(SESSION)
     expect(world.fleet?.isOpen).toBe(true)
+    expect(await asksIn(clock, world, 2_000), 'the new chain ticks while the old tick is still held').toBe(2)
 
     // The held answer is the engine's as of the close: no pane.
     release([])
@@ -580,6 +581,45 @@ describe('the tick', () => {
     expect(world.fleet?.isOpen, 'the old tick wrote no close').toBe(true)
     await clock.advance(1_000)
     expect(await asksIn(clock, world, 3_000), 'one chain, a tick a second').toBe(3)
+  })
+
+  test('with the pane closed, the orchestrator\'s model requests refresh the agent list (at most every 5 s): an agent the engine lists idle leaves the status line', { options: { autoOpen: false } }, async ($, on) => {
+    const world = worldOf(on)
+    const clock = mock.clock(on, { now: NOW })
+
+    mock.env(on, { HOME })
+    on('agent.spawn', () => SPAWNED)
+    on('turn.step', async function* () {
+      return STEPPED
+    })
+    await $.session.start(SESSION)
+    await $.agent.spawn(SPAWN as never)
+    expect(world.statuses.at(-1), 'the agent runs').toContain('coder')
+    world.agents = [{ id: SPAWNED.agentId, type: 'omelette-coder', status: 'idle', description: 'x' } as never]
+    await clock.advance(5_000)
+    await step($ as never, undefined, 'high')
+    expect(world.statuses.at(-1), 'the idle agent is gone from the status line').toBeUndefined()
+  })
+
+  test('a close whose pane-list answer is held while the pane is reopened, then let go, stops nothing: the reopened pane stays open and ticking', { options: { autoOpen: false } }, async ($, on) => {
+    const world = worldOf(on)
+    const clock = mock.clock(on, { now: NOW })
+    let release: (panes: { id: string; isPlaced: boolean }[]) => void = () => undefined
+
+    mock.env(on, { HOME })
+    await $.session.start(SESSION)
+    await $.command.run(command())
+    world.heldAsk = new Promise(resolve => (release = resolve))
+
+    const closing = $.command.run(command('close'))
+
+    await clock.settle()
+    await $.command.run(command())
+    release([])
+    await closing
+    await clock.settle()
+    expect(world.fleet?.isOpen, 'the reopened pane is open').toBe(true)
+    expect(await asksIn(clock, world, 3_000), 'its chain still ticks').toBe(3)
   })
 
   test('an open whose feed read is held across a close, then let go, writes nothing: the model stays closed', { options: { autoOpen: false } }, async ($, on) => {

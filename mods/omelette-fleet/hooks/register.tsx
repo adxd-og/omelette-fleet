@@ -55,11 +55,18 @@ type Chain = { readonly generation: number; timer?: Timer }
  */
 let ticker: Chain | undefined
 let generation = 0
+/** Opens of the pane by this module (the command, autoOpen): a close that waited across one stops nothing. */
+let opens = 0
+/** When the closed pane's status line last refreshed the agent list. */
+let agentsReadAt = -Infinity
+const AGENTS_MS = 5_000
 let feedReadAt = Number.NEGATIVE_INFINITY
 let drawnOn: string | undefined
 
 /** Whether the chain of `gen` is the one running: a tick, an open or a feed read of an older chain writes nothing. */
 const isCurrent = (gen: number): boolean => ticker?.generation === gen
+/** No chain runs: a close may be written. */
+const isStopped = (): boolean => ticker === undefined
 
 /** Thrown inside a write of a chain stopped since its tick or open began: `update` writes nothing. */
 const STALE = new Error('the chain stopped')
@@ -68,14 +75,16 @@ const STALE = new Error('the chain stopped')
  * Applies model events at the engine's time in one state write (`update`
  * retries on a concurrent write), then sets the status line: the running
  * actors while the pane is closed, nothing while it is open. With `gen`, the
- * write is made only while that chain runs, checked at the write itself.
+ * write is made only while that chain runs (or, given a check, while it holds),
+ * checked at the write itself: `update` writes with `ifVersion` and re-runs the
+ * check on a miss.
  * Never throws.
  */
-const apply = async ($: EngineInterface, events: readonly ModelEvent[], gen?: number): Promise<FleetState | undefined> => {
+const apply = async ($: EngineInterface, events: readonly ModelEvent[], gen?: number | (() => boolean)): Promise<FleetState | undefined> => {
   try {
     const at = await $.clock.now()
     const state: FleetState = await update($, fleet, value => {
-      if (gen !== undefined && !isCurrent(gen)) {
+      if (typeof gen === 'function' ? !gen() : gen !== undefined && !isCurrent(gen)) {
         throw STALE
       }
 
@@ -215,7 +224,8 @@ const tick = async ($: EngineInterface, gen: number, isAnimated: boolean): Promi
 
     if (!pane) {
       stopTicking()
-      await apply($, [{ type: 'close' }])
+      // Written only while no chain has started since: a reopen in the meantime wins.
+      await apply($, [{ type: 'close' }], isStopped)
 
       return
     }
@@ -310,6 +320,7 @@ const start = async ($: EngineInterface, options: PluginOptions): Promise<void> 
       // Not awaited: the engine seats an unasked pane only on a wide terminal, and a `-p` run never answers.
       void $.ui.open({ id: PANE, title: TITLE }).then(
         async opened => {
+          opens += 1
           const gen = startTicking($, options.animate !== false)
 
           if (opened.isPlaced) {
@@ -341,6 +352,22 @@ const noteStep = async ($: EngineInterface, agentId: string, model: string, effo
 
     const isStepped = node !== undefined && node.model === model && node.effort === effort && node.status !== 'reported'
     const events: ModelEvent[] = [...(node?.loopCalls ? [{ type: 'settle', agentId }] : []), ...(isStepped ? [] : [{ type: 'step', agentId, model, effort }])]
+
+    // With no pane ticking, the status line still names the running agents: the orchestrator's own model
+    // requests refresh the engine's list (at most every 5 s), so an agent that never stops does not linger.
+    if (agentId === MAIN && state && !state.isOpen && state.nodes.some(one => one.kind === 'agent' && one.status === 'running')) {
+      const at = await $.clock.now()
+
+      if (at - agentsReadAt >= AGENTS_MS) {
+        agentsReadAt = at
+
+        const agents = await $.agent.list().catch(() => undefined)
+
+        if (agents) {
+          events.push(agentsEvent(agents))
+        }
+      }
+    }
 
     if (events.length > 0) {
       await apply($, events)
@@ -384,6 +411,7 @@ export const register: Register = (on, options) => {
     }
 
     const opened = await $.ui.open({ id: PANE, title: TITLE })
+    opens += 1
     const gen = startTicking($, options.animate !== false)
 
     if (opened.isPlaced) {
@@ -447,6 +475,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
+    const opensBefore = opens
     const result = await next(e)
     // The engine's list says whether the pane closed: a hook beneath may keep it by answering without next.
     const isClosed = await $.ui.panes().then(
@@ -454,9 +483,10 @@ export const register: Register = (on, options) => {
       () => false,
     )
 
-    if (isClosed) {
+    // A reopen while the engine answered (it may keep the same chain): this close is not the pane's any more.
+    if (isClosed && opens === opensBefore) {
       stopTicking()
-      await apply($, [{ type: 'close' }])
+      await apply($, [{ type: 'close' }], isStopped)
     }
 
     return result
