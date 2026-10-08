@@ -60,30 +60,32 @@ function cli(bin, args, { home, cwd, base }) {
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
 
-test('the plugin manifest: named omelette-fleet, at the package version, with a one-line description, its types file and the autoOpen option', () => {
+test('the plugin manifest: named omelette-fleet, at the package version, with a one-line description, its types file and the two options', () => {
   const p = plugin();
   assert.equal(p.name, 'omelette-fleet');
   assert.equal(p.version, pkg().version, 'the plugin version must equal package.json\'s');
   assert.equal(typeof p.description, 'string');
   assert.ok(p.description.length > 0 && !p.description.includes('\n'), p.description);
-  assert.equal(typeof p.types, 'string');
+  assert.equal(p.types, './types/index.d.ts');
   assert.ok(existsSync(resolve(MOD, p.types)), `types names a file that does not exist: ${p.types}`);
-  assert.equal(p.userConfig.autoOpen.type, 'boolean');
-  assert.equal(p.userConfig.autoOpen.default, true);
+  assert.deepEqual(Object.keys(p.userConfig).sort(), ['animate', 'autoOpen'], 'autoOpen (Task 1) and animate (Task 3.2)');
+  const { autoOpen } = p.userConfig;
+  assert.deepEqual([autoOpen.type, autoOpen.default, autoOpen.title], ['boolean', true, 'Open the pane at session start']);
+  for (const words of [/wide terminal/, /\/omelette-fleet command/, /status line/]) assert.match(autoOpen.description, words);
 });
 
-test('hooks.json names exactly one module, and that module exists', () => {
+test('hooks.json names exactly one module, ./register.tsx, and that module exists', () => {
   const hooksJson = join(MOD, 'hooks', 'hooks.json');
-  const { modules } = readJson(hooksJson);
-  assert.ok(Array.isArray(modules), 'modules is a list');
-  assert.equal(modules.length, 1, `exactly one module: ${JSON.stringify(modules)}`);
-  assert.ok(existsSync(resolve(dirname(hooksJson), modules[0])), `the module does not exist: ${modules[0]}`);
+  assert.deepEqual(readJson(hooksJson), { modules: ['./register.tsx'] });
+  assert.ok(existsSync(resolve(dirname(hooksJson), './register.tsx')));
 });
 
 test('the marketplace: its one plugin\'s source resolves to a folder holding the plugin manifest, under the same name and description', () => {
   const m = marketplace();
+  assert.equal(m.owner.name, 'adxd-og');
   assert.equal(m.plugins.length, 1, JSON.stringify(m.plugins));
   const [entry] = m.plugins;
+  assert.equal(entry.source, './mods/omelette-fleet');
   const folder = resolve(ROOT, entry.source);
   assert.ok(statSync(folder).isDirectory(), `source is not a folder: ${entry.source}`);
   const manifest = join(folder, '.claude-plugin', 'plugin.json');
@@ -95,10 +97,29 @@ test('the marketplace: its one plugin\'s source resolves to a folder holding the
   assert.equal(`${p.name}@${m.name}`, 'omelette-fleet@omelette-fleet');
 });
 
-test('package.json ships the mod and the marketplace', () => {
-  const { files } = pkg();
-  assert.ok(files.includes('mods'), JSON.stringify(files));
-  assert.ok(files.includes('.claude-plugin'), JSON.stringify(files));
+test('package.json ships the mod and the marketplace, with no runtime dependency, on Node 20, and npm test runs test/ only (the kit\'s .test.ts files stay with claude plugin test)', () => {
+  const p = pkg();
+  assert.ok(p.files.includes('mods'), JSON.stringify(p.files));
+  assert.ok(p.files.includes('.claude-plugin'), JSON.stringify(p.files));
+  assert.deepEqual(Object.keys(p.dependencies ?? {}), []);
+  assert.equal(p.engines.node, '>=20');
+  assert.equal(p.scripts.test, 'node --test test/');
+});
+
+test('npm pack --dry-run ships the manifests and the plugin files, and none of the engine-laid declarations, node tests or session files', { timeout: 120000 }, (t) => {
+  const box = sandbox();
+  const r = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+    cwd: ROOT, encoding: 'utf8',
+    env: { ...process.env, HOME: box.home, npm_config_cache: join(box.base, 'npm-cache'), npm_config_update_notifier: 'false', npm_config_audit: 'false', npm_config_fund: 'false' },
+  });
+  if (r.error || r.status !== 0) { t.skip(`npm unavailable: ${r.error || r.stderr}`); return; }
+  const paths = JSON.parse(r.stdout.slice(r.stdout.indexOf('[')))[0].files.map((f) => f.path);
+  for (const want of ['.claude-plugin/marketplace.json', 'mods/omelette-fleet/.claude-plugin/plugin.json', 'mods/omelette-fleet/hooks/hooks.json', 'mods/omelette-fleet/hooks/register.tsx', 'mods/omelette-fleet/types/index.d.ts']) {
+    assert.ok(paths.includes(want), `${want} missing from the package`);
+  }
+  assert.ok(!paths.some((p) => /\.claude-plugin\/types\//.test(p)), 'engine-laid declarations would ship');
+  assert.ok(!paths.some((p) => p.startsWith('mods/omelette-fleet/tests/')), 'the kit tests would ship');
+  assert.ok(!paths.some((p) => p.startsWith('test/') || p.startsWith('.omelette') || p.startsWith('.claude/')), 'tests or session files would ship');
 });
 
 test('no file under mods/ holds import(, node: or an absolute home path (the engine\'s own .claude-plugin/types/ aside)', () => {
@@ -150,10 +171,10 @@ test('rules --mods prints the install commands, the one-session form and the rem
   assert.deepEqual(snapshot(box.cwd), before.cwd, 'rules --mods wrote under the cwd');
 });
 
-test('rules --mods quotes a package root that holds a space, and a shell reads it as one word',
+test('rules --mods quotes a package root that holds a space and an apostrophe, and a shell reads it as one word',
   { skip: process.platform === 'win32' && 'POSIX quoting' }, () => {
     const box = sandbox();
-    const copy = join(box.base, 'fleet with space');
+    const copy = join(box.base, "fleet it's here");
     for (const part of ['bin', 'core', 'units', 'servers', 'examples', 'rules', 'agents', 'skills', 'hooks', 'package.json']) {
       cpSync(join(ROOT, part), join(copy, part), { recursive: true });
     }
@@ -162,9 +183,9 @@ test('rules --mods quotes a package root that holds a space, and a shell reads i
     const r = cli(join(copy, 'bin', 'omelette-fleet.mjs'), ['rules', '--mods'], box);
     assert.equal(r.code, 0, r.out + r.err);
     const add = r.out.split('\n').map((l) => l.trim()).find((l) => l.startsWith('claude plugin marketplace add '));
-    assert.equal(add, `claude plugin marketplace add '${root}'`, r.out);
+    assert.equal(add, `claude plugin marketplace add ${shellWord(root)}`, r.out);
     const dir = r.out.split('\n').map((l) => l.trim()).find((l) => l.startsWith('claude --plugin-dir '));
-    assert.equal(dir, `claude --plugin-dir '${join(root, 'mods', 'omelette-fleet')}'`, r.out);
+    assert.equal(dir, `claude --plugin-dir ${shellWord(join(root, 'mods', 'omelette-fleet'))}`, r.out);
     // What the operator pastes: the path is ONE argument to a POSIX shell.
     for (const [line, word] of [[add, root], [dir, join(root, 'mods', 'omelette-fleet')]]) {
       const words = spawnSync('sh', ['-c', `set -- ${line.slice('claude '.length)}; printf '%s\\n' "$@"`], { encoding: 'utf8' });

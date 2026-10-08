@@ -42,6 +42,9 @@ test('snapshotNames keeps the three units\' status-<unit>-<pid>.json and drops e
     'STATUS-grok-1.json',
     'status-codex-48123.json',
     'status-codex--1.json',
+    'status-codex-.json',
+    'status-codex-1-2.json',
+    'status-codexx-1.json',
   ]), ['status-grok-4242.json', 'status-gemini-7.json', 'status-codex-48123.json']);
   assert.deepEqual(snapshotNames([]), []);
 });

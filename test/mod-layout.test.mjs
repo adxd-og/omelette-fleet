@@ -62,6 +62,16 @@ function toneAt(row, col) {
   return undefined;
 }
 
+/** Hand-built states for the motion tests: the orchestrator, the three units (`units` patches them by name), `agents`. */
+const unitNode = (name, order, fields = {}) => ({ id: `unit:${name}`, kind: 'unit', role: name, status: 'idle', since: NOW - MIN, feed: 'ok', order, ...fields });
+const agent = (id, fields = {}) => ({ id, kind: 'agent', role: `omelette-${id}`, parentId: 'main', status: 'running', since: NOW - MIN, order: 10 + Number(id.replace(/\D/g, '') || 0), ...fields });
+const call = (callerId, callId = `${callerId}:c`) => ({ callId, callerId, tool: 'review', since: NOW - MIN });
+const running = (...callers) => ({ status: 'running', callerId: callers.at(-1), activity: 'review', openCalls: callers.map((c, i) => call(c, `c${i}`)) });
+const stateOf = (agents = [], units = {}) => ({
+  now: NOW, isOpen: true, usage: {}, history: [],
+  nodes: [{ id: 'main', kind: 'orchestrator', role: 'orchestrator', status: 'running', since: NOW - MIN, order: 0 }, ...['gemini', 'grok', 'codex'].map((name, i) => unitNode(name, i + 1, units[name])), ...agents],
+});
+
 const GOLDEN_53 = [
   'ctx 31% · 5h 11% · 7d 71%',
   '',
@@ -126,6 +136,29 @@ test('with animate, a running box\'s glyph is the spinner\'s frame for the model
     assert.notEqual(glyphAt(NOW, isAscii), glyphAt(NOW + 250, isAscii), `ascii=${isAscii}`);
     for (const now of [NOW, NOW + 250, NOW + 1234]) assert.ok(frames.includes(glyphAt(now, isAscii)), `ascii=${isAscii} @${now}: ${glyphAt(now, isAscii)}`);
   }
+});
+
+test('the spinner frame is exactly floor(now / 250) % n of the ten glyphs (ASCII four): 249 ms is still the same frame, a full cycle returns to it', () => {
+  const state = stateOf([agent('a1')]);
+  const glyphAt = (now, isAscii) => plainRows(layout({ ...state, now }, { columns: 53, rows: 30, isAscii, animate: true, tzOffsetAt: UTC })).join('\n').match(/(\S) a1/)[1];
+  for (const [isAscii, frames] of [[false, [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏']], [true, [...'|/-\\']]]) {
+    for (const now of [0, 249, 250, 499, 500, 2499, 2500, 12_345_678, NOW, NOW + 249, NOW + 250, NOW + 251, NOW + 1000, NOW + 2750]) {
+      assert.equal(glyphAt(now, isAscii), frames[Math.floor(now / 250) % frames.length], `ascii=${isAscii} now=${now}`);
+    }
+  }
+});
+
+test('with animate the tree form (narrow pane) shows the spinner as well, the static ▶ without it', () => {
+  const state = stateOf([agent('a1')]);
+  const tree = (animate, isAscii) => plainRows(layout({ ...state, now: NOW + 250 }, { columns: 35, rows: 30, isAscii, animate, tzOffsetAt: UTC })).filter((row) => row.includes('a1'));
+  assert.match(tree(true, false)[0], /^├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] a1/);
+  assert.match(tree(true, true)[0], /^\+ [|/\\-] a1/);
+  assert.match(tree(false, false)[0], /^├ ▶ a1/);
+});
+
+test('units and agents appear in `order`, whatever the order of the nodes array', () => {
+  const state = golden();
+  assert.deepEqual(plainRows(layout({ ...state, nodes: [...state.nodes].reverse() }, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC })).slice(0, 18), GOLDEN_53);
 });
 
 test('plainRows joins a row\'s segments and trims its right end', () => {
@@ -277,6 +310,29 @@ test('a unit\'s link is live when any of its open calls is the orchestrator\'s, 
   const rows = layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
   assert.equal(plainRows(rows)[16], '│               │ │ ← coder-medium│ │               │', 'the newest caller is still the one named');
   for (const [row, what] of [[11, 'the orchestrator\'s bottom junction'], [12, 'the bus under it'], [13, 'grok\'s top junction']]) assert.equal(toneAt(rows[row], 26), 'live', what);
+});
+
+test('a unit\'s link is live when ANY open call is the orchestrator\'s, even if the first listed is another caller\'s', () => {
+  const state = stateOf([], { grok: { status: 'running', callerId: 'main', activity: 'review', openCalls: [call('a-x', 'c0'), call('main', 'c1')] } });
+  const rows = layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
+  const top = plainRows(rows).findIndex((row, i) => i > 4 && row.startsWith('┌'));
+  assert.equal(toneAt(rows[top], 26), 'live', 'grok\'s top junction');
+});
+
+test('a running unit\'s frame is live with or without motion, whoever calls it; an idle unit\'s is dim; a waiting agent\'s is not live', () => {
+  for (const animate of [false, true]) {
+    for (const caller of ['main', 'other']) {
+      const rows = layout(stateOf([agent('a1', { status: 'waiting' })], { grok: running(caller) }), { columns: 53, rows: 30, isAscii: false, animate, tzOffsetAt: UTC });
+      const grokTop = plainRows(rows).findIndex((row, i) => i > 4 && row.startsWith('┌'));
+      assert.ok(grokTop > 0, 'the units\' row');
+      assert.equal(toneAt(rows[grokTop + 1], 18), 'live', `animate=${animate} caller=${caller}: grok's left frame`);
+      assert.equal(toneAt(rows[grokTop + 1], 18 + 16), 'live', 'grok\'s right frame');
+      assert.equal(toneAt(rows[grokTop + 1], 0), 'dim', 'gemini, idle');
+      const waitingRow = plainRows(rows).findIndex((row) => row.includes('◌ a1'));
+      assert.ok(waitingRow > 0, 'the waiting agent is drawn');
+      assert.notEqual(toneAt(rows[waitingRow], plainRows(rows)[waitingRow].indexOf('◌') - 2), 'live', 'a waiting agent is not running');
+    }
+  }
 });
 
 test('a unit with two open calls may show the count; the line is still one box line', () => {

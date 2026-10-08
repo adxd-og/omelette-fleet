@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MAIN, UNITS, initialState, reduce, unitOfTool } from '../mods/omelette-fleet/hooks/model.mjs';
+import { MAIN, STALE_MS, UNITS, initialState, reduce, unitOfTool } from '../mods/omelette-fleet/hooks/model.mjs';
 import { parseSnapshot } from '../mods/omelette-fleet/hooks/feed.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -64,6 +64,7 @@ test('unitOfTool: a unit\'s MCP tool under any server prefix splits into unit an
   assert.equal(unitOfTool('Bash'), null);
   assert.equal(unitOfTool('grok_code_review'), null, 'not an MCP name');
   assert.equal(unitOfTool('mcp__orion-grok__grok_'), null, 'no tool part');
+  for (const other of ['mcp__grok_code_review', 'mcp__x__grokx_review', 'mcp__x__Grok_review', 'mcp__x__xgrok_review', 'mcp__x__jaravis_research']) assert.equal(unitOfTool(other), null, other);
   assert.equal(unitOfTool(undefined), null);
 });
 
@@ -74,8 +75,9 @@ test('spawn: adds a running agent under the main loop, with its role and model, 
     status: 'running', since: T0 + SEC, order: 4,
   });
   assert.deepEqual(s.history, [{ at: T0 + SEC, from: 'main', to: CODER, label: 'Agent' }]);
-  const second = reduce(s, spawn(T0 + 2 * SEC, TESTER, 'omelette-tester', { model: 'claude-sonnet-5-5' }));
+  const second = reduce(s, spawn(T0 + 2 * SEC, TESTER, 'omelette-tester', { model: 'claude-sonnet-5-5', parentId: '' }));
   assert.equal(node(second, TESTER).order, 5, 'order is the spawn sequence');
+  assert.equal(node(second, TESTER).parentId, 'main', 'an empty parentId is the main loop');
 });
 
 test('spawn of an agent the model already holds updates it in place, keeping its order', () => {
@@ -131,6 +133,9 @@ test('call: sets the loop\'s activity (the subject, else the tool\'s name), its 
   assert.equal(node(s, CODER).activity, 'Grep');
   assert.equal(node(s, CODER).activityCallId, 'k2');
   assert.deepEqual(s.history.map((l) => l.label), ['Agent'], 'a plain tool call adds no link');
+  for (const held of [{ type: 'stop', at: T0 + 3 * MIN, agentId: CODER }, { type: 'agents', at: T0 + 3 * MIN, list: [{ id: CODER, type: 'omelette-coder-medium', status: 'waiting' }] }]) {
+    assert.equal(node(run(s, held, call(T0 + 4 * MIN, CODER, 'k3', 'Read', 'Read a.mjs')), CODER).status, 'running', `a call after ${held.type}`);
+  }
 });
 
 test('call: a unit tool from the main loop sets the unit running, called by main, and links main → unit · tool part', () => {
@@ -161,12 +166,13 @@ test('call: SendMessage links the caller to its target — a node id, or the raw
     spawn(T0, TESTER, 'omelette-tester'),
     call(T0 + MIN, MAIN, 'm1', 'SendMessage', 'SendMessage', { target: TESTER }),
     call(T0 + 2 * MIN, TESTER, 'm2', 'SendMessage', 'SendMessage', { target: 'main' }),
-    call(T0 + 3 * MIN, MAIN, 'm3', 'SendMessage', 'SendMessage', { target: 'reviewer-2' }));
+    call(T0 + 3 * MIN, MAIN, 'm3', 'SendMessage', 'SendMessage', { target: 'reviewer-2' }),
+    call(T0 + 4 * MIN, MAIN, 'm4', 'SendMessage', 'SendMessage'));
   assert.deepEqual(s.history.slice(1), [
     { at: T0 + MIN, from: 'main', to: TESTER, label: 'SendMessage' },
     { at: T0 + 2 * MIN, from: TESTER, to: 'main', label: 'SendMessage' },
     { at: T0 + 3 * MIN, from: 'main', to: 'reviewer-2', label: 'SendMessage' },
-  ]);
+  ], 'no target, no link');
 });
 
 test('return: clears the loop\'s activity when the call id matches; the unit whose call it was becomes idle with lastEndedAt', () => {
@@ -292,6 +298,52 @@ test('open calls stay pure: call, return, stop and tick on deep-frozen state nev
   assert.equal(node(state, 'unit:grok').status, 'idle');
 });
 
+test('a unit call with no call id holds no open call on the unit, but its link and the loop\'s activity are recorded; an open call beside it stays', () => {
+  for (const callId of [undefined, '', null]) {
+    const s = reduce(initialState(T0), call(T0 + SEC, MAIN, callId, GROK, 'code_review'));
+    const grok = node(s, 'unit:grok');
+    assert.equal(grok.status, 'idle', String(callId));
+    assert.equal('openCalls' in grok, false, String(callId));
+    assert.equal(node(s, MAIN).activity, 'code_review');
+    assert.deepEqual(s.history, [{ at: T0 + SEC, from: MAIN, to: 'unit:grok', label: 'code_review' }]);
+  }
+  const s = run(initialState(T0), call(T0, MAIN, 'c1', GROK, 'code_review'), call(T0 + SEC, MAIN, undefined, GROK, 'code_review'));
+  assert.deepEqual(node(s, 'unit:grok').openCalls.map((c) => c.callId), ['c1']);
+});
+
+test('a unit keeps at most 20 open calls, the oldest dropped', () => {
+  const calls = Array.from({ length: 25 }, (_, i) => call(T0 + i * SEC, MAIN, `c${i}`, GROK, 'code_review'));
+  const grok = node(run(initialState(T0), ...calls), 'unit:grok');
+  assert.equal(grok.openCalls.length, 20);
+  assert.equal(grok.openCalls[0].callId, 'c5');
+  assert.equal(grok.openCalls.at(-1).callId, 'c24');
+  assert.equal(grok.activityCallId, 'c24');
+});
+
+test('a unit falling back to an older open call drops model and effort; one that keeps showing the same call keeps them', () => {
+  const grokFeed = (at, startedAt) => ({ type: 'feed', at, snapshots: [snap('grok', [entry('grok_code_review', startedAt, 'grok-4.7', 'high')], { updatedAt: startedAt })] });
+  const two = run(initialState(T0), call(T0, MAIN, 'old', GROK, 'code_review'), call(T0 + SEC, MAIN, 'new', GROK, 'code_review'), grokFeed(T0 + 2 * SEC, T0 + SEC));
+  assert.equal(node(two, 'unit:grok').model, 'grok-4.7');
+  const afterReturn = node(reduce(two, { type: 'return', at: T0 + 3 * SEC, agentId: MAIN, callId: 'new' }), 'unit:grok');
+  assert.equal(afterReturn.activityCallId, 'old');
+  assert.equal('model' in afterReturn, false);
+  assert.equal('effort' in afterReturn, false);
+  const oldGone = node(reduce(two, { type: 'return', at: T0 + 3 * SEC, agentId: MAIN, callId: 'old' }), 'unit:grok');
+  assert.deepEqual([oldGone.activityCallId, oldGone.model, oldGone.effort], ['new', 'grok-4.7', 'high'], 'the call shown did not change');
+  const byAgent = run(initialState(T0), spawn(T0, 'ag1', 'omelette-coder'), call(T0, MAIN, 'old', GROK, 'code_review'), call(T0 + SEC, 'ag1', 'new', GROK, 'code_review'), grokFeed(T0 + 2 * SEC, T0 + SEC), { type: 'stop', at: T0 + 3 * SEC, agentId: 'ag1' });
+  assert.equal(node(byAgent, 'unit:grok').activityCallId, 'old');
+  assert.equal('model' in node(byAgent, 'unit:grok'), false, 'after a stop');
+  const byTick = node(reduce(two, { type: 'tick', at: T0 + STALE_MS + 1 }), 'unit:grok');
+  assert.deepEqual([byTick.openCalls.map((c) => c.callId), byTick.model], [['new'], 'grok-4.7'], 'a tick that drops only the old call keeps the newest and its model');
+});
+
+test('STALE_MS is the one 2-hour bound of the model\'s tick', () => {
+  assert.equal(STALE_MS, 2 * HOUR);
+  const s = run(initialState(T0), call(T0, MAIN, 'c1', 'Bash', 'Bash: x'));
+  assert.equal(node(reduce(s, { type: 'tick', at: T0 + STALE_MS }), MAIN).activity, 'Bash: x');
+  assert.equal('activity' in node(reduce(s, { type: 'tick', at: T0 + STALE_MS + 1 }), MAIN), false);
+});
+
 test('stop: the agent is reported since the stop, its activity cleared, and links agent → main · report', () => {
   const s = run(initialState(T0),
     spawn(T0, TESTER, 'omelette-tester'),
@@ -342,6 +394,8 @@ test('agents (Review Focus 1): agents the model never saw spawn appear with role
   assert.equal(node(s, CODER).model, 'claude-opus-5-5');
   assert.equal(node(s, CODER).effort, 'medium');
   assert.equal(node(s, CODER).activity, 'Edit adapter.mjs');
+  s = reduce(s, { type: 'stop', at: T0 + 3 * MIN, agentId: HELPER });
+  assert.deepEqual(s.history.at(-1), { at: T0 + 3 * MIN, from: HELPER, to: CODER, label: 'report' }, 'a listed agent reports to its listed parent');
 });
 
 test('agents: a known agent takes the engine\'s status, except that a reported one stays reported while the engine says idle', () => {
@@ -364,6 +418,14 @@ test('agents: a known agent takes the engine\'s status, except that a reported o
   assert.equal(node(s, CODER).status, 'running');
   assert.equal(node(s, TESTER).status, 'running', 'resumed');
   assert.equal(s.nodes.length, 6, 'nothing added');
+  const again = reduce(s, { type: 'agents', at: T0 + 9 * MIN, list: [{ id: CODER, type: 'omelette-coder', status: 'running' }] });
+  assert.deepEqual(node(again, CODER), node(s, CODER), 'an unchanged status keeps its since');
+});
+
+test('agents: the orchestrator\'s or a unit\'s id in the list stays what it is, and malformed entries are skipped', () => {
+  const s = reduce(initialState(T0), { type: 'agents', at: T0, list: [{ id: 'main', type: 'x', status: 'completed' }, { id: 'unit:grok', type: 'x', status: 'running' }, null, {}, { id: '', type: 'x', status: 'running' }, { id: 'ok', type: 'x', status: 'running' }] });
+  assert.deepEqual([node(s, MAIN).status, node(s, 'unit:grok').status, node(s, 'unit:grok').kind], ['idle', 'idle', 'unit']);
+  assert.deepEqual(s.nodes.map((n) => n.id), ['main', 'unit:gemini', 'unit:grok', 'unit:codex', 'ok']);
 });
 
 test('agents: an ended agent (completed, failed, killed) reads as reported; one the engine holds reads as waiting; one not yet started reads as running', () => {
@@ -447,6 +509,40 @@ test('feed: a unit whose snapshot is gone loses its feed, and another session\'s
   s = reduce(s, { type: 'feed', at: T0 + 2 * SEC, snapshots: [] });
   assert.equal(node(s, 'unit:gemini').feed, 'none');
   assert.equal(node(s, 'unit:gemini').status, 'idle');
+  // A snapshot of a unit the model does not have, or no snapshots field at all, adds nothing.
+  assert.equal(reduce(s, { type: 'feed', at: T0, snapshots: [{ unit: 'jaravis', pid: 1, active: [], updatedAt: T0, isStale: false }] }).nodes.length, 4);
+  assert.equal(reduce(s, { type: 'feed', at: T0 }).nodes.length, 4);
+});
+
+const snap = (unit, active = [], extra = {}) => ({ unit, pid: 4242, active, updatedAt: T0, isStale: false, ...extra });
+const entry = (tool, startedAt, model = 'm-1', effort = 'high') => ({ id: '4242-1', tool, model, effort, startedAt });
+
+test('feed: this session\'s call takes model, effort and since from the same-tool entry that started nearest to it', () => {
+  const s0 = reduce(initialState(T0), call(T0 + 10 * SEC, MAIN, 'c1', GROK, 'code_review'));
+  const s = reduce(s0, { type: 'feed', at: T0 + 12 * SEC, snapshots: [snap('grok', [
+    entry('grok_code_review', T0 - 5 * MIN, 'far-model', 'low'),
+    entry('grok_code_review', T0 + 9 * SEC, 'near-model', 'high'),
+    entry('grok_research', T0 + 10 * SEC, 'other-tool-model', 'max'),
+  ])] });
+  assert.deepEqual([node(s, 'unit:grok').model, node(s, 'unit:grok').effort, node(s, 'unit:grok').since, node(s, 'unit:grok').callerId], ['near-model', 'high', T0 + 9 * SEC, MAIN]);
+});
+
+test('feed: another session\'s call shows from the newest entry; several snapshots of one unit (two processes) are one union', () => {
+  const s = reduce(initialState(T0), { type: 'feed', at: T0 + MIN, snapshots: [snap('grok', [entry('grok_research', T0 + 10 * SEC, 'g-old', 'low'), entry('grok_code_review', T0 + 40 * SEC, 'g-new', 'high')])] });
+  assert.deepEqual([node(s, 'unit:grok').callerId, node(s, 'unit:grok').activity, node(s, 'unit:grok').model, node(s, 'unit:grok').since], ['other', 'code_review', 'g-new', T0 + 40 * SEC]);
+  const two = reduce(initialState(T0), { type: 'feed', at: T0 + MIN, snapshots: [
+    snap('grok', [entry('grok_research', T0 + 10 * SEC, 'a', 'low')], { pid: 1, lastEndedAt: T0 - MIN }),
+    snap('grok', [entry('grok_code_review', T0 + 30 * SEC, 'b', 'high')], { pid: 2, lastEndedAt: T0 - 10 * SEC }),
+  ] });
+  assert.deepEqual([node(two, 'unit:grok').activity, node(two, 'unit:grok').model, node(two, 'unit:grok').lastEndedAt], ['code_review', 'b', T0 - 10 * SEC]);
+});
+
+test('feed: lastEndedAt is the newer of the model\'s and the feed\'s, whichever side gives it', () => {
+  const ended = run(initialState(T0), call(T0, MAIN, 'c1', GROK, 'code_review'), { type: 'return', at: T0 + 60 * SEC, agentId: MAIN, callId: 'c1' });
+  assert.equal(node(reduce(ended, { type: 'feed', at: T0 + 70 * SEC, snapshots: [snap('grok', [], { lastEndedAt: T0 + 30 * SEC })] }), 'unit:grok').lastEndedAt, T0 + 60 * SEC);
+  assert.equal(node(reduce(ended, { type: 'feed', at: T0 + 200 * SEC, snapshots: [snap('grok', [], { lastEndedAt: T0 + 150 * SEC })] }), 'unit:grok').lastEndedAt, T0 + 150 * SEC);
+  const fresh = reduce(initialState(T0), { type: 'feed', at: T0, snapshots: [snap('codex', [], { lastEndedAt: T0 - MIN })] });
+  assert.equal(node(reduce(fresh, { type: 'feed', at: T0 + SEC, snapshots: [snap('codex', [], { lastEndedAt: T0 - 2 * MIN })] }), 'unit:codex').lastEndedAt, T0 - MIN);
 });
 
 test('usage: replaces the usage figures', () => {

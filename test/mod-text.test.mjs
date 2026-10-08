@@ -26,6 +26,7 @@ test('cut: text that fits is unchanged; longer text ends in an ellipsis within t
 
 test('cut counts terminal cells: a wide character is two, a combining mark none, and a pair is never split', () => {
   assert.equal(cells('日本語'), 6);
+  assert.equal(cells('한글'), 4);
   assert.equal(cells('abc'), 3);
   assert.equal(cells('é'), 1, 'a combining acute adds no cell');
   assert.equal(cells('😀'), 2);
@@ -77,6 +78,7 @@ test('shortRole strips a plugin namespace first, then the omelette- prefix', () 
   assert.equal(shortRole('omelette-fleet:omelette-coder-medium'), 'coder-medium');
   assert.equal(shortRole('other:thing'), 'thing');
   assert.equal(shortRole('other:omelette-'), 'omelette-', 'nothing left after the prefix: the name stays');
+  assert.equal(shortRole('a:b:c'), 'b:c', 'one namespace only');
 });
 
 test('shortModel drops the claude- prefix and leaves other ids alone', () => {
@@ -165,12 +167,202 @@ test('subjectOf: Bash keeps secrets off the screen', () => {
   }
 });
 
-test('subjectOf: Bash parses in linear time', () => {
-  for (const command of ['cd ' + ' '.repeat(20000) + 'x', 'A=' + 'x'.repeat(50000), 'cd ' + '"'.repeat(20001), 'A=1 '.repeat(20000) + 'npm test']) {
-    const started = performance.now();
-    bash(command);
-    const took = performance.now() - started;
-    assert.ok(took < 50, `${command.slice(0, 12)}…: ${took.toFixed(1)} ms`);
+const MARK = 'S3CR3T9';
+const SUBCOMMAND_PROGRAMS = ['npm', 'npx', 'pnpm', 'yarn', 'git', 'gh', 'node', 'cargo', 'go', 'make', 'docker', 'python', 'python3', 'pytest', 'claude', 'omelette-fleet'];
+/** What a Bash subject may look like at all: the program, and a second word only for a listed program. */
+const SUBJECT_SHAPE = /^Bash(?:: ([A-Za-z0-9._+-]+)(?: ([a-z][a-z0-9:._-]*))?)?$/i;
+
+/** mulberry32: a seeded generator whose low bits are as good as its high ones. */
+function lcg(seed) {
+  let a = seed >>> 0;
+  return (n) => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return (((t ^ (t >>> 14)) >>> 0) % n);
+  };
+}
+
+test('subjectOf Bash, the examples of the ruling: program, listed second word, the cases that show only the program or plain Bash', () => {
+  const b = (command) => subjectOf('Bash', { command });
+  assert.equal(b('npm test'), 'Bash: npm test');
+  assert.equal(b('npm test --silent'), 'Bash: npm test');
+  assert.equal(b('npm run build'), 'Bash: npm run');
+  assert.equal(b('git status'), 'Bash: git status');
+  assert.equal(b('git commit -m "msg"'), 'Bash: git commit');
+  assert.equal(b('/usr/local/bin/node x.js'), 'Bash: node x.js');
+  assert.equal(b('./scripts/build.sh --all'), 'Bash: build.sh');
+  assert.equal(b('curl https://example.test'), 'Bash: curl');
+  assert.equal(b('rm -rf node_modules'), 'Bash: rm');
+  assert.equal(b('echo hello'), 'Bash: echo');
+  for (const program of SUBCOMMAND_PROGRAMS) assert.equal(b(`${program} sub-cmd:x.y_z --flag`), `Bash: ${program} sub-cmd:x.y_z`, program);
+  assert.equal(b('npm'), 'Bash: npm');
+  // a program outside the list shows alone, whatever its second word looks like
+  for (const command of ['curl abc', 'echo hello', 'ls src', 'rm file', 'cat README', 'sudo npm', 'env x', 'export TOKEN', 'bash script', 'ssh host', 'time npm']) assert.equal(b(command), `Bash: ${command.split(' ')[0]}`, command);
+  // a second word may be any case, but must start with a letter
+  assert.equal(b('git STATUS'), 'Bash: git STATUS');
+  assert.equal(b('npm Test'), 'Bash: npm Test');
+  assert.equal(b('npm _x'), 'Bash: npm');
+  // the second word must be plain: no flag, no path, no =, no number first, no quote or $
+  for (const next of ['-v', '--version', './x', '/abs', 'a=b', '1abc', '$X', '~', '@scope/pkg', 'a/b']) {
+    assert.equal(b(`npm ${next}`), 'Bash: npm', next);
+  }
+  assert.equal(b('npm "a b"'), 'Bash: npm');
+  // quoted words are grouped before the checks
+  assert.equal(b('npm "test"'), 'Bash: npm test');
+  assert.equal(b("git 'status' -s"), 'Bash: git status');
+  assert.equal(b('np\\m test'), 'Bash: npm test');
+  // a program word outside [A-Za-z0-9._+-] is plain Bash
+  for (const command of ['$X test', '"a b" c', "'a b' c", '${X} y', 'a=b', '@x y', '{ npm test; }', '!npm', '<(x)', '\\$x y', 'a:b c', 'a,b c', 'é c']) {
+    assert.equal(b(command), 'Bash', command);
+  }
+  // the program is the base name of its word
+  assert.equal(b('/a/b/git status'), 'Bash: git status');
+  assert.equal(b('../x/make all'), 'Bash: make all');
+  assert.equal(b('/a/b/'), 'Bash');
+  assert.equal(b('~/bin/x y'), 'Bash: x', 'the plain-word check is on the base name');
+  assert.equal(b('/a/b/$X y'), 'Bash');
+  // stops at the first unquoted separator
+  for (const [command, shown] of [
+    ['npm test | tee out', 'Bash: npm test'],
+    ['npm test && echo done', 'Bash: npm test'],
+    ['npm test || echo fail', 'Bash: npm test'],
+    ['npm test; echo done', 'Bash: npm test'],
+    ['npm test\necho done', 'Bash: npm test'],
+    ['npm test & echo bg', 'Bash: npm test'],
+    ['npm $(echo test)', 'Bash: npm'],
+    ['npm `echo test`', 'Bash: npm'],
+    ['npm (test)', 'Bash: npm'],
+    ['git status)', 'Bash: git status'],
+    ['(npm test)', 'Bash'],
+    ['| npm test', 'Bash'],
+    ['; npm test', 'Bash'],
+    ['\nnpm test', 'Bash'],
+    ['&& npm test', 'Bash'],
+  ]) assert.equal(b(command), shown, JSON.stringify(command));
+  // a separator glued to a word ends the scan there (and the word is not cut with it)
+  for (const [command, shown] of [
+    ['npm test|tee', 'Bash: npm test'],
+    ['npm test;ls', 'Bash: npm test'],
+    ['npm test&&ls', 'Bash: npm test'],
+    ['npm test||ls', 'Bash: npm test'],
+    ['npm test(x)', 'Bash: npm test'],
+    ['npm test)x', 'Bash: npm test'],
+    ['npm test`x`', 'Bash: npm test'],
+    ['npm test$(x)', 'Bash: npm test'],
+    ['npm test\nls', 'Bash: npm test'],
+  ]) assert.equal(b(command), shown, JSON.stringify(command));
+  assert.equal(b('cd /x || npm test'), 'Bash: cd');
+  // inside quotes the separators are text, and a substitution inside double quotes stops the scan
+  assert.equal(b('git "status; rm" -s'), 'Bash: git', 'the quoted word is not plain');
+  assert.equal(b("git 'a|b'"), 'Bash: git');
+  assert.equal(b('npm "te$(x)st"'), 'Bash: npm');
+  assert.equal(b('npm "te`x`st"'), 'Bash: npm');
+  assert.equal(b("npm 'te$(x)st'"), 'Bash: npm', 'single quotes keep the $( as text, and the word is not plain');
+  // a substitution inside double quotes ends the scan and drops its word, so what follows is never read
+  assert.equal(b('cd "a$(x)" && npm test'), 'Bash: cd');
+  assert.equal(b('cd "a`x`" && npm test'), 'Bash: cd');
+  assert.equal(b('npm "$(echo "'), 'Bash: npm');
+  assert.equal(b('npm "`echo "'), 'Bash: npm');
+  assert.equal(b('npm "te\\"st"'), 'Bash: npm', 'an escaped quote inside double quotes does not close them');
+  assert.equal(b('npm test "a\\" b" c'), 'Bash: npm test');
+  // an unclosed quote anywhere in the scanned part
+  for (const command of ['npm "test', "npm 'test", 'echo "', "echo '", 'FOO="x npm test', 'npm test "unclosed']) assert.equal(b(command), 'Bash', command);
+  assert.equal(b('npm test && echo "unclosed'), 'Bash: npm test', 'beyond the stop, nothing is read');
+  // backslash escapes
+  assert.equal(b('npm test\\'), 'Bash: npm test');
+  assert.equal(b('np\\ m test'), 'Bash', 'an escaped space is part of the word');
+  assert.equal(b('npm te\\;st'), 'Bash: npm', 'an escaped ; is text, and the word is not plain');
+  assert.equal(b('npm \\|'), 'Bash: npm');
+});
+
+test('subjectOf Bash, a property: a marker secret never reaches the subject - assignments, prefixes, flags, substitutions, pipes, separators, quotes, escapes', () => {
+  const rnd = lcg(20261008);
+  const pick = (list) => list[rnd(list.length)];
+  const values = [
+    MARK, `"${MARK}"`, `'${MARK}'`, `"a ${MARK}"`, `'a ${MARK}'`, `a\\ ${MARK}`, `x${MARK}`, `"x"${MARK}`, `$(echo ${MARK})`, `\`echo ${MARK}\``,
+    `"$(echo ${MARK})"`, `"x \`echo ${MARK}\`"`, `\${${MARK}}`, `$'${MARK}'`, `"it's ${MARK}"`, `'say "${MARK}"'`, `"a\\"${MARK}"`, `a\\;${MARK}`, `"a;b|c&&${MARK}"`, `'(${MARK})'`,
+    `a\\\n${MARK}`, `"multi\nline ${MARK}"`, `$(a "$(b ${MARK})")`, `"$X"${MARK}`,
+  ];
+  const connectors = [' | ', ' && ', ' || ', '; ', '\n', ' & ', ' > ', ' 2>&1 | ', ' <<< ', ' $(', ' `', ' (', ' ) ', ';;', '|&', '\r\n'];
+  const assignments = [(v) => `TOKEN=${v}`, (v) => `A_B1=${v}`, (v) => `_x=${v}`, (v) => `A+=${v}`, (v) => `A[0]=${v}`, () => 'TOKEN=', (v) => `export TOKEN=${v}`, (v) => `A=1 B=${v}`];
+  // programs with the words that precede the secret slot: a listed program's second word is shown, so the slot comes after it
+  const programs = [
+    'npm test', 'git status', 'node x.js', 'docker run', 'gh auth', 'make deploy', 'claude -p', 'python3 -c', 'cargo build', 'pnpm install', 'yarn add', 'npx tool', 'go run', 'pytest -k', 'omelette-fleet set',
+    'echo', 'curl', 'sudo', 'env', 'export', 'time', '/usr/bin/env', 'bash -c', 'sh -c', 'ssh', 'mysql', 'psql', 'wget', 'nohup', 'xargs', 'cat', 'printf', 'gpg --passphrase', 'aws', 'kubectl',
+  ];
+  const flagged = [(v) => `--token ${v}`, (v) => `--token=${v}`, (v) => `-p${v}`, (v) => `-H "Authorization: Bearer ${v}"`, (v) => `--password '${v}'`, (v) => v, (v) => `https://user:${v}@host/x`, (v) => `-e KEY=${v}`, (v) => `--env=KEY=${v}`, (v) => `${v} --flag`];
+  const chains = ['', 'cd /x && ', 'cd /x; ', 'cd "a b" && ', 'cd /x && cd /y && ', `cd ${MARK} && `, `cd ${MARK}; `, `cd "${MARK}" && `, 'cd /x || ', 'cd /x | ', '(', '{ ', '! ', 'FOO=1 '];
+  const leaks = [];
+  // every program with every flag form and value, and every chain, connector and assignment form around a fixed program
+  const check = (command) => {
+    const out = subjectOf('Bash', { command });
+    if (out.includes('S3CR')) leaks.push([command, out]);
+    const m = SUBJECT_SHAPE.exec(out);
+    assert.ok(m, `shape: ${JSON.stringify(command)} -> ${JSON.stringify(out)}`);
+    if (m[2] !== undefined) assert.ok(SUBCOMMAND_PROGRAMS.includes(m[1]), `second word only for a listed program: ${JSON.stringify(command)} -> ${out}`);
+  };
+  for (const program of programs) for (const flag of flagged) for (const value of values) check(`${program} ${flag(value)}`);
+  for (const chain of chains) for (const assign of assignments) for (const value of values) check(`${chain}${assign(value)} npm test --x`);
+  for (const connector of connectors) for (const program of programs) for (const flag of flagged) for (const value of values) check(`npm test${connector}${program} ${flag(value)}`);
+  for (const chain of chains) for (const value of values) check(`${chain}export X=${value}`);
+  const N = 6000;
+  for (let k = 0; k < N; k++) {
+    const parts = [pick(chains)];
+    if (rnd(3) > 0) for (let n = rnd(3) + 1; n > 0; n--) parts.push(`${pick(assignments)(pick(values))} `);
+    parts.push(pick(programs));
+    for (let n = rnd(3); n > 0; n--) parts.push(` ${pick(flagged)(pick(values))}`);
+    if (rnd(2)) parts.push(pick(connectors) + pick(flagged)(pick(values)));
+    if (rnd(4) === 0) parts.push(`${pick(connectors) + pick(programs)} ${pick(flagged)(pick(values))}`);
+    check(parts.join(''));
+  }
+  assert.deepEqual(leaks.slice(0, 5), [], `${leaks.length} of ${N} generated commands put the marker on screen`);
+});
+
+test('subjectOf Bash is linear: 100 000-character commands of spaces, quotes, backslashes, =, cd, separators and assignments each take under 250 ms (the defect it pins took seconds; the bound leaves room for a loaded CI machine)', () => {
+  const n = 100000;
+  const cases = {
+    spaces: ' '.repeat(n),
+    'cd and spaces': `cd ${' '.repeat(n)}x`,
+    'cd and spaces then &&': `cd ${' '.repeat(n)}&& npm test`,
+    'npm and spaces': `npm${' '.repeat(n)}test`,
+    'double quotes': '"'.repeat(n),
+    'single quotes': "'".repeat(n),
+    'open quote then text': `FOO="${'x'.repeat(n)}`,
+    'quote pairs': '""'.repeat(n / 2),
+    backslashes: '\\'.repeat(n),
+    'backslash pairs': '\\ '.repeat(n / 2),
+    'equals signs': '='.repeat(n),
+    'name equals': `A${'='.repeat(n)}`,
+    assignments: 'A=1 '.repeat(n / 4),
+    'assignment of a long word': `A=${'b'.repeat(n)} npm test`,
+    'a long word': 'a'.repeat(n),
+    'a long name without =': `${'A'.repeat(n)} x`,
+    'cd words': 'cd '.repeat(n / 3),
+    'cd and &&': 'cd x && '.repeat(n / 8),
+    'cd and ;': 'cd x; '.repeat(n / 6),
+    'dollar-parens': '$('.repeat(n / 2),
+    'double quote then dollar-parens': `"${'$('.repeat(n / 2)}`,
+    backticks: '`'.repeat(n),
+    newlines: '\n'.repeat(n),
+    pipes: '|'.repeat(n),
+    ampersands: '&'.repeat(n),
+    'many words': 'a '.repeat(n / 2),
+    'many words after npm': `npm ${'t '.repeat(n / 2)}`,
+    tabs: '\t'.repeat(n),
+    'cd tab runs': `cd${'\t '.repeat(n / 2)}`,
+    'cd and quotes': `cd ${'"'.repeat(n)}`,
+  };
+  subjectOf('Bash', { command: 'npm test' }); // warm up
+  for (const [name, command] of Object.entries(cases)) {
+    let best = Infinity;
+    for (let rep = 0; rep < 3; rep++) {
+      const t = performance.now();
+      subjectOf('Bash', { command });
+      best = Math.min(best, performance.now() - t);
+    }
+    assert.ok(best < 250, `${name}: ${best.toFixed(1)} ms for ${command.length} characters`);
   }
 });
 
@@ -199,6 +391,8 @@ test('clock: HH:MM:SS of a time shifted by the offset getTimezoneOffset reports,
   assert.equal(clock(Date.UTC(2026, 9, 8, 23, 30, 0), -180), '02:30:00');
   assert.equal(clock(Date.UTC(2026, 9, 8, 1, 0, 0), 120), '23:00:00');
   assert.equal(clock(Date.UTC(2026, 9, 8, 0, 0, 0), 0), '00:00:00');
+  assert.equal(clock(-1000, 0), '23:59:59', 'before the epoch');
+  assert.equal(clock(Date.UTC(1969, 11, 31, 23, 0, 0), 120), '21:00:00');
 });
 
 test('clock with this machine\'s offset reads as the local time', () => {
