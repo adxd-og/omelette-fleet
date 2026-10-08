@@ -51,7 +51,7 @@ ctx 31% · 5h 11% · 7d 71%
 | Box, line 3 | What it is doing now (`Bash: npm test`, `Edit adapter.mjs`), or its state with a time (`reported 3:10`, `idle 12m`). A unit shows its model and the elapsed time. |
 | Lines between boxes | Who called whom. Sub-agents above, the orchestrator in the middle, the units below. A line is bold and in the accent colour while the call is live; every other line is dim. |
 | Sub-agent row | One row, as many boxes as the width holds (three at 53 columns, up to six). Running and waiting ones come first; the rest fold into a last box, `+N more`. |
-| History | The newest links first, as many as the height leaves (at least three): time, caller, callee, tool. Kept for the session, the last 200. A unit called from a sub-agent is marked `← coder-medium`. |
+| History | The newest links first, as many as the pane's height leaves under the graph (on a short terminal pane that can be one; the desktop shows at least three): time, caller, callee, tool. Kept for the session, the last 200. A unit called from a sub-agent is marked `← coder-medium`. |
 
 State glyphs:
 
@@ -132,7 +132,7 @@ It writes only its own pane state (`$.state`, so a reload redraws from it). It w
 
 - **It refuses, rewrites and blocks nothing.** Every hook hands the engine's event on unchanged. A hook that fails is skipped by the engine and the session goes on.
 - **It draws no raw text.** Every state string is cleaned of terminal control characters (C0 and C1 controls, DEL, bidi controls) before it is drawn, and XML-escaped in the SVG.
-- **No secret in a command line reaches the pane.** A Bash command shows its program only, and its subcommand only for a short list of programs (`git`, `npm`, `gh`, `docker` and a few more). Arguments, flags, paths and environment assignments are never shown.
+- **A command line stays off the pane.** A Bash command shows its program, and for a short list of programs (`git`, `npm`, `node`, `docker` and a few more) one plain next word — the subcommand or the script's name. Flags, paths, environment assignments, quoted values and everything after the first word or two are never shown. A secret typed as that plain next word would show; nothing else in a command line does.
 - **It touches no setting.** It does not edit `settings.json`, the rules file or the guard.
 
 The history records call attempts. A call that a guard or another hook refuses further down the chain still appears, because the pane sees the attempt, not the result.
