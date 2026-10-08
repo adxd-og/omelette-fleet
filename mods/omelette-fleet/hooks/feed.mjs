@@ -34,20 +34,27 @@ function msOf(value) {
   return Number.isFinite(ms) ? ms : undefined;
 }
 
-const stringOrNull = (value) => (typeof value === 'string' ? value : null);
+/** The code points a call's `tool`, `model` and `effort` keep: a status file is outside input, and what the model takes from it lives in `$.state`. */
+const FIELD_POINTS = 64;
 
-/** One `active[]` entry, or null when it has no tool or no start time. */
+/** `value`'s first FIELD_POINTS code points; a code point is at most two UTF-16 units, so a long string is never spread whole. */
+const capped = (value) => [...value.slice(0, 2 * FIELD_POINTS)].slice(0, FIELD_POINTS).join('');
+
+const stringOrNull = (value) => (typeof value === 'string' ? capped(value) : null);
+
+/** One `active[]` entry, its tool, model and effort capped at FIELD_POINTS code points; null when it has no tool or no start time. */
 function callOf(entry) {
   if (!entry || typeof entry !== 'object' || typeof entry.tool !== 'string') return null;
   const startedAt = msOf(entry.startedAt);
   if (startedAt === undefined) return null;
-  return { id: String(entry.id ?? ''), tool: entry.tool, model: stringOrNull(entry.model), effort: stringOrNull(entry.effort), startedAt };
+  return { id: String(entry.id ?? ''), tool: capped(entry.tool), model: stringOrNull(entry.model), effort: stringOrNull(entry.effort), startedAt };
 }
 
 /**
  * One snapshot file's text. Null for text that is not JSON, not an object,
  * `schema !== 2`, a unit outside UNITS, or an `updatedAt` that is not a time.
- * A snapshot with calls in `active` and an `updatedAt` more than STALE_MS
+ * Each active call's `tool`, `model` and `effort` keep their first 64 code
+ * points. A snapshot with calls in `active` and an `updatedAt` more than STALE_MS
  * (2 hours) before `now` is stale: its `active` is returned empty.
  * @param {string} text
  * @param {number} now

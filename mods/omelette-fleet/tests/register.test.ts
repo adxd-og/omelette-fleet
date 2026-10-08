@@ -7,7 +7,7 @@
  * Paths and ids are made up.
  */
 import { describe, expect, mock, test } from 'claude-code/testing'
-import type { On, RenderInput, SessionStartInput } from 'claude-code'
+import type { AgentInfo, On, RenderInput, SessionStartInput } from 'claude-code'
 
 import type { FleetState } from '../types'
 
@@ -30,6 +30,10 @@ type World = {
   /** How many times the plugin asked which panes are open: once per tick. */
   asks: number
   hold: Promise<void> | undefined
+  /** The next ask for the panes, held until the test lets it go, answered with what the test gives. */
+  heldAsk: Promise<{ id: string; isPlaced: boolean }[]> | undefined
+  /** What `$.agent.list()` answers. */
+  agents: AgentInfo[]
 }
 
 type Engine = {
@@ -39,13 +43,15 @@ type Engine = {
   placed?: boolean
   /** Whether `ui.close` is refused beneath the plugin. */
   denyClose?: boolean
+  /** Whether a hook beneath answers `ui.close` without closing the pane (no deny: the pane just stays). */
+  keepOnClose?: boolean
   /** The panes the engine already holds (a reload with the pane open). */
   panes?: { id: string; isPlaced: boolean }[]
 }
 
 /** The engine beneath the plugin, in memory: what it registers, opens and shows, and the fleet home's files. */
-function worldOf(on: On, { files = {}, placed = true, denyClose = false, panes = [] }: Engine = {}): World {
-  const world: World = { fleet: undefined, writes: 0, commands: [], opened: [], closed: [], statuses: [], panes: [...panes], lists: 0, hold: undefined, asks: 0 }
+function worldOf(on: On, { files = {}, placed = true, denyClose = false, keepOnClose = false, panes = [] }: Engine = {}): World {
+  const world: World = { fleet: undefined, writes: 0, commands: [], opened: [], closed: [], statuses: [], panes: [...panes], lists: 0, hold: undefined, asks: 0, heldAsk: undefined, agents: [] }
 
   on('state.set', ($, e, next) => {
     if (e.plugin === PLUGIN && e.key === 'fleet') {
@@ -61,7 +67,7 @@ function worldOf(on: On, { files = {}, placed = true, denyClose = false, panes =
 
     return { value: { command: e.name } }
   })
-  on('agent.list', () => ({ value: [] }))
+  on('agent.list', () => ({ value: world.agents }))
   on('session.usage', () => ({
     value: { startedAt: NOW, context: { window: 1_000_000, percent: 31 }, rateLimits: [{ kind: 'five_hour', percentUsed: 11 }, { kind: 'seven_day', percentUsed: 71 }], cost: { usd: 646.7 } },
   }))
@@ -81,14 +87,24 @@ function worldOf(on: On, { files = {}, placed = true, denyClose = false, panes =
       return { deny: 'the person keeps it open' } as never
     }
 
+    if (keepOnClose) {
+      return { value: undefined }
+    }
+
     world.panes = world.panes.filter(pane => pane.id !== e.id)
 
     return { value: undefined }
   })
-  on('ui.panes', () => {
+  on('ui.panes', async () => {
     world.asks += 1
 
-    return { value: world.panes.map(pane => ({ ...pane, title: 'Fleet', isShown: true, isFocused: false })) }
+    const held = world.heldAsk
+
+    world.heldAsk = undefined
+
+    const panes = held ? await held : world.panes
+
+    return { value: panes.map(pane => ({ ...pane, title: 'Fleet', isShown: true, isFocused: false })) }
   })
   on('ui.status', ($, e) => {
     world.statuses.push(e.text)
@@ -175,7 +191,7 @@ describe('the session start and the command', () => {
     const state = world.fleet
 
     expect(state?.nodes.map(node => node.id)).toEqual(['main', 'unit:gemini', 'unit:grok', 'unit:codex'])
-    expect(state?.usage).toEqual({ contextPercent: 31, fiveHour: 11, sevenDay: 71, costUsd: 646.7 })
+    expect(state?.usage, 'the cost is not kept: the pane draws none').toEqual({ contextPercent: 31, fiveHour: 11, sevenDay: 71 })
   })
 
   test('an unset autoOpen reaches the plugin as its default: the pane opens', { options: {} }, async ($, on) => {
@@ -270,6 +286,23 @@ describe('the session start and the command', () => {
     expect(world.fleet?.now, 'the tick still runs').toBeGreaterThan(before)
   })
 
+  test('a close a hook beneath answers without closing the pane (no deny) keeps the model open and the tick running', async ($, on) => {
+    const world = worldOf(on, { keepOnClose: true })
+    const clock = mock.clock(on, { now: NOW })
+
+    mock.env(on, { HOME })
+    await $.session.start(SESSION)
+    await clock.advance(1_100)
+    await $.command.run(command('close'))
+    expect(world.panes.map(pane => pane.id), 'the engine still holds it').toEqual(['omelette-fleet'])
+    expect(world.fleet?.isOpen, 'a close that left the pane is not a close').toBe(true)
+
+    const before = world.fleet?.now ?? 0
+
+    await clock.advance(3_000)
+    expect(world.fleet?.now, 'the tick still runs').toBeGreaterThan(before)
+  })
+
   test('a reload with the pane still open (a fresh module, the pane in the engine\'s list) starts the tick without opening anything', async ($, on) => {
     const world = worldOf(on, { panes: [{ id: 'omelette-fleet', isPlaced: true }] })
     const clock = mock.clock(on, { now: NOW })
@@ -335,12 +368,14 @@ describe('the hooks of the data sources', () => {
 
   test('a step on an unchanged model writes nothing; a numeric effort is kept as text', async ($, on) => {
     const world = worldOf(on)
-    mock.clock(on, { now: NOW })
+    const clock = mock.clock(on, { now: NOW })
     mock.env(on, { HOME })
     on('turn.step', async function* () {
       return STEPPED
     })
     await $.session.start(SESSION)
+    // The unasked open runs unawaited: its write lands before the writes are counted.
+    await clock.settle()
 
     await step($ as never, undefined, 'high')
     expect(world.fleet?.nodes.find(node => node.id === 'main')).toMatchObject({ model: 'claude-opus-5-5', effort: 'high' })
@@ -352,6 +387,41 @@ describe('the hooks of the data sources', () => {
 
     await step($ as never, undefined, 3)
     expect(world.fleet?.nodes.find(node => node.id === 'main')?.effort).toBe('3')
+  })
+
+  test('a call whose return never comes is cleared at its loop\'s next step, in one write; a step after that writes nothing', { options: { autoOpen: false } }, async ($, on) => {
+    const world = worldOf(on)
+    const clock = mock.clock(on, { now: NOW })
+    let release: (value: unknown) => void = () => undefined
+
+    mock.env(on, { HOME })
+    on('agent.spawn', () => SPAWNED)
+    on('turn.step', async function* () {
+      return STEPPED
+    })
+    on('tool.call', () => new Promise(resolve => (release = resolve)) as never)
+    await $.session.start(SESSION)
+    await $.agent.spawn(SPAWN as never)
+    await step($ as never, 'agent-c1', 'medium')
+
+    const lost = $.tool.call({ tool: 'Bash', command: 'npm test', agentId: 'agent-c1', tool_use_id: 'toolu_lost' } as never)
+
+    await clock.settle()
+    expect(nodeOf(world, 'agent-c1')?.activity).toBe('Bash: npm test')
+
+    const writes = world.writes
+
+    await step($ as never, 'agent-c1', 'medium')
+    expect(nodeOf(world, 'agent-c1')?.activity, 'the call is over').toBeUndefined()
+    expect(nodeOf(world, 'agent-c1')?.loopCalls).toBeUndefined()
+    expect(nodeOf(world, 'agent-c1')?.status).toBe('running')
+    expect(world.writes, 'one write').toBe(writes + 1)
+
+    await step($ as never, 'agent-c1', 'medium')
+    expect(world.writes, 'nothing open, nothing changed: no write').toBe(writes + 1)
+
+    release(BASH_RESULT)
+    await lost
   })
 
   test('while the pane is closed the status line names what runs, and clears when nothing does', { options: { autoOpen: false } }, async ($, on) => {
@@ -432,7 +502,7 @@ describe('the hooks of the data sources', () => {
     on('session.measure', ($$, e) => ({ changed: e.changed }))
     await $.session.start(SESSION)
     expect(await $.session.measure({ context: { window: 1_000_000, percent: 44 }, rateLimits: [{ kind: 'five_hour', percentUsed: 12 }, { kind: 'seven_day', percentUsed: 73 }], cost: { usd: 12.5 }, changed: ['context'] } as never)).toEqual({ changed: ['context'] })
-    expect(world.fleet?.usage).toEqual({ contextPercent: 44, fiveHour: 12, sevenDay: 73, costUsd: 12.5 })
+    expect(world.fleet?.usage).toEqual({ contextPercent: 44, fiveHour: 12, sevenDay: 73 })
   })
 
   test('with the pane open the status line is cleared even while a unit runs; closed, it names the unit', async ($, on) => {
@@ -474,7 +544,96 @@ describe('the tick', () => {
     expect(world.fleet?.nodes.find(node => node.id === 'unit:codex')?.feed).toBe('ok')
   })
 
-  test('a tick that starts while the last one still reads the feed is skipped, not queued', { options: { autoOpen: false } }, async ($, on) => {
+  for (const [name, value, dir] of [['padded', '  /srv/fleet \n', '/srv/fleet'], ['blank', ' \t ', '/home/op/.omelette']] as const) {
+    test(`a ${name} OMELETTE_HOME reads the status feed from ${dir}`, { options: { autoOpen: false } }, async ($, on) => {
+      const world = worldOf(on, { files: { [`${dir}/status-codex-4242.json`]: SNAPSHOT['/home/op/.omelette/status-codex-4242.json'] } })
+
+      mock.clock(on, { now: NOW })
+      mock.env(on, { HOME, OMELETTE_HOME: value })
+      await $.session.start(SESSION)
+      await $.command.run(command())
+
+      expect(nodeOf(world, 'unit:codex')?.feed).toBe('ok')
+    })
+  }
+
+  test('a tick held on the engine across a close, a reopen and a reload, then let go, changes neither isOpen nor the new chain; one chain ticks', { options: { autoOpen: false } }, async ($, on) => {
+    const world = worldOf(on)
+    const clock = mock.clock(on, { now: NOW })
+    let release: (panes: { id: string; isPlaced: boolean }[]) => void = () => undefined
+
+    mock.env(on, { HOME })
+    await $.session.start(SESSION)
+    await $.command.run(command())
+    world.heldAsk = new Promise(resolve => (release = resolve))
+    await clock.advance(1_000)
+    expect(world.heldAsk, 'the first chain\'s tick asked and is held').toBeUndefined()
+
+    await $.command.run(command('close'))
+    await $.command.run(command())
+    await $.session.start(SESSION)
+    expect(world.fleet?.isOpen).toBe(true)
+
+    // The held answer is the engine's as of the close: no pane.
+    release([])
+    await clock.settle()
+    expect(world.fleet?.isOpen, 'the old tick wrote no close').toBe(true)
+    await clock.advance(1_000)
+    expect(await asksIn(clock, world, 3_000), 'one chain, a tick a second').toBe(3)
+  })
+
+  test('an open whose feed read is held across a close, then let go, writes nothing: the model stays closed', { options: { autoOpen: false } }, async ($, on) => {
+    const world = worldOf(on, { files: SNAPSHOT })
+    const clock = mock.clock(on, { now: NOW })
+    let release: () => void = () => undefined
+
+    mock.env(on, { HOME })
+    await $.session.start(SESSION)
+    world.hold = new Promise(resolve => (release = resolve))
+
+    const opening = $.command.run(command())
+
+    await clock.settle()
+    expect(world.lists, 'the open\'s feed read is held').toBe(1)
+    await $.command.run(command('close'))
+    expect(world.fleet?.isOpen).toBe(false)
+
+    const writes = world.writes
+
+    release()
+    world.hold = undefined
+    await opening
+    await clock.settle()
+    expect(world.fleet?.isOpen, 'the stale open wrote no open').toBe(false)
+    expect(world.writes, 'nothing written').toBe(writes)
+  })
+
+  test('a tick whose feed read is held across a close, then let go, writes nothing: the model stays closed, the status line is not cleared', { options: { autoOpen: false } }, async ($, on) => {
+    const world = worldOf(on, { files: SNAPSHOT })
+    const clock = mock.clock(on, { now: NOW })
+    let release: () => void = () => undefined
+
+    mock.env(on, { HOME })
+    await $.session.start(SESSION)
+    await $.command.run(command())
+    world.hold = new Promise(resolve => (release = resolve))
+    await clock.advance(2_000)
+    expect(world.lists, 'the second tick passed the pane check and is held on the feed').toBe(2)
+    await $.command.run(command('close'))
+    expect(world.fleet?.isOpen).toBe(false)
+
+    const writes = world.writes
+    const statuses = world.statuses.length
+
+    release()
+    world.hold = undefined
+    await clock.settle()
+    expect(world.fleet?.isOpen, 'the stale tick wrote no open').toBe(false)
+    expect(world.writes, 'nothing written').toBe(writes)
+    expect(world.statuses.length, 'no status set').toBe(statuses)
+  })
+
+  test('while a tick\'s feed read is held no other tick starts (the chain arms its next once the last is over); once it is let go, the next feed tick reads again', { options: { autoOpen: false } }, async ($, on) => {
     const world = worldOf(on, { files: SNAPSHOT })
     const clock = mock.clock(on, { now: NOW })
 
@@ -490,7 +649,7 @@ describe('the tick', () => {
     expect(world.lists, 'the second tick reads the feed and is held').toBe(2)
 
     await clock.advance(2_000)
-    expect(world.lists, 'ticks three and four start while it is held: skipped').toBe(2)
+    expect(world.lists, 'no tick starts while it is held').toBe(2)
 
     release()
     world.hold = undefined
@@ -633,6 +792,22 @@ describe('the tick rates', () => {
 })
 
 describe('the tick when the pane is not drawn', () => {
+  test('a pane opened unasked that waits unplaced (a narrow terminal): its ticks ask for the panes and write no state, read no feed', async ($, on) => {
+    const world = worldOf(on, { placed: false })
+    const clock = mock.clock(on, { now: NOW })
+
+    mock.env(on, { HOME })
+    await $.session.start(SESSION)
+    await clock.settle()
+    expect(world.opened).toEqual(['omelette-fleet'])
+
+    const writes = world.writes
+
+    expect(await asksIn(clock, world, 5_000), 'it ticks').toBe(5)
+    expect(world.writes, 'no state written').toBe(writes)
+    expect(world.lists, 'no feed read').toBe(0)
+  })
+
   test('a pane drawn on the terminal that the engine then un-seats (a narrow terminal) ticks a second: nothing is open to move', { options: { autoOpen: false } }, async ($, on) => {
     const world = worldOf(on)
     const clock = mock.clock(on, { now: NOW })
@@ -651,6 +826,8 @@ describe('the tick when the pane is not drawn', () => {
     world.panes = world.panes.map(one => ({ ...one, isPlaced: false }))
     await clock.advance(1_000)
     expect(await asksIn(clock, world, 1_000), 'no longer seated').toBe(1)
+    expect(world.fleet?.isOpen, 'an un-seated pane is not open').toBe(false)
+    expect(world.statuses.at(-1), 'the status line is back').toContain('fleet:')
     await pane.unmount()
   })
 
@@ -735,6 +912,33 @@ describe('motion', () => {
     await clock.advance(1_000)
     expect(world.asks - before, 'nothing runs').toBe(1)
     await pane.unmount()
+  })
+
+  test('an agent the engine lists idle after its spawn, with no stop, reads waiting after the next feed tick: not running, not spinning, not holding the fast tick', { options: { autoOpen: false } }, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const world = worldOf(on)
+
+    mock.env(on, { HOME })
+    on('agent.spawn', () => SPAWNED)
+    await $.session.start(SESSION)
+    await $.agent.spawn(SPAWN as never)
+    await $.command.run(command())
+
+    const pane = await $.ui.mount({ ...PANE, plugin: PLUGIN })
+
+    await clock.advance(1_000)
+    expect(await asksIn(clock, world, 1_000), 'it runs').toBe(4)
+
+    world.agents = [{ id: 'agent-c1', type: 'omelette-coder-medium', status: 'idle', description: 'Run the suite' }]
+    await clock.advance(2_000)
+    expect(nodeOf(world, 'agent-c1')?.status).toBe('waiting')
+    expect(await asksIn(clock, world, 1_000), 'nothing runs').toBe(1)
+    await pane.unmount()
+
+    const again = await $.ui.mount({ ...PANE, plugin: PLUGIN })
+
+    expect(await again.find({ type: 'Text', text: '│ ◌ coder-medium│' }), 'the waiting glyph, no spinner').toBeDefined()
+    await again.unmount()
   })
 
   test('a pane drawn on the desktop ticks every second with an agent running: no spinner there, and its SVG animates itself', { options: { autoOpen: false } }, async ($, on) => {

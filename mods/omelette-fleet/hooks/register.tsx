@@ -12,7 +12,7 @@
  * source and refuses a call it did not see.
  */
 import { read, update } from 'claude-code'
-import type { EngineInterface, FsEntry, PluginOptions, Register, SessionUsage, Timer } from 'claude-code'
+import type { AgentInfo, EngineInterface, Frozen, FsEntry, PluginOptions, Register, SessionUsage, Timer } from 'claude-code'
 
 import type { FleetState } from '../types'
 import { parseSnapshot, snapshotNames } from './feed.mjs'
@@ -28,7 +28,7 @@ const fleet = { plugin: 'omelette-fleet', key: 'fleet' } as const
 /**
  * The pane's tick while it is open: every 250 ms while an agent or a unit runs
  * and motion is on (the spinner's frame), every second otherwise. The status
- * feed is read when the pane is drawn, then at most every 2 s.
+ * feed and the agent list are read when the pane is drawn, then at most every 2 s.
  */
 const FAST_MS = 250
 const SLOW_MS = 1000
@@ -38,33 +38,49 @@ const FEED_MS = 2000
 type ModelEvent = { readonly type: string; readonly [field: string]: unknown }
 type Tone = 'plain' | 'live' | 'dim'
 
-/** The tick's chain of one-shot timers: one pending at a time, each tick arming the next at the rate the state asks for. */
-type Chain = { timer?: Timer }
+/**
+ * The tick's chain of one-shot timers: the generation it started under, and
+ * its one pending timer, each tick arming the next at the rate the state asks
+ * for once it is over (so a chain never overlaps itself).
+ */
+type Chain = { readonly generation: number; timer?: Timer }
 
 /**
- * The tick's own state, all a module variable holds: the running chain,
- * whether a tick is in flight, when the feed was last read, and the surface
- * the pane was last drawn on (the fast tick is the terminal's spinner; a
- * redraw four times a second would restart the SVG's own animations). A reload
- * drops them, the surface becoming unknown (the slow tick) until the next
- * draw, and `session.start` starts the tick again.
+ * The tick's own state, all a module variable holds: the running chain, the
+ * generation the newest chain started under, when the feed was last read, and
+ * the surface the pane was last drawn on (the fast tick is the terminal's
+ * spinner; a redraw four times a second would restart the SVG's own
+ * animations). A reload drops them, the surface becoming unknown (the slow
+ * tick) until the next draw, and `session.start` starts the tick again.
  */
 let ticker: Chain | undefined
-let isTicking = false
+let generation = 0
 let feedReadAt = Number.NEGATIVE_INFINITY
 let drawnOn: string | undefined
+
+/** Whether the chain of `gen` is the one running: a tick, an open or a feed read of an older chain writes nothing. */
+const isCurrent = (gen: number): boolean => ticker?.generation === gen
+
+/** Thrown inside a write of a chain stopped since its tick or open began: `update` writes nothing. */
+const STALE = new Error('the chain stopped')
 
 /**
  * Applies model events at the engine's time in one state write (`update`
  * retries on a concurrent write), then sets the status line: the running
- * actors while the pane is closed, nothing while it is open. Never throws.
+ * actors while the pane is closed, nothing while it is open. With `gen`, the
+ * write is made only while that chain runs, checked at the write itself.
+ * Never throws.
  */
-const apply = async ($: EngineInterface, events: readonly ModelEvent[]): Promise<FleetState | undefined> => {
+const apply = async ($: EngineInterface, events: readonly ModelEvent[], gen?: number): Promise<FleetState | undefined> => {
   try {
     const at = await $.clock.now()
-    const state: FleetState = await update($, fleet, value =>
-      events.reduce((acc: FleetState, event) => reduce(acc, { ...event, at }), value ?? initialState(at)),
-    )
+    const state: FleetState = await update($, fleet, value => {
+      if (gen !== undefined && !isCurrent(gen)) {
+        throw STALE
+      }
+
+      return events.reduce((acc: FleetState, event) => reduce(acc, { ...event, at }), value ?? initialState(at))
+    })
 
     $.ui.status(state.isOpen ? undefined : statusLine(state, at))
 
@@ -74,21 +90,26 @@ const apply = async ($: EngineInterface, events: readonly ModelEvent[]): Promise
   }
 }
 
-/** The engine's usage figures as the model keeps them; a figure the engine does not have is left out. */
-const usageOf = (usage: Pick<SessionUsage, 'context' | 'rateLimits' | 'cost'>): Record<string, number> => {
+/** The engine's usage figures as the model keeps them (the pane draws no cost); a figure the engine does not have is left out. */
+const usageOf = (usage: Frozen<Pick<SessionUsage, 'context' | 'rateLimits'>>): Record<string, number> => {
   const figures: Record<string, number | undefined> = {
     contextPercent: usage.context?.percent,
     fiveHour: usage.rateLimits?.find(limit => limit.kind === 'five_hour')?.percentUsed,
     sevenDay: usage.rateLimits?.find(limit => limit.kind === 'seven_day')?.percentUsed,
-    costUsd: usage.cost?.usd,
   }
 
   return Object.fromEntries(Object.entries(figures).filter(([, value]) => typeof value === 'number')) as Record<string, number>
 }
 
-/** The fleet home: `$OMELETTE_HOME`, else `~/.omelette`. */
+/** The engine's agent list as the model's `agents` event. */
+const agentsEvent = (agents: readonly AgentInfo[]): ModelEvent => ({
+  type: 'agents',
+  list: agents.map(agent => ({ id: agent.id, type: agent.type, status: agent.status, parentId: agent.parentId })),
+})
+
+/** The fleet home: `$OMELETTE_HOME` trimmed, else (unset or blank) `~/.omelette`. */
 const fleetHome = async ($: EngineInterface): Promise<string | undefined> => {
-  const own = await $.env.get('OMELETTE_HOME')
+  const own = (await $.env.get('OMELETTE_HOME'))?.trim()
 
   if (own) {
     return own
@@ -133,49 +154,64 @@ const readFeed = async ($: EngineInterface): Promise<unknown[]> => {
   return snapshots
 }
 
-/** The status feed, read now; the time of the read is kept for the next one's due time. */
-const feedNow = async ($: EngineInterface): Promise<unknown[]> => {
-  feedReadAt = await $.clock.now()
+/**
+ * What the pane reads beside the events, now, for the chain of `gen`: the
+ * status feed, and the agent list (an idle teammate or a held background
+ * agent raises no SubagentStop, so only the list says it stopped running).
+ * The time of the read is kept for the next one's due time, by the running
+ * chain only. A source that cannot be read is left out.
+ */
+const sourcesNow = async ($: EngineInterface, gen: number): Promise<ModelEvent[]> => {
+  const at = await $.clock.now()
 
-  return readFeed($)
+  if (isCurrent(gen)) {
+    feedReadAt = at
+  }
+
+  const snapshots = await readFeed($).catch(() => undefined)
+  const agents = await $.agent.list().catch(() => undefined)
+
+  return [...(agents ? [agentsEvent(agents)] : []), ...(snapshots ? [{ type: 'feed', snapshots }] : [])]
 }
 
 /** Whether the pane's spinner moves now: it is drawn, last on the terminal, motion is on, and an agent or a unit runs. */
 const isMoving = (state: FleetState | undefined, isAnimated: boolean): boolean =>
   isAnimated && drawnOn === 'terminal' && state?.isOpen === true && state.nodes.some(node => node.kind !== 'orchestrator' && node.status === 'running')
 
-/** The pane is drawn: the model knows it, its clock moves, and the status feed is read now, not at the next due tick. Never throws. */
-const markOpen = async ($: EngineInterface): Promise<void> => {
-  const snapshots = await feedNow($).catch(() => undefined)
+/**
+ * The pane is drawn, for the chain of `gen`: the model knows it, its clock
+ * moves, and the status feed and the agent list are read now, not at the next
+ * due tick; written only while that chain runs. Never throws.
+ */
+const markOpen = async ($: EngineInterface, gen: number): Promise<void> => {
+  const sources = await sourcesNow($, gen).catch(() => [])
 
-  await apply($, [{ type: 'open' }, { type: 'tick' }, ...(snapshots ? [{ type: 'feed', snapshots }] : [])])
+  await apply($, [{ type: 'open' }, { type: 'tick' }, ...sources], gen)
 }
 
 /**
- * One tick: whether the pane is still open and drawn (a pane opened unasked on
- * a narrow terminal waits undrawn, and is seated later without an event), the
- * model's clock, and the status feed when it is due or the pane has just been
- * drawn; then the chain's next tick, 250 ms on while something moves, else a
- * second. A tick that starts while another runs (one of a chain stopped and
- * started again) is skipped, not queued. Never throws.
+ * One tick of the chain of `gen`: whether the pane is still open and drawn;
+ * once it is drawn, the model's clock, and the status feed and the agent list
+ * when they are due or the pane has just been drawn; then the chain's next
+ * tick, 250 ms on while something moves, else a second. A pane opened unasked
+ * on a narrow terminal waits undrawn and is seated later without an event:
+ * until then a tick asks for the panes and writes nothing. A tick of a chain
+ * stopped since it began (the pane closed, maybe opened again, while it waited
+ * on the engine) writes nothing, stops nothing and arms nothing. Never throws.
  */
-const tick = async ($: EngineInterface, chain: Chain, isAnimated: boolean): Promise<void> => {
-  if (ticker !== chain) {
+const tick = async ($: EngineInterface, gen: number, isAnimated: boolean): Promise<void> => {
+  if (!isCurrent(gen)) {
     return
   }
-
-  if (isTicking) {
-    arm($, chain, SLOW_MS, isAnimated)
-
-    return
-  }
-
-  isTicking = true
 
   let next = SLOW_MS
 
   try {
     const pane = (await $.ui.panes()).find(one => one.id === PANE)
+
+    if (!isCurrent(gen)) {
+      return
+    }
 
     if (!pane) {
       stopTicking()
@@ -184,40 +220,53 @@ const tick = async ($: EngineInterface, chain: Chain, isAnimated: boolean): Prom
       return
     }
 
+    if (!pane.isPlaced) {
+      // Waiting to be seated: nothing to draw, so nothing is written — except once, when a drawn pane
+      // is un-seated (a narrowed terminal), so the status line comes back while the pane is not shown.
+      if ((await read($, fleet))?.isOpen === true) {
+        await apply($, [{ type: 'close' }], gen)
+      }
+
+      return
+    }
+
     const wasOpen = (await read($, fleet))?.isOpen === true
     const isDue = !wasOpen || (await $.clock.now()) - feedReadAt >= FEED_MS
-    const snapshots = pane.isPlaced && isDue ? await feedNow($) : undefined
-    const state = await apply($, [{ type: pane.isPlaced ? 'open' : 'close' }, { type: 'tick' }, ...(snapshots ? [{ type: 'feed', snapshots }] : [])])
+    const sources = isDue ? await sourcesNow($, gen) : []
+    const state = await apply($, [{ type: 'open' }, { type: 'tick' }, ...sources], gen)
 
     next = isMoving(state, isAnimated) ? FAST_MS : SLOW_MS
   } catch {
     // The next tick tries again.
   } finally {
-    isTicking = false
-
-    if (ticker === chain) {
-      arm($, chain, next, isAnimated)
+    if (isCurrent(gen)) {
+      arm($, gen, next, isAnimated)
     }
   }
 }
 
-/** The chain's next tick, `ms` from now: the one timer the tick holds. */
-const arm = ($: EngineInterface, chain: Chain, ms: number, isAnimated: boolean): void => {
-  chain.timer = $.clock.after(ms, () => {
-    void tick($, chain, isAnimated)
-  })
-}
+/** The next tick of the chain of `gen`, `ms` from now: the one timer the chain holds; none once that chain stopped. */
+const arm = ($: EngineInterface, gen: number, ms: number, isAnimated: boolean): void => {
+  const chain = ticker
 
-/** Starts the tick unless it runs. */
-const startTicking = ($: EngineInterface, isAnimated: boolean): void => {
-  if (ticker) {
+  if (chain?.generation !== gen) {
     return
   }
 
-  const chain: Chain = {}
+  chain.timer = $.clock.after(ms, () => {
+    void tick($, gen, isAnimated)
+  })
+}
 
-  ticker = chain
-  arm($, chain, SLOW_MS, isAnimated)
+/** Starts a chain under the next generation unless one runs; the running chain's generation. */
+const startTicking = ($: EngineInterface, isAnimated: boolean): number => {
+  if (!ticker) {
+    generation += 1
+    ticker = { generation }
+    arm($, generation, SLOW_MS, isAnimated)
+  }
+
+  return ticker.generation
 }
 
 const stopTicking = (): void => {
@@ -251,10 +300,7 @@ const start = async ($: EngineInterface, options: PluginOptions): Promise<void> 
     const agents = await $.agent.list().catch(() => [])
     const usage = await $.session.usage().catch(() => undefined)
 
-    await apply($, [
-      { type: 'agents', list: agents.map(agent => ({ id: agent.id, type: agent.type, status: agent.status, parentId: agent.parentId })) },
-      ...(usage ? [{ type: 'usage', usage: usageOf(usage) }] : []),
-    ])
+    await apply($, [agentsEvent(agents), ...(usage ? [{ type: 'usage', usage: usageOf(usage) }] : [])])
 
     const panes = await $.ui.panes().catch(() => [])
 
@@ -264,10 +310,10 @@ const start = async ($: EngineInterface, options: PluginOptions): Promise<void> 
       // Not awaited: the engine seats an unasked pane only on a wide terminal, and a `-p` run never answers.
       void $.ui.open({ id: PANE, title: TITLE }).then(
         async opened => {
-          startTicking($, options.animate !== false)
+          const gen = startTicking($, options.animate !== false)
 
           if (opened.isPlaced) {
-            await markOpen($)
+            await markOpen($, gen)
           }
         },
         () => undefined,
@@ -278,17 +324,27 @@ const start = async ($: EngineInterface, options: PluginOptions): Promise<void> 
   }
 }
 
-/** What a loop's model request names, written only when it changes (or resumes a reported agent). */
+/**
+ * What a loop's model request says: the model and effort it names, written
+ * only when they change (or the request resumes a reported agent); and, when
+ * the loop still holds open calls, that they are over (a loop asks the model
+ * again only once its tool results are back). Nothing to change, no write.
+ */
 const noteStep = async ($: EngineInterface, agentId: string, model: string, effort: string | undefined): Promise<void> => {
   try {
     const state = await read($, fleet)
     const node = state?.nodes.find(one => one.id === agentId)
 
-    if (state && (!node || (node.model === model && node.effort === effort && node.status !== 'reported'))) {
+    if (state && !node) {
       return
     }
 
-    await apply($, [{ type: 'step', agentId, model, effort }])
+    const isStepped = node !== undefined && node.model === model && node.effort === effort && node.status !== 'reported'
+    const events: ModelEvent[] = [...(node?.loopCalls ? [{ type: 'settle', agentId }] : []), ...(isStepped ? [] : [{ type: 'step', agentId, model, effort }])]
+
+    if (events.length > 0) {
+      await apply($, events)
+    }
   } catch {
     // Bookkeeping only: the request goes on.
   }
@@ -328,11 +384,10 @@ export const register: Register = (on, options) => {
     }
 
     const opened = await $.ui.open({ id: PANE, title: TITLE })
-
-    startTicking($, options.animate !== false)
+    const gen = startTicking($, options.animate !== false)
 
     if (opened.isPlaced) {
-      await markOpen($)
+      await markOpen($, gen)
     }
 
     return { text: opened.isPlaced ? 'Fleet pane opened.' : `Fleet pane waits: ${opened.reason}` }
@@ -393,8 +448,13 @@ export const register: Register = (on, options) => {
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
     const result = await next(e)
+    // The engine's list says whether the pane closed: a hook beneath may keep it by answering without next.
+    const isClosed = await $.ui.panes().then(
+      panes => !panes.some(one => one.id === PANE),
+      () => false,
+    )
 
-    if (!(result && 'deny' in result && result.deny)) {
+    if (isClosed) {
       stopTicking()
       await apply($, [{ type: 'close' }])
     }

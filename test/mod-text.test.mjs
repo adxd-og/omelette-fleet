@@ -46,6 +46,12 @@ test('cut counts terminal cells: a wide character is two, a combining mark none,
   assert.equal(cut('éée', 3), 'éée', 'combining marks take no cell');
 });
 
+test('cut counts a base and its VS16 as two code points against the 4 × cells + 1 bound', () => {
+  const out = cut(`a\ufe0f${'\u0301'.repeat(30)}`, 3);
+  assert.ok([...out].length <= 4 * 3 + 1, `${[...out].length} code points`);
+  assert.equal(out, `a\ufe0f${'\u0301'.repeat(10)}…`);
+});
+
 test('duration: m:ss below ten minutes, whole minutes from ten, whole hours from one', () => {
   assert.equal(duration(0), '0:00');
   assert.equal(duration(999), '0:00');
@@ -400,4 +406,10 @@ test('clock with this machine\'s offset reads as the local time', () => {
   const d = new Date(at);
   const two = (n) => String(n).padStart(2, '0');
   assert.equal(clock(at, d.getTimezoneOffset()), `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`);
+});
+
+test('subjectOf keeps a subject to 128 code points: a file name of a megabyte does not live in the state', () => {
+  const huge = 'x'.repeat(1_000_000);
+  assert.equal([...subjectOf('Edit', { file_path: `/home/op/${huge}.mjs` })].length, 128);
+  assert.equal(subjectOf('Edit', { file_path: '/home/op/a.mjs' }), 'Edit a.mjs');
 });

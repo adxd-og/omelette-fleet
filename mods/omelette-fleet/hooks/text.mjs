@@ -116,10 +116,15 @@ export function cells(text) {
   return width;
 }
 
+/** The code points `cut` keeps per cell: a run of zero-width marks takes no cell, so the cells alone would not bound it. */
+const POINTS_PER_CELL = 4;
+
 /**
- * `text` in at most `width` terminal cells: longer text keeps what fits in
- * `width - 1` of them, whole code points only, a base and the VS16 after it
- * kept or dropped together, and ends in '…'; no width, no text.
+ * `text` in at most `width` terminal cells and `4 × width + 1` code points:
+ * longer text (more cells, or more code points) keeps what fits in
+ * `width - 1` cells and `4 × width` code points, whole code points only, a
+ * base and the VS16 after it kept or dropped together, and ends in '…'; no
+ * width, no text. A long text is never spread whole: only its head is read.
  * @param {string} text
  * @param {number} width
  * @returns {string}
@@ -128,22 +133,28 @@ export function cut(text, width) {
   const max = Math.floor(width);
   if (!(max > 0)) return '';
   const whole = String(text ?? '');
-  if (cells(whole) <= max) return whole;
-  const points = [...whole];
+  const room = POINTS_PER_CELL * max;
+  // One code point more than the text may keep tells a text past the bound; a code point is at most two UTF-16 units.
+  const points = [...whole.slice(0, 2 * (room + 2))].slice(0, room + 2);
+  if (points.length <= room + 1 && cells(whole) <= max) return whole;
   let kept = '';
   let used = 0;
+  let count = 0;
   for (let i = 0; i < points.length; i++) {
     let unit = points[i];
     const point = unit.codePointAt(0);
     let w = cellsOf(point);
+    let size = 1;
     if (point !== VS16 && points[i + 1]?.codePointAt(0) === VS16) {
       unit += points[i + 1];
       i += 1;
+      size = 2;
       if (w === 1) w = 2;
     }
-    if (used + w > max - 1) break;
+    if (used + w > max - 1 || count + size > room) break;
     kept += unit;
     used += w;
+    count += size;
   }
   return `${kept}…`;
 }
@@ -200,6 +211,15 @@ export function familyOf(id) {
  * @returns {string}
  */
 export function subjectOf(tool, input) {
+  // A subject lives in the pane's state (up to 20 per loop): a file name of any length is kept to 128 code points.
+  const subject = subjectWhole(tool, input);
+  const points = [...subject.slice(0, 2 * SUBJECT_POINTS)];
+  return points.length > SUBJECT_POINTS ? points.slice(0, SUBJECT_POINTS).join('') : points.join('');
+}
+
+const SUBJECT_POINTS = 128;
+
+function subjectWhole(tool, input) {
   const args = input && typeof input === 'object' ? input : {};
   if (tool === 'Bash') return typeof args.command === 'string' ? bashSubject(args.command) : 'Bash';
   if (Object.hasOwn(FILE_FIELD, tool)) {

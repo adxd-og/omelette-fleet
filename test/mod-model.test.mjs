@@ -203,6 +203,68 @@ test('return with a foreign call id changes nothing', () => {
   }
 });
 
+test('an agent with two parallel calls, the newer returning first, still shows the older one\'s subject; the last return clears it', () => {
+  let s = run(initialState(T0),
+    spawn(T0, CODER, 'omelette-coder'),
+    call(T0 + SEC, CODER, 'k1', 'Bash', 'Bash: npm test'),
+    call(T0 + 2 * SEC, CODER, 'k2', 'Read', 'Read a.mjs'));
+  assert.equal(node(s, CODER).activity, 'Read a.mjs', 'the newest shows');
+  s = reduce(s, { type: 'return', at: T0 + 3 * SEC, agentId: CODER, callId: 'k2' });
+  const held = node(s, CODER);
+  assert.deepEqual([held.activity, held.activityCallId, held.since, held.status], ['Bash: npm test', 'k1', T0 + SEC, 'running']);
+  s = reduce(s, { type: 'return', at: T0 + 4 * SEC, agentId: CODER, callId: 'k1' });
+  for (const k of ['activity', 'activityCallId', 'loopCalls']) assert.equal(k in node(s, CODER), false, k);
+});
+
+test('a loop\'s newest remaining call shows when the newest returns, and only 20 are held: the oldest past the cap is dropped, its return changes nothing', () => {
+  let s = run(initialState(T0),
+    spawn(T0, CODER, 'omelette-coder'),
+    call(T0 + SEC, CODER, 'k1', 'Bash', 'Bash: npm test'),
+    call(T0 + 2 * SEC, CODER, 'k2', 'Read', 'Read a.mjs'),
+    call(T0 + 3 * SEC, CODER, 'k3', 'Grep', 'Grep'));
+  s = reduce(s, { type: 'return', at: T0 + 4 * SEC, agentId: CODER, callId: 'k3' });
+  const held = node(s, CODER);
+  assert.deepEqual([held.activity, held.activityCallId, held.since], ['Read a.mjs', 'k2', T0 + 2 * SEC], 'the newest of those remaining, not the oldest');
+  let capped = run(initialState(T0), spawn(T0, CODER, 'omelette-coder'));
+  for (let i = 0; i < 25; i++) capped = reduce(capped, call(T0 + (i + 1) * SEC, CODER, `c${i}`, 'Read', `Read f${i}.mjs`));
+  assert.deepEqual(node(capped, CODER).loopCalls.map((c) => c.callId), Array.from({ length: 20 }, (_, i) => `c${i + 5}`));
+  assert.equal(reduce(capped, { type: 'return', at: T0 + HOUR / 4, agentId: CODER, callId: 'c0' }), capped, 'a dropped call\'s return is foreign');
+});
+
+test('a loop\'s open calls stay pure: call, return, stop and tick on deep-frozen state never write into an earlier loopCalls', () => {
+  let state = deepFreeze(run(initialState(T0), spawn(T0, CODER, 'omelette-coder')));
+  for (const e of [
+    call(T0 + SEC, CODER, 'a', 'Bash', 'Bash: npm test'),
+    call(T0 + 2 * SEC, CODER, 'b', 'Read', 'Read a.mjs'),
+    call(T0 + 3 * SEC, MAIN, 'c', 'Grep'),
+    call(T0 + 4 * SEC, MAIN, 'd', 'Read', 'Read b.mjs'),
+    { type: 'return', at: T0 + 5 * SEC, agentId: CODER, callId: 'b' },
+    { type: 'stop', at: T0 + 6 * SEC, agentId: CODER },
+    { type: 'tick', at: T0 + 3 * SEC + 2 * HOUR + 1 },
+  ]) {
+    const copy = JSON.stringify(state);
+    const next = reduce(state, deepFreeze(e));
+    assert.equal(JSON.stringify(state), copy, `${e.type} changed its input`);
+    state = deepFreeze(next);
+  }
+  assert.deepEqual(node(state, MAIN).loopCalls, [{ callId: 'd', subject: 'Read b.mjs', since: T0 + 4 * SEC }], 'the tick dropped only the call past 2 hours');
+  assert.equal('loopCalls' in node(state, CODER), false, 'the stop cleared the agent\'s');
+});
+
+test('settle: a loop\'s next model request clears its open calls and its activity; a loop with none, a unit or an unknown id is returned as given', () => {
+  const lost = deepFreeze(run(initialState(T0),
+    spawn(T0, CODER, 'omelette-coder'),
+    call(T0 + SEC, CODER, 'k1', 'Bash', 'Bash: npm test'),
+    call(T0 + 2 * SEC, MAIN, 'u1', GROK, 'code_review')));
+  const settled = reduce(lost, { type: 'settle', at: T0 + MIN, agentId: CODER });
+  for (const k of ['loopCalls', 'activity', 'activityCallId']) assert.equal(k in node(settled, CODER), false, k);
+  assert.deepEqual([node(settled, CODER).status, node(settled, CODER).since], ['running', T0 + SEC], 'the loop still runs; only its calls are over');
+  assert.equal(node(settled, MAIN).activity, 'code_review', 'another loop\'s calls stay');
+  assert.equal(node(settled, 'unit:grok').status, 'running', 'a unit\'s calls are its own');
+  assert.equal(reduce(settled, { type: 'settle', at: T0 + MIN, agentId: CODER }), settled, 'no open calls: as given');
+  for (const agentId of ['unit:grok', 'ffff0000']) assert.equal(reduce(lost, { type: 'settle', at: T0 + MIN, agentId }), lost, agentId);
+});
+
 const GROK = 'mcp__orion-grok__grok_code_review';
 const CODEX = 'mcp__orion-codex__codex_research';
 
@@ -572,11 +634,12 @@ test('tick: sets now, and clears an activity older than 2 hours — a unit back 
   assert.equal(node(later, MAIN).activity, 'Read plan.md', 'a call twenty minutes old stays');
 });
 
-test('a tool call that never returns (Review Focus 5): the loop\'s next call replaces it, its stop clears it, a tick clears one older than 2 hours', () => {
+test('a tool call that never returns (Review Focus 5): the loop\'s next call shows over it, its stop clears it, a tick clears one older than 2 hours', () => {
   const lost = run(initialState(T0), spawn(T0, CODER, 'omelette-coder'), call(T0 + MIN, CODER, 'k1', 'Bash', 'Bash: npm test'));
   const replaced = reduce(lost, call(T0 + 2 * MIN, CODER, 'k2', 'Read', 'Read a.mjs'));
   assert.equal(node(replaced, CODER).activity, 'Read a.mjs');
-  assert.equal(reduce(replaced, { type: 'return', at: T0 + 3 * MIN, agentId: CODER, callId: 'k1' }), replaced, 'the lost call\'s late return is foreign now');
+  const late = node(reduce(replaced, { type: 'return', at: T0 + 3 * MIN, agentId: CODER, callId: 'k1' }), CODER);
+  assert.deepEqual([late.activity, late.activityCallId], ['Read a.mjs', 'k2'], 'the lost call\'s late return leaves the newer call shown');
   const stopped = reduce(lost, { type: 'stop', at: T0 + 2 * MIN, agentId: CODER });
   assert.equal('activity' in node(stopped, CODER), false);
   const main = run(initialState(T0), call(T0, MAIN, 'k9', 'Bash', 'Bash: sleep 9999'), { type: 'tick', at: T0 + 2 * HOUR + MIN });
@@ -631,4 +694,16 @@ test('history keeps the newest 200 links, newest last', () => {
   assert.equal(s.history.length, 200);
   assert.equal(s.history[0].to, 'peer-50');
   assert.equal(s.history.at(-1).to, 'peer-249');
+});
+
+test('settle also ends the loop\'s own unit calls that never returned; another caller\'s call stays', () => {
+  const T = Date.UTC(2026, 9, 8, 12);
+  let s = initialState(T);
+  s = reduce(s, { type: 'spawn', at: T, agentId: 'a1', role: 'omelette-coder', parentId: 'main', model: 'claude-opus-5-5' });
+  s = reduce(s, { type: 'call', at: T + 1, agentId: 'a1', callId: 'g1', tool: 'mcp__orion-grok__grok_code_review', subject: 'code_review' });
+  s = reduce(s, { type: 'call', at: T + 2, agentId: 'main', callId: 'g2', tool: 'mcp__orion-grok__grok_code_review', subject: 'code_review' });
+  s = reduce(s, { type: 'settle', at: T + 3, agentId: 'a1' });
+  const grok = s.nodes.find((n) => n.id === 'unit:grok');
+  assert.deepEqual(grok.openCalls.map((c) => c.callId), ['g2']);
+  assert.equal(grok.callerId, 'main');
 });

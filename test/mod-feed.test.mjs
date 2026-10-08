@@ -122,3 +122,12 @@ test('parseSnapshot: an active entry without a tool or a start time is dropped, 
   assert.equal(snap.active.length, 1);
   assert.equal(snap.active[0].id, '4242-1');
 });
+
+test('parseSnapshot keeps the first 64 code points of an active call\'s tool, model and effort: a status file cannot store megabytes in the pane\'s state', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const hostile = { ...activeCall(now - 2000), tool: `grok_${'x'.repeat(4 * 1024 * 1024)}`, model: '\u{1d544}'.repeat(100_000), effort: 'h'.repeat(65) };
+  const [call] = parseSnapshot(snapshotText('grok', now - 1000, [hostile]), now).active;
+  assert.equal(call.tool, `grok_${'x'.repeat(59)}`);
+  assert.equal(call.model, '\u{1d544}'.repeat(64), 'code points, not UTF-16 units');
+  assert.equal(call.effort, 'h'.repeat(64));
+});

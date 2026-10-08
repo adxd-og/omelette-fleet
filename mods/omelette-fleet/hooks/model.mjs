@@ -17,17 +17,20 @@
  *   model?: string, effort?: string, status: 'running'|'waiting'|'idle'|'reported',
  *   activity?: string, activityCallId?: string, since: number, callerId?: string,
  *   feed?: 'ok'|'none', lastEndedAt?: number, order: number,
- *   openCalls?: { callId: string, callerId: string, tool: string, since: number }[] }} FleetNode
+ *   openCalls?: { callId: string, callerId: string, tool: string, since: number }[],
+ *   loopCalls?: { callId: string, subject: string, since: number }[] }} FleetNode
  *   `openCalls`: a unit's calls of this session still out; the unit shows the newest.
+ *   `loopCalls`: a loop's own calls still out (the main loop's or an agent's); the loop shows the newest.
  */
 /** @typedef {{ at: number, from: string, to: string, label: string }} FleetLink  node ids, or a SendMessage's raw target */
-/** @typedef {{ contextPercent?: number, fiveHour?: number, sevenDay?: number, costUsd?: number }} FleetUsage */
+/** @typedef {{ contextPercent?: number, fiveHour?: number, sevenDay?: number }} FleetUsage */
 /** @typedef {{ nodes: FleetNode[], history: FleetLink[], usage: FleetUsage, now: number, isOpen: boolean }} FleetState */
 /**
  * @typedef {{ type: 'spawn', at: number, agentId: string, role: string, parentId?: string, model?: string }
  *   | { type: 'step', at: number, agentId: string, model?: string, effort?: string }
  *   | { type: 'call', at: number, agentId: string, callId: string, tool: string, subject?: string, target?: string }
  *   | { type: 'return', at: number, agentId: string, callId: string }
+ *   | { type: 'settle', at: number, agentId: string }
  *   | { type: 'stop', at: number, agentId: string }
  *   | { type: 'agents', at: number, list: { id: string, type: string, status: string, parentId?: string }[] }
  *   | { type: 'feed', at: number, snapshots: FleetSnapshot[] }
@@ -47,7 +50,7 @@ const HISTORY_CAP = 200;
  * has no fixed ceiling and a default deep research runs about 36 minutes.
  */
 export const STALE_MS = 2 * 60 * 60 * 1000;
-/** The open calls a unit keeps, the oldest dropped past it. */
+/** The open calls a unit or a loop keeps, the oldest dropped past it. */
 const OPEN_CALLS_CAP = 20;
 /** Another session's call on a unit, as `callerId`. */
 const OTHER = 'other';
@@ -127,8 +130,8 @@ const find = (state, id) => state.nodes.find((n) => n.id === id);
 const findAgent = (state, id) => state.nodes.find((n) => n.id === id && n.kind === 'agent');
 const nextOrder = (state) => Math.max(...state.nodes.map((n) => n.order)) + 1;
 
-/** What a node shows once its current call is over. */
-const NO_ACTIVITY = Object.freeze({ activity: undefined, activityCallId: undefined });
+/** What a node shows once its calls are over. */
+const NO_ACTIVITY = Object.freeze({ activity: undefined, activityCallId: undefined, loopCalls: undefined });
 /** A unit with no call running. */
 const UNIT_IDLE = Object.freeze({ ...NO_ACTIVITY, status: 'idle', callerId: undefined, openCalls: undefined });
 
@@ -158,6 +161,20 @@ function withUnitCalls(state, keep, idlePatch = {}) {
   return next;
 }
 
+/** A loop's fields once `open` are its calls still out: no activity when none is, else the newest shows. */
+function loopHolding(open) {
+  if (open.length === 0) return NO_ACTIVITY;
+  const newest = open.reduce((a, b) => (b.since >= a.since ? b : a));
+  return { loopCalls: open, activity: newest.subject, activityCallId: newest.callId, since: newest.since };
+}
+
+/** `state` with the open calls of `loop` narrowed to those `keep` accepts; a loop that lost one is shown anew. */
+function withLoopCalls(state, loop, keep) {
+  const open = loop.loopCalls ?? [];
+  const left = open.filter(keep);
+  return left.length === open.length ? state : withNode(state, loop.id, loopHolding(left));
+}
+
 /** @type {Record<string, (state: FleetState, e: any) => FleetState>} */
 const ON = {
   spawn(state, e) {
@@ -184,7 +201,10 @@ const ON = {
     let next = state;
     const loop = find(state, e.agentId);
     if (loop && loop.kind !== 'unit') {
-      next = withNode(next, loop.id, { activity: e.subject || e.tool, activityCallId: e.callId, status: 'running', since: e.at });
+      const subject = e.subject || e.tool;
+      // Held open until its return, like a unit's; a call with no id could never be matched by its return, so it only shows.
+      const open = e.callId ? { loopCalls: [...(loop.loopCalls ?? []), { callId: e.callId, subject, since: e.at }].slice(-OPEN_CALLS_CAP) } : {};
+      next = withNode(next, loop.id, { ...open, activity: subject, activityCallId: e.callId, status: 'running', since: e.at });
     }
     if (unit) {
       const to = unitId(unit.unit);
@@ -205,8 +225,16 @@ const ON = {
     if (!e.callId) return state;
     let next = state;
     const loop = find(state, e.agentId);
-    if (loop && loop.kind !== 'unit' && loop.activityCallId === e.callId) next = withNode(next, loop.id, NO_ACTIVITY);
+    if (loop && loop.kind !== 'unit') next = withLoopCalls(next, loop, (c) => c.callId !== e.callId);
     return withUnitCalls(next, (c) => c.callId !== e.callId, { lastEndedAt: e.at });
+  },
+
+  // A loop asks the model again only once its tool results are back: a call still open in it is one whose return never came.
+  settle(state, e) {
+    const loop = find(state, e.agentId);
+    if (!loop || loop.kind === 'unit' || !loop.loopCalls) return state;
+    // Its unit calls are over too: a unit call is one of the loop's tool calls.
+    return withUnitCalls(withNode(state, loop.id, NO_ACTIVITY), (c) => c.callerId !== loop.id);
   },
 
   stop(state, e) {
@@ -278,14 +306,16 @@ const ON = {
 
   tick(state, e) {
     const isOld = (since) => e.at - since > STALE_MS;
-    // A unit with open calls loses only the old ones; another session's call (no open calls) goes by its since.
-    const stale = (n) => n.activity !== undefined && !n.openCalls && isOld(n.since);
+    const keep = (c) => !isOld(c.since);
+    // A unit or a loop with open calls loses only the old ones; an activity with none (another session's call, a call with no id) goes by its since.
+    const stale = (n) => n.activity !== undefined && !n.openCalls && !n.loopCalls && isOld(n.since);
     const next = {
       ...state,
       now: e.at,
       nodes: state.nodes.map((n) => (stale(n) ? patched(n, n.kind === 'unit' ? UNIT_IDLE : NO_ACTIVITY) : n)),
     };
-    return withUnitCalls(next, (c) => !isOld(c.since));
+    const loops = next.nodes.filter((n) => n.kind !== 'unit');
+    return withUnitCalls(loops.reduce((acc, loop) => withLoopCalls(acc, loop, keep), next), keep);
   },
 
   open: (state) => ({ ...state, isOpen: true }),

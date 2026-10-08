@@ -155,8 +155,7 @@ export function statusLine(state, now) {
  * layout draws passes here.
  */
 function fitted(raw, width, sym) {
-  // At most four code points per cell: zero-width marks pass `cut`, so a run of them could make a row (and the SVG's alt) unbounded.
-  const text = [...clean(raw)].slice(0, 4 * Math.max(width, 0) + 1).join('');
+  const text = clean(raw);
   const out = cut(text, width);
   return out !== text && sym.more !== '…' && out.endsWith('…') ? `${out.slice(0, -1)}${sym.more}` : out;
 }
@@ -300,14 +299,28 @@ function grid(width, height) {
   return Array.from({ length: height }, () => Array.from({ length: width }, () => ({ ch: ' ', tone: /** @type {Tone} */ ('plain') })));
 }
 
-/** Writes `text` into a row from column `x`, by cells: a wide character takes two, a combining mark joins the cell before. */
+/** Variation selector 16: after a one-cell code point, the pair is an emoji two cells wide (`cells` counts it so). */
+const VS16 = '\ufe0f';
+
+/**
+ * Writes `text` into a row from column `x`, by cells: a wide character takes
+ * two, and so does a one-cell code point with the VS16 after it (the pair in
+ * the first cell, the second left empty); a combining mark joins the cell before.
+ */
 function put(row, x, text, tone) {
+  const points = [...text];
   let col = x;
-  for (const ch of text) {
-    const w = cells(ch);
+  for (let i = 0; i < points.length; i++) {
+    let ch = points[i];
+    let w = cells(ch);
     if (w === 0) {
       if (col > x) row[col - 1].ch += ch;
       continue;
+    }
+    if (w === 1 && points[i + 1] === VS16) {
+      ch += VS16;
+      w = 2;
+      i += 1;
     }
     if (col + w > row.length) break;
     row[col] = { ch, tone };

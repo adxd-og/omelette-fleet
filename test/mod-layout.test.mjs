@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { layout, plainRows, statusLine } from '../mods/omelette-fleet/hooks/layout.mjs';
-import { cells } from '../mods/omelette-fleet/hooks/text.mjs';
+import { cells, cut } from '../mods/omelette-fleet/hooks/text.mjs';
 
 const SEC = 1000;
 const MIN = 60 * SEC;
@@ -508,6 +508,27 @@ test('statusLine: running roles and units, a unit with its duration; nothing whe
   assert.ok(cells(line) <= 60, line);
   assert.ok(line.startsWith('fleet: role0, role1'), line);
   assert.ok(line.endsWith('…'), line);
+});
+
+test('cut keeps at most 4 × cells + 1 code points, so a role of zero-width marks cannot make the status line unbounded', () => {
+  const flood = 'a' + '\u0301'.repeat(100_000);
+  for (const width of [1, 3, 14, 60]) {
+    const out = cut(flood, width);
+    assert.ok([...out].length <= 4 * width + 1, `${width}: ${[...out].length} code points`);
+    assert.ok(out.endsWith('…'), `${width}: a text past the bound is cut`);
+  }
+  assert.equal(cut('a\u0301\u0301\u0301\u0301', 1), 'a\u0301\u0301\u0301\u0301', 'five code points in one cell are within the bound');
+  const line = statusLine(withAgents(golden(), 1, 1, { role: flood }), NOW);
+  assert.ok([...line].length <= 4 * 60 + 1, `${[...line].length} code points`);
+  assert.ok(line.startsWith('fleet: a\u0301'), line.slice(0, 12));
+});
+
+test('a one-cell code point and its VS16 take two columns: a role ☀\ufe0f coder leaves every row of the 53-column graph as wide as the golden\'s', () => {
+  const sunny = plainRows(layout(patch(golden(), 'a-coder', { role: '☀\ufe0f coder' }), { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  const plain = plainRows(layout(golden(), { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  assert.equal(sunny[3], '│ ▶ ☀\ufe0f coder    │ │ · tester      │ │ ▶ reviewer    │');
+  assert.deepEqual(sunny.map(cells), plain.map(cells));
+  for (const row of sunny.slice(2, 7)) assert.equal(cells(row), 53, row);
 });
 
 test('a run of zero-width marks cannot make a row or the alt unbounded: at most four code points per cell', async () => {
