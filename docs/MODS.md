@@ -120,7 +120,7 @@ Live lines run as a dashed stroke from caller to callee, and a running box's fra
 | Reads | From |
 |---|---|
 | Agents, their models and efforts, tool calls, hand-backs | The engine's own events (`agent.spawn`, `turn.step`, `tool.call`, the sub-agent stop) |
-| Agents it never saw spawn (after a reload or a resume) | `$.agent.list()` |
+| Agents it never saw spawn (after a reload or a resume), and each agent's status (a held agent or an idle teammate reads as waiting) | `$.agent.list()`, at open and with the status feed, at most every 2 s |
 | Context fill and the rate-limit windows | `$.session.usage()` and the engine's measure event |
 | A unit's model, start time, and calls made by other sessions (shown as `← other`) | The units' status snapshots, `status-<unit>-<pid>.json` under `$OMELETTE_HOME` (default `~/.omelette`), schema 2. See [STATUS-FEED](STATUS-FEED.md). |
 
