@@ -1017,7 +1017,9 @@ test('cut, a property: on mixed wide, narrow, combining, ZWJ and VS16 strings th
       assert.ok(out.endsWith('…'), `${JSON.stringify(text)} @${width}`);
       const kept = out.slice(0, -1);
       assert.ok(text.startsWith(kept), 'a prefix of the text');
-      const next = [...text.slice(kept.length)][0];
+      // The next unit is a code point with the VS16 that follows it: `cut` keeps or drops the pair whole (ruling 2026-10-08).
+      const rest = [...text.slice(kept.length)];
+      const next = rest[0] + (rest[0] !== '\ufe0f' && rest[1] === '\ufe0f' ? rest[1] : '');
       assert.ok(cells(kept) + cells(next) > width - 1, `longest prefix: ${JSON.stringify(text)} @${width} kept ${JSON.stringify(kept)} next ${JSON.stringify(next)}`);
     }
   }

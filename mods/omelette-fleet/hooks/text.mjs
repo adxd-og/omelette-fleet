@@ -27,33 +27,99 @@ const FILE_FIELD = Object.freeze({ Edit: 'file_path', Write: 'file_path', Read: 
 
 const two = (n) => String(n).padStart(2, '0');
 
-/** Code point ranges a terminal draws two cells wide: East Asian Wide/Fullwidth and emoji. */
+/**
+ * The code points a terminal draws two cells wide: every East Asian Width W
+ * (Wide) and F (Fullwidth) code point of Unicode 16.0.0, emoji included, as
+ * sorted [low, high] ranges. Generated, not written by hand: Python 3.14's
+ * `unicodedata.east_asian_width` over 0..0x10FFFF, kept where it reads 'W' or
+ * 'F' (unassigned code points in the CJK blocks and planes 2 and 3 read 'W',
+ * as UAX #11 defaults them), adjacent code points merged — 122 ranges.
+ */
 const WIDE = Object.freeze([
-  [0x1100, 0x115f], [0x2e80, 0xa4cf], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe30, 0xfe4f],
-  [0xff00, 0xff60], [0xffe0, 0xffe6], [0x1f300, 0x1f64f], [0x1f680, 0x1f6ff], [0x1f900, 0x1f9ff], [0x20000, 0x3fffd],
+  [0x1100, 0x115f], [0x231a, 0x231b], [0x2329, 0x232a], [0x23e9, 0x23ec], [0x23f0, 0x23f0], [0x23f3, 0x23f3],
+  [0x25fd, 0x25fe], [0x2614, 0x2615], [0x2630, 0x2637], [0x2648, 0x2653], [0x267f, 0x267f], [0x268a, 0x268f],
+  [0x2693, 0x2693], [0x26a1, 0x26a1], [0x26aa, 0x26ab], [0x26bd, 0x26be], [0x26c4, 0x26c5], [0x26ce, 0x26ce],
+  [0x26d4, 0x26d4], [0x26ea, 0x26ea], [0x26f2, 0x26f3], [0x26f5, 0x26f5], [0x26fa, 0x26fa], [0x26fd, 0x26fd],
+  [0x2705, 0x2705], [0x270a, 0x270b], [0x2728, 0x2728], [0x274c, 0x274c], [0x274e, 0x274e], [0x2753, 0x2755],
+  [0x2757, 0x2757], [0x2795, 0x2797], [0x27b0, 0x27b0], [0x27bf, 0x27bf], [0x2b1b, 0x2b1c], [0x2b50, 0x2b50],
+  [0x2b55, 0x2b55], [0x2e80, 0x2e99], [0x2e9b, 0x2ef3], [0x2f00, 0x2fd5], [0x2ff0, 0x303e], [0x3041, 0x3096],
+  [0x3099, 0x30ff], [0x3105, 0x312f], [0x3131, 0x318e], [0x3190, 0x31e5], [0x31ef, 0x321e], [0x3220, 0x3247],
+  [0x3250, 0xa48c], [0xa490, 0xa4c6], [0xa960, 0xa97c], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe10, 0xfe19],
+  [0xfe30, 0xfe52], [0xfe54, 0xfe66], [0xfe68, 0xfe6b], [0xff01, 0xff60], [0xffe0, 0xffe6], [0x16fe0, 0x16fe4],
+  [0x16ff0, 0x16ff1], [0x17000, 0x187f7], [0x18800, 0x18cd5], [0x18cff, 0x18d08], [0x1aff0, 0x1aff3], [0x1aff5, 0x1affb],
+  [0x1affd, 0x1affe], [0x1b000, 0x1b122], [0x1b132, 0x1b132], [0x1b150, 0x1b152], [0x1b155, 0x1b155], [0x1b164, 0x1b167],
+  [0x1b170, 0x1b2fb], [0x1d300, 0x1d356], [0x1d360, 0x1d376], [0x1f004, 0x1f004], [0x1f0cf, 0x1f0cf], [0x1f18e, 0x1f18e],
+  [0x1f191, 0x1f19a], [0x1f200, 0x1f202], [0x1f210, 0x1f23b], [0x1f240, 0x1f248], [0x1f250, 0x1f251], [0x1f260, 0x1f265],
+  [0x1f300, 0x1f320], [0x1f32d, 0x1f335], [0x1f337, 0x1f37c], [0x1f37e, 0x1f393], [0x1f3a0, 0x1f3ca], [0x1f3cf, 0x1f3d3],
+  [0x1f3e0, 0x1f3f0], [0x1f3f4, 0x1f3f4], [0x1f3f8, 0x1f43e], [0x1f440, 0x1f440], [0x1f442, 0x1f4fc], [0x1f4ff, 0x1f53d],
+  [0x1f54b, 0x1f54e], [0x1f550, 0x1f567], [0x1f57a, 0x1f57a], [0x1f595, 0x1f596], [0x1f5a4, 0x1f5a4], [0x1f5fb, 0x1f64f],
+  [0x1f680, 0x1f6c5], [0x1f6cc, 0x1f6cc], [0x1f6d0, 0x1f6d2], [0x1f6d5, 0x1f6d7], [0x1f6dc, 0x1f6df], [0x1f6eb, 0x1f6ec],
+  [0x1f6f4, 0x1f6fc], [0x1f7e0, 0x1f7eb], [0x1f7f0, 0x1f7f0], [0x1f90c, 0x1f93a], [0x1f93c, 0x1f945], [0x1f947, 0x1f9ff],
+  [0x1fa70, 0x1fa7c], [0x1fa80, 0x1fa89], [0x1fa8f, 0x1fac6], [0x1face, 0x1fadc], [0x1fadf, 0x1fae9], [0x1faf0, 0x1faf8],
+  [0x20000, 0x2fffd], [0x30000, 0x3fffd],
 ]);
 
-/** The cells one code point takes: 0 for a combining mark, ZWJ or VS16, 2 for a wide one, else 1. */
+/** The characters a terminal acts on instead of drawing: C0 controls, DEL, C1 controls, and the bidi controls. */
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+
+/**
+ * `text` without the characters a terminal would act on — C0 and C1 controls,
+ * DEL, and the bidi controls (U+061C, U+200E, U+200F, U+202A–202E,
+ * U+2066–2069) — since roles, model ids and file names come from outside. One
+ * pass, linear in the length; anything not a string is ''.
+ * @param {unknown} text
+ * @returns {string}
+ */
+export function clean(text) {
+  return typeof text === 'string' ? text.replace(UNSAFE, '') : '';
+}
+
+/** Whether a code point is in WIDE: a binary search over its sorted ranges. */
+function isWide(point) {
+  let low = 0;
+  let high = WIDE.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const [first, last] = WIDE[mid];
+    if (point < first) high = mid - 1;
+    else if (point > last) low = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
+/** Variation selector 16: asks for the emoji presentation of the code point before it. */
+const VS16 = 0xfe0f;
+
+/** The cells one code point takes on its own: 0 for a combining mark, ZWJ or VS16, 2 for a wide one, else 1. */
 function cellsOf(point) {
-  if ((point >= 0x300 && point <= 0x36f) || point === 0x200d || point === 0xfe0f) return 0;
-  for (const [low, high] of WIDE) if (point >= low && point <= high) return 2;
-  return 1;
+  if ((point >= 0x300 && point <= 0x36f) || point === 0x200d || point === VS16) return 0;
+  return isWide(point) ? 2 : 1;
 }
 
 /**
- * The terminal cells `text` takes.
+ * The terminal cells `text` takes. A VS16 right after a one-cell code point
+ * turns that pair into an emoji two cells wide (one more cell); after a wide
+ * code point, or alone, it adds nothing.
  * @param {string} text
  * @returns {number}
  */
 export function cells(text) {
   let width = 0;
-  for (const ch of String(text ?? '')) width += cellsOf(ch.codePointAt(0));
+  let before = 0;
+  for (const ch of String(text ?? '')) {
+    const point = ch.codePointAt(0);
+    const w = point === VS16 ? (before === 1 ? 1 : 0) : cellsOf(point);
+    width += w;
+    before = point === VS16 ? 0 : w;
+  }
   return width;
 }
 
 /**
  * `text` in at most `width` terminal cells: longer text keeps what fits in
- * `width - 1` of them, whole code points only, and ends in '…'; no width, no text.
+ * `width - 1` of them, whole code points only, a base and the VS16 after it
+ * kept or dropped together, and ends in '…'; no width, no text.
  * @param {string} text
  * @param {number} width
  * @returns {string}
@@ -63,12 +129,20 @@ export function cut(text, width) {
   if (!(max > 0)) return '';
   const whole = String(text ?? '');
   if (cells(whole) <= max) return whole;
+  const points = [...whole];
   let kept = '';
   let used = 0;
-  for (const ch of whole) {
-    const w = cellsOf(ch.codePointAt(0));
+  for (let i = 0; i < points.length; i++) {
+    let unit = points[i];
+    const point = unit.codePointAt(0);
+    let w = cellsOf(point);
+    if (point !== VS16 && points[i + 1]?.codePointAt(0) === VS16) {
+      unit += points[i + 1];
+      i += 1;
+      if (w === 1) w = 2;
+    }
     if (used + w > max - 1) break;
-    kept += ch;
+    kept += unit;
     used += w;
   }
   return `${kept}…`;
