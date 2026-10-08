@@ -132,7 +132,7 @@ const COMMANDS = {
     ],
   },
   rules: {
-    args: '[--global] [--agents] [--hooks] [--print] [--remove] [--force] [--dry-run]',
+    args: '[--global] [--agents] [--hooks] [--mods] [--print] [--remove] [--force] [--dry-run]',
     body: [
       'Write the fleet\'s operating rules (units propose, this session applies;',
       'tester flow; routing table) to <cwd>/.claude/rules/omelette-fleet.md,',
@@ -151,6 +151,7 @@ const COMMANDS = {
       '.claude/skills. --hooks writes the guard script into .claude/hooks',
       'and prints the settings.json snippet that calls it — that file is',
       'yours to edit, never ours.',
+      '--mods prints how to install the fleet pane mod and writes nothing.',
     ],
   },
   doctor: {
@@ -1843,11 +1844,45 @@ function managedFiles({ global = false, agents = false, hooks = false, version, 
 /** The kinds a running session ever picks up on its own — the post-write line is about these and no other. */
 const LOADED_BY_A_SESSION = new Set(['rules', 'agents', 'skills']);
 
+/**
+ * The fleet pane is a Claude Code mod (mods/omelette-fleet) and this package
+ * root is its folder marketplace (.claude-plugin/marketplace.json). Installing
+ * a plugin is `claude`'s and the operator's to do, as every settings file is:
+ * `rules --mods` PRINTS the commands and writes nothing. The plugin and the
+ * marketplace are both named omelette-fleet (test/mod-skeleton.test.mjs pins
+ * it). MOD_TESTED_BUILD is the Claude Code build the mod was run against: its
+ * plugin API is early access and moves between releases.
+ */
+const MOD_REF = 'omelette-fleet@omelette-fleet';
+const MOD_TESTED_BUILD = '2.1.294';
+const MOD_UNINSTALL = ['claude', 'plugin', 'uninstall', MOD_REF];
+
+function printModInstructions() {
+  out("The fleet pane is an optional Claude Code mod shipped in this package, on Claude Code's early access plugin API.");
+  out("It only reads (the engine's own events and the units' status feed) and refuses, rewrites or blocks nothing.");
+  out(`Tested on Claude Code ${MOD_TESTED_BUILD}.`);
+  out();
+  out('Install (this package folder is the marketplace and is read in place: after an update, /reload-plugins loads the new mod):');
+  out(`  ${printed(['claude', 'plugin', 'marketplace', 'add', ROOT])}`);
+  out(`  ${printed(['claude', 'plugin', 'install', MOD_REF])}`);
+  out();
+  out('For one session, without installing:');
+  out(`  ${printed(['claude', '--plugin-dir', join(ROOT, 'mods', 'omelette-fleet')])}`);
+  out();
+  out('Remove:');
+  out(`  ${printed(MOD_UNINSTALL)}`);
+}
+
 async function cmdRules(argv) {
-  const { flags, positional, errors } = parseArgv(argv, { booleans: ['global', 'agents', 'hooks', 'print', 'remove', 'force', 'dry-run'] });
+  const { flags, positional, errors } = parseArgv(argv, { booleans: ['global', 'agents', 'hooks', 'mods', 'print', 'remove', 'force', 'dry-run'] });
   if (positional.length) errors.push(`unexpected argument: ${positional[0]}`);
   if (flags.print && flags.remove) errors.push('--print and --remove ask for opposite things — pick one');
+  if (flags.mods && flags.remove) errors.push(`--mods only prints and removes nothing — the mod is removed with: ${printed(MOD_UNINSTALL)}`);
   if (errors.length) { errors.forEach((e) => err(`omelette-fleet rules: ${e}`)); return 1; }
+
+  // --mods prints and does nothing else: no file is rendered, read or written,
+  // whatever else was asked (--print, --dry-run and the render flags included).
+  if (flags.mods) { printModInstructions(); return 0; }
 
   // The definitions render from the CURRENT agent settings, so a `set` shows up
   // in the next `rules --agents` as a content change at the same version. A
