@@ -63,7 +63,7 @@ test('plugin.json: name, semver version equal to the package, description, autho
   assert.equal(p.version, pkg().version);
   assert.equal(p.types, './types/index.d.ts');
   const a = p.userConfig.autoOpen;
-  assert.deepEqual(Object.keys(p.userConfig), ['autoOpen'], 'only autoOpen is configurable in T1');
+  assert.deepEqual(Object.keys(p.userConfig).sort(), ['animate', 'autoOpen'], 'autoOpen (T1) and animate (Task 3.2) are the options');
   assert.equal(a.type, 'boolean');
   assert.equal(a.default, true);
   assert.equal(a.title, 'Open the pane at session start');

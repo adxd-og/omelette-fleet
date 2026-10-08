@@ -184,3 +184,45 @@ test('a unit with several open calls shows <tool> ×N on one link; one another s
   assert.deepEqual(boxesOf(source).find((b) => b.name === 'grok').lines, ['▶ grok', 'code_review', '← other']);
   assert.ok(linksOf(source).every((l) => !l.pair.includes('grok')));
 });
+
+test('motion: with animate, the dash flow and the pulse sit only inside the reduced-motion query; without it there is none, and nothing else differs', () => {
+  const still = svgOf(golden(), { tzOffsetAt: UTC }).source;
+  const moving = svgOf(golden(), { tzOffsetAt: UTC, animate: true }).source;
+  for (const word of ['animation', '@keyframes', 'stroke-dasharray', 'prefers-reduced-motion']) assert.ok(!still.includes(word), `still: ${word}`);
+  const QUERY = '@media (prefers-reduced-motion: no-preference){';
+  const start = moving.indexOf(QUERY);
+  assert.ok(start >= 0, 'the query');
+  let depth = 0;
+  let end = -1;
+  for (let i = start + QUERY.length - 1; i < moving.length && end < 0; i++) {
+    if (moving[i] === '{') depth += 1;
+    else if (moving[i] === '}' && --depth === 0) end = i;
+  }
+  const inside = moving.slice(start, end + 1);
+  const outside = moving.slice(0, start) + moving.slice(end + 1);
+  for (const word of ['animation', '@keyframes', 'stroke-dasharray', 'stroke-dashoffset']) {
+    assert.ok(inside.includes(word), `inside: ${word}`);
+    assert.ok(!outside.includes(word), `outside: ${word}`);
+  }
+  assert.equal(outside, still, 'the accent frames and every element are the same either way');
+});
+
+test('an idle box is dim: its group carries the half opacity', () => {
+  const { source } = svgOf(golden(), { tzOffsetAt: UTC });
+  const groupOf = (name) => source.match(new RegExp(`<g([^>]*)><rect[^>]*/><text[^>]*>[^<]* ${name}</text>`))?.[1];
+  assert.equal(groupOf('gemini'), ' opacity="0.5"');
+  assert.equal(groupOf('codex'), ' opacity="0.5"');
+  assert.equal(groupOf('grok'), '', 'a running one is not');
+});
+
+test('alt is the terminal drawing at the columns that show every box the image shows: five agents, five boxes in both', () => {
+  const agents = Array.from({ length: 5 }, (_, i) => ({ id: `a${i}`, kind: 'agent', role: `omelette-role${i}`, parentId: 'main', status: 'running', since: NOW - MIN, order: 10 + i }));
+  const state = { ...golden(), nodes: [...golden().nodes.filter((n) => n.kind !== 'agent'), ...agents] };
+  const { source, alt } = svgOf(state, { tzOffsetAt: UTC });
+  assert.equal(alt, plainRows(layout(state, { columns: 89, rows: 40, isAscii: false, tzOffsetAt: UTC })).join('\n'));
+  for (let i = 0; i < 5; i++) {
+    assert.ok(boxesOf(source).some((b) => b.name === `role${i}`), `the image draws role${i}`);
+    assert.ok(alt.includes(`▶ role${i}`), `the alt holds role${i}`);
+  }
+  assert.ok(!alt.includes(' more'), 'no fold in the alt where the image has none');
+});

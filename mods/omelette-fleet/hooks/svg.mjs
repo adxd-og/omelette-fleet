@@ -4,16 +4,19 @@
  * VS Code, mobile) (1.7.0): the fleet graph as one SVG document — a box per
  * actor with the terminal's lines, a real line per link (an agent to the loop
  * that spawned it, a caller to a unit whose call is in flight, a sub-agent's
- * call included), the live ones in the accent colour and `class="live"` — and
- * its alt text, the terminal's drawing at 53 columns. Pure, no imports but its
- * neighbours.
+ * call included), the live ones in the accent colour and `class="live"`, a
+ * running box's frame in the accent too — and its alt text, the terminal's
+ * drawing at the width that shows the same boxes. With `animate`, the live
+ * lines run as dashes from caller to callee and a running frame pulses, both
+ * CSS inside `prefers-reduced-motion: no-preference`. Pure, no imports but
+ * its neighbours.
  *
  * Every string from the state is cleaned of control characters (`clean`), cut
  * to its box, then XML-escaped; none reaches an attribute, where every value
  * is a number or a constant. No script, no event attribute, no external
  * reference: the only URI is the SVG namespace.
  */
-import { graphBoxes, layout, plainRows } from './layout.mjs';
+import { graphBoxes, graphColumns, layout, plainRows } from './layout.mjs';
 import { MAIN } from './model.mjs';
 import { clean, cut } from './text.mjs';
 
@@ -24,7 +27,13 @@ import { clean, cut } from './text.mjs';
 /** The accent a live link is drawn in: the Claude orange, which reads on a light and on a dark ground. */
 const ACCENT = '#d97757';
 /** Every other colour is `currentColor`; drawn as an isolated image, the SVG has no page colour to inherit, so a dark scheme sets its own. */
-const STYLE = '<style>@media (prefers-color-scheme: dark){svg{color:#e8e6e3}}</style>';
+const DARK = '@media (prefers-color-scheme: dark){svg{color:#e8e6e3}}';
+/**
+ * The motion, only where the person has not asked for less: a live line's
+ * dashes flow along it (every link is drawn from caller to callee), and a
+ * running box's frame (the only rect stroked in the accent) pulses.
+ */
+const MOTION = `@media (prefers-reduced-motion: no-preference){.live{stroke-dasharray:6 4;animation:fleet-flow .6s linear infinite}rect[stroke="${ACCENT}"]{animation:fleet-pulse 1.2s ease-in-out infinite}@keyframes fleet-flow{to{stroke-dashoffset:-10}}@keyframes fleet-pulse{50%{stroke-opacity:.35}}}`;
 const FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
 /** px: the type size, the step between baselines, a box's inner margin. */
@@ -94,14 +103,14 @@ function callersOf(unit) {
   return unit.openCalls?.length ? unit.openCalls.map((c) => c.callerId) : unit.callerId ? [unit.callerId] : [];
 }
 
-/** One box: its frame, and a text per line that is not blank; a dim box at half opacity. */
-function boxSvg(place, lines, budget, tone) {
+/** One box: its frame (a running box's in the accent), and a text per line that is not blank; a dim box at half opacity. */
+function boxSvg(place, lines, budget, tone, isRunning = false) {
   const texts = lines
     .map((line, i) => ({ text: lineText(line, budget), y: place.y + PAD_PX + FONT_PX + i * LINE_PX }))
     .filter((line) => line.text)
     .map((line) => `<text x="${place.x + PAD_PX}" y="${line.y}">${line.text}</text>`);
   const group = tone === 'dim' ? '<g opacity="0.5">' : '<g>';
-  return `${group}<rect x="${place.x}" y="${place.y}" width="${place.w}" height="${BOX_H}" rx="6" fill="none" stroke="currentColor"/>${texts.join('')}</g>`;
+  return `${group}<rect x="${place.x}" y="${place.y}" width="${place.w}" height="${BOX_H}" rx="6" fill="none" stroke="${isRunning ? ACCENT : 'currentColor'}"/>${texts.join('')}</g>`;
 }
 
 /** One link: live in the accent at two pixels, else a faint `currentColor`. */
@@ -111,13 +120,16 @@ function linkSvg(link) {
   return `<line x1="${link.from.x}" y1="${link.from.y}" x2="${link.to.x}" y2="${link.to.y}" ${stroke}/>`;
 }
 
-/** A straight link between two layers: from one box's bottom centre to the other's top centre. */
+/** A call down a layer, the orchestrator's to a unit: from the caller's bottom centre to the callee's top centre. */
 const straight = (upper, lower, isLive) => ({ from: bottomOf(upper), to: topOf(lower), isLive });
 
-/** An agent's link to its parent agent in the same row: an arc over the row, top centre to top centre. */
-function arc(child, parent, isLive) {
-  const from = topOf(child);
-  const to = topOf(parent);
+/** An agent's link to the orchestrator that spawned it, drawn the way the call runs: from the orchestrator's top centre up to the agent's bottom centre. */
+const spawned = (parent, child, isLive) => ({ from: topOf(parent), to: bottomOf(child), isLive });
+
+/** An agent's link to its parent agent in the same row: an arc over the row, from the parent's top centre to the child's. */
+function arc(parent, child, isLive) {
+  const from = topOf(parent);
+  const to = topOf(child);
   const control = from.y - 2 * (ARC_ROOM - 4);
   return { from, to, d: `M${from.x} ${from.y}Q${(from.x + to.x) / 2} ${control} ${to.x} ${to.y}`, isLive };
 }
@@ -147,14 +159,16 @@ function around(agent, orch, unit, level, sides, width) {
  * standing in for a folded one), the fold to the orchestrator, each caller
  * whose call is in flight to its unit (the orchestrator straight down, an
  * agent around the orchestrator's box) — live when the agent runs or the call
- * is in flight. `alt` is the terminal's drawing at 53 columns and 40 rows;
- * `tzOffsetAt(at)` is `Date.prototype.getTimezoneOffset` at that instant.
- * `width` and `height` are the document's size in CSS pixels.
+ * is in flight; every link drawn from caller to callee. `alt` is the
+ * terminal's drawing, 40 rows, at the columns that show every box the image
+ * shows; `tzOffsetAt(at)` is `Date.prototype.getTimezoneOffset` at that
+ * instant. `animate` adds the motion. `width` and `height` are the document's
+ * size in CSS pixels.
  * @param {FleetState} state
- * @param {{ tzOffsetAt?: (at: number) => number }} [options]
+ * @param {{ tzOffsetAt?: (at: number) => number, animate?: boolean }} [options]
  * @returns {{ source: string, alt: string, width: number, height: number }}
  */
-export function svgOf(state, { tzOffsetAt = () => 0 } = {}) {
+export function svgOf(state, { tzOffsetAt = () => 0, animate = false } = {}) {
   const { agents, fold, orchestrator, units } = graphBoxes(state);
   const shown = fold ? [...agents, fold] : agents;
 
@@ -191,8 +205,8 @@ export function svgOf(state, { tzOffsetAt = () => 0 } = {}) {
   const height = y + BOX_H + MARGIN;
 
   /** @type {Link[]} */
-  const links = agents.map((a, i) => (parents[i] >= 0 ? arc(agentPlaces[i], agentPlaces[parents[i]], a.isLive) : straight(agentPlaces[i], orchPlace, a.isLive)));
-  if (fold) links.push(straight(agentPlaces[agents.length], orchPlace, fold.isLive));
+  const links = agents.map((a, i) => (parents[i] >= 0 ? arc(agentPlaces[parents[i]], agentPlaces[i], a.isLive) : spawned(orchPlace, agentPlaces[i], a.isLive)));
+  if (fold) links.push(spawned(orchPlace, agentPlaces[agents.length], fold.isLive));
   const sides = { left: 0, right: 0 };
   let level = 0;
   for (const { slot, unit } of calls) {
@@ -200,17 +214,17 @@ export function svgOf(state, { tzOffsetAt = () => 0 } = {}) {
   }
 
   const boxes = [
-    ...shown.map((b, i) => boxSvg(agentPlaces[i], b.lines, BOX_CELLS, b.tone)),
+    ...shown.map((b, i) => boxSvg(agentPlaces[i], b.lines, BOX_CELLS, b.tone, b.actor?.status === 'running')),
     boxSvg(orchPlace, orchestrator.lines, ORCH_CELLS, orchestrator.tone),
-    ...units.map((u, i) => boxSvg(unitPlaces[i], u.lines, BOX_CELLS, u.tone)),
+    ...units.map((u, i) => boxSvg(unitPlaces[i], u.lines, BOX_CELLS, u.tone, u.actor.status === 'running')),
   ];
   const source = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="${FONT_FAMILY}" font-size="${FONT_PX}" fill="currentColor">`,
-    STYLE,
+    `<style>${DARK}${animate ? MOTION : ''}</style>`,
     ...links.map(linkSvg),
     ...boxes,
     '</svg>',
   ].join('');
-  const alt = plainRows(layout(state, { columns: 53, rows: 40, isAscii: false, tzOffsetAt })).join('\n');
+  const alt = plainRows(layout(state, { columns: graphColumns(shown.length), rows: 40, isAscii: false, tzOffsetAt })).join('\n');
   return { source, alt, width, height };
 }

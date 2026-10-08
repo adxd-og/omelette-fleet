@@ -261,13 +261,4 @@ test('a box line that is blank writes no <text>, and no <text> is empty', () => 
   assert.equal(boxesOf(source).find((b) => b.name === 'codex').lines.length, 2, 'an idle unit with no last call: its name and "idle"');
 });
 
-test('alt is the terminal drawing at 53 columns even where 53 and a wider pane differ: five agents, a long history label', () => {
-  const state = {
-    ...stateOf(Array.from({ length: 5 }, (_, i) => agent(`a${i + 1}`))),
-    history: [{ at: NOW - MIN, from: 'main', to: 'a1', label: 'a label that is far too long to fit in fifty-three columns at all' }],
-  };
-  const { alt } = svgOf(state, { tzOffsetAt: UTC });
-  assert.equal(alt, plainRows(layout(state, { columns: 53, rows: 40, isAscii: false, tzOffsetAt: UTC })).join('\n'));
-  assert.ok(alt.split('\n').every((row) => [...row].length <= 53), 'no row wider than 53 cells');
-  assert.notEqual(alt, plainRows(layout(state, { columns: 80, rows: 40, isAscii: false, tzOffsetAt: UTC })).join('\n'));
-});
+// The 53-column alt test went with the ruling of 2026-10-08: the alt is drawn at the SVG's own width (test/mod-svg.test.mjs pins it).

@@ -10,6 +10,12 @@
       "title": "Open the pane at session start",
       "description": "Open the fleet pane when a session starts, on a wide terminal; off leaves the /omelette-fleet command and the status line",
       "default": true
+    },
+    "animate": {
+      "type": "boolean",
+      "title": "Animate running agents",
+      "description": "A spinner on a running agent or unit and a faster tick while anything runs; on the desktop, moving live lines and a pulsing frame. Off draws the same pane without motion",
+      "default": true
     }
   }
 }

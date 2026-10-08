@@ -63,7 +63,7 @@ function toneAt(row, col) {
 }
 
 const GOLDEN_53 = [
-  'ctx 31% · 5h 11% · 7d 71% · $646',
+  'ctx 31% · 5h 11% · 7d 71%',
   '',
   '┌───────────────┐ ┌───────────────┐ ┌───────────────┐',
   '│ ▶ coder-medium│ │ · tester      │ │ ▶ reviewer    │',
@@ -84,7 +84,7 @@ const GOLDEN_53 = [
 ];
 
 const TREE_35 = [
-  'ctx 31% · 5h 11% · 7d 71% · $646',
+  'ctx 31% · 5h 11% · 7d 71%',
   '',
   '● orchestrator  fable-5-1 · high',
   '├ ▶ coder-medium  opus · medium',
@@ -115,9 +115,17 @@ const TREE_20 = [
   '└ · codex  idle',
 ];
 
-test('the golden at 53 columns: the first 18 rows are the plan\'s drawing, exactly', () => {
-  const rows = layout(golden(), { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
-  assert.deepEqual(plainRows(rows).slice(0, 18), GOLDEN_53);
+test('the golden at 53 columns: the first 18 rows are the plan\'s drawing, the spinner\'s first frame in place of ▶', () => {
+  const rows = layout(golden(), { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC, animate: true });
+  assert.deepEqual(plainRows(rows).slice(0, 18), GOLDEN_53.map((row) => row.replaceAll('▶', '⠋')));
+});
+
+test('with animate, a running box\'s glyph is the spinner\'s frame for the model\'s clock: 250 ms on, the next frame; one of ten, ASCII one of four', () => {
+  const glyphAt = (now, isAscii) => plainRows(layout({ ...golden(), now }, { columns: 53, rows: 30, isAscii, tzOffsetAt: UTC, animate: true }))[3][2];
+  for (const [isAscii, frames] of [[false, [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏']], [true, [...'|/-\\']]]) {
+    assert.notEqual(glyphAt(NOW, isAscii), glyphAt(NOW + 250, isAscii), `ascii=${isAscii}`);
+    for (const now of [NOW, NOW + 250, NOW + 1234]) assert.ok(frames.includes(glyphAt(now, isAscii)), `ascii=${isAscii} @${now}: ${glyphAt(now, isAscii)}`);
+  }
 });
 
 test('plainRows joins a row\'s segments and trims its right end', () => {
@@ -156,7 +164,7 @@ test('one agent: the bus row is a single │ between its box and the orchestrato
 test('no agents: no agent row and no upper bus; the orchestrator\'s top frame has no junction', () => {
   const state = { ...golden(), nodes: golden().nodes.filter((n) => n.kind !== 'agent') };
   const rows = plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  assert.deepEqual(rows.slice(0, 12), ['ctx 31% · 5h 11% · 7d 71% · $646', '', ...GOLDEN_53.slice(8, 18)].map((row, i) =>
+  assert.deepEqual(rows.slice(0, 12), ['ctx 31% · 5h 11% · 7d 71%', '', ...GOLDEN_53.slice(8, 18)].map((row, i) =>
     (i === 2 ? '             ┌─────────────────────────┐' : row)));
   assert.equal(rows.length, 12, 'no history, no blank row after the graph');
 });
@@ -202,7 +210,7 @@ test('the tree golden at 20 columns: every row cut by cells, none wider than 20'
 test('a pane of 8 rows at 80 columns: the tree, not the graph, eight rows, the last … +N', () => {
   const rows = plainRows(layout(golden(), { columns: 80, rows: 8, isAscii: false, tzOffsetAt: UTC }));
   assert.deepEqual(rows, [
-    'ctx 31% · 5h 11% · 7d 71% · $646',
+    'ctx 31% · 5h 11% · 7d 71%',
     '',
     '● orchestrator  fable-5-1 · high',
     '├ ▶ coder-medium  opus · medium',
@@ -227,7 +235,9 @@ test('tones: with only the coder running, the upper bus is live from its centre 
   assert.equal(toneAt(rows[6], 8), 'live', 'the coder\'s frame junction');
   assert.equal(toneAt(rows[6], 26), 'dim', 'the reported tester\'s junction');
   assert.equal(toneAt(rows[8], 26), 'live', 'the orchestrator\'s top junction');
-  assert.equal(toneAt(rows[3], 0), 'plain', 'a running box is plain');
+  assert.equal(toneAt(rows[3], 0), 'live', 'a running box\'s frame is live');
+  assert.equal(toneAt(rows[2], 4), 'live');
+  assert.equal(toneAt(rows[3], 4), 'plain', 'its lines are not');
   assert.equal(toneAt(rows[3], 20), 'dim', 'a reported box is dim');
   for (let row = 13; row <= 17; row++) for (const col of [0, 2, 8, 16]) assert.equal(toneAt(rows[row], col), 'dim', `gemini row ${row} col ${col}`);
   for (let col = 8; col <= 44; col++) assert.equal(toneAt(rows[12], col), 'dim', `lower bus col ${col}: no unit runs`);
@@ -254,6 +264,19 @@ test('tones: a unit the orchestrator calls has a live link; one a sub-agent call
   assert.equal(plainRows(layout(other, { columns: 53, rows: 30, isAscii: true, tzOffsetAt: UTC }))[16], '|               | | <- other      | |               |');
   assert.equal(plainRows(layout(other, { columns: 35, rows: 40, isAscii: false, tzOffsetAt: UTC }))[11], '│   ← other', 'the tree says the same');
   assert.equal(plainRows(layout(other, { columns: 35, rows: 40, isAscii: true, tzOffsetAt: UTC }))[11], '|   <- other');
+});
+
+test('a unit\'s link is live when any of its open calls is the orchestrator\'s, not only when the newest is', () => {
+  const state = patch(golden(), 'unit:grok', {
+    callerId: 'a-coder',
+    openCalls: [
+      { callId: 'toolu_g0', callerId: 'main', tool: 'code_review', since: NOW - 3 * MIN },
+      { callId: 'toolu_g1', callerId: 'a-coder', tool: 'code_review', since: NOW - MIN },
+    ],
+  });
+  const rows = layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
+  assert.equal(plainRows(rows)[16], '│               │ │ ← coder-medium│ │               │', 'the newest caller is still the one named');
+  for (const [row, what] of [[11, 'the orchestrator\'s bottom junction'], [12, 'the bus under it'], [13, 'grok\'s top junction']]) assert.equal(toneAt(rows[row], 26), 'live', what);
 });
 
 test('a unit with two open calls may show the count; the line is still one box line', () => {
@@ -283,11 +306,12 @@ test('a role or a tool name longer than its box is cut with an ellipsis; the box
   assert.equal(rows[15], '│ idle 12m      │ │ a_tool_name_l…│ │ idle          │');
 });
 
-test('the orchestrator without a model yet, and a header with figures missing', () => {
+test('the orchestrator without a model yet, and a header with figures missing; the header never shows the cost', () => {
   let state = patch(golden(), 'main', { model: undefined, effort: undefined });
   state = { ...state, usage: { sevenDay: 71.4, costUsd: 3.456 } };
   const rows = plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  assert.equal(rows[0], '7d 71% · $3.46');
+  assert.equal(rows[0], '7d 71%');
+  assert.doesNotMatch(plainRows(layout(golden(), { columns: 80, rows: 30, isAscii: false, tzOffsetAt: UTC }))[0], /\$/);
   assert.equal(rows[10], '             │                         │');
   assert.equal(plainRows(layout({ ...state, usage: {} }, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }))[0], '');
 });
@@ -295,7 +319,7 @@ test('the orchestrator without a model yet, and a header with figures missing', 
 test('the ASCII form of the 53-column golden holds printable ASCII only', () => {
   const rows = plainRows(layout(golden(), { columns: 53, rows: 30, isAscii: true, tzOffsetAt: UTC }));
   for (const row of rows) assert.match(row, /^[\x20-\x7e]*$/, row);
-  assert.equal(rows[0], 'ctx 31% - 5h 11% - 7d 71% - $646');
+  assert.equal(rows[0], 'ctx 31% - 5h 11% - 7d 71%');
   assert.equal(rows[2], '+---------------+ +---------------+ +---------------+');
   assert.equal(rows[3], '| > coder-medium| | . tester      | | > reviewer    |');
   assert.equal(rows[4], '| opus - medium | | sonnet - high | | opus - xhigh  |');

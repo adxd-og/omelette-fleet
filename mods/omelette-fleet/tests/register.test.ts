@@ -27,12 +27,14 @@ type World = {
   panes: { id: string; isPlaced: boolean }[]
   /** How many times the fleet home was listed, and a listing held open until the test lets it go. */
   lists: number
+  /** How many times the plugin asked which panes are open: once per tick. */
+  asks: number
   hold: Promise<void> | undefined
 }
 
 /** The engine beneath the plugin, in memory: what it registers, opens and shows, and the fleet home's files. */
 function worldOf(on: On, files: Readonly<Record<string, string>> = {}): World {
-  const world: World = { fleet: undefined, writes: 0, commands: [], opened: [], closed: [], statuses: [], panes: [], lists: 0, hold: undefined }
+  const world: World = { fleet: undefined, writes: 0, commands: [], opened: [], closed: [], statuses: [], panes: [], lists: 0, hold: undefined, asks: 0 }
 
   on('state.set', ($, e, next) => {
     if (e.plugin === PLUGIN && e.key === 'fleet') {
@@ -67,7 +69,11 @@ function worldOf(on: On, files: Readonly<Record<string, string>> = {}): World {
 
     return { value: undefined }
   })
-  on('ui.panes', () => ({ value: world.panes.map(pane => ({ ...pane, title: 'Fleet', isShown: true, isFocused: false })) }))
+  on('ui.panes', () => {
+    world.asks += 1
+
+    return { value: world.panes.map(pane => ({ ...pane, title: 'Fleet', isShown: true, isFocused: false })) }
+  })
   on('ui.status', ($, e) => {
     world.statuses.push(e.text)
 
@@ -333,6 +339,79 @@ describe('the tick', () => {
   })
 })
 
+describe('motion', () => {
+  test('the tick runs every 250 ms while an agent runs, and every second once nothing does', { options: { autoOpen: false } }, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const world = worldOf(on)
+
+    mock.env(on, { HOME })
+    on('agent.spawn', () => SPAWNED)
+    on('classic.SubagentStop', () => ({}))
+    await $.session.start(SESSION)
+    await $.agent.spawn(SPAWN as never)
+    await $.command.run(command())
+
+    const pane = await $.ui.mount({ ...PANE, plugin: PLUGIN })
+
+    await clock.advance(1_000)
+
+    let before = world.asks
+
+    await clock.advance(1_000)
+    expect(world.asks - before, 'an agent runs').toBe(4)
+
+    await $.classic.SubagentStop({ agent_id: 'agent-c1', agent_type: 'omelette-coder-medium', agent_transcript_path: '', stop_hook_active: false } as never)
+    await clock.advance(1_000)
+    before = world.asks
+    await clock.advance(1_000)
+    expect(world.asks - before, 'nothing runs').toBe(1)
+    await pane.unmount()
+  })
+
+  test('a pane drawn on the desktop ticks every second with an agent running: no spinner there, and its SVG animates itself', { options: { autoOpen: false } }, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const world = worldOf(on)
+
+    mock.env(on, { HOME })
+    on('agent.spawn', () => SPAWNED)
+    await $.session.start(SESSION)
+    await $.agent.spawn(SPAWN as never)
+    await $.command.run(command())
+
+    const pane = await $.ui.mount({ ...PANE, plugin: PLUGIN, surface: 'desktop' })
+
+    await clock.advance(1_000)
+
+    const before = world.asks
+
+    await clock.advance(1_000)
+    expect(world.asks - before).toBe(1)
+    await pane.unmount()
+  })
+
+  test('animate off: the tick stays at a second with an agent running, and the box shows a static ▶', { options: { autoOpen: false, animate: false } }, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const world = worldOf(on)
+
+    mock.env(on, { HOME })
+    on('agent.spawn', () => SPAWNED)
+    await $.session.start(SESSION)
+    await $.agent.spawn(SPAWN as never)
+    await $.command.run(command())
+
+    const pane = await $.ui.mount({ ...PANE, plugin: PLUGIN })
+
+    expect(await pane.find({ type: 'Text', text: '│ ▶ coder-medium│' })).toBeDefined()
+    await clock.advance(1_000)
+
+    const before = world.asks
+
+    await clock.advance(1_000)
+    expect(world.asks - before, 'drawn on the terminal, still a second').toBe(1)
+    await pane.unmount()
+  })
+})
+
 describe('the pane', () => {
   test('mounted on the terminal at 53 columns it draws the frames, in the terminal\'s own elements', async ($, on) => {
     worldOf(on)
@@ -345,10 +424,10 @@ describe('the pane', () => {
     const pane = await $.ui.mount({ ...PANE, plugin: PLUGIN })
 
     expect(await pane.find({ type: 'Text', text: `${' '.repeat(18)}┌───────────────┐` }), 'the agent\'s box').toBeDefined()
-    expect(await pane.find({ type: 'Text', text: '│ ▶ coder-medium│' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '│ ⠋ coder-medium│' }), 'the spinner\'s first frame').toBeDefined()
     expect(await pane.find({ type: 'Text', text: '└───────────────┘ └───────────────┘ └───────────────┘' }), 'the units\' frames').toBeDefined()
     expect(await pane.find({ type: 'Text', text: '● orchestrator' })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: 'ctx 31% · 5h 11% · 7d 71% · $646' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'ctx 31% · 5h 11% · 7d 71%' })).toBeDefined()
     await pane.unmount()
   })
 
@@ -368,7 +447,7 @@ describe('the pane', () => {
       expect(String(svgs[0]?.props.source)).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" [^>]*>.*<\/svg>$/)
       expect(String(svgs[0]?.props.alt)).toContain('│ ▶ coder-medium│')
       expect(typeof svgs[0]?.props.width).toBe('number')
-      expect(await pane.find({ type: 'Text', text: 'ctx 31% · 5h 11% · 7d 71% · $646' }), surface).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: 'ctx 31% · 5h 11% · 7d 71%' }), surface).toBeDefined()
       expect(await pane.find({ type: 'Text', text: /^\d\d:\d\d:\d\d orchestrator → coder-medium · Agent$/ }), surface).toBeDefined()
       expect(await pane.find({ type: 'Text', text: '┌───────────────┐' }), 'no terminal frame drawn as text').toBeUndefined()
       await pane.unmount()

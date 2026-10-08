@@ -17,7 +17,7 @@ import { cells, clean, clock, cut, duration, familyOf, shortModel, shortRole } f
 /** @import { FleetNode, FleetState } from './model.mjs' */
 /** @typedef {'plain'|'live'|'dim'} Tone */
 /** @typedef {{ text: string, tone: Tone }} Segment */
-/** @typedef {{ columns: number, rows: number, isAscii?: boolean, tzOffsetAt?: (at: number) => number }} LayoutOptions */
+/** @typedef {{ columns: number, rows: number, isAscii?: boolean, tzOffsetAt?: (at: number) => number, animate?: boolean }} LayoutOptions */
 
 /** The narrowest pane the graph is drawn on: three units side by side. */
 const GRAPH_MIN = 53;
@@ -33,6 +33,9 @@ const ROW_MAX = 6;
 const STATUS_CELLS = 60;
 /** A unit call by another session, as the model writes `callerId`. */
 const OTHER = 'other';
+/** A running box's glyph when motion is on: one frame per 250 ms of the model's clock. */
+const SPINNER = Object.freeze({ unicode: [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'], ascii: [...'|/-\\'] });
+const SPIN_MS = 250;
 
 const SYMBOLS = Object.freeze({
   unicode: { orchestrator: '●', running: '▶', waiting: '◌', idle: '·', sep: ' · ', to: '→', from: '←', more: '…', times: '×', branch: '├', last: '└', spine: '│' },
@@ -56,16 +59,19 @@ const JUNCTION = Object.freeze({
  * tree, then (when there is history and room) a blank row and the history,
  * newest first. Never more than `rows` rows, none wider than `columns` cells.
  * `tzOffsetAt(at)` is `Date.prototype.getTimezoneOffset` at that instant, so
- * each history time is shown in the zone it fell in.
+ * each history time is shown in the zone it fell in. With `animate`, a running
+ * box's glyph is the spinner's frame for `state.now`, so the drawing stays a
+ * function of the state; without it, a static ▶.
  * @param {FleetState} state
  * @param {LayoutOptions} options
  * @returns {Segment[][]}
  */
-export function layout(state, { columns, rows, isAscii = false, tzOffsetAt = () => 0 }) {
+export function layout(state, { columns, rows, isAscii = false, tzOffsetAt = () => 0, animate = false }) {
   const width = Math.floor(columns);
   const height = Math.floor(rows);
   if (!(width > 0) || !(height > 0)) return [];
-  const sym = isAscii ? SYMBOLS.ascii : SYMBOLS.unicode;
+  const base = isAscii ? SYMBOLS.ascii : SYMBOLS.unicode;
+  const sym = animate ? { ...base, running: spinnerOf(state.now, isAscii) } : base;
 
   const out = [headerRow(state, { columns: width, isAscii }), []];
   const graphHeight = graphRowsFor(state);
@@ -80,8 +86,9 @@ export function layout(state, { columns, rows, isAscii = false, tzOffsetAt = () 
 }
 
 /**
- * The header row: `ctx 31% · 5h 11% · 7d 71% · $646`, each figure left out
- * when absent, cut to `columns`; an empty row when there is no figure.
+ * The header row: `ctx 31% · 5h 11% · 7d 71%`, each figure left out when
+ * absent, cut to `columns`; an empty row when there is no figure. The
+ * session's cost is not shown: on a subscription it is an API price, not a bill.
  * @param {FleetState} state
  * @param {{ columns: number, isAscii?: boolean }} options
  * @returns {Segment[]}
@@ -156,15 +163,21 @@ function fitted(raw, width, sym) {
 /** One row of one plain segment; an empty text is an empty row. */
 const textRow = (text, tone = /** @type {Tone} */ ('plain')) => (text ? [{ text, tone }] : []);
 
-/** `ctx 31% · 5h 11% · 7d 71% · $646`, each figure left out when absent. */
+/** `ctx 31% · 5h 11% · 7d 71%`, each figure left out when absent. */
 function headerText(usage, sym) {
   const percent = (value) => `${Math.round(value)}%`;
   const parts = [];
   if (Number.isFinite(usage.contextPercent)) parts.push(`ctx ${percent(usage.contextPercent)}`);
   if (Number.isFinite(usage.fiveHour)) parts.push(`5h ${percent(usage.fiveHour)}`);
   if (Number.isFinite(usage.sevenDay)) parts.push(`7d ${percent(usage.sevenDay)}`);
-  if (Number.isFinite(usage.costUsd)) parts.push(`$${usage.costUsd >= 10 ? Math.floor(usage.costUsd) : usage.costUsd.toFixed(2)}`);
   return parts.join(sym.sep);
+}
+
+/** The spinner's frame for the model's time `now`: the next frame every 250 ms. */
+function spinnerOf(now, isAscii) {
+  const frames = isAscii ? SPINNER.ascii : SPINNER.unicode;
+  const step = Number.isFinite(now) ? Math.floor(now / SPIN_MS) : 0;
+  return frames[((step % frames.length) + frames.length) % frames.length];
 }
 
 /**
@@ -188,8 +201,10 @@ const orchestratorOf = (state) => state.nodes.find((n) => n.id === MAIN) ?? { id
 const isActive = (n) => n.status === 'running' || n.status === 'waiting';
 /** A box that is idle or reported is dim. */
 const isDim = (n) => n.status === 'idle' || n.status === 'reported';
-/** A unit whose call is in flight from the orchestrator: its link is drawn live. */
-const isLiveUnit = (n) => n.status === 'running' && n.callerId === MAIN;
+/** A unit with a call in flight from the orchestrator (any of its open calls): its link is drawn live. */
+const isLiveUnit = (n) => n.status === 'running' && (n.openCalls?.length ? n.openCalls.some((c) => c.callerId === MAIN) : n.callerId === MAIN);
+/** A running agent's or unit's frame is drawn live, like a live line. */
+const frameToneOf = (n, tone) => (n?.status === 'running' ? 'live' : tone);
 
 /** An agent's three lines: glyph and role; model family · effort; what it does, or its state with a duration. */
 function agentLines(node, now, sym) {
@@ -265,6 +280,17 @@ export function graphBoxes(state, perRow = ROW_MAX, sym = SYMBOLS.unicode) {
   return { agents, fold, orchestrator, units };
 }
 
+/**
+ * The cells across the graph needs to draw `boxes` boxes in its agent row: the
+ * three units' 53 at least. (The SVG's alt is the terminal drawing at this
+ * width, so every box the image shows is in it.)
+ * @param {number} boxes
+ * @returns {number}
+ */
+export function graphColumns(boxes) {
+  return Math.max(GRAPH_MIN, Math.floor(boxes) * STEP - 1);
+}
+
 /** The graph's rows: an agent row and its bus when there are agents, the orchestrator, the unit bus, the units. */
 const graphRowsFor = (state) => (state.nodes.some((n) => n.kind === 'agent') ? 6 : 0) + 4 + 1 + 5;
 
@@ -291,20 +317,23 @@ function put(row, x, text, tone) {
 
 /**
  * A box at (`y`, `x`): frame, one row per line (a space and the line cut to
- * the width less three), frame; `top` / `bottom` put a junction at the box's
+ * the width less three), frame; the frame in `frameTone` (a running box's is
+ * live), the lines in `tone`; `top` / `bottom` put a junction at the box's
  * centre in that tone.
  */
-function box(cells2d, y, x, width, lines, tone, sym, { top, bottom } = {}) {
+function box(cells2d, y, x, width, lines, tone, sym, { top, bottom, frameTone = tone } = {}) {
   const inner = width - 2;
   const centre = x + Math.floor(width / 2);
   const frame = (r, left, right, junction, junctionTone) => {
-    put(cells2d[r], x, `${left}${'─'.repeat(inner)}${right}`, tone);
+    put(cells2d[r], x, `${left}${'─'.repeat(inner)}${right}`, frameTone);
     if (junction) put(cells2d[r], centre, junction, junctionTone);
   };
   frame(y, '┌', '┐', top && '┴', top);
   lines.forEach((line, i) => {
     const row = cells2d[y + 1 + i];
-    put(row, x, `│${' '.repeat(inner)}│`, tone);
+    put(row, x, '│', frameTone);
+    put(row, x + 1, ' '.repeat(inner), tone);
+    put(row, x + width - 1, '│', frameTone);
     put(row, x + 2, fitted(line, inner - 1, sym), tone);
   });
   frame(y + 1 + lines.length, '└', '┘', bottom && '┬', bottom);
@@ -340,7 +369,7 @@ function graph(state, width, sym, isAscii) {
   if (boxes.length) {
     const left = (W - (boxes.length * STEP - 1)) / 2;
     const centres = boxes.map((_, i) => left + i * STEP + Math.floor(BOX / 2));
-    boxes.forEach((b, i) => box(out, y, left + i * STEP, BOX, b.lines, b.tone, sym, { bottom: b.isLive ? 'live' : b.tone }));
+    boxes.forEach((b, i) => box(out, y, left + i * STEP, BOX, b.lines, b.tone, sym, { bottom: b.isLive ? 'live' : b.tone, frameTone: frameToneOf(b.actor, b.tone) }));
     bus(out[y + 5], centres, [hub], hub, centres.filter((_, i) => boxes[i].isLive));
     y += 6;
   }
@@ -357,7 +386,7 @@ function graph(state, width, sym, isAscii) {
   const unitCentres = units.map((_, i) => unitLeft + i * STEP + Math.floor(BOX / 2));
   bus(out[y], [hub], unitCentres, hub, unitCentres.filter((_, i) => units[i].isLive));
   units.forEach((u, i) => {
-    box(out, y + 1, unitLeft + i * STEP, BOX, u.lines, u.tone, sym, { top: u.isLive ? 'live' : u.tone });
+    box(out, y + 1, unitLeft + i * STEP, BOX, u.lines, u.tone, sym, { top: u.isLive ? 'live' : u.tone, frameTone: frameToneOf(u.actor, u.tone) });
   });
 
   return out.map((row) => segmentsOf(row, isAscii));

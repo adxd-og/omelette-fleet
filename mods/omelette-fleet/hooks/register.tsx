@@ -25,20 +25,34 @@ const PANE = 'omelette-fleet'
 const TITLE = 'Fleet'
 const fleet = { plugin: 'omelette-fleet', key: 'fleet' } as const
 
-/** The pane's tick: every second while it is open; the status feed is read when the pane is drawn, then every second tick. */
-const TICK_MS = 1000
+/**
+ * The pane's tick while it is open: every 250 ms while an agent or a unit runs
+ * and motion is on (the spinner's frame), every second otherwise. The status
+ * feed is read when the pane is drawn, then at most every 2 s.
+ */
+const FAST_MS = 250
+const SLOW_MS = 1000
+const FEED_MS = 2000
 
 /** A fleet-model event before its time is stamped (model.mjs, FleetEvent). */
 type ModelEvent = { readonly type: string; readonly [field: string]: unknown }
 type Tone = 'plain' | 'live' | 'dim'
 
+/** The tick's chain of one-shot timers: one pending at a time, each tick arming the next at the rate the state asks for. */
+type Chain = { timer?: Timer }
+
 /**
- * The one timer, and whether a tick is in flight. Module variables hold the
- * tick's own state only: a reload drops both, and `session.start` starts the
- * tick again.
+ * The tick's own state, all a module variable holds: the running chain,
+ * whether a tick is in flight, when the feed was last read, and the surface
+ * the pane was last drawn on (the fast tick is the terminal's spinner; a
+ * redraw four times a second would restart the SVG's own animations). A reload
+ * drops them, the surface becoming unknown (the slow tick) until the next
+ * draw, and `session.start` starts the tick again.
  */
-let ticker: Timer | undefined
+let ticker: Chain | undefined
 let isTicking = false
+let feedReadAt = Number.NEGATIVE_INFINITY
+let drawnOn: string | undefined
 
 /**
  * Applies model events at the engine's time in one state write (`update`
@@ -119,9 +133,20 @@ const readFeed = async ($: EngineInterface): Promise<unknown[]> => {
   return snapshots
 }
 
-/** The pane is drawn: the model knows it, its clock moves, and the status feed is read now, not at the second tick. Never throws. */
+/** The status feed, read now; the time of the read is kept for the next one's due time. */
+const feedNow = async ($: EngineInterface): Promise<unknown[]> => {
+  feedReadAt = await $.clock.now()
+
+  return readFeed($)
+}
+
+/** Whether the pane's spinner moves now: it is drawn, last on the terminal, motion is on, and an agent or a unit runs. */
+const isMoving = (state: FleetState | undefined, isAnimated: boolean): boolean =>
+  isAnimated && drawnOn === 'terminal' && state?.isOpen === true && state.nodes.some(node => node.kind !== 'orchestrator' && node.status === 'running')
+
+/** The pane is drawn: the model knows it, its clock moves, and the status feed is read now, not at the next due tick. Never throws. */
 const markOpen = async ($: EngineInterface): Promise<void> => {
-  const snapshots = await readFeed($).catch(() => undefined)
+  const snapshots = await feedNow($).catch(() => undefined)
 
   await apply($, [{ type: 'open' }, { type: 'tick' }, ...(snapshots ? [{ type: 'feed', snapshots }] : [])])
 }
@@ -129,16 +154,25 @@ const markOpen = async ($: EngineInterface): Promise<void> => {
 /**
  * One tick: whether the pane is still open and drawn (a pane opened unasked on
  * a narrow terminal waits undrawn, and is seated later without an event), the
- * model's clock, and the status feed every second tick, or at once when the
- * pane has just been drawn. A tick that starts while the last one runs (a slow
- * feed read) is skipped, not queued. Never throws.
+ * model's clock, and the status feed when it is due or the pane has just been
+ * drawn; then the chain's next tick, 250 ms on while something moves, else a
+ * second. A tick that starts while another runs (one of a chain stopped and
+ * started again) is skipped, not queued. Never throws.
  */
-const tick = async ($: EngineInterface, withFeed: boolean): Promise<void> => {
+const tick = async ($: EngineInterface, chain: Chain, isAnimated: boolean): Promise<void> => {
+  if (ticker !== chain) {
+    return
+  }
+
   if (isTicking) {
+    arm($, chain, SLOW_MS, isAnimated)
+
     return
   }
 
   isTicking = true
+
+  let next = SLOW_MS
 
   try {
     const pane = (await $.ui.panes()).find(one => one.id === PANE)
@@ -151,32 +185,43 @@ const tick = async ($: EngineInterface, withFeed: boolean): Promise<void> => {
     }
 
     const wasOpen = (await read($, fleet))?.isOpen === true
-    const snapshots = pane.isPlaced && (withFeed || !wasOpen) ? await readFeed($) : undefined
+    const isDue = !wasOpen || (await $.clock.now()) - feedReadAt >= FEED_MS
+    const snapshots = pane.isPlaced && isDue ? await feedNow($) : undefined
+    const state = await apply($, [{ type: pane.isPlaced ? 'open' : 'close' }, { type: 'tick' }, ...(snapshots ? [{ type: 'feed', snapshots }] : [])])
 
-    await apply($, [{ type: pane.isPlaced ? 'open' : 'close' }, { type: 'tick' }, ...(snapshots ? [{ type: 'feed', snapshots }] : [])])
+    next = isMoving(state, isAnimated) ? FAST_MS : SLOW_MS
   } catch {
     // The next tick tries again.
   } finally {
     isTicking = false
+
+    if (ticker === chain) {
+      arm($, chain, next, isAnimated)
+    }
   }
 }
 
+/** The chain's next tick, `ms` from now: the one timer the tick holds. */
+const arm = ($: EngineInterface, chain: Chain, ms: number, isAnimated: boolean): void => {
+  chain.timer = $.clock.after(ms, () => {
+    void tick($, chain, isAnimated)
+  })
+}
+
 /** Starts the tick unless it runs. */
-const startTicking = ($: EngineInterface): void => {
+const startTicking = ($: EngineInterface, isAnimated: boolean): void => {
   if (ticker) {
     return
   }
 
-  let count = 0
+  const chain: Chain = {}
 
-  ticker = $.clock.every(TICK_MS, () => {
-    count += 1
-    void tick($, count % 2 === 0)
-  })
+  ticker = chain
+  arm($, chain, SLOW_MS, isAnimated)
 }
 
 const stopTicking = (): void => {
-  ticker?.cancel()
+  ticker?.timer?.cancel()
   ticker = undefined
 }
 
@@ -214,12 +259,12 @@ const start = async ($: EngineInterface, options: PluginOptions): Promise<void> 
     const panes = await $.ui.panes().catch(() => [])
 
     if (panes.some(one => one.id === PANE)) {
-      startTicking($)
+      startTicking($, options.animate !== false)
     } else if (isFresh && options.autoOpen !== false) {
       // Not awaited: the engine seats an unasked pane only on a wide terminal, and a `-p` run never answers.
       void $.ui.open({ id: PANE, title: TITLE }).then(
         async opened => {
-          startTicking($)
+          startTicking($, options.animate !== false)
 
           if (opened.isPlaced) {
             await markOpen($)
@@ -284,7 +329,7 @@ export const register: Register = (on, options) => {
 
     const opened = await $.ui.open({ id: PANE, title: TITLE })
 
-    startTicking($)
+    startTicking($, options.animate !== false)
 
     if (opened.isPlaced) {
       await markOpen($)
@@ -358,6 +403,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    drawnOn = e.surface
     const state = (await read($, fleet)) ?? initialState(await $.clock.now())
     const columns = e.props.bodyColumns
     const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24
@@ -365,7 +411,7 @@ export const register: Register = (on, options) => {
     // The desktop, VS Code and mobile draw the graph as one Svg, between the header and the history as text.
     if (e.surface !== 'terminal') {
       const { Box, Svg, Text } = $.ui.resolve(e)
-      const drawing = svgOf(state, { tzOffsetAt })
+      const drawing = svgOf(state, { tzOffsetAt, animate: options.animate !== false })
       const header = headerRow(state, { columns }).map(segment => segment.text).join('')
       // How tall the Svg is in rows is the surface's to say: the history gets the pane's rows, at least three.
       const history = historyRows(state, { columns, count: Math.max(3, bodyRows), tzOffsetAt })
@@ -387,7 +433,7 @@ export const register: Register = (on, options) => {
 
     const { Box, Text } = $.ui.resolve(e)
     const isAscii = Boolean(await $.env.get('NO_COLOR')) || (await $.env.get('TERM')) === 'dumb'
-    const rows = layout(state, { columns, rows: bodyRows, isAscii, tzOffsetAt })
+    const rows = layout(state, { columns, rows: bodyRows, isAscii, tzOffsetAt, animate: options.animate !== false })
 
     return (
       <Box flexDirection="column">

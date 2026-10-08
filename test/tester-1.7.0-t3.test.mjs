@@ -69,7 +69,7 @@ const UNSAFE = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/u;
 // The plan's goldens
 
 const GOLDEN_53 = [
-  'ctx 31% · 5h 11% · 7d 71% · $646',
+  'ctx 31% · 5h 11% · 7d 71%',
   '',
   '┌───────────────┐ ┌───────────────┐ ┌───────────────┐',
   '│ ▶ coder-medium│ │ · tester      │ │ ▶ reviewer    │',
@@ -90,7 +90,7 @@ const GOLDEN_53 = [
 ];
 
 const GOLDEN_53_ASCII = [
-  'ctx 31% - 5h 11% - 7d 71% - $646',
+  'ctx 31% - 5h 11% - 7d 71%',
   '',
   '+---------------+ +---------------+ +---------------+',
   '| > coder-medium| | . tester      | | > reviewer    |',
@@ -137,13 +137,13 @@ test('golden: the ASCII form of the same graph, character for character', () => 
 });
 
 test('golden: the tree at 35 columns (header, blank, the plan\'s tree)', () => {
-  assert.deepEqual(plain(goldenState(), 35, 40), ['ctx 31% · 5h 11% · 7d 71% · $646', '', ...TREE]);
+  assert.deepEqual(plain(goldenState(), 35, 40), ['ctx 31% · 5h 11% · 7d 71%', '', ...TREE]);
 });
 
 test('golden: the tree at 20 columns, each row cut by `cut`: the plan\'s rows ending in an ellipsis within 20 cells', () => {
   const cutTo20 = (s) => (Array.from(s).length <= 20 ? s : `${Array.from(s).slice(0, 19).join('')}…`);
   const got = plain(goldenState(), 20, 40);
-  assert.deepEqual(got, ['ctx 31% · 5h 11% · 7d 71% · $646', '', ...TREE].map(cutTo20));
+  assert.deepEqual(got, ['ctx 31% · 5h 11% · 7d 71%', '', ...TREE].map(cutTo20));
   assert.equal(got[0], 'ctx 31% · 5h 11% · …');
   assert.equal(got[2], '● orchestrator  fab…');
   assert.equal(got[3], '├ ▶ coder-medium  o…');
@@ -251,7 +251,7 @@ test('the graph needs 20 rows at 53 columns (graph plus a blank and one history 
 test('a pane of 8 rows at 80 columns: the tree, eight rows, the last `… +N` counting the actors left out', () => {
   const got = plain(goldenState(), 80, 8);
   assert.deepEqual(got, [
-    'ctx 31% · 5h 11% · 7d 71% · $646', '',
+    'ctx 31% · 5h 11% · 7d 71%', '',
     '● orchestrator  fable-5-1 · high',
     '├ ▶ coder-medium  opus · medium',
     '│   Bash: npm test',
@@ -358,17 +358,14 @@ test('layout does not mutate its input (deep-frozen state)', () => {
 // ---------------------------------------------------------------------------
 // The header
 
-test('the header: whole dollars from $10 (646.74 is $646), two decimals below, each figure left out when absent', () => {
+test('the header: context and the two windows, each figure left out when absent; the cost is never shown (ruling 2026-10-08)', () => {
   const header = (usage, columns = 80) => plain(stateOf(idleUnits(), { usage }), columns, 24)[0];
-  assert.equal(header(usageFull), 'ctx 31% · 5h 11% · 7d 71% · $646');
-  assert.equal(header({ costUsd: 9.5 }), '$9.50');
-  assert.equal(header({ costUsd: 10 }), '$10');
-  assert.equal(header({ costUsd: 0 }), '$0.00');
-  assert.equal(header({ costUsd: 99.99 }), '$99');
+  assert.equal(header(usageFull), 'ctx 31% · 5h 11% · 7d 71%');
+  assert.equal(header({ costUsd: 9.5 }), '');
   assert.equal(header({ contextPercent: 31 }), 'ctx 31%');
   assert.equal(header({ fiveHour: 0, sevenDay: 5 }), '5h 0% · 7d 5%');
   assert.equal(header({}), '');
-  assert.equal(plain(stateOf(idleUnits(), { usage: usageFull }), 80, 24, { isAscii: true })[0], 'ctx 31% - 5h 11% - 7d 71% - $646');
+  assert.equal(plain(stateOf(idleUnits(), { usage: usageFull }), 80, 24, { isAscii: true })[0], 'ctx 31% - 5h 11% - 7d 71%');
 });
 
 // ---------------------------------------------------------------------------
