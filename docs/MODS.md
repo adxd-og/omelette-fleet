@@ -132,7 +132,7 @@ It writes only its own pane state (`$.state`, so a reload redraws from it). It w
 
 - **It refuses, rewrites and blocks nothing.** Every hook hands the engine's event on unchanged. A hook that fails is skipped by the engine and the session goes on.
 - **It draws no raw text.** Every state string is cleaned of terminal control characters (C0 and C1 controls, DEL, bidi controls) before it is drawn, and XML-escaped in the SVG.
-- **A command line stays off the pane.** A Bash command shows its program, and for a short list of programs (`git`, `npm`, `node`, `docker` and a few more) one plain next word — the subcommand or the script's name. Flags, paths, environment assignments, quoted values and everything after the first word or two are never shown. A secret typed as that plain next word would show; nothing else in a command line does.
+- **A command line stays off the pane.** A Bash command shows its program, and for a short list of programs (`git`, `npm`, `node`, `docker` and a few more) one plain next word — the subcommand or the script's name. Flags, paths, environment assignments and everything after those one or two words are never shown. Whatever stands in those one or two places does show, quotes removed: a secret typed as the program's name or as that next word (`python3 'hunter2'`) would reach the pane; nothing else in a command line does.
 - **It touches no setting.** It does not edit `settings.json`, the rules file or the guard.
 
 The history records call attempts. A call that a guard or another hook refuses further down the chain still appears, because the pane sees the attempt, not the result.
