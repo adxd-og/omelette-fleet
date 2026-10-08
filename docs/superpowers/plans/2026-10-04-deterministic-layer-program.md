@@ -1,9 +1,11 @@
-# The deterministic layer — program plan (1.7.0 → 1.12.0)
+# The fleet as one plugin — program plan (1.7.0 → 1.12.0)
 
-Date: 2026-10-04. Starts the week of 2026-10-05. Ledger of the first release: `.omelette/ledger-1.7.0.md`. Each release gets its own spec and plan when its turn comes; this file fixes the order, the mechanisms and the decisions that are already made, and names what is still to be measured.
+Date: 2026-10-04, goal revised 2026-10-08. Starts the week of 2026-10-05. Ledger of the first release: `.omelette/ledger-1.7.0.md`. Each release gets its own spec and plan when its turn comes; this file fixes the order, the mechanisms and the decisions that are already made, and names what is still to be measured.
 
 | Question | Where |
 |---|---|
+| What is the program for, and how is a release judged? | [The goal](#the-goal-one-plugin-one-install-line) |
+| Which manual step goes in which release? | [What the plugin carries](#what-the-plugin-carries) |
 | What is being moved off prose, and what is not? | [Every rule, classified](#every-rule-classified) |
 | What is the one pattern every slice follows? | [The pattern](#the-pattern) |
 | In what order, and what ships in each release? | [Releases](#releases) |
@@ -14,6 +16,36 @@ Date: 2026-10-04. Starts the week of 2026-10-05. Ledger of the first release: `.
 | What can stop the program? | [Risks and stop conditions](#risks-and-stop-conditions) |
 | What is measured, release by release? | [Measurements](#measurements) |
 | What happens to the backlog's G1, G2, G3, W0 and N1? | [Backlog items absorbed](#backlog-items-absorbed) |
+
+## The goal: one plugin, one install line
+
+Revised 2026-10-08 (operator: the fleet should be a real tool, easy to install, configure and manage; "Будто мейк сенс" to this goal). The first draft's goal was "every rule that can be checked moves off prose"; that stays, as the means. The goal is that the whole fleet is **one Claude Code plugin** installed from this repository's marketplace:
+
+```
+/plugin install omelette-fleet --marketplace adxd-og/omelette-fleet
+```
+
+and that installing, configuring, updating and removing it are Claude Code's own actions, taken by the person, with nothing to merge by hand. At the end of the program the manual steps left are that line and each vendor CLI's own install and login (`agy`, `grok`, `codex`), which no plugin can do for them. Every release names the manual step it removes; a release that removes none says why.
+
+The CLI stays, for three jobs: `doctor`, `call` / `results` / `check`, and the install for a person who does not take the plugin. "The CLI never writes Claude Code's settings" still holds: Claude Code installs the plugin on the person's word.
+
+Today, from the README's quickstart, a first install is: clone; `install`; `rules --agents --hooks` from each project; merge the printed snippet into that project's `.claude/settings.json`; restart; `doctor`. A setting is `set key=value` followed by `rules --agents` again in every project; an update is `git pull`.
+
+## What the plugin carries
+
+| Piece | Today | In the plugin | Release | Open question |
+|---|---|---|---|---|
+| The pane | — | the mod | 1.7.0 | none |
+| The marketplace | — | `.claude-plugin/marketplace.json` at the root | 1.7.0 (T1) | does `/plugin install … --marketplace adxd-og/omelette-fleet` work against the public repo — checked at 1.7.0's live gate |
+| The three units | `install` registers `claude mcp add -s user` | the plugin's MCP servers (`${CLAUDE_PLUGIN_ROOT}/servers/<unit>.mjs`) | 1.8.0 | does a plugin's MCP server keep our env allowlist and billing scrub, and how does `doctor` tell a plugin registration from a CLI one — a spike before 1.8.0's spec |
+| Guard and handoff hooks | snippet merged into settings by hand | the mod's hooks (guard v2) | 1.8.0 | which delivery answers when both are wired (already 1.8.0's) |
+| Settings | `set` + `rules --agents` in every project | `userConfig` fields: rows in Claude Code's config menu; a change reloads the mod | 1.8.0 (units, handoff), 1.11.0 (roles) | which keys belong in the menu and which stay CLI-only |
+| The four roles and `/omelette-test` | `rules --agents` per project | the plugin's `agents/*.md` and skill, then `agent.register` from config | 1.11.0 | a plugin agent's name is namespaced (`omelette-fleet:omelette-coder`?) — the guard and the rules name roles by bare name |
+| The rules text | `rules` per project, 14 590 characters | `prompt.compose` / events from the mod; the rendered file only for CLI installs | 1.10.0 | none beyond 1.10.0's |
+| Updates | `git pull` | `claude plugin update` | from 1.7.0 | the version on record vs `package.json` (T1 pins them equal) |
+| Per-project choice | — | profiles | 1.12.0 | as written there |
+
+The Usage tracker settings section (backlog, parked 2026-10-08) becomes an overview on top of this, not the place settings live.
 
 ## The pattern
 
@@ -73,6 +105,8 @@ Count: 11 rules become gates or automatic, 4 become visible, 4 arrive by event, 
 | **1.11.0** | 2026-11-02 | `/omelette-test` as a mod command, roles registered from the mod, cost per task and role as ledger lines, the task-size label | no |
 | **1.12.0** | 2026-11-09 | **project profiles**: `solo` / `standard` / `strict`, proposed by `init` from measurable signals, chosen by the operator, rendered by `rules` and subscribed by the mod | no — a lighter profile drops ceremony, never verification |
 
+The manual step each removes: 1.7.0 none yet (it proves the marketplace install); 1.8.0 the settings snippet and `claude mcp add` (units and guard from the plugin); 1.9.0 none (it adds checks); 1.10.0 `rules` per project; 1.11.0 `rules --agents` per project and the re-render after a setting; 1.12.0 choosing what a project needs.
+
 The weeks are an order, not a promise: each release starts when the one before it is released and has run for at least two working days on the operator's sessions.
 
 ### 1.7.0 — the pane
@@ -83,10 +117,12 @@ Spec `docs/superpowers/specs/2026-10-04-1.7.0-fleet-pane-design.md`, plan `docs/
 
 - **Guard v2.** A `tool.call` hook on `Bash` inside a loop whose agent type is one of the four roles hands the call to `hooks/omelette-guard.mjs` (stdin: the PreToolUse shape with `agent_type`) and answers `{ deny: <its stderr> }` on exit 2. The script and its test table are untouched; the settings hook stays wired and documented as the fallback, and a call both would refuse is refused once (the mod's answer comes first). Decision to take in its spec: whether the mod asks the script at all when the settings hook is present (`settings.read`), or always.
 - **The reviewer's write fence.** `tool.call` on `Write` / `Edit` / `NotebookEdit` in an `omelette-reviewer` loop: refused unless the path resolves (`$.fs.stat(path, { resolve: true })`) under `.omelette/reports/` and ends in `-review.md`.
-- **Model pins.** `agent.spawn` for the four roles: when the resolved model is not the definition's id, the hook returns the definition's (`{ model }`) and the pane notes it. The effort cannot be set at spawn; a `turn.step` whose effort differs from the definition's raises a flag in the pane and a notice, once per agent.
+- **Model pins.** `agent.spawn` for the four roles: when the resolved model is not the definition's id, the hook returns the definition's (`{ model }`) and the pane notes it. The `agent.spawn` hook cannot set the effort (its input has none on 2.1.294), though the Agent tool now takes `effort` per call — the spec decides whether the rules ask for it; a `turn.step` whose effort differs from the definition's raises a flag in the pane and a notice, once per agent.
 - **`CLAUDE_CODE_EFFORT_LEVEL`.** Read at session start; set → one notice naming the rule.
 - **The handoff, delivered.** `prompt.context` gains one block with the last `## Handoff` of each ledger in the project (the bound and the reader are the guard script's own, run by `$.process.run`), after a compaction and a `/clear`; the SessionStart print stays as the fallback.
 - **The compaction skip, off by default** (`userConfig.handoffGate: false`). On, a `manual` or `auto` compaction with no `## Handoff` newer than 30 minutes in the newest ledger is skipped once with the reason; the second attempt passes. Never on a `precompute`, never for a sub-agent's own compaction.
+- **The units from the plugin.** The plugin's MCP servers start the three units; `install` stays for a CLI-only install, and `doctor` reports which registration is live (both wired is a warning, not two units). Starts with the spike named in What the plugin carries.
+- **Settings in the config menu.** `userConfig` fields for the units' `enabled`, the handoff switch, the pane's `autoOpen`; written where Claude Code keeps plugin options, read by the mod and handed to the unit servers through their environment — the spec settles how the one config file and the menu stay one truth.
 - Tests: the guard's table run through the mod's hook with the kit; the fence's path cases (a symlink out of the reports folder, `..`, a case alias); the pin on each role; the block's bound.
 
 ### 1.9.0 — the gates
@@ -167,4 +203,4 @@ Added 2026-10-05 (operator: "пора делать какую-то автона�
 
 ## Working agreement for the program
 
-Each release: spec approved by the operator, plan, a coder per task, the hand-dispatched tester in two passes, three reviews, the live gate on the operator's machine, release notes that say what a session now cannot do that it could before. The orchestrator model per phase (Fable for specs and arbitration, Opus for plan-execution days) is tried on 1.7.0's execution and decided with 1.11.0's cost lines.
+Each release: spec approved by the operator (it names the manual step the release removes), plan, a coder per task, the hand-dispatched tester in two passes, three reviews, the live gate on the operator's machine, release notes that say what a session now cannot do that it could before. The orchestrator model per phase (Fable for specs and arbitration, Opus for plan-execution days) is tried on 1.7.0's execution and decided with 1.11.0's cost lines.
