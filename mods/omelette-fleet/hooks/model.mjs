@@ -42,10 +42,13 @@ export const MAIN = 'main';
 const HISTORY_CAP = 200;
 /**
  * An activity older than this is a call whose return never came (an interrupted
- * turn): above the longest legitimate unit call, since a unit's timeoutS has no
- * fixed ceiling and a default deep research runs about 36 minutes.
+ * turn), and a feed snapshot still listing a call after it is left by a process
+ * that is gone: above the longest legitimate unit call, since a unit's timeoutS
+ * has no fixed ceiling and a default deep research runs about 36 minutes.
  */
-const ACTIVITY_MAX_MS = 2 * 60 * 60 * 1000;
+export const STALE_MS = 2 * 60 * 60 * 1000;
+/** The open calls a unit keeps, the oldest dropped past it. */
+const OPEN_CALLS_CAP = 20;
 /** Another session's call on a unit, as `callerId`. */
 const OTHER = 'other';
 
@@ -143,7 +146,14 @@ function withUnitCalls(state, keep, idlePatch = {}) {
     if (unit.kind !== 'unit' || !unit.openCalls) continue;
     const open = unit.openCalls.filter(keep);
     if (open.length === unit.openCalls.length) continue;
-    next = withNode(next, unit.id, open.length ? unitHolding(open) : { ...UNIT_IDLE, ...idlePatch });
+    if (open.length === 0) {
+      next = withNode(next, unit.id, { ...UNIT_IDLE, ...idlePatch });
+      continue;
+    }
+    const holding = unitHolding(open);
+    // Falling back to an older call: the model and effort were the newer one's; the feed sets them again.
+    const fellBack = holding.activityCallId !== unit.activityCallId;
+    next = withNode(next, unit.id, fellBack ? { ...holding, model: undefined, effort: undefined } : holding);
   }
   return next;
 }
@@ -178,8 +188,11 @@ const ON = {
     }
     if (unit) {
       const to = unitId(unit.unit);
-      const open = [...(find(next, to).openCalls ?? []), { callId: e.callId, callerId: e.agentId, tool: unit.tool, since: e.at }];
-      next = withNode(next, to, unitHolding(open));
+      // A call with no id could never be matched by its return: it holds nothing open.
+      if (e.callId) {
+        const open = [...(find(next, to).openCalls ?? []), { callId: e.callId, callerId: e.agentId, tool: unit.tool, since: e.at }];
+        next = withNode(next, to, unitHolding(open.slice(-OPEN_CALLS_CAP)));
+      }
       next = withLink(next, { at: e.at, from: e.agentId, to, label: unit.tool });
     } else if (e.tool === 'SendMessage' && typeof e.target === 'string' && e.target) {
       // An agent id or 'main' is the node's id; a name no node carries stays as written.
@@ -264,7 +277,7 @@ const ON = {
   },
 
   tick(state, e) {
-    const isOld = (since) => e.at - since > ACTIVITY_MAX_MS;
+    const isOld = (since) => e.at - since > STALE_MS;
     // A unit with open calls loses only the old ones; another session's call (no open calls) goes by its since.
     const stale = (n) => n.activity !== undefined && !n.openCalls && isOld(n.since);
     const next = {

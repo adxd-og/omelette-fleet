@@ -14,9 +14,9 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { MAIN, UNITS, initialState, reduce, unitOfTool } from '../mods/omelette-fleet/hooks/model.mjs';
+import { MAIN, STALE_MS, UNITS, initialState, reduce, unitOfTool } from '../mods/omelette-fleet/hooks/model.mjs';
 import { parseSnapshot, snapshotNames } from '../mods/omelette-fleet/hooks/feed.mjs';
-import { clock, cut, duration, familyOf, shortModel, shortRole, subjectOf } from '../mods/omelette-fleet/hooks/text.mjs';
+import { cells, clock, cut, duration, familyOf, shortModel, shortRole, subjectOf } from '../mods/omelette-fleet/hooks/text.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const HOOKS = join(ROOT, 'mods', 'omelette-fleet', 'hooks');
@@ -949,31 +949,78 @@ test('parseSnapshot output feeds reduce directly: the documented example, read a
 // text.mjs
 // ---------------------------------------------------------------------------
 
-test('cut: boundaries by code points - exact fit, one over, one cell, none, astral characters and emoji', () => {
+test('cut: boundaries in terminal cells - exact fit, one over, one cell, none, wide characters and emoji (2 cells), astral narrow characters (1)', () => {
   assert.equal(cut('abc', 3), 'abc');
   assert.equal(cut('abcd', 3), 'ab…');
   assert.equal(cut('abc', 1), '…');
   assert.equal(cut('a', 1), 'a');
   assert.equal(cut('', 5), '');
   assert.equal(cut('', 0), '');
-  for (const cells of [0, -1, -100, NaN, undefined, null]) assert.equal(cut('abc', cells), '', String(cells));
+  for (const width of [0, -1, -100, NaN, undefined, null]) assert.equal(cut('abc', width), '', String(width));
   assert.equal(cut('abc', 100), 'abc');
-  // astral: each emoji is one code point (two UTF-16 units)
-  assert.equal(cut('😀😀😀', 3), '😀😀😀');
-  assert.equal(cut('😀😀😀', 2), '😀…');
+  // emoji are two cells each
+  assert.equal(cut('😀😀😀', 6), '😀😀😀');
+  assert.equal(cut('😀😀😀', 5), '😀😀…');
+  assert.equal(cut('😀😀😀', 4), '😀…');
+  assert.equal(cut('😀😀😀', 3), '😀…');
+  assert.equal(cut('😀😀😀', 2), '…');
   assert.equal(cut('😀😀😀', 1), '…');
-  assert.equal(cut('a😀b', 3), 'a😀b');
-  assert.equal(cut('a😀b', 2), 'a…');
-  assert.equal(cut('ab😀cd', 4), 'ab😀…');
+  assert.equal(cut('a😀b', 4), 'a😀b');
+  assert.equal(cut('a😀b', 3), 'a…');
+  assert.equal(cut('ab😀cd', 5), 'ab😀…');
+  assert.equal(cut('😀a', 2), '…');
+  // CJK is two cells each
+  assert.equal(cut('日本語', 6), '日本語');
+  assert.equal(cut('日本語', 5), '日本…');
+  assert.equal(cut('日本語', 4), '日…');
+  assert.equal(cut('日本語', 3), '日…');
+  // astral characters outside the wide ranges stay one cell
+  assert.equal(cut('𝒳𝒴𝒵', 3), '𝒳𝒴𝒵');
   assert.equal(cut('𝒳𝒴𝒵', 2), '𝒳…');
-  // no lone surrogate is ever produced
-  for (const cells of [1, 2, 3, 4, 5, 6]) {
-    const out = cut('😀a😀b😀c😀d', cells);
-    assert.ok(!/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(out), `lone surrogate at ${cells}`);
-    assert.ok([...out].length <= cells, `${cells}`);
+  // combining marks take no cell and are never cut off their base
+  assert.equal(cut('e\u0301e\u0301e\u0301', 3), 'e\u0301e\u0301e\u0301');
+  assert.equal(cut('e\u0301e\u0301e\u0301e\u0301', 3), 'e\u0301e\u0301…');
+});
+
+test('cells: narrow 1, wide CJK and emoji 2, combining marks, ZWJ and VS16 0; nothing, nothing', () => {
+  assert.equal(cells(''), 0);
+  assert.equal(cells(undefined), 0);
+  assert.equal(cells(null), 0);
+  assert.equal(cells('abc'), 3);
+  assert.equal(cells('日本語'), 6);
+  assert.equal(cells('한글'), 4);
+  assert.equal(cells('Ａ'), 2); // fullwidth A
+  assert.equal(cells('ｱ'), 1); // halfwidth katakana
+  assert.equal(cells('😀'), 2);
+  assert.equal(cells('🚀'), 2);
+  assert.equal(cells('🤖'), 2);
+  assert.equal(cells('e\u0301'), 1);
+  assert.equal(cells('\u0301'), 0);
+  assert.equal(cells('\u200d'), 0);
+  assert.equal(cells('\ufe0f'), 0);
+  assert.equal(cells('a\u200db'), 2);
+  assert.equal(cells('日a日'), 5);
+});
+
+test('cut, a property: on mixed wide, narrow, combining, ZWJ and VS16 strings the result is whole code points, fits the cells with its ellipsis, and is the longest prefix that does', () => {
+  const pool = ['a', 'Z', ' ', '日', '한', '😀', '🚀', 'e\u0301', '\u0301', '\u200d', '\ufe0f', '𝒳', 'Ａ', 'ｱ', '…'];
+  let seed = 12345;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  for (let k = 0; k < 400; k++) {
+    const text = Array.from({ length: rnd(12) }, () => pool[rnd(pool.length)]).join('');
+    for (let width = 0; width <= 16; width++) {
+      const out = cut(text, width);
+      assert.ok(!/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(out), `lone surrogate: ${JSON.stringify(text)} @${width}`);
+      assert.ok(cells(out) <= width, `${JSON.stringify(text)} @${width} -> ${JSON.stringify(out)} is ${cells(out)} cells`);
+      if (cells(text) <= width) { assert.equal(out, text); continue; }
+      if (width <= 0) { assert.equal(out, ''); continue; }
+      assert.ok(out.endsWith('…'), `${JSON.stringify(text)} @${width}`);
+      const kept = out.slice(0, -1);
+      assert.ok(text.startsWith(kept), 'a prefix of the text');
+      const next = [...text.slice(kept.length)][0];
+      assert.ok(cells(kept) + cells(next) > width - 1, `longest prefix: ${JSON.stringify(text)} @${width} kept ${JSON.stringify(kept)} next ${JSON.stringify(next)}`);
+    }
   }
-  // the result never exceeds the cells, for plain text of every length
-  for (let len = 0; len <= 12; len++) for (let cells = 1; cells <= 12; cells++) assert.ok([...cut('x'.repeat(len), cells)].length <= cells);
 });
 
 test('duration: the ten-minute, one-hour and second boundaries', () => {
@@ -1021,7 +1068,8 @@ test('subjectOf: Bash words, whitespace, file tools, unit tools, everything else
   assert.equal(subjectOf('Bash', { command: 'npm test --silent' }), 'Bash: npm test');
   assert.equal(subjectOf('Bash', { command: 'ls' }), 'Bash: ls');
   assert.equal(subjectOf('Bash', { command: '  git   status\t-s\n' }), 'Bash: git status');
-  assert.equal(subjectOf('Bash', { command: 'a b c d e' }), 'Bash: a b');
+  assert.equal(subjectOf('Bash', { command: 'a b c d e' }), 'Bash: a', 'a program outside the subcommand list shows alone');
+  assert.equal(subjectOf('Bash', { command: 'git status -s -b' }), 'Bash: git status');
   assert.equal(subjectOf('Bash', {}), 'Bash');
   assert.equal(subjectOf('Bash', undefined), 'Bash');
   assert.equal(subjectOf('Bash', { command: '' }), 'Bash');
@@ -1229,7 +1277,7 @@ test('purity holds for the open-call events too: frozen state with open calls th
   }
 });
 
-test('subjectOf Bash: leading NAME=value words are skipped (quoted values as one word), then two words', () => {
+test('subjectOf Bash: leading NAME=value words are skipped (quoted values as one word), then the program and, for a listed program, its plain second word', () => {
   const b = (command) => subjectOf('Bash', { command });
   assert.equal(b('FOO=bar npm test'), 'Bash: npm test');
   assert.equal(b('A=1 B=2 C_3=x npm run build'), 'Bash: npm run');
@@ -1238,15 +1286,15 @@ test('subjectOf Bash: leading NAME=value words are skipped (quoted values as one
   assert.equal(b("TOKEN='a b c' npm test"), 'Bash: npm test');
   assert.equal(b('TOKEN="a b"c npm test'), 'Bash: npm test');
   assert.equal(b('TOKEN= npm test'), 'Bash: npm test'); // empty value
-  assert.equal(b('A=1\nB=2 npm test'), 'Bash: npm test');
+  assert.equal(b('A=1\nB=2 npm test'), 'Bash', 'the scan stops at the newline');
   assert.equal(b('  FOO=bar   npm   test  '), 'Bash: npm test');
   assert.equal(b('FOO=bar'), 'Bash');
   assert.equal(b('FOO=bar BAR=baz'), 'Bash');
   // not an assignment: the name must start with a letter or underscore, and must lead the command
-  assert.equal(b('1A=b cmd'), 'Bash: 1A=b cmd');
-  assert.equal(b('echo A=b'), 'Bash: echo A=b');
+  assert.equal(b('1A=b cmd'), 'Bash');
+  assert.equal(b('echo A=b'), 'Bash: echo');
   assert.equal(b('npm test FOO=bar'), 'Bash: npm test');
-  assert.equal(b('=x cmd'), 'Bash: =x cmd');
+  assert.equal(b('=x cmd'), 'Bash');
 });
 
 test('subjectOf Bash: an assignment whose quote never closes shows plain Bash, and never any of its value', () => {
@@ -1259,7 +1307,7 @@ test('subjectOf Bash: an assignment whose quote never closes shows plain Bash, a
   }
 });
 
-test('subjectOf Bash: one leading cd <dir> segment joined by && or ; is skipped, with assignments around it', () => {
+test('subjectOf Bash: one leading cd segment is skipped only when && or ; follows it, with assignments around it', () => {
   const b = (command) => subjectOf('Bash', { command });
   assert.equal(b('cd /home/op/proj && npm test'), 'Bash: npm test');
   assert.equal(b('cd /home/op/proj; npm test'), 'Bash: npm test');
@@ -1267,14 +1315,14 @@ test('subjectOf Bash: one leading cd <dir> segment joined by && or ; is skipped,
   assert.equal(b('cd "/home/op/my proj" && make all'), 'Bash: make all');
   assert.equal(b('cd /x && FOO=bar npm test'), 'Bash: npm test');
   assert.equal(b('FOO=bar cd /x && npm test'), 'Bash: npm test');
-  assert.equal(b('cd /x && cd /y && npm test'), 'Bash: cd /y', 'only one leading cd segment');
+  assert.equal(b('cd /x && cd /y && npm test'), 'Bash: cd', 'only one leading cd segment');
   assert.equal(b('cd /x && ls'), 'Bash: ls');
-  assert.equal(b('cd /x'), 'Bash: cd /x', 'a lone cd is the command');
+  assert.equal(b('cd /x'), 'Bash: cd', 'a lone cd is the command, without its directory');
   assert.equal(b('cd'), 'Bash: cd');
   assert.equal(b('cd /x && '), 'Bash');
-  assert.equal(b('cd /x || npm test'), 'Bash: cd /x', 'only && and ; join the segment');
-  assert.equal(b('cdx foo && bar'), 'Bash: cdx foo', 'cdx is not cd');
-  assert.equal(b('echo hi && cd /x && ls'), 'Bash: echo hi');
+  assert.equal(b('cd /x || npm test'), 'Bash: cd', 'only && and ; join the segment');
+  assert.equal(b('cdx foo && bar'), 'Bash: cdx', 'cdx is not cd');
+  assert.equal(b('echo hi && cd /x && ls'), 'Bash: echo');
 });
 
 test('shortRole: one plugin namespace is stripped first, then the package prefix', () => {
@@ -1288,4 +1336,312 @@ test('shortRole: one plugin namespace is stripped first, then the package prefix
   assert.equal(shortRole('ns:'), 'ns:');
   assert.equal(shortRole(':x'), ':x');
   assert.equal(shortRole('omelette-fleet'), 'fleet');
+});
+
+// ---------------------------------------------------------------------------
+// T2.1: the Bash subject's tokenizer, the model's open-call fixes, the one STALE_MS
+// ---------------------------------------------------------------------------
+
+const MARK = 'S3CR3T9';
+const SUBCOMMAND_PROGRAMS = ['npm', 'npx', 'pnpm', 'yarn', 'git', 'gh', 'node', 'cargo', 'go', 'make', 'docker', 'python', 'python3', 'pytest', 'claude', 'omelette-fleet'];
+/** What a Bash subject may look like at all: the program, and a second word only for a listed program. */
+const SUBJECT_SHAPE = /^Bash(?:: ([A-Za-z0-9._+-]+)(?: ([a-z][a-z0-9:._-]*))?)?$/i;
+
+/** mulberry32: a seeded generator whose low bits are as good as its high ones. */
+function lcg(seed) {
+  let a = seed >>> 0;
+  return (n) => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return (((t ^ (t >>> 14)) >>> 0) % n);
+  };
+}
+
+test('subjectOf Bash, the examples of the ruling: program, listed second word, the cases that show only the program or plain Bash', () => {
+  const b = (command) => subjectOf('Bash', { command });
+  assert.equal(b('npm test'), 'Bash: npm test');
+  assert.equal(b('npm test --silent'), 'Bash: npm test');
+  assert.equal(b('npm run build'), 'Bash: npm run');
+  assert.equal(b('git status'), 'Bash: git status');
+  assert.equal(b('git commit -m "msg"'), 'Bash: git commit');
+  assert.equal(b('/usr/local/bin/node x.js'), 'Bash: node x.js');
+  assert.equal(b('./scripts/build.sh --all'), 'Bash: build.sh');
+  assert.equal(b('curl https://example.test'), 'Bash: curl');
+  assert.equal(b('rm -rf node_modules'), 'Bash: rm');
+  assert.equal(b('echo hello'), 'Bash: echo');
+  for (const program of SUBCOMMAND_PROGRAMS) assert.equal(b(`${program} sub-cmd:x.y_z --flag`), `Bash: ${program} sub-cmd:x.y_z`, program);
+  assert.equal(b('npm'), 'Bash: npm');
+  // a program outside the list shows alone, whatever its second word looks like
+  for (const command of ['curl abc', 'echo hello', 'ls src', 'rm file', 'cat README', 'sudo npm', 'env x', 'export TOKEN', 'bash script', 'ssh host', 'time npm']) assert.equal(b(command), `Bash: ${command.split(' ')[0]}`, command);
+  // a second word may be any case, but must start with a letter
+  assert.equal(b('git STATUS'), 'Bash: git STATUS');
+  assert.equal(b('npm Test'), 'Bash: npm Test');
+  assert.equal(b('npm _x'), 'Bash: npm');
+  // the second word must be plain: no flag, no path, no =, no number first, no quote or $
+  for (const next of ['-v', '--version', './x', '/abs', 'a=b', '1abc', '$X', '~', '@scope/pkg', 'a/b']) {
+    assert.equal(b(`npm ${next}`), 'Bash: npm', next);
+  }
+  assert.equal(b('npm "a b"'), 'Bash: npm');
+  // quoted words are grouped before the checks
+  assert.equal(b('npm "test"'), 'Bash: npm test');
+  assert.equal(b("git 'status' -s"), 'Bash: git status');
+  assert.equal(b('np\\m test'), 'Bash: npm test');
+  // a program word outside [A-Za-z0-9._+-] is plain Bash
+  for (const command of ['$X test', '"a b" c', "'a b' c", '${X} y', 'a=b', '@x y', '{ npm test; }', '!npm', '<(x)', '\\$x y', 'a:b c', 'a,b c', 'é c']) {
+    assert.equal(b(command), 'Bash', command);
+  }
+  // the program is the base name of its word
+  assert.equal(b('/a/b/git status'), 'Bash: git status');
+  assert.equal(b('../x/make all'), 'Bash: make all');
+  assert.equal(b('/a/b/'), 'Bash');
+  assert.equal(b('~/bin/x y'), 'Bash: x', 'the plain-word check is on the base name');
+  assert.equal(b('/a/b/$X y'), 'Bash');
+  // stops at the first unquoted separator
+  for (const [command, shown] of [
+    ['npm test | tee out', 'Bash: npm test'],
+    ['npm test && echo done', 'Bash: npm test'],
+    ['npm test || echo fail', 'Bash: npm test'],
+    ['npm test; echo done', 'Bash: npm test'],
+    ['npm test\necho done', 'Bash: npm test'],
+    ['npm test & echo bg', 'Bash: npm test'],
+    ['npm $(echo test)', 'Bash: npm'],
+    ['npm `echo test`', 'Bash: npm'],
+    ['npm (test)', 'Bash: npm'],
+    ['git status)', 'Bash: git status'],
+    ['(npm test)', 'Bash'],
+    ['| npm test', 'Bash'],
+    ['; npm test', 'Bash'],
+    ['\nnpm test', 'Bash'],
+    ['&& npm test', 'Bash'],
+  ]) assert.equal(b(command), shown, JSON.stringify(command));
+  // a separator glued to a word ends the scan there (and the word is not cut with it)
+  for (const [command, shown] of [
+    ['npm test|tee', 'Bash: npm test'],
+    ['npm test;ls', 'Bash: npm test'],
+    ['npm test&&ls', 'Bash: npm test'],
+    ['npm test||ls', 'Bash: npm test'],
+    ['npm test(x)', 'Bash: npm test'],
+    ['npm test)x', 'Bash: npm test'],
+    ['npm test`x`', 'Bash: npm test'],
+    ['npm test$(x)', 'Bash: npm test'],
+    ['npm test\nls', 'Bash: npm test'],
+  ]) assert.equal(b(command), shown, JSON.stringify(command));
+  assert.equal(b('cd /x || npm test'), 'Bash: cd');
+  // inside quotes the separators are text, and a substitution inside double quotes stops the scan
+  assert.equal(b('git "status; rm" -s'), 'Bash: git', 'the quoted word is not plain');
+  assert.equal(b("git 'a|b'"), 'Bash: git');
+  assert.equal(b('npm "te$(x)st"'), 'Bash: npm');
+  assert.equal(b('npm "te`x`st"'), 'Bash: npm');
+  assert.equal(b("npm 'te$(x)st'"), 'Bash: npm', 'single quotes keep the $( as text, and the word is not plain');
+  // a substitution inside double quotes ends the scan and drops its word, so what follows is never read
+  assert.equal(b('cd "a$(x)" && npm test'), 'Bash: cd');
+  assert.equal(b('cd "a`x`" && npm test'), 'Bash: cd');
+  assert.equal(b('npm "$(echo "'), 'Bash: npm');
+  assert.equal(b('npm "`echo "'), 'Bash: npm');
+  assert.equal(b('npm "te\\"st"'), 'Bash: npm', 'an escaped quote inside double quotes does not close them');
+  assert.equal(b('npm test "a\\" b" c'), 'Bash: npm test');
+  // an unclosed quote anywhere in the scanned part
+  for (const command of ['npm "test', "npm 'test", 'echo "', "echo '", 'FOO="x npm test', 'npm test "unclosed']) assert.equal(b(command), 'Bash', command);
+  assert.equal(b('npm test && echo "unclosed'), 'Bash: npm test', 'beyond the stop, nothing is read');
+  // backslash escapes
+  assert.equal(b('npm test\\'), 'Bash: npm test');
+  assert.equal(b('np\\ m test'), 'Bash', 'an escaped space is part of the word');
+  assert.equal(b('npm te\\;st'), 'Bash: npm', 'an escaped ; is text, and the word is not plain');
+  assert.equal(b('npm \\|'), 'Bash: npm');
+});
+
+test('subjectOf Bash, a property: a marker secret never reaches the subject - assignments, prefixes, flags, substitutions, pipes, separators, quotes, escapes', () => {
+  const rnd = lcg(20261008);
+  const pick = (list) => list[rnd(list.length)];
+  const values = [
+    MARK, `"${MARK}"`, `'${MARK}'`, `"a ${MARK}"`, `'a ${MARK}'`, `a\\ ${MARK}`, `x${MARK}`, `"x"${MARK}`, `$(echo ${MARK})`, `\`echo ${MARK}\``,
+    `"$(echo ${MARK})"`, `"x \`echo ${MARK}\`"`, `\${${MARK}}`, `$'${MARK}'`, `"it's ${MARK}"`, `'say "${MARK}"'`, `"a\\"${MARK}"`, `a\\;${MARK}`, `"a;b|c&&${MARK}"`, `'(${MARK})'`,
+    `a\\\n${MARK}`, `"multi\nline ${MARK}"`, `$(a "$(b ${MARK})")`, `"$X"${MARK}`,
+  ];
+  const connectors = [' | ', ' && ', ' || ', '; ', '\n', ' & ', ' > ', ' 2>&1 | ', ' <<< ', ' $(', ' `', ' (', ' ) ', ';;', '|&', '\r\n'];
+  const assignments = [(v) => `TOKEN=${v}`, (v) => `A_B1=${v}`, (v) => `_x=${v}`, (v) => `A+=${v}`, (v) => `A[0]=${v}`, () => 'TOKEN=', (v) => `export TOKEN=${v}`, (v) => `A=1 B=${v}`];
+  // programs with the words that precede the secret slot: a listed program's second word is shown, so the slot comes after it
+  const programs = [
+    'npm test', 'git status', 'node x.js', 'docker run', 'gh auth', 'make deploy', 'claude -p', 'python3 -c', 'cargo build', 'pnpm install', 'yarn add', 'npx tool', 'go run', 'pytest -k', 'omelette-fleet set',
+    'echo', 'curl', 'sudo', 'env', 'export', 'time', '/usr/bin/env', 'bash -c', 'sh -c', 'ssh', 'mysql', 'psql', 'wget', 'nohup', 'xargs', 'cat', 'printf', 'gpg --passphrase', 'aws', 'kubectl',
+  ];
+  const flagged = [(v) => `--token ${v}`, (v) => `--token=${v}`, (v) => `-p${v}`, (v) => `-H "Authorization: Bearer ${v}"`, (v) => `--password '${v}'`, (v) => v, (v) => `https://user:${v}@host/x`, (v) => `-e KEY=${v}`, (v) => `--env=KEY=${v}`, (v) => `${v} --flag`];
+  const chains = ['', 'cd /x && ', 'cd /x; ', 'cd "a b" && ', 'cd /x && cd /y && ', `cd ${MARK} && `, `cd ${MARK}; `, `cd "${MARK}" && `, 'cd /x || ', 'cd /x | ', '(', '{ ', '! ', 'FOO=1 '];
+  const leaks = [];
+  // every program with every flag form and value, and every chain, connector and assignment form around a fixed program
+  const check = (command) => {
+    const out = subjectOf('Bash', { command });
+    if (out.includes('S3CR')) leaks.push([command, out]);
+    const m = SUBJECT_SHAPE.exec(out);
+    assert.ok(m, `shape: ${JSON.stringify(command)} -> ${JSON.stringify(out)}`);
+    if (m[2] !== undefined) assert.ok(SUBCOMMAND_PROGRAMS.includes(m[1]), `second word only for a listed program: ${JSON.stringify(command)} -> ${out}`);
+  };
+  for (const program of programs) for (const flag of flagged) for (const value of values) check(`${program} ${flag(value)}`);
+  for (const chain of chains) for (const assign of assignments) for (const value of values) check(`${chain}${assign(value)} npm test --x`);
+  for (const connector of connectors) for (const program of programs) for (const flag of flagged) for (const value of values) check(`npm test${connector}${program} ${flag(value)}`);
+  for (const chain of chains) for (const value of values) check(`${chain}export X=${value}`);
+  const N = 6000;
+  for (let k = 0; k < N; k++) {
+    const parts = [pick(chains)];
+    if (rnd(3) > 0) for (let n = rnd(3) + 1; n > 0; n--) parts.push(`${pick(assignments)(pick(values))} `);
+    parts.push(pick(programs));
+    for (let n = rnd(3); n > 0; n--) parts.push(` ${pick(flagged)(pick(values))}`);
+    if (rnd(2)) parts.push(pick(connectors) + pick(flagged)(pick(values)));
+    if (rnd(4) === 0) parts.push(`${pick(connectors) + pick(programs)} ${pick(flagged)(pick(values))}`);
+    check(parts.join(''));
+  }
+  assert.deepEqual(leaks.slice(0, 5), [], `${leaks.length} of ${N} generated commands put the marker on screen`);
+});
+
+test('subjectOf Bash, a property: whatever bytes come in, the subject has the allowed shape and the call returns', () => {
+  const rnd = lcg(99);
+  const alphabet = ['n', 'p', 'm', ' ', ' ', 't', 'e', 's', 'c', 'd', '=', 'A', '_', '0', '"', "'", '\\', '$', '(', ')', '`', '|', '&', ';', '\n', '\t', '/', '.', '-', ':', 'é', '日', '😀', '\u0000'];
+  const words = ['npm', 'cd', 'git', 'status', 'FOO=bar', '&&', '||', ';', 'sudo', 'env', 'export'];
+  for (let k = 0; k < 8000; k++) {
+    let command = '';
+    for (let n = rnd(40); n > 0; n--) command += rnd(3) === 0 ? ` ${words[rnd(words.length)]} ` : alphabet[rnd(alphabet.length)];
+    const out = subjectOf('Bash', { command });
+    const m = SUBJECT_SHAPE.exec(out);
+    assert.ok(m, `${JSON.stringify(command)} -> ${JSON.stringify(out)}`);
+    if (m[2] !== undefined) assert.ok(SUBCOMMAND_PROGRAMS.includes(m[1]), `${JSON.stringify(command)} -> ${out}`);
+  }
+});
+
+test('subjectOf Bash is linear: 100 000-character commands of spaces, quotes, backslashes, =, cd, separators and assignments each take under 50 ms', () => {
+  const n = 100000;
+  const cases = {
+    spaces: ' '.repeat(n),
+    'cd and spaces': `cd ${' '.repeat(n)}x`,
+    'cd and spaces then &&': `cd ${' '.repeat(n)}&& npm test`,
+    'npm and spaces': `npm${' '.repeat(n)}test`,
+    'double quotes': '"'.repeat(n),
+    'single quotes': "'".repeat(n),
+    'open quote then text': `FOO="${'x'.repeat(n)}`,
+    'quote pairs': '""'.repeat(n / 2),
+    backslashes: '\\'.repeat(n),
+    'backslash pairs': '\\ '.repeat(n / 2),
+    'equals signs': '='.repeat(n),
+    'name equals': `A${'='.repeat(n)}`,
+    assignments: 'A=1 '.repeat(n / 4),
+    'assignment of a long word': `A=${'b'.repeat(n)} npm test`,
+    'a long word': 'a'.repeat(n),
+    'a long name without =': `${'A'.repeat(n)} x`,
+    'cd words': 'cd '.repeat(n / 3),
+    'cd and &&': 'cd x && '.repeat(n / 8),
+    'cd and ;': 'cd x; '.repeat(n / 6),
+    'dollar-parens': '$('.repeat(n / 2),
+    'double quote then dollar-parens': `"${'$('.repeat(n / 2)}`,
+    backticks: '`'.repeat(n),
+    newlines: '\n'.repeat(n),
+    pipes: '|'.repeat(n),
+    ampersands: '&'.repeat(n),
+    'many words': 'a '.repeat(n / 2),
+    'many words after npm': `npm ${'t '.repeat(n / 2)}`,
+    tabs: '\t'.repeat(n),
+    'cd tab runs': `cd${'\t '.repeat(n / 2)}`,
+  };
+  subjectOf('Bash', { command: 'npm test' }); // warm up
+  for (const [name, command] of Object.entries(cases)) {
+    let best = Infinity;
+    for (let rep = 0; rep < 3; rep++) {
+      const t = performance.now();
+      subjectOf('Bash', { command });
+      best = Math.min(best, performance.now() - t);
+    }
+    assert.ok(best < 50, `${name}: ${best.toFixed(1)} ms for ${command.length} characters`);
+  }
+});
+
+test('model: a unit call with no call id opens nothing (the unit stays idle) but the link is still recorded', () => {
+  for (const callId of [undefined, '', null]) {
+    const s = reduce(initialState(T0), { type: 'call', at: T0 + SEC, agentId: MAIN, callId, tool: GROK_REVIEW, subject: 'code_review' });
+    const u = node(s, 'unit:grok');
+    assert.equal(u.status, 'idle', String(callId));
+    assert.equal('openCalls' in u, false);
+    assert.equal('callerId' in u, false);
+    assert.deepEqual(s.history, [{ at: T0 + SEC, from: MAIN, to: 'unit:grok', label: 'code_review' }]);
+  }
+  // an id-less call next to an open one leaves the open one alone
+  let s = run(initialState(T0), call(T0, MAIN, 'c1', GROK_REVIEW, 'code_review'));
+  s = reduce(s, { type: 'call', at: T0 + SEC, agentId: MAIN, tool: GROK_REVIEW, subject: 'code_review' });
+  assert.deepEqual(node(s, 'unit:grok').openCalls.map((c) => c.callId), ['c1']);
+  assert.equal(s.history.length, 2);
+});
+
+test('model: a unit keeps at most 20 open calls, the oldest dropped; the cap is per unit; a dropped call\'s return is foreign', () => {
+  let s = initialState(T0);
+  for (let i = 0; i < 20; i++) s = reduce(s, call(T0 + i, MAIN, `c${i}`, GROK_REVIEW, 'code_review'));
+  assert.equal(node(s, 'unit:grok').openCalls.length, 20, 'exactly 20 are all kept');
+  assert.equal(node(s, 'unit:grok').openCalls[0].callId, 'c0');
+  for (let i = 20; i < 25; i++) s = reduce(s, call(T0 + i, MAIN, `c${i}`, GROK_REVIEW, 'code_review'));
+  const u = node(s, 'unit:grok');
+  assert.equal(u.openCalls.length, 20);
+  assert.deepEqual(u.openCalls.map((c) => c.callId), Array.from({ length: 20 }, (_, i) => `c${i + 5}`));
+  assert.equal(u.activityCallId, 'c24');
+  assert.equal(s.history.length, 25, 'the history keeps every link');
+  // another unit has its own 20
+  s = reduce(s, call(T0 + 30, MAIN, 'g1', GEMINI_RESEARCH, 'research'));
+  assert.equal(node(s, 'unit:gemini').openCalls.length, 1);
+  assert.equal(node(s, 'unit:grok').openCalls.length, 20);
+  // c0 fell off: its return changes nothing about the unit
+  const foreign = reduce(s, ret(T0 + 40, MAIN, 'c0'));
+  assert.equal(node(foreign, 'unit:grok').openCalls.length, 20);
+  assert.equal('lastEndedAt' in node(foreign, 'unit:grok'), false);
+  // one still held returns: 19 left
+  assert.equal(node(reduce(s, ret(T0 + 40, MAIN, 'c24')), 'unit:grok').openCalls.length, 19);
+});
+
+test('model: a unit that falls back to an older open call drops model and effort; keeping the newest keeps them; the feed sets them again', () => {
+  const base = run(
+    initialState(T0),
+    spawn(T0, 'A', 'x'),
+    spawn(T0, 'B', 'y'),
+    call(T0 + 1 * SEC, 'A', 'cA', GROK_REVIEW, 'code_review'),
+    call(T0 + 5 * SEC, 'B', 'cB', GROK_REVIEW, 'code_review'),
+    feedEv(T0 + 6 * SEC, [snap('grok', [fcall('grok_code_review', T0 + 5 * SEC, 'm-b', 'high')])]),
+  );
+  assert.equal(node(base, 'unit:grok').model, 'm-b');
+  const noModel = (s) => !('model' in node(s, 'unit:grok')) && !('effort' in node(s, 'unit:grok'));
+  // the newest returns: fall back to A's call
+  const viaReturn = reduce(base, ret(T0 + 7 * SEC, 'B', 'cB'));
+  assert.equal(node(viaReturn, 'unit:grok').activityCallId, 'cA');
+  assert.ok(noModel(viaReturn), 'return');
+  // the agent that made the newest stops
+  const viaStop = reduce(base, stop(T0 + 7 * SEC, 'B'));
+  assert.equal(node(viaStop, 'unit:grok').activityCallId, 'cA');
+  assert.ok(noModel(viaStop), 'stop');
+  // the older call returns: the newest stays, and so do its model and effort
+  const older = reduce(base, ret(T0 + 7 * SEC, 'A', 'cA'));
+  assert.equal(node(older, 'unit:grok').activityCallId, 'cB');
+  assert.equal(node(older, 'unit:grok').model, 'm-b');
+  assert.equal(node(older, 'unit:grok').effort, 'high');
+  // a tick that drops only the old call keeps the newest and its model
+  const viaTick = reduce(base, { type: 'tick', at: T0 + 5 * SEC + STALE_MS });
+  assert.equal(node(viaTick, 'unit:grok').activityCallId, 'cB');
+  assert.equal(node(viaTick, 'unit:grok').model, 'm-b');
+  // the feed sets them again for the call that is shown
+  const again = reduce(viaReturn, feedEv(T0 + 8 * SEC, [snap('grok', [fcall('grok_code_review', T0 + 1 * SEC, 'm-a', 'medium')])]));
+  assert.equal(node(again, 'unit:grok').model, 'm-a');
+  assert.equal(node(again, 'unit:grok').effort, 'medium');
+});
+
+test('model: one exported STALE_MS of 2 hours serves feed.mjs and tick alike', () => {
+  assert.equal(STALE_MS, 2 * 60 * 60 * 1000);
+  const feedSrc = readFileSync(join(HOOKS, 'feed.mjs'), 'utf8');
+  assert.match(feedSrc, /import \{[^}]*\bSTALE_MS\b[^}]*\} from '\.\/model\.mjs'/);
+  assert.doesNotMatch(feedSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''), /\b60 \* 60|\b120 \* 60|7200|3600/, 'feed.mjs carries no second copy of the bound');
+  const doc = JSON.stringify({ schema: 2, unit: 'grok', pid: 7, active: [{ id: '7-1', tool: 'grok_research', startedAt: '2026-10-08T11:00:00.000Z' }], lastEvent: null, updatedAt: '2026-10-08T12:00:00.000Z' });
+  const u = Date.parse('2026-10-08T12:00:00.000Z');
+  assert.equal(parseSnapshot(doc, u + STALE_MS).isStale, false);
+  assert.equal(parseSnapshot(doc, u + STALE_MS + 1).isStale, true);
+  const s = run(initialState(T0), call(T0, MAIN, 'c1', 'Bash', 'Bash: x'));
+  assert.equal(node(reduce(s, { type: 'tick', at: T0 + STALE_MS }), MAIN).activity, 'Bash: x');
+  assert.equal('activity' in node(reduce(s, { type: 'tick', at: T0 + STALE_MS + 1 }), MAIN), false);
+});
+
+test('package.json: npm test runs the test directory', () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(pkg.scripts.test, 'node --test test/');
 });

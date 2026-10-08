@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { clock, cut, duration, familyOf, shortModel, shortRole, subjectOf } from '../mods/omelette-fleet/hooks/text.mjs';
+import { cells, clock, cut, duration, familyOf, shortModel, shortRole, subjectOf } from '../mods/omelette-fleet/hooks/text.mjs';
 
 const SEC = 1000;
 const MIN = 60 * SEC;
@@ -24,10 +24,25 @@ test('cut: text that fits is unchanged; longer text ends in an ellipsis within t
   assert.equal(cut('', 4), '');
 });
 
-test('cut counts code points, so a surrogate pair is never split', () => {
-  assert.equal(cut('😀😀😀', 3), '😀😀😀');
-  assert.equal(cut('😀😀😀', 2), '😀…');
-  assert.equal([...cut('😀😀😀😀', 3)].length, 3);
+test('cut counts terminal cells: a wide character is two, a combining mark none, and a pair is never split', () => {
+  assert.equal(cells('日本語'), 6);
+  assert.equal(cells('abc'), 3);
+  assert.equal(cells('é'), 1, 'a combining acute adds no cell');
+  assert.equal(cells('😀'), 2);
+  assert.equal(cells(''), 0);
+  const wide = cut('日本語のファイル名.mjs', 8);
+  assert.ok(cells(wide) <= 8, wide);
+  assert.ok(wide.endsWith('…'), wide);
+  assert.equal(wide, '日本語…');
+  assert.equal(cut('😀😀😀', 6), '😀😀😀');
+  assert.equal(cut('😀😀😀', 5), '😀😀…');
+  assert.equal(cut('😀😀😀', 2), '…', 'a wide character that does not fit beside the ellipsis is dropped whole');
+  assert.equal(cut('ab日', 3), 'ab…');
+  for (const width of [1, 2, 3, 4, 5, 7, 9]) {
+    const out = cut('日本語のファイル名.mjs', width);
+    assert.ok(cells(out) <= width, `${width}: ${out}`);
+  }
+  assert.equal(cut('éée', 3), 'éée', 'combining marks take no cell');
 });
 
 test('duration: m:ss below ten minutes, whole minutes from ten, whole hours from one', () => {
@@ -79,25 +94,84 @@ test('familyOf names a Claude model\'s family and leaves a non-Claude id unchang
   assert.equal(familyOf('gpt-6.1-sol'), 'gpt-6.1-sol');
 });
 
-test('subjectOf: Bash with the command\'s first two words', () => {
-  assert.equal(subjectOf('Bash', { command: 'npm test --watch' }), 'Bash: npm test');
-  assert.equal(subjectOf('Bash', { command: '  git\tstatus \n --short' }), 'Bash: git status');
-  assert.equal(subjectOf('Bash', { command: 'ls' }), 'Bash: ls');
-  assert.equal(subjectOf('Bash', { command: 'npm test --x' }), 'Bash: npm test');
+const bash = (command) => subjectOf('Bash', { command });
+
+test('subjectOf: Bash shows the program, and a second word only for a known program and a plain word', () => {
+  assert.equal(bash('npm test --watch'), 'Bash: npm test');
+  assert.equal(bash('  git\tstatus \n --short'), 'Bash: git status');
+  assert.equal(bash('ls'), 'Bash: ls');
+  assert.equal(bash('ls -la /x'), 'Bash: ls');
+  assert.equal(bash('a b c d e'), 'Bash: a', 'an unknown program shows alone');
+  assert.equal(bash('npm test --x'), 'Bash: npm test');
+  assert.equal(bash('/usr/local/bin/git status'), 'Bash: git status');
+  assert.equal(bash('git -C /x status'), 'Bash: git');
+  assert.equal(bash('npm run build:prod'), 'Bash: npm run');
+  assert.equal(bash('node a.js'), 'Bash: node a.js');
+  assert.equal(bash('omelette-fleet doctor'), 'Bash: omelette-fleet doctor');
+  assert.equal(bash('npm test | tail -5'), 'Bash: npm test');
+  assert.equal(bash('npm test&&echo ok'), 'Bash: npm test');
   assert.equal(subjectOf('Bash', {}), 'Bash');
   assert.equal(subjectOf('Bash', undefined), 'Bash');
+  assert.equal(bash(''), 'Bash');
+  assert.equal(bash('   '), 'Bash');
 });
 
-test('subjectOf: Bash skips leading assignments (often a secret) and one leading cd segment, then takes two words', () => {
-  assert.equal(subjectOf('Bash', { command: 'OPENAI_API_KEY=sk-x node a.js' }), 'Bash: node a.js');
-  assert.equal(subjectOf('Bash', { command: 'cd /home/op/p && npm test' }), 'Bash: npm test');
-  assert.equal(subjectOf('Bash', { command: 'cd /home/op/p; FOO=1 make all' }), 'Bash: make all');
-  assert.equal(subjectOf('Bash', { command: 'A=1 B=2' }), 'Bash');
-  assert.equal(subjectOf('Bash', { command: 'TOKEN="a b c" CI=1 npm test' }), 'Bash: npm test', 'a quoted value is one word');
-  assert.equal(subjectOf('Bash', { command: 'TOKEN="sk-x y node a.js' }), 'Bash', 'an open quote: nothing of the value is shown');
-  assert.equal(subjectOf('Bash', { command: 'cd /home/op/p && cd sub && make' }), 'Bash: cd sub', 'one cd segment only');
-  assert.equal(subjectOf('Bash', { command: 'cd /home/op/p' }), 'Bash: cd /home/op/p', 'a cd with nothing after it is the command');
-  assert.equal(subjectOf('Bash', { command: 'cd /home/op/p && ' }), 'Bash');
+test('subjectOf: Bash skips leading assignments and one leading cd command', () => {
+  assert.equal(bash('OPENAI_API_KEY=sk-x node a.js'), 'Bash: node a.js');
+  assert.equal(bash('cd /home/op/p && npm test'), 'Bash: npm test');
+  assert.equal(bash('cd /home/op/p; FOO=1 make all'), 'Bash: make all');
+  assert.equal(bash('A=1 B=2'), 'Bash');
+  assert.equal(bash('TOKEN="a b c" CI=1 npm test'), 'Bash: npm test', 'a quoted value is one word');
+  assert.equal(bash("TOKEN='a b' npm test"), 'Bash: npm test');
+  assert.equal(bash('TOKEN=a\\ b npm test'), 'Bash: npm test', 'an escaped space stays in the value');
+  assert.equal(bash('TOKEN="unclosed npm test'), 'Bash', 'an open quote: plain Bash');
+  assert.equal(bash('TOKEN=$(cat f) npm test'), 'Bash', 'a command substitution ends the scan');
+  assert.equal(bash('cd /home/op/p && cd sub && make'), 'Bash: cd', 'one cd only');
+  assert.equal(bash('cd /home/op/p'), 'Bash: cd', 'a bare cd');
+  assert.equal(bash('cd "/home/op/my proj" && make all'), 'Bash: make all');
+  assert.equal(bash('cd /home/op/p && '), 'Bash', 'nothing after the cd');
+  assert.equal(bash('FOO=1 cd /x && npm test'), 'Bash: npm test');
+});
+
+test('subjectOf: a program word that is not a plain name is plain Bash', () => {
+  assert.equal(bash('1A=b cmd'), 'Bash');
+  assert.equal(bash('=x cmd'), 'Bash');
+  assert.equal(bash('echo A=b'), 'Bash: echo');
+  assert.equal(bash('$CMD run'), 'Bash');
+  assert.equal(bash('./run.sh'), 'Bash: run.sh');
+  assert.equal(bash('g++ a.cc'), 'Bash: g++');
+});
+
+test('subjectOf: Bash keeps secrets off the screen', () => {
+  const cases = {
+    'OPENAI_API_KEY=sk-x node a.js': 'Bash: node a.js',
+    'export TOKEN=sk-live123': 'Bash: export',
+    'env TOKEN=sk-live123 node x.js': 'Bash: env',
+    'sudo TOKEN=sk-live123 node x': 'Bash: sudo',
+    'echo sk-live123 | gh auth login': 'Bash: echo',
+    'mysql -psecret123 db': 'Bash: mysql',
+    'TOKEN=a\\ b npm test': 'Bash: npm test',
+    'TOKEN=$(cat f) npm test': 'Bash',
+    'TOKEN="sk-x y node a.js': 'Bash',
+    'TOKEN="unclosed npm test': 'Bash',
+    'npm `echo sk-live`': 'Bash: npm',
+    'node $(echo sk-live)': 'Bash: node',
+    'node "$(cat secret)"': 'Bash: node',
+  };
+  for (const [command, expected] of Object.entries(cases)) {
+    const out = bash(command);
+    assert.equal(out, expected, command);
+    for (const fragment of ['sk-', 'secret', 'TOKEN', 'cat f']) assert.ok(!out.includes(fragment), `${command} → ${out}`);
+  }
+});
+
+test('subjectOf: Bash parses in linear time', () => {
+  for (const command of ['cd ' + ' '.repeat(20000) + 'x', 'A=' + 'x'.repeat(50000), 'cd ' + '"'.repeat(20001), 'A=1 '.repeat(20000) + 'npm test']) {
+    const started = performance.now();
+    bash(command);
+    const took = performance.now() - started;
+    assert.ok(took < 50, `${command.slice(0, 12)}…: ${took.toFixed(1)} ms`);
+  }
 });
 
 test('subjectOf: the file tools with the file\'s base name', () => {

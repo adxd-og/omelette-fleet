@@ -5,20 +5,15 @@
  * as the model's `feed` event takes it. Pure: register.tsx lists and reads
  * the files, this only looks at names and text.
  */
-import { UNITS } from './model.mjs';
+import { STALE_MS, UNITS } from './model.mjs';
 
 /**
  * @typedef {{ id: string, tool: string, model: string|null, effort: string|null, startedAt: number }} FleetFeedCall
  * @typedef {{ unit: string, pid: number, active: FleetFeedCall[], updatedAt: number, lastEndedAt?: number, isStale: boolean }} FleetSnapshot
  */
 
-/**
- * The feed has no heartbeat: a snapshot is rewritten on events only, so a live
- * call keeps the `updatedAt` of its start. 2 hours is above the longest default
- * run (a deep research takes about 36 minutes); a call still listed after that
- * is left by a process that is gone.
- */
-const STALE_MS = 2 * 60 * 60 * 1000;
+// The feed has no heartbeat: a snapshot is rewritten on events only, so a live
+// call keeps the `updatedAt` of its start; STALE_MS (model.mjs) is the bound.
 const SNAPSHOT_NAME = new RegExp(`^status-(?:${UNITS.join('|')})-\\d+\\.json$`);
 
 /**
@@ -52,8 +47,8 @@ function callOf(entry) {
 /**
  * One snapshot file's text. Null for text that is not JSON, not an object,
  * `schema !== 2`, a unit outside UNITS, or an `updatedAt` that is not a time.
- * A snapshot with calls in `active` and an `updatedAt` more than 30 minutes
- * before `now` is stale: its `active` is returned empty.
+ * A snapshot with calls in `active` and an `updatedAt` more than STALE_MS
+ * (2 hours) before `now` is stale: its `active` is returned empty.
  * @param {string} text
  * @param {number} now
  * @returns {FleetSnapshot | null}

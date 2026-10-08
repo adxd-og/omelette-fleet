@@ -13,10 +13,12 @@ const DAY = 24 * HOUR;
 
 /** A word that starts `NAME=`: a leading shell assignment, whose value is often a secret. */
 const NAME_EQ = /^[A-Za-z_][A-Za-z0-9_]*=/;
-/** One leading assignment with its value, quoted parts included, and the space after it. */
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"'])*(?:\s+|$)/;
-/** One leading `cd <dir>` segment joined to the rest by `&&` or `;`. */
-const CD_SEGMENT = /^cd\s+[^;&]*?\s*(?:&&|;)\s*/;
+/** The programs whose second word says what they do (`npm test`, `git status`); any other shows alone. */
+const SUBCOMMAND_PROGRAMS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'git', 'gh', 'node', 'cargo', 'go', 'make', 'docker', 'python', 'python3', 'pytest', 'claude', 'omelette-fleet']);
+/** A second word plain enough to show: no flag, no `=`, no path, no quote. */
+const PLAIN_WORD = /^[a-z][a-z0-9:._-]*$/i;
+/** A program name plain enough to show: no `=`, `$`, quote or other shell syntax. */
+const PLAIN_PROGRAM = /^[A-Za-z0-9._+-]+$/;
 /** The package's agent prefix, which every shipped role carries. */
 const ROLE_PREFIX = 'omelette-';
 
@@ -25,18 +27,51 @@ const FILE_FIELD = Object.freeze({ Edit: 'file_path', Write: 'file_path', Read: 
 
 const two = (n) => String(n).padStart(2, '0');
 
+/** Code point ranges a terminal draws two cells wide: East Asian Wide/Fullwidth and emoji. */
+const WIDE = Object.freeze([
+  [0x1100, 0x115f], [0x2e80, 0xa4cf], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe30, 0xfe4f],
+  [0xff00, 0xff60], [0xffe0, 0xffe6], [0x1f300, 0x1f64f], [0x1f680, 0x1f6ff], [0x1f900, 0x1f9ff], [0x20000, 0x3fffd],
+]);
+
+/** The cells one code point takes: 0 for a combining mark, ZWJ or VS16, 2 for a wide one, else 1. */
+function cellsOf(point) {
+  if ((point >= 0x300 && point <= 0x36f) || point === 0x200d || point === 0xfe0f) return 0;
+  for (const [low, high] of WIDE) if (point >= low && point <= high) return 2;
+  return 1;
+}
+
 /**
- * `text` in at most `cells` code points: longer text keeps `cells - 1` of them
- * and ends in '…'; no cells, no text.
+ * The terminal cells `text` takes.
  * @param {string} text
- * @param {number} cells
+ * @returns {number}
+ */
+export function cells(text) {
+  let width = 0;
+  for (const ch of String(text ?? '')) width += cellsOf(ch.codePointAt(0));
+  return width;
+}
+
+/**
+ * `text` in at most `width` terminal cells: longer text keeps what fits in
+ * `width - 1` of them, whole code points only, and ends in '…'; no width, no text.
+ * @param {string} text
+ * @param {number} width
  * @returns {string}
  */
-export function cut(text, cells) {
-  const width = Math.floor(cells);
-  if (!(width > 0)) return '';
-  const points = [...String(text ?? '')];
-  return points.length <= width ? points.join('') : `${points.slice(0, width - 1).join('')}…`;
+export function cut(text, width) {
+  const max = Math.floor(width);
+  if (!(max > 0)) return '';
+  const whole = String(text ?? '');
+  if (cells(whole) <= max) return whole;
+  let kept = '';
+  let used = 0;
+  for (const ch of whole) {
+    const w = cellsOf(ch.codePointAt(0));
+    if (used + w > max - 1) break;
+    kept += ch;
+    used += w;
+  }
+  return `${kept}…`;
 }
 
 /**
@@ -92,10 +127,7 @@ export function familyOf(id) {
  */
 export function subjectOf(tool, input) {
   const args = input && typeof input === 'object' ? input : {};
-  if (tool === 'Bash' && typeof args.command === 'string') {
-    const words = commandWords(args.command);
-    if (words.length) return `Bash: ${words.join(' ')}`;
-  }
+  if (tool === 'Bash') return typeof args.command === 'string' ? bashSubject(args.command) : 'Bash';
   if (Object.hasOwn(FILE_FIELD, tool)) {
     const path = args[FILE_FIELD[tool]];
     const base = typeof path === 'string' ? path.split(/[\\/]/).pop() : '';
@@ -104,26 +136,97 @@ export function subjectOf(tool, input) {
   return unitOfTool(tool)?.tool ?? tool;
 }
 
-/** `text` without its leading assignments; empty when one has a value it cannot delimit (an open quote). */
-function withoutAssignments(text) {
-  let rest = text;
-  while (NAME_EQ.test(rest)) {
-    const assignment = ASSIGNMENT.exec(rest);
-    if (!assignment) return '';
-    rest = rest.slice(assignment[0].length);
+/**
+ * The words of the simple command starting at `from`, in one left-to-right
+ * scan: whitespace separates, quotes group, a backslash escapes the next
+ * character. The scan stops at the first unquoted `|`, `&&`, `||`, `;`,
+ * newline, `(`, `)`, backtick or `$(` (`stop` names it, `end` is just past it),
+ * and at a backtick or `$(` inside double quotes (the word it is in is dropped).
+ * Null when a quote never closes.
+ * @param {string} command
+ * @param {number} from
+ * @returns {{ words: string[], stop: string, end: number } | null}
+ */
+function simpleCommand(command, from) {
+  const words = [];
+  let word = '';
+  let inWord = false;
+  let quote = '';
+  let i = from;
+  const finish = (stop, end, keepWord = true) => {
+    if (inWord && keepWord) words.push(word);
+    return { words, stop, end };
+  };
+  while (i < command.length) {
+    const ch = command[i];
+    if (quote === "'") {
+      if (ch === "'") quote = '';
+      else word += ch;
+      i += 1;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = '';
+      else if (ch === '`' || (ch === '$' && command[i + 1] === '(')) return finish('substitution', i, false);
+      else if (ch === '\\' && i + 1 < command.length) { word += command[i + 1]; i += 1; }
+      else word += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; inWord = true; i += 1; continue; }
+    if (ch === '\\') {
+      if (i + 1 < command.length) word += command[i + 1];
+      inWord = true;
+      i += 2;
+      continue;
+    }
+    const two = command.slice(i, i + 2);
+    if (two === '&&' || two === '||' || two === '$(') return finish(two, i + 2);
+    if (ch === '|' || ch === ';' || ch === '\n' || ch === '(' || ch === ')' || ch === '`') return finish(ch, i + 1);
+    if (ch === ' ' || ch === '\t' || ch === '\r') {
+      if (inWord) words.push(word);
+      word = '';
+      inWord = false;
+      i += 1;
+      continue;
+    }
+    word += ch;
+    inWord = true;
+    i += 1;
   }
-  return rest;
+  if (quote) return null;
+  return finish('', i);
 }
 
+/** `words` without its leading `NAME=value` words. */
+const withoutAssignments = (words) => {
+  let i = 0;
+  while (i < words.length && NAME_EQ.test(words[i])) i += 1;
+  return words.slice(i);
+};
+
 /**
- * The first two words of a shell command that say what it runs: leading
- * assignments skipped, and one leading `cd <dir> &&` (or `;`) segment with them.
+ * What a shell command runs, as the pane shows it: `Bash: <program>`, plus a
+ * second word only for a program in SUBCOMMAND_PROGRAMS and a plain word.
+ * Leading assignments are skipped, and one leading `cd …` with them when an
+ * `&&` or `;` follows it; nothing to show, or an open quote, is plain `Bash`.
  */
-function commandWords(command) {
-  let rest = withoutAssignments(command.trim());
-  const cd = CD_SEGMENT.exec(rest);
-  if (cd) rest = withoutAssignments(rest.slice(cd[0].length));
-  return rest.split(/\s+/).filter(Boolean).slice(0, 2);
+function bashSubject(command) {
+  let scanned = simpleCommand(command, 0);
+  if (!scanned) return 'Bash';
+  let words = withoutAssignments(scanned.words);
+  if (words[0] === 'cd') {
+    if (scanned.stop !== '&&' && scanned.stop !== ';') return 'Bash: cd';
+    scanned = simpleCommand(command, scanned.end);
+    if (!scanned) return 'Bash';
+    words = withoutAssignments(scanned.words);
+  }
+  if (words.length === 0) return 'Bash';
+  const program = words[0].split('/').pop();
+  if (!PLAIN_PROGRAM.test(program)) return 'Bash';
+  const next = words[1];
+  const showsNext = SUBCOMMAND_PROGRAMS.has(program) && typeof next === 'string' && PLAIN_WORD.test(next);
+  return showsNext ? `Bash: ${program} ${next}` : `Bash: ${program}`;
 }
 
 /**
