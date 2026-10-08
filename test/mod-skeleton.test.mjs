@@ -103,7 +103,8 @@ test('package.json ships the mod and the marketplace, with no runtime dependency
   assert.ok(p.files.includes('.claude-plugin'), JSON.stringify(p.files));
   assert.deepEqual(Object.keys(p.dependencies ?? {}), []);
   assert.equal(p.engines.node, '>=20');
-  assert.equal(p.scripts.test, 'node --test test/');
+  // The shell expands the glob (CI runs Ubuntu and macOS): Node 22 reads a bare directory argument as a module and runs nothing, and a bare `node --test` would also collect the kit's *.test.ts on Node ≥ 23.6.
+  assert.equal(p.scripts.test, 'node --test test/*.test.mjs');
 });
 
 test('npm pack --dry-run ships the manifests and the plugin files, and none of the engine-laid declarations, node tests or session files', { timeout: 120000 }, (t) => {
