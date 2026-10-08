@@ -132,7 +132,7 @@ test('register.tsx: the command, its description, the pane id/title, close, and 
   assert.match(s, /\$\.ui\.open\(\{\s*id:\s*PANE,\s*title:\s*TITLE\s*\}\)/);
   assert.match(s, /\$\.ui\.close\(\{\s*id:\s*PANE\s*\}\)/);
   assert.match(s, /'close'/);
-  assert.match(s, /<Text dimColor>No fleet activity yet\.<\/Text>/);
+  // The skeleton's placeholder line was replaced by the drawing in Task 3 (ledger 2026-10-08).
 });
 
 test('register.tsx: session.start returns next(e) with the event unchanged; no dynamic import, no node: import, no `$` aliasing', () => {
@@ -143,7 +143,8 @@ test('register.tsx: session.start returns next(e) with the event unchanged; no d
   assert.ok(!/\bconst\s+\w+\s*=\s*\$\s*[;\n]/.test(s), '$ is never aliased');
   assert.ok(!/\$\[/.test(s), '$ is never indexed dynamically');
   for (const m of s.matchAll(/^import .* from '([^']+)'/gm)) {
-    assert.ok(m[1] === 'claude-code' || /\.mjs$/.test(m[1]), `import without extension or unknown package: ${m[1]}`);
+    // `import type … from '../types'` is the documented contract import (examples/pane.tsx), erased at compile.
+    assert.ok(m[1] === 'claude-code' || /\.mjs$/.test(m[1]) || (m[1] === '../types' && /^import type /.test(m[0])), `import without extension or unknown package: ${m[1]}`);
   }
 });
 
