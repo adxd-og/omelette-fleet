@@ -31,6 +31,7 @@
     "hooks",
     "skills",
     "mods",
+    "!mods/omelette-fleet/tests",
     ".claude-plugin",
     "README.md",
     "LICENSE",
