@@ -18,6 +18,7 @@ const DOCS = [
   'docs/STATUS-FEED.md',
   'docs/ARCHITECTURE.md',
   'docs/MEASUREMENTS.md',
+  'docs/MODS.md',
 ];
 const MAP_HEADER = /^\| Question \| Where \|$/m;
 const SET_HEADER = /^\| If you want to know… \| Read \|$/m;

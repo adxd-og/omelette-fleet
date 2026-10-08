@@ -20,6 +20,7 @@ The short version: units read, the manager writes. Everything below explains wha
 | What does the guard hook actually block, and how? | [The guard hook](#the-guard-hook) |
 | Which `git` commands does the guard refuse, which pass, and what does its reading miss? | [What the guard reads as a write](#what-the-guard-reads-as-a-write) |
 | Is the guard a security boundary? | [Wiring, and what the guard is not](#wiring-and-what-the-guard-is-not) |
+| What can the fleet pane mod read, write and do? | [The fleet pane mod](#the-fleet-pane-mod) |
 | What will this package never do to my project or machine? | [What this package never does](#what-this-package-never-does) |
 | Which protections here are only best-effort, not guarantees? | [What is best-effort](#what-is-best-effort) |
 | What's the underlying design principle here? | [Units propose, the manager applies](#units-propose-the-manager-applies) |
@@ -341,6 +342,10 @@ Residuals — what the reading misses, known and accepted:
 **A hook script is inert until your settings call it, and this package does not write those files.** `rules --hooks` prints the snippet and you paste it into your own settings file; settings level is also the only placement that fires — a `hooks:` block in an agent definition's own frontmatter did not fire at all on Claude Code 2.1.261 (measured 2026-09-06). The snippet, its quoting per platform, and how `doctor` decides whether the guard is wired: [ORCHESTRATION, "Layer 3: the guard"](ORCHESTRATION.md#layer-3-the-guard) and ["What doctor says about the wiring"](ORCHESTRATION.md#what-doctor-says-about-the-wiring).
 
 The guard is **containment for a delegated agent, not a boundary against a hostile one.** It bounds one tool on one pattern read out of one string, so an argv-array spawn, a backslash-escaped `g\it`, a shell alias, `$(which git)` and anything else that never spells the command out are deliberately out of scope — and anything determined to get around it has other ways to reach git. Its value is that an agent doing the ordinary wrong thing — committing when the operating model says report instead, or stashing the tree to get a clean test run — is stopped every time, without anyone having to be watching.
+
+## The fleet pane mod
+
+The optional fleet pane ([MODS](MODS.md)) runs inside Claude Code as a plugin, so its reach is the plugin API's, not the units'. It reads the engine's own events and figures (agents, tool calls, context fill, rate-limit windows) and the units' status snapshots under the fleet home. It writes only its own pane state, which Claude Code stores. It spawns no process, opens no network connection, writes no file and edits no setting. Every hook hands the engine's event on unchanged, so it refuses, rewrites and blocks nothing; a hook that fails is skipped. Strings it draws are cleaned of terminal control characters, and a Bash command is shown as its program (and, for a short list of programs, its subcommand), never its arguments, so a secret in a command line does not reach the pane. Install it only from this package; a plugin runs with your session's reach, and its source is `mods/omelette-fleet/`.
 
 ## What this package never does
 

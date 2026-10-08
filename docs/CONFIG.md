@@ -11,6 +11,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |
 | How do I switch the handoff hooks off? | [Handoff settings](#handoff-settings) |
 | What do the handoff hooks do to my ledger, and when? | [The handoff hooks](#the-handoff-hooks) |
+| How do I install the fleet pane mod, and which two options does it have? | [The fleet pane mod](#the-fleet-pane-mod) |
 | How do I set whether the session merges or opens a PR? | [Workflow settings](#workflow-settings) |
 | What config keys exist and what do they default to? | [Keys](#keys) |
 | What extra keys does one unit have, and what's its built-in default? | [Unit-specific extras and built-in overrides](#unit-specific-extras-and-built-in-overrides) |
@@ -406,6 +407,17 @@ The answer is cached in `<home>/update-check.json`, written atomically with mode
 Precedence is deliberately asymmetric. The environment variable is the hard switch, set on the machine outside every project, and it can only *disable*; the config key is the soft one. So `"updateCheck": false` in the file turns the check off everywhere, and `OMELETTE_UPDATE_CHECK=0` turns it off even where the file says `true` — but `OMELETTE_UPDATE_CHECK=1` does not turn a disabled config back on.
 
 With the check off, `doctor` prints `latest check disabled` and `omelette-fleet update` still works: the release number is advisory, and it is `git` that decides whether a checkout can be fast-forwarded.
+
+## The fleet pane mod
+
+`omelette-fleet rules --mods` prints how to install the fleet pane (a Claude Code mod shipped in this package) and writes nothing: no file, no setting. What the pane shows and how to install, update and remove it: [MODS](MODS.md).
+
+The mod's two options are not in `fleet.config.json`. They belong to the plugin and are rows in Claude Code's plugin config menu:
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `autoOpen` | boolean | `true` | Open the pane when a session starts, on a wide terminal. `false` leaves the `/omelette-fleet` command and the status-line entry. |
+| `animate` | boolean | `true` | A spinner on a running agent or unit, a faster tick while anything runs, and on the desktop moving live lines and a pulsing frame. `false` draws the same pane without motion. |
 
 ## The ceiling, in config terms
 

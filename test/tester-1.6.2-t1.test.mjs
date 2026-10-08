@@ -296,7 +296,7 @@ test('ORCHESTRATION: the new bullet is whole and replaced the old one in place (
 
 test('CHANGELOG: the 1.6.2 entry is first, dated, has its four bullets, and sits above 1.6.1', () => {
   const cl = read('CHANGELOG.md');
-  const heads = cl.split('\n').filter((l) => l.startsWith('## '));
+  const heads = cl.split('\n').filter((l) => l.startsWith('## ') && !l.endsWith('— unreleased'));
   assert.equal(heads[0], '## 1.6.2 — 2026-10-03');
   assert.match(heads[1], /^## 1\.6\.1 — 2026-09-30/);
   const entry = cl.slice(cl.indexOf('## 1.6.2'), cl.indexOf('## 1.6.1'));

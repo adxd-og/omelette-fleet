@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.0 — unreleased
+
+The fleet pane: an optional Claude Code mod that draws who is working and who is calling whom. It only reads; nothing in 1.7.0 refuses, rewrites or blocks. Map: [docs/MODS.md](docs/MODS.md).
+
+- **A pane for the fleet.** The orchestrator, its sub-agents and the three units as a graph with live links (from 53 columns; an indented tree below), a history of the last 200 calls, and a header with context fill and the five-hour and seven-day windows (no cost: on a subscription it is an API price, not a bill). A terminal draws it as text, ASCII under `NO_COLOR` or `TERM=dumb`; the desktop app, VS Code and mobile draw one SVG with real lines, the terminal graph as its alt text. The command is `/omelette-fleet` (`close` closes it); with the pane closed, a status-line entry names what runs.
+- **Motion.** A running box shows a spinner and an accent frame, on a 250 ms tick only while something runs; on the desktop, live lines run caller to callee and a running frame pulses, off under reduced motion. Two plugin options, both default `true`: `autoOpen` (open the pane at session start) and `animate` (`false` turns all motion off).
+- **`rules --mods`** prints how to install the pane and writes nothing. The package root is a folder marketplace (`.claude-plugin/marketplace.json`), read in place: after an update, `/reload-plugins` loads the new mod. A package root that moves needs the marketplace added again.
+- **Safe to draw.** Every state string is cleaned of terminal control characters; a Bash command shows only its program and, for a short list of programs, its subcommand. Tested on Claude Code 2.1.294; the plugin API is early access.
+
 ## 1.6.2 — 2026-10-03
 
 - **The Gemini catalog's Claude entries are the 5.5 generation.** Antigravity replaced `Claude Opus 4.6 (Thinking)` with `Claude Opus 5.5 (Low|Medium|High)` and added `Claude Sonnet 5.5 (Low|Medium|High)` (agy 1.2.14, `agy models`, 2026-10-03). The catalog lists Opus 5.5 and Sonnet 5.5 at High and Medium — not Low: Flash Low on the Gemini pool is the cheap tier. Opus 5.5 (Medium) and Sonnet 5.5 (High) ran headless through the adapter's argv shape on 2026-10-03; the other two were accepted by `agy models` and did not run — the Claude bucket answered `RESOURCE_EXHAUSTED` to both the same afternoon, after three calls, which is the quota rule in one line.
