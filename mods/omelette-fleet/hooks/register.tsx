@@ -351,7 +351,7 @@ const noteStep = async ($: EngineInterface, agentId: string, model: string, effo
     }
 
     const isStepped = node !== undefined && node.model === model && node.effort === effort && node.status !== 'reported'
-    const events: ModelEvent[] = [...(node?.loopCalls ? [{ type: 'settle', agentId }] : []), ...(isStepped ? [] : [{ type: 'step', agentId, model, effort }])]
+    const events: ModelEvent[] = [...(node?.loopCalls || node?.activity !== undefined ? [{ type: 'settle', agentId }] : []), ...(isStepped ? [] : [{ type: 'step', agentId, model, effort }])]
 
     // With no pane ticking, the status line still names the running agents: the orchestrator's own model
     // requests refresh the engine's list (at most every 5 s), so an agent that never stops does not linger.

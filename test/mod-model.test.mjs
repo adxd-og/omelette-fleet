@@ -707,3 +707,12 @@ test('settle also ends the loop\'s own unit calls that never returned; another c
   assert.deepEqual(grok.openCalls.map((c) => c.callId), ['g2']);
   assert.equal(grok.callerId, 'main');
 });
+
+test('settle clears the activity of a call that had no id (shown, never held)', () => {
+  const T = Date.UTC(2026, 9, 8, 12);
+  let s = initialState(T);
+  s = reduce(s, { type: 'call', at: T, agentId: 'main', tool: 'Bash', subject: 'Bash: npm test' });
+  assert.equal(s.nodes.find((n) => n.id === 'main').activity, 'Bash: npm test');
+  s = reduce(s, { type: 'settle', at: T + 1, agentId: 'main' });
+  assert.equal(s.nodes.find((n) => n.id === 'main').activity, undefined);
+});

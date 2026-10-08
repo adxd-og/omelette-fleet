@@ -232,7 +232,8 @@ const ON = {
   // A loop asks the model again only once its tool results are back: a call still open in it is one whose return never came.
   settle(state, e) {
     const loop = find(state, e.agentId);
-    if (!loop || loop.kind === 'unit' || !loop.loopCalls) return state;
+    // A call with no id is shown but never held: its activity is settled too.
+    if (!loop || loop.kind === 'unit' || (!loop.loopCalls && loop.activity === undefined)) return state;
     // Its unit calls are over too: a unit call is one of the loop's tool calls.
     return withUnitCalls(withNode(state, loop.id, NO_ACTIVITY), (c) => c.callerId !== loop.id);
   },
