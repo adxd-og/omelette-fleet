@@ -102,7 +102,9 @@ test('hooks.json is exactly { modules: ["./register.tsx"] } and the module is th
 test('types/index.d.ts declares PluginState["omelette-fleet"].fleet', () => {
   const t = readFileSync(join(MOD, 'types', 'index.d.ts'), 'utf8');
   assert.match(t, /interface PluginState/);
-  assert.match(t, /'omelette-fleet':\s*\{\s*fleet:\s*unknown\s*\}/);
+  // Task 2 filled the placeholder `fleet: unknown` with the fleet model's type.
+  assert.match(t, /'omelette-fleet':\s*\{\s*fleet:\s*FleetState\s*\}/);
+  for (const name of ['FleetNode', 'FleetLink', 'FleetUsage', 'FleetState']) assert.match(t, new RegExp(`^export type ${name} =`, 'm'), name);
 });
 
 test('package.json: files holds mods and .claude-plugin; zero runtime dependencies; node >= 20', () => {
