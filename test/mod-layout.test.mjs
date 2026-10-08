@@ -453,3 +453,18 @@ test('statusLine: running roles and units, a unit with its duration; nothing whe
   assert.ok(line.startsWith('fleet: role0, role1'), line);
   assert.ok(line.endsWith('…'), line);
 });
+
+test('a run of zero-width marks cannot make a row or the alt unbounded: at most four code points per cell', async () => {
+  const { svgOf } = await import('../mods/omelette-fleet/hooks/svg.mjs');
+  const { initialState, reduce } = await import('../mods/omelette-fleet/hooks/model.mjs');
+  const T0 = Date.UTC(2026, 9, 8, 12);
+  const flood = 'a' + '\u0301'.repeat(30000);
+  let state = initialState(T0);
+  state = reduce(state, { type: 'spawn', at: T0, agentId: 'a1', role: flood, parentId: 'main', model: 'claude-opus-5-5' });
+  state = reduce(state, { type: 'call', at: T0, agentId: 'a1', callId: 'c1', tool: 'Bash', subject: flood });
+  state = { ...state, history: [{ at: T0, from: 'main', to: 'a1', label: flood }] };
+  for (const columns of [20, 53, 120]) {
+    for (const row of plainRows(layout(state, { columns, rows: 40, isAscii: false }))) assert.ok([...row].length <= 4 * columns + 1, `${columns}: ${[...row].length} code points`);
+  }
+  assert.ok(svgOf(state, { tzOffsetAt: () => 0 }).alt.length < 131072);
+});

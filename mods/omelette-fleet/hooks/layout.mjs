@@ -155,7 +155,8 @@ export function statusLine(state, now) {
  * layout draws passes here.
  */
 function fitted(raw, width, sym) {
-  const text = clean(raw);
+  // At most four code points per cell: zero-width marks pass `cut`, so a run of them could make a row (and the SVG's alt) unbounded.
+  const text = [...clean(raw)].slice(0, 4 * Math.max(width, 0) + 1).join('');
   const out = cut(text, width);
   return out !== text && sym.more !== '…' && out.endsWith('…') ? `${out.slice(0, -1)}${sym.more}` : out;
 }

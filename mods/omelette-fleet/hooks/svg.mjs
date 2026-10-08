@@ -33,7 +33,8 @@ const DARK = '@media (prefers-color-scheme: dark){svg{color:#e8e6e3}}';
  * dashes flow along it (every link is drawn from caller to callee), and a
  * running box's frame (the only rect stroked in the accent) pulses.
  */
-const MOTION = `@media (prefers-reduced-motion: no-preference){.live{stroke-dasharray:6 4;animation:fleet-flow .6s linear infinite}rect[stroke="${ACCENT}"]{animation:fleet-pulse 1.2s ease-in-out infinite}@keyframes fleet-flow{to{stroke-dashoffset:-10}}@keyframes fleet-pulse{50%{stroke-opacity:.35}}}`;
+// Both periods are one second: the drawing changes once a second (the elapsed times), and if the host restarts the animations on a new source, a whole period hides the restart.
+const MOTION = `@media (prefers-reduced-motion: no-preference){.live{stroke-dasharray:6 4;animation:fleet-flow 1s linear infinite}rect[stroke="${ACCENT}"]{animation:fleet-pulse 1s ease-in-out infinite}@keyframes fleet-flow{to{stroke-dashoffset:-10}}@keyframes fleet-pulse{50%{stroke-opacity:.35}}}`;
 const FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
 /** px: the type size, the step between baselines, a box's inner margin. */
