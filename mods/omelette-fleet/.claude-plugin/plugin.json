@@ -1,0 +1,15 @@
+{
+  "name": "omelette-fleet",
+  "version": "1.6.2",
+  "description": "A pane that draws the fleet (the orchestrator, its sub-agents and the units) and who is calling whom; it only reads",
+  "author": { "name": "adxd-og" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the pane at session start",
+      "description": "Open the fleet pane when a session starts, on a wide terminal; off leaves the /omelette-fleet command and the status line",
+      "default": true
+    }
+  }
+}

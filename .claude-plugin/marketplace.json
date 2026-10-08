@@ -1,0 +1,11 @@
+{
+  "name": "omelette-fleet",
+  "owner": { "name": "adxd-og" },
+  "plugins": [
+    {
+      "name": "omelette-fleet",
+      "source": "./mods/omelette-fleet",
+      "description": "A pane that draws the fleet (the orchestrator, its sub-agents and the units) and who is calling whom; it only reads"
+    }
+  ]
+}

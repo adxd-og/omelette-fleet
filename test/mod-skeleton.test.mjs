@@ -1,0 +1,128 @@
+/**
+ * omelette-fleet :: test/mod-skeleton.test.mjs
+ * The fleet pane's skeleton and its delivery (1.7.0, Task 1): the plugin
+ * folder under mods/, the package root as a folder marketplace, the files npm
+ * ships, and `rules --mods`, which PRINTS how to install the mod and writes
+ * nothing. No test here runs `claude`: the manifests are read as files, and
+ * the CLI runs as a child process with PATH emptied, a temp HOME and a temp
+ * cwd, as in cli.test.mjs.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { shellWord } from '../core/rules.mjs';
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
+const MOD = join(ROOT, 'mods', 'omelette-fleet');
+
+const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
+const pkg = () => readJson(join(ROOT, 'package.json'));
+const plugin = () => readJson(join(MOD, '.claude-plugin', 'plugin.json'));
+const marketplace = () => readJson(join(ROOT, '.claude-plugin', 'marketplace.json'));
+
+/** Every file and folder under `dir`, with each file's bytes: two snapshots are equal only when nothing was written. */
+function snapshot(dir) {
+  const seen = {};
+  const walk = (d) => {
+    for (const name of readdirSync(d).sort()) {
+      const path = join(d, name);
+      if (statSync(path).isDirectory()) { seen[relative(dir, path) + '/'] = ''; walk(path); } else seen[relative(dir, path)] = readFileSync(path).toString('base64');
+    }
+  };
+  walk(dir);
+  return seen;
+}
+
+/** A sandbox: a temp HOME (the fleet home too) and a temp cwd, apart from each other and from the package. */
+function sandbox() {
+  const base = mkdtempSync(join(tmpdir(), 'omelette-mods-'));
+  const home = join(base, 'home');
+  const cwd = join(base, 'project');
+  mkdirSync(home);
+  mkdirSync(cwd);
+  return { base, home, cwd };
+}
+
+/** The CLI at `bin`, with PATH pointing at an empty folder: no `claude`, no vendor CLI, no network. */
+function cli(bin, args, { home, cwd, base }) {
+  const empty = join(base, 'empty-path');
+  mkdirSync(empty, { recursive: true });
+  const r = spawnSync(process.execPath, [bin, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: { PATH: empty, HOME: home, OMELETTE_HOME: home, OMELETTE_UPDATE_CHECK: '0' },
+  });
+  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+test('the plugin manifest: named omelette-fleet, at the package version, with a one-line description, its types file and the autoOpen option', () => {
+  const p = plugin();
+  assert.equal(p.name, 'omelette-fleet');
+  assert.equal(p.version, pkg().version, 'the plugin version must equal package.json\'s');
+  assert.equal(typeof p.description, 'string');
+  assert.ok(p.description.length > 0 && !p.description.includes('\n'), p.description);
+  assert.equal(typeof p.types, 'string');
+  assert.ok(existsSync(resolve(MOD, p.types)), `types names a file that does not exist: ${p.types}`);
+  assert.equal(p.userConfig.autoOpen.type, 'boolean');
+  assert.equal(p.userConfig.autoOpen.default, true);
+});
+
+test('hooks.json names exactly one module, and that module exists', () => {
+  const hooksJson = join(MOD, 'hooks', 'hooks.json');
+  const { modules } = readJson(hooksJson);
+  assert.ok(Array.isArray(modules), 'modules is a list');
+  assert.equal(modules.length, 1, `exactly one module: ${JSON.stringify(modules)}`);
+  assert.ok(existsSync(resolve(dirname(hooksJson), modules[0])), `the module does not exist: ${modules[0]}`);
+});
+
+test('the marketplace: its one plugin\'s source resolves to a folder holding the plugin manifest, under the same name and description', () => {
+  const m = marketplace();
+  assert.equal(m.plugins.length, 1, JSON.stringify(m.plugins));
+  const [entry] = m.plugins;
+  const folder = resolve(ROOT, entry.source);
+  assert.ok(statSync(folder).isDirectory(), `source is not a folder: ${entry.source}`);
+  const manifest = join(folder, '.claude-plugin', 'plugin.json');
+  assert.ok(existsSync(manifest), `no plugin manifest under ${entry.source}`);
+  const p = readJson(manifest);
+  assert.equal(entry.name, p.name);
+  assert.equal(entry.description, p.description);
+  // What `rules --mods` prints to install it.
+  assert.equal(`${p.name}@${m.name}`, 'omelette-fleet@omelette-fleet');
+});
+
+test('package.json ships the mod and the marketplace', () => {
+  const { files } = pkg();
+  assert.ok(files.includes('mods'), JSON.stringify(files));
+  assert.ok(files.includes('.claude-plugin'), JSON.stringify(files));
+});
+
+test('no file under mods/ holds import(, node: or an absolute home path (the engine\'s own .claude-plugin/types/ aside)', () => {
+  // The engine lays this build's declarations into <mod>/.claude-plugin/types/
+  // at every load from a folder (gitignored by the engine itself); they are its
+  // text, not the mod's, and they name this machine's MCP servers.
+  const laid = join(MOD, '.claude-plugin', 'types');
+  // A macOS, Linux or Windows home; `/home/op` is the fixtures' made-up one.
+  const homePath = /(?:\/Users\/|\/home\/(?!op\b)|[A-Za-z]:\\Users\\)[^\s/\\'"`]+/;
+  const files = [];
+  const walk = (d) => {
+    for (const name of readdirSync(d)) {
+      const path = join(d, name);
+      if (path === laid) continue;
+      if (statSync(path).isDirectory()) walk(path); else files.push(path);
+    }
+  };
+  walk(join(ROOT, 'mods'));
+  assert.ok(files.includes(join(MOD, 'hooks', 'register.tsx')), 'the scan reached the hooks module');
+  for (const path of files) {
+    const text = readFileSync(path, 'utf8');
+    const name = relative(ROOT, path);
+    assert.ok(!text.includes('import('), `${name} holds import(`);
+    assert.ok(!text.includes('node:'), `${name} holds node:`);
+    assert.doesNotMatch(text, homePath, `${name} holds an absolute home path`);
+  }
+});

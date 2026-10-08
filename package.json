@@ -30,6 +30,8 @@
     "agents",
     "hooks",
     "skills",
+    "mods",
+    ".claude-plugin",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
