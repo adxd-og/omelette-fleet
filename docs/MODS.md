@@ -66,7 +66,7 @@ With `animate` off the running glyph is a still `▶` and the frame keeps its ac
 
 ## Install, update and removal
 
-The package root (the folder with `package.json`) is a folder marketplace, and the mod is read from it in place. `omelette-fleet rules --mods` prints these commands and writes nothing. The CLI never writes Claude Code's settings.
+The package root (the folder with `package.json`) is a folder marketplace. The terminal reads the mod from it in place; the desktop app runs its own Claude Code and loads the copy cached at install. `omelette-fleet rules --mods` prints these commands and writes nothing. The CLI never writes Claude Code's settings.
 
 ```bash
 claude plugin marketplace add <package root>
@@ -76,7 +76,7 @@ claude plugin install omelette-fleet@omelette-fleet
 | Task | How |
 |---|---|
 | Try it for one session, nothing installed | `claude --plugin-dir <package root>/mods/omelette-fleet` |
-| Update | Update the package (`git pull` in a checkout, or `omelette-fleet update`), then run `/reload-plugins` in the session. The folder is read in place, so the reload loads the new mod. |
+| Update | Update the package (`git pull` in a checkout, or `omelette-fleet update`). In the terminal, run `/reload-plugins`: the folder is read in place, so the reload loads the new mod. The desktop app keeps its cached copy until the version changes: run `claude plugin marketplace update omelette-fleet` and `claude plugin update omelette-fleet@omelette-fleet`, then restart the app. |
 | Remove | `claude plugin uninstall omelette-fleet@omelette-fleet` |
 | The package root moved | A folder marketplace points at a path. An npx cache or a version-manager prefix changes that path on an update, which breaks the marketplace: run `claude plugin marketplace add <new package root>` again. |
 
