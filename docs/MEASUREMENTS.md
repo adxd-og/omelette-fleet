@@ -32,7 +32,7 @@ What has actually been measured on this project, how each number was taken, and 
 | How big is the rules file every session loads, before and after 1.2.0? | [The rules file, before and after](#the-rules-file-before-and-after) |
 | What did the session carry per request in 1.3.0, and did the rules file cause it? | [Rent and the rules file, 1.2.0 to 1.3.0](#rent-and-the-rules-file-120-to-130) |
 
-**Runtime behaviour** — the hooks, Codex web mode, unit processes, `initialize`, vendor CLI versions:
+**Runtime behaviour** — the hooks, Codex web mode, unit processes, `initialize`, the fleet pane, vendor CLI versions:
 
 | Question | Where |
 |---|---|
@@ -41,6 +41,7 @@ What has actually been measured on this project, how each number was taken, and 
 | Which web mode does a Codex research run get when none is set? | [The Codex web default mode](#the-codex-web-default-mode) |
 | What outlives a killed unit server, per vendor CLI? | [Unit processes after the server is gone](#unit-processes-after-the-server-is-gone) |
 | Which MCP protocol version does Claude Code ask for, and which does the server claim? | [What Claude Code sends at `initialize`](#what-claude-code-sends-at-initialize) |
+| What does the fleet pane add to each tool call? | [The fleet pane's cost per tool call](#the-fleet-panes-cost-per-tool-call) |
 | Which vendor CLI versions was each release live-gated on? | [Vendor CLI versions per release](#vendor-cli-versions-per-release) |
 
 **About these numbers:**
@@ -408,6 +409,19 @@ Measured 2026-09-25 on Claude Code 2.1.282: every `initialize` request carries `
 
 **How it was taken.** `grep -h -o 'rotocolVersion[^0-9]*[0-9-]*' ~/Library/Caches/claude-cli-nodejs/*/mcp-logs-orion-*/*.jsonl | sort | uniq -c` on the operator's machine; the changelogs at `modelcontextprotocol.io/specification/<revision>/changelog`.
 
+## The fleet pane's cost per tool call
+
+Measured 2026-10-09 at the 1.7.0 live gate on Claude Code 2.1.295. The program's stop line: more than 150 ms added per tool call stops the slice.
+
+| Mod | Calls | Median | Mean |
+|---|---:|---:|---:|
+| enabled | 38 | 597.0 ms | 605.2 ms |
+| disabled | 40 | 597.5 ms | 602.8 ms |
+
+No measurable cost: the medians differ by half a millisecond the other way, the means by 2.4 ms, inside the spread between series (their own medians run from 593 to 602 ms).
+
+**How it was taken.** `claude -p` on `claude-haiku-5-5` in an empty folder, asked to call Bash with `true` twenty times, one call per turn, with `--output-format stream-json --verbose` and `--allowedTools 'Bash(true)'`. Each call is timed from the arrival of the assistant line carrying the `tool_use` to the line carrying its `tool_result`. Two series with the mod enabled, two after `claude plugin disable omelette-fleet@omelette-fleet`; the first, cold call of each series is dropped. A headless run never opens the pane, so the tick and the drawing are not in these numbers, only the hooks every tool call passes through.
+
 ## Vendor CLI versions per release
 
 The versions the live gate ran on, from the ledgers' live-gate lines and the CHANGELOG; "—" means the ledger did not record it (the CLIs auto-update, so a release without a recorded version was gated on whatever was installed that day).
@@ -424,10 +438,11 @@ The versions the live gate ran on, from the ledgers' live-gate lines and the CHA
 | 1.6.0 (2026-09-26) | 1.2.11 | 1.0.41 | 0.157.0 |
 | 1.6.1 (2026-09-30) | 1.2.14 | 1.0.44 | 0.159.2 |
 | 1.6.2 (2026-10-03) | 1.2.16 | 1.0.46 | 0.159.2 |
+| 1.7.0 (2026-10-09) | 1.3.2 | 1.0.50 | 0.160.0 |
 
 Each release adds its row at the live gate (a step of the release procedure the ledger records; this repository's own checklist is the operator's, not a published file).
 
-**Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since "$(git log -1 --format=%cI <first commit>)"` — the ISO time of the branch's first commit with its offset (`2026-09-25T18:47:00+03:00`); UTC, with or without milliseconds, reads the same (calls, wall-clock, spool per unit); a unit whose call count equals `resultsKeep` (50) is a floor, not a count, because the spool prunes as it fills. 1.6.0, from the branch's first commit (2026-09-25T18:47Z) to the merge — the U1 measurement's runs, the live gate and the release reviews included: gemini 5 calls / 10 min 20 s / 10 KB; grok 4 / 3 min 7 s / 11 KB (one of them the live gate's hard kill: `status: error`, nothing salvaged; another the 60 s kill with text, `partial: true`); codex 14 / 1 h 5 min 7 s / 54 KB — 23 calls, 1 h 18 min of vendor wall-clock, none at the cap. The row taken with `--since 2026-09-25` (the whole day) read 78 calls and 5 h 58 min, most of it 1.5.0's release day and codex's 50 the cap — the wrong window, kept here as the reason the rule names the commit time. 1.6.1, from the branch's first commit (2026-09-30T13:34:33+03:00, read with `git log -1 --format=%cI`) to the merge: 5 calls, 33 min 18 s of unit wall-clock — grok 1 (the release sweep, 22 min), codex 4 (a code review from another session's server at 11:11Z, the two release reviews, the live gate's image run); the Gemini research for the catalog ran before the first commit and is not in the window; none at the `resultsKeep` floor. 1.6.2, whose one commit landed after all the work (so the first-commit window would have been empty), from the branch's creation (reflog, 2026-10-03T13:24:06+03:00) to the merge: grok 1 call (the release sweep, 4 min 17 s, 710 B spool, 112 206 tokens in / 17 417 out), gemini and codex 0 through the unit — the two Claude smoke runs and the tester's one call went to agy directly and are not in the window; the catalog's live gate through the unit is deferred to the bucket's reset. The nine tester and two coder measurement arms ran on Claude sub-agents, not on units, and are in [their own section](#the-testers-effort-a-second-pass-and-an-advisor).
+**Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since "$(git log -1 --format=%cI <first commit>)"` — the ISO time of the branch's first commit with its offset (`2026-09-25T18:47:00+03:00`); UTC, with or without milliseconds, reads the same (calls, wall-clock, spool per unit); a unit whose call count equals `resultsKeep` (50) is a floor, not a count, because the spool prunes as it fills. 1.6.0, from the branch's first commit (2026-09-25T18:47Z) to the merge — the U1 measurement's runs, the live gate and the release reviews included: gemini 5 calls / 10 min 20 s / 10 KB; grok 4 / 3 min 7 s / 11 KB (one of them the live gate's hard kill: `status: error`, nothing salvaged; another the 60 s kill with text, `partial: true`); codex 14 / 1 h 5 min 7 s / 54 KB — 23 calls, 1 h 18 min of vendor wall-clock, none at the cap. The row taken with `--since 2026-09-25` (the whole day) read 78 calls and 5 h 58 min, most of it 1.5.0's release day and codex's 50 the cap — the wrong window, kept here as the reason the rule names the commit time. 1.6.1, from the branch's first commit (2026-09-30T13:34:33+03:00, read with `git log -1 --format=%cI`) to the merge: 5 calls, 33 min 18 s of unit wall-clock — grok 1 (the release sweep, 22 min), codex 4 (a code review from another session's server at 11:11Z, the two release reviews, the live gate's image run); the Gemini research for the catalog ran before the first commit and is not in the window; none at the `resultsKeep` floor. 1.6.2, whose one commit landed after all the work (so the first-commit window would have been empty), from the branch's creation (reflog, 2026-10-03T13:24:06+03:00) to the merge: grok 1 call (the release sweep, 4 min 17 s, 710 B spool, 112 206 tokens in / 17 417 out), gemini and codex 0 through the unit — the two Claude smoke runs and the tester's one call went to agy directly and are not in the window; the catalog's live gate through the unit is deferred to the bucket's reset. The nine tester and two coder measurement arms ran on Claude sub-agents, not on units, and are in [their own section](#the-testers-effort-a-second-pass-and-an-advisor). 1.7.0, from the branch's first commit (2026-10-04T12:11:40+03:00) to the merge — the release reviews, their re-reviews and the desktop live gate's session included: gemini 2 calls / 7 min 34 s / 21 KB (one `partial`); grok 4 / 49 min 27 s / 37 KB; codex 5 / 32 min 5 s / 34 KB — 11 calls, 1 h 29 min of unit wall-clock, none at the `resultsKeep` floor.
 
 ## How the numbers are taken
 
