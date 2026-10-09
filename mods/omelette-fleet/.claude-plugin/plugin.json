@@ -1,6 +1,6 @@
 {
   "name": "omelette-fleet",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "description": "A pane that draws the fleet (the orchestrator, its sub-agents and the units) and who is calling whom; it only reads",
   "author": { "name": "adxd-og" },
   "types": "./types/index.d.ts",

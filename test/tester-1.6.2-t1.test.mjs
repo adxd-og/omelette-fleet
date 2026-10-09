@@ -294,11 +294,12 @@ test('ORCHESTRATION: the new bullet is whole and replaced the old one in place (
   assert.ok(orch.indexOf('Plain 128K retrieval is **not**') < orch.indexOf(bullet));
 });
 
-test('CHANGELOG: the 1.6.2 entry is first, dated, has its four bullets, and sits above 1.6.1', () => {
+test('CHANGELOG: the 1.6.2 entry is dated, has its four bullets, and sits right above 1.6.1', () => {
   const cl = read('CHANGELOG.md');
-  const heads = cl.split('\n').filter((l) => l.startsWith('## ') && !l.endsWith('— unreleased'));
-  assert.equal(heads[0], '## 1.6.2 — 2026-10-03');
-  assert.match(heads[1], /^## 1\.6\.1 — 2026-09-30/);
+  const heads = cl.split('\n').filter((l) => l.startsWith('## '));
+  const i = heads.indexOf('## 1.6.2 — 2026-10-03');
+  assert.ok(i >= 0);
+  assert.match(heads[i + 1], /^## 1\.6\.1 — 2026-09-30/);
   const entry = cl.slice(cl.indexOf('## 1.6.2'), cl.indexOf('## 1.6.1'));
   assert.equal(entry.split('\n').filter((l) => l.startsWith('- ')).length, 4);
   assert.ok(entry.includes('**The Gemini catalog\'s Claude entries are the 5.5 generation.**'));
@@ -306,12 +307,6 @@ test('CHANGELOG: the 1.6.2 entry is first, dated, has its four bullets, and sits
   assert.ok(entry.includes('**The Antigravity Claude quota is small, so Claude-via-agy is a named one-call route.**'));
   assert.ok(entry.includes('`EXCLUDED_CLAUDE_MODELS` is empty and stays exported.'));
   assert.ok(entry.includes('explicit or configured as `gemini.model`'));
-});
-
-test('package.json is 1.6.2 and nothing else in it changed shape', () => {
-  const pkg = JSON.parse(read('package.json'));
-  assert.equal(pkg.version, '1.6.2');
-  assert.equal(pkg.name, 'omelette-fleet');
 });
 
 // --- second pass: the pins the mutation check showed missing ------------------
