@@ -1862,9 +1862,14 @@ function printModInstructions() {
   out("It only reads (the engine's own events and the units' status feed) and refuses, rewrites or blocks nothing.");
   out(`Tested on Claude Code ${MOD_TESTED_BUILD}.`);
   out();
-  out('Install (this package folder is the marketplace and is read in place: after an update, /reload-plugins loads the new mod):');
+  out('Install (this package folder is the marketplace):');
   out(`  ${printed(['claude', 'plugin', 'marketplace', 'add', ROOT])}`);
   out(`  ${printed(['claude', 'plugin', 'install', MOD_REF])}`);
+  out();
+  out('Update: the terminal reads the mod from this folder in place, so /reload-plugins loads a new version.');
+  out('The desktop app runs its own Claude Code and keeps the copy it cached at install until the version changes; refresh it, then restart the app:');
+  out(`  ${printed(['claude', 'plugin', 'marketplace', 'update', 'omelette-fleet'])}`);
+  out(`  ${printed(['claude', 'plugin', 'update', MOD_REF])}`);
   out();
   out('For one session, without installing:');
   out(`  ${printed(['claude', '--plugin-dir', join(ROOT, 'mods', 'omelette-fleet')])}`);

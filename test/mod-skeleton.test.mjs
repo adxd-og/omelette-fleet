@@ -162,6 +162,9 @@ test('rules --mods prints the install commands, the one-session form and the rem
   const lines = runs[0].out.split('\n').map((l) => l.trim());
   assert.ok(lines.includes(`claude plugin marketplace add ${shellWord(ROOT)}`), runs[0].out);
   assert.ok(lines.includes('claude plugin install omelette-fleet@omelette-fleet'), runs[0].out);
+  // The desktop app loads the copy cached at install (seen at the 1.7.0 live gate): the update is two commands and a restart.
+  assert.ok(lines.includes('claude plugin marketplace update omelette-fleet'), runs[0].out);
+  assert.ok(lines.includes('claude plugin update omelette-fleet@omelette-fleet'), runs[0].out);
   assert.ok(lines.includes(`claude --plugin-dir ${shellWord(join(ROOT, 'mods', 'omelette-fleet'))}`), runs[0].out);
   assert.ok(lines.includes('claude plugin uninstall omelette-fleet@omelette-fleet'), runs[0].out);
   assert.match(runs[0].out, /optional/i);
