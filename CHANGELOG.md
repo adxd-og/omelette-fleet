@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.7.0 — unreleased
+## 1.7.0 — 2026-10-09
 
 The fleet pane: an optional Claude Code mod that draws who is working and who is calling whom. It only reads; nothing in 1.7.0 refuses, rewrites or blocks. Map: [docs/MODS.md](docs/MODS.md).
 
