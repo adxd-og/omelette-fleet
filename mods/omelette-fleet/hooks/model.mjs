@@ -22,9 +22,9 @@
  *   `openCalls`: a unit's calls of this session still out; the unit shows the newest.
  *   `loopCalls`: a loop's own calls still out (the main loop's or an agent's); the loop shows the newest.
  */
-/** @typedef {{ at: number, from: string, to: string, label: string }} FleetLink  node ids, or a SendMessage's raw target */
+/** @typedef {{ at: number, from: string, to: string, label: string, fromRole?: string, toRole?: string }} FleetLink  node ids, or a SendMessage's raw target; a forgotten agent's end keeps its role */
 /** @typedef {{ contextPercent?: number, fiveHour?: number, sevenDay?: number }} FleetUsage */
-/** @typedef {{ nodes: FleetNode[], history: FleetLink[], usage: FleetUsage, now: number, isOpen: boolean }} FleetState */
+/** @typedef {{ nodes: FleetNode[], history: FleetLink[], usage: FleetUsage, now: number, isOpen: boolean, forgotten?: string[] }} FleetState  `forgotten`: the ids of agents dropped after their report, newest last */
 /**
  * @typedef {{ type: 'spawn', at: number, agentId: string, role: string, parentId?: string, model?: string }
  *   | { type: 'step', at: number, agentId: string, model?: string, effort?: string }
@@ -50,6 +50,10 @@ const HISTORY_CAP = 200;
  * has no fixed ceiling and a default deep research runs about 36 minutes.
  */
 export const STALE_MS = 2 * 60 * 60 * 1000;
+/** A reported agent is dropped this long after its report (operator, 2026-10-12: a workflow left 171 boxes). */
+export const FORGET_MS = 10 * 60 * 1000;
+/** The forgotten ids kept, so the engine's list of ended agents does not bring them back. */
+const FORGOTTEN_CAP = 500;
 /** The open calls a unit or a loop keeps, the oldest dropped past it. */
 const OPEN_CALLS_CAP = 20;
 /** Another session's call on a unit, as `callerId`. */
@@ -254,6 +258,7 @@ const ON = {
       const status = AGENT_STATUS[listed.status];
       const known = find(next, listed.id);
       if (!known) {
+        if (status === 'reported' && next.forgotten?.includes(listed.id)) continue;
         const added = patched({ id: listed.id, kind: 'agent', role: listed.type || 'agent', parentId: listed.parentId || MAIN, status: status ?? 'running', since: e.at, order: nextOrder(next) }, {});
         next = { ...next, nodes: [...next.nodes, added] };
         continue;
@@ -316,12 +321,20 @@ const ON = {
       nodes: state.nodes.map((n) => (stale(n) ? patched(n, n.kind === 'unit' ? UNIT_IDLE : NO_ACTIVITY) : n)),
     };
     const loops = next.nodes.filter((n) => n.kind !== 'unit');
-    return withUnitCalls(loops.reduce((acc, loop) => withLoopCalls(acc, loop, keep), next), keep);
+    return forget(withUnitCalls(loops.reduce((acc, loop) => withLoopCalls(acc, loop, keep), next), keep), e.at);
   },
 
   open: (state) => ({ ...state, isOpen: true }),
   close: (state) => ({ ...state, isOpen: false }),
 };
+
+/** `state` without the agents reported more than FORGET_MS before `at`; the history keeps their roles. */
+function forget(state, at) {
+  const gone = new Map(state.nodes.filter((n) => n.kind === 'agent' && n.status === 'reported' && at - n.since > FORGET_MS).map((n) => [n.id, n.role]));
+  if (gone.size === 0) return state;
+  const history = state.history.map((l) => (gone.has(l.from) || gone.has(l.to) ? patched(l, { fromRole: l.fromRole ?? gone.get(l.from), toRole: l.toRole ?? gone.get(l.to) }) : l));
+  return { ...state, history, nodes: state.nodes.filter((n) => !gone.has(n.id)), forgotten: [...(state.forgotten ?? []), ...gone.keys()].slice(-FORGOTTEN_CAP) };
+}
 
 /** The entry of `calls` whose start is nearest to `at`. */
 function nearest(calls, at) {

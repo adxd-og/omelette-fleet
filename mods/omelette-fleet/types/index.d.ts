@@ -22,12 +22,13 @@ export type FleetNode = {
   loopCalls?: { callId: string; subject: string; since: number }[]
 }
 
-/** Node ids, or a SendMessage's raw target. */
-export type FleetLink = { at: number; from: string; to: string; label: string }
+/** Node ids, or a SendMessage's raw target; a forgotten agent's end keeps its role. */
+export type FleetLink = { at: number; from: string; to: string; label: string; fromRole?: string; toRole?: string }
 
 export type FleetUsage = { contextPercent?: number; fiveHour?: number; sevenDay?: number }
 
-export type FleetState = { nodes: FleetNode[]; history: FleetLink[]; usage: FleetUsage; now: number; isOpen: boolean }
+/** `forgotten`: the ids of agents dropped after their report, newest last. */
+export type FleetState = { nodes: FleetNode[]; history: FleetLink[]; usage: FleetUsage; now: number; isOpen: boolean; forgotten?: string[] }
 
 declare module 'claude-code' {
   interface PluginState {

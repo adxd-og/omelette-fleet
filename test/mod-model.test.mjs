@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MAIN, STALE_MS, UNITS, initialState, reduce, unitOfTool } from '../mods/omelette-fleet/hooks/model.mjs';
+import { FORGET_MS, MAIN, STALE_MS, UNITS, initialState, reduce, unitOfTool } from '../mods/omelette-fleet/hooks/model.mjs';
 import { parseSnapshot } from '../mods/omelette-fleet/hooks/feed.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -248,7 +248,7 @@ test('a loop\'s open calls stay pure: call, return, stop and tick on deep-frozen
     state = deepFreeze(next);
   }
   assert.deepEqual(node(state, MAIN).loopCalls, [{ callId: 'd', subject: 'Read b.mjs', since: T0 + 4 * SEC }], 'the tick dropped only the call past 2 hours');
-  assert.equal('loopCalls' in node(state, CODER), false, 'the stop cleared the agent\'s');
+  assert.equal(node(state, CODER), undefined, 'reported two hours before the tick: forgotten');
 });
 
 test('settle: a loop\'s next model request clears its open calls and its activity; a loop with none, a unit or an unknown id is returned as given', () => {
@@ -415,6 +415,7 @@ test('stop: the agent is reported since the stop, its activity cleared, and link
   assert.equal(node(s, TESTER).since, T0 + 4 * MIN);
   assert.equal('activity' in node(s, TESTER), false);
   assert.equal('activityCallId' in node(s, TESTER), false);
+  assert.equal('loopCalls' in node(s, TESTER), false);
   assert.deepEqual(s.history.at(-1), { at: T0 + 4 * MIN, from: TESTER, to: 'main', label: 'report' });
 });
 
@@ -715,4 +716,29 @@ test('settle clears the activity of a call that had no id (shown, never held)', 
   assert.equal(s.nodes.find((n) => n.id === 'main').activity, 'Bash: npm test');
   s = reduce(s, { type: 'settle', at: T + 1, agentId: 'main' });
   assert.equal(s.nodes.find((n) => n.id === 'main').activity, undefined);
+});
+
+test('tick: an agent reported more than FORGET_MS ago is dropped, its history links keep its role; running, waiting and newer reported agents stay', () => {
+  const s = run(initialState(T0),
+    spawn(T0, CODER, 'omelette-coder'), spawn(T0, TESTER, 'omelette-tester'), spawn(T0, HELPER, 'Explore'),
+    { type: 'stop', at: T0 + MIN, agentId: CODER },
+    { type: 'stop', at: T0 + 5 * MIN, agentId: HELPER });
+  const kept = reduce(s, { type: 'tick', at: T0 + MIN + FORGET_MS });
+  assert.ok(node(kept, CODER), 'not yet past FORGET_MS');
+  const out = reduce(s, { type: 'tick', at: T0 + MIN + FORGET_MS + 1 });
+  assert.equal(node(out, CODER), undefined);
+  assert.equal(node(out, TESTER).status, 'running');
+  assert.equal(node(out, HELPER).status, 'reported', 'reported later: kept');
+  assert.deepEqual(out.forgotten, [CODER]);
+  const links = out.history.filter((l) => l.from === CODER || l.to === CODER);
+  assert.deepEqual(links.map((l) => [l.label, l.fromRole, l.toRole]), [['Agent', undefined, 'omelette-coder'], ['report', 'omelette-coder', undefined]]);
+  assert.ok(out.history.filter((l) => l.from === TESTER || l.to === TESTER).every((l) => !('toRole' in l) && !('fromRole' in l)));
+});
+
+test('agents: a forgotten agent the engine still lists as ended does not come back; listed running again, it does', () => {
+  const s = run(initialState(T0), spawn(T0, CODER, 'omelette-coder'), { type: 'stop', at: T0 + MIN, agentId: CODER }, { type: 'tick', at: T0 + MIN + FORGET_MS + 1 });
+  const ended = reduce(s, { type: 'agents', at: T0 + 20 * MIN, list: [{ id: CODER, type: 'omelette-coder', status: 'completed' }] });
+  assert.equal(node(ended, CODER), undefined);
+  const resumed = reduce(ended, { type: 'agents', at: T0 + 21 * MIN, list: [{ id: CODER, type: 'omelette-coder', status: 'running' }] });
+  assert.equal(node(resumed, CODER).status, 'running');
 });

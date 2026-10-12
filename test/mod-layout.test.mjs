@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { layout, plainRows, statusLine } from '../mods/omelette-fleet/hooks/layout.mjs';
+import { historyRows, layout, plainRows, statusLine } from '../mods/omelette-fleet/hooks/layout.mjs';
 import { cells, cut } from '../mods/omelette-fleet/hooks/text.mjs';
 
 const SEC = 1000;
@@ -544,4 +544,9 @@ test('a run of zero-width marks cannot make a row or the alt unbounded: at most 
     for (const row of plainRows(layout(state, { columns, rows: 40, isAscii: false }))) assert.ok([...row].length <= 4 * columns + 1, `${columns}: ${[...row].length} code points`);
   }
   assert.ok(svgOf(state, { tzOffsetAt: () => 0 }).alt.length < 131072);
+});
+
+test('historyRows: the end of a link whose agent was forgotten reads as the role the link kept', () => {
+  const state = { ...stateOf([]), history: [{ at: NOW - MIN, from: 'a7c0de01', to: 'main', label: 'report', fromRole: 'omelette-coder' }] };
+  assert.match(plainRows(historyRows(state, { columns: 60, count: 3, tzOffsetAt: UTC })).join('\n'), /coder → orchestrator · report/);
 });

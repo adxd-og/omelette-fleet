@@ -113,7 +113,7 @@ export function historyRows(state, { columns, count, isAscii = false, tzOffsetAt
   const max = Math.floor(count);
   if (!(max > 0)) return [];
   return history.slice(-max).reverse().map((link) => textRow(fitted(
-    `${clock(link.at, tzOffsetAt(link.at))} ${roleOf(state, link.from)} ${sym.to} ${roleOf(state, link.to)}${sym.sep}${link.label}`,
+    `${clock(link.at, tzOffsetAt(link.at))} ${link.fromRole ? shortRole(link.fromRole) : roleOf(state, link.from)} ${sym.to} ${link.toRole ? shortRole(link.toRole) : roleOf(state, link.to)}${sym.sep}${link.label}`,
     Math.floor(columns),
     sym,
   )));
