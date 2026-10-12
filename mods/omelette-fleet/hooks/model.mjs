@@ -18,7 +18,7 @@
  *   activity?: string, activityCallId?: string, since: number, callerId?: string,
  *   feed?: 'ok'|'none', lastEndedAt?: number, order: number,
  *   openCalls?: { callId: string, callerId: string, tool: string, since: number }[],
- *   loopCalls?: { callId: string, subject: string, since: number }[] }} FleetNode
+ *   loopCalls?: { callId: string, subject: string, since: number }[], seenAt?: number }} FleetNode
  *   `openCalls`: a unit's calls of this session still out; the unit shows the newest.
  *   `loopCalls`: a loop's own calls still out (the main loop's or an agent's); the loop shows the newest.
  */
@@ -253,6 +253,11 @@ const ON = {
 
   agents(state, e) {
     let next = state;
+    // An agent the list does not hold (a workflow's never is) that ran with no call out and no sign of life for FORGET_MS ended unseen: reported since its last sign, so the next tick forgets it; a step brings it back.
+    const listed = new Set((Array.isArray(e.list) ? e.list : []).map((a) => a?.id));
+    for (const n of state.nodes) {
+      if (n.kind === 'agent' && n.status === 'running' && !n.loopCalls && !listed.has(n.id) && e.at - (n.seenAt ?? n.since) > FORGET_MS) next = withNode(next, n.id, { ...NO_ACTIVITY, status: 'reported', since: n.seenAt ?? n.since });
+    }
     for (const listed of Array.isArray(e.list) ? e.list : []) {
       if (!listed || typeof listed.id !== 'string' || !listed.id) continue;
       const status = AGENT_STATUS[listed.status];
@@ -336,6 +341,8 @@ function forget(state, at) {
   return { ...state, history, nodes: state.nodes.filter((n) => !gone.has(n.id)), forgotten: [...(state.forgotten ?? []), ...gone.keys()].slice(-FORGOTTEN_CAP) };
 }
 
+const SIGNS = new Set(['step', 'call', 'return', 'settle']);
+
 /** The entry of `calls` whose start is nearest to `at`. */
 function nearest(calls, at) {
   return calls.reduce((a, b) => (a && Math.abs(a.startedAt - at) <= Math.abs(b.startedAt - at) ? a : b), undefined);
@@ -351,5 +358,7 @@ function nearest(calls, at) {
 export function reduce(state, event) {
   const type = event?.type;
   if (typeof type !== 'string' || !Object.hasOwn(ON, type)) return state;
-  return ON[type](state, event);
+  const next = ON[type](state, event);
+  // A loop's step, call, return or settle is a sign of life (one that changed nothing returns the state as given); its spawn is its since.
+  return next !== state && SIGNS.has(type) && findAgent(next, event.agentId) && Number.isFinite(event.at) ? withNode(next, event.agentId, { seenAt: event.at }) : next;
 }

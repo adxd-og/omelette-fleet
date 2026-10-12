@@ -742,3 +742,21 @@ test('agents: a forgotten agent the engine still lists as ended does not come ba
   const resumed = reduce(ended, { type: 'agents', at: T0 + 21 * MIN, list: [{ id: CODER, type: 'omelette-coder', status: 'running' }] });
   assert.equal(node(resumed, CODER).status, 'running');
 });
+
+test('agents: a running agent the list does not hold, with no call out and no sign of life for FORGET_MS, is reported since its last sign and forgotten at the next tick; a listed one, one with a call out or one seen lately stays', () => {
+  const s = run(initialState(T0),
+    spawn(T0, CODER, 'workflow-subagent'), spawn(T0, TESTER, 'workflow-subagent'), spawn(T0, HELPER, 'Explore'), spawn(T0, 'd00d0004', 'workflow-subagent'),
+    { type: 'step', at: T0 + MIN, agentId: CODER, model: 'claude-sonnet-5-5' },
+    call(T0 + MIN, TESTER, 'k1', 'Bash', 'Bash: npm test'),
+    { type: 'step', at: T0 + 5 * MIN, agentId: 'd00d0004', model: 'claude-sonnet-5-5' });
+  const at = T0 + MIN + FORGET_MS + 1;
+  const out = reduce(s, { type: 'agents', at, list: [{ id: HELPER, type: 'Explore', status: 'running' }] });
+  assert.equal(node(out, CODER).status, 'reported');
+  assert.equal(node(out, CODER).since, T0 + MIN, 'reported since its last step');
+  assert.equal(node(out, TESTER).status, 'running', 'a call still out');
+  assert.deepEqual([node(out, HELPER).status, node(out, HELPER).since], ['running', T0], 'listed: untouched');
+  assert.equal(node(out, 'd00d0004').status, 'running', 'seen lately');
+  assert.equal(node(reduce(out, { type: 'tick', at }), CODER), undefined);
+  const back = reduce(out, { type: 'step', at: at + SEC, agentId: CODER, model: 'claude-sonnet-5-5' });
+  assert.equal(node(back, CODER).status, 'running', 'a step brings it back');
+});

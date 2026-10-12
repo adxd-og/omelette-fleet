@@ -20,6 +20,8 @@ export type FleetNode = {
   openCalls?: { callId: string; callerId: string; tool: string; since: number }[]
   /** A loop's own calls still out (the main loop's or an agent's); the loop shows the newest. */
   loopCalls?: { callId: string; subject: string; since: number }[]
+  /** An agent's last step, call, return or settle. */
+  seenAt?: number
 }
 
 /** Node ids, or a SendMessage's raw target; a forgotten agent's end keeps its role. */
