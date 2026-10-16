@@ -44,6 +44,12 @@ What has actually been measured on this project, how each number was taken, and 
 | What does the fleet pane add to each tool call? | [The fleet pane's cost per tool call](#the-fleet-panes-cost-per-tool-call) |
 | Which vendor CLI versions was each release live-gated on? | [Vendor CLI versions per release](#vendor-cli-versions-per-release) |
 
+**Unit quality** — the evals:
+
+| Question | Where |
+|---|---|
+| How do the fleet's units score on our own research and review tasks? | [The fleet's units on our own tasks](#the-fleets-units-on-our-own-tasks) |
+
 **About these numbers:**
 
 | Question | Where |
@@ -444,6 +450,33 @@ The versions the live gate ran on, from the ledgers' live-gate lines and the CHA
 Each release adds its row at the live gate (a step of the release procedure the ledger records; this repository's own checklist is the operator's, not a published file).
 
 **Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since "$(git log -1 --format=%cI <first commit>)"` — the ISO time of the branch's first commit with its offset (`2026-09-25T18:47:00+03:00`); UTC, with or without milliseconds, reads the same (calls, wall-clock, spool per unit); a unit whose call count equals `resultsKeep` (50) is a floor, not a count, because the spool prunes as it fills. 1.6.0, from the branch's first commit (2026-09-25T18:47Z) to the merge — the U1 measurement's runs, the live gate and the release reviews included: gemini 5 calls / 10 min 20 s / 10 KB; grok 4 / 3 min 7 s / 11 KB (one of them the live gate's hard kill: `status: error`, nothing salvaged; another the 60 s kill with text, `partial: true`); codex 14 / 1 h 5 min 7 s / 54 KB — 23 calls, 1 h 18 min of vendor wall-clock, none at the cap. The row taken with `--since 2026-09-25` (the whole day) read 78 calls and 5 h 58 min, most of it 1.5.0's release day and codex's 50 the cap — the wrong window, kept here as the reason the rule names the commit time. 1.6.1, from the branch's first commit (2026-09-30T13:34:33+03:00, read with `git log -1 --format=%cI`) to the merge: 5 calls, 33 min 18 s of unit wall-clock — grok 1 (the release sweep, 22 min), codex 4 (a code review from another session's server at 11:11Z, the two release reviews, the live gate's image run); the Gemini research for the catalog ran before the first commit and is not in the window; none at the `resultsKeep` floor. 1.6.2, whose one commit landed after all the work (so the first-commit window would have been empty), from the branch's creation (reflog, 2026-10-03T13:24:06+03:00) to the merge: grok 1 call (the release sweep, 4 min 17 s, 710 B spool, 112 206 tokens in / 17 417 out), gemini and codex 0 through the unit — the two Claude smoke runs and the tester's one call went to agy directly and are not in the window; the catalog's live gate through the unit is deferred to the bucket's reset. The nine tester and two coder measurement arms ran on Claude sub-agents, not on units, and are in [their own section](#the-testers-effort-a-second-pass-and-an-advisor). 1.7.0, from the branch's first commit (2026-10-04T12:11:40+03:00) to the merge — the release reviews, their re-reviews and the desktop live gate's session included: gemini 2 calls / 7 min 34 s / 21 KB (one `partial`); grok 4 / 49 min 27 s / 37 KB; codex 5 / 32 min 5 s / 34 KB — 11 calls, 1 h 29 min of unit wall-clock, none at the `resultsKeep` floor. 1.7.1, from the first lane commit (2026-10-12T20:56:47+03:00) to the merge — the Argon research (Astra), the release reviews and re-reviews and the live gate included: gemini 13 calls / 12 min 56 s / 18 KB (2 errors); grok 4 / 25 min 40 s / 28 KB (1 error); codex 21 / 2 h 29 min 47 s / 95 KB — 38 calls, 3 h 8 min of unit wall-clock, none at the `resultsKeep` floor. The live gate ran `gemini_research` once on `Gemini 3.8 Flash (High)` (10.3 s) and once on `Gemini 4 Argon (Low)` (8.5 s), both answering.
+
+## The fleet's units on our own tasks
+
+Round one of the evals, 2026-10-16, on agy 1.4.0, codex 0.162.1 and grok 1.0.60: 138 calls, none failed. The method, its limits and the charts are in [evals/README](../evals/README.md); the tasks, keys and answers stay private.
+
+| Arm | Runs | R correct, of 10 | V recall | V precision | V wall per call |
+|---|---:|---:|---:|---:|---:|
+| Gemini 3.8 Flash · Low | 2 | 9 | 21 % | 27 % | 12 s |
+| Gemini 3.8 Flash · Medium | 2 | 9 | 43 % | 40 % | 497 s |
+| Gemini 3.8 Flash · High | 2 | 8.5 | 29 % | 24 % | 511 s |
+| Gemini 4 Argon · Low | 1 | 8 * | 29 % | 22 % | 58 s |
+| Gemini 4 Argon · Medium | 1 | 9 * | 29 % | 38 % | 69 s |
+| Gemini 4 Argon · High | 1 | 9 * | 29 % | 50 % | 560 s |
+| Grok 4.7 | 2 | 10 | 36 % | 64 % | 924 s |
+| GPT-6.1 Sol · xhigh | 2 | 10 | 43 % | 83 % | 273 s |
+| GPT-6 Astra · xhigh | 2 | 10 | 43 % | 93 % | 328 s |
+
+\* one prompt for all ten questions. Recall is key defects found, of 7. Precision is the findings that are key items or new defects the session confirmed, over all findings; a new finding the session could not confirm (10 in the round, most of them hanging on how the engine behaves) counts against it.
+
+| Question | What round one says (N = 1–2) |
+|---|---|
+| Research | Codex and Grok answered all ten in every run; every Gemini arm missed the same question, naming a later release where the key asks for the first. No cited URL was invented (58 graded). The trap question caught one Flash High run. |
+| Review | Codex is the most precise reviewer (83–93 %), and no arm found more than 3 of the 7 key defects; three of them no arm found. Gemini's precision ran 22–50 %. |
+| Effort | Neither Gemini model gains steadily from Low to High: Flash's best V recall is at Medium, and Argon High doubles Low's precision at ten times the wall time. |
+| Grok | 20 of 20 on research here does not lift [never a sole source](ORCHESTRATION.md#never-a-sole-source): ten questions, two runs. |
+
+**How it was graded.** One clean `omelette-reviewer` graded the blinded answers (383 lines). The session checked every uncertain grade and every claimed new defect, plus a seeded 10 % sample of the rest (33 lines, none changed). It overturned 8 grades: 7 under one ruling (a race in the tick that the key's stale-tick defect covers), 1 for consistency with a matching finding. It dropped 13 duplicate lines for that same race.
 
 ## How the numbers are taken
 
