@@ -77,8 +77,8 @@ const EVIDENCE = '- **Evidence travels with pointers.** Coder and tester reports
  * gains its capital letter, nothing else), and each a bullet of its own.
  */
 const DUTIES = [
-  '**After a compaction, re-read the ledger before doing anything else.**',
-  "The hooks reach only a ledger in this session's own repository and stay silent on some compactions, so the handoff blocks above are yours to write; the hook is a net under that practice, not a replacement for it.",
+  "**After a compaction or a `/clear`, re-read the ledger before doing anything else.** At a goal's boundary — a release out, a new plan next — write the handoff and suggest `/clear` to the operator.",
+  "The hooks reach only this repository's ledger and miss some compactions and every `/clear`: the handoff blocks are yours to write; the hook is a net, not a replacement.",
 ];
 
 // 1.3.0 P1: 13 100 -> 13 510 — the measured render with the reviewer's rules
@@ -94,10 +94,13 @@ const DUTIES = [
 // its measured cold-cache clause and the fallback for a tester that cannot be
 // continued, the tester at high and the definitions line's exact ids (+820:
 // 13 672 / 13 640 -> 14 492 / 14 460), plus headroom.
-test('the rendered rules file is at most 14 590 characters under either merge policy', () => {
+// 1.7.1: 14 590 -> 14 700 — the tie-breaker row (+33) and the /clear duty at a
+// goal's boundary (operator, 2026-10-16; +82 net after the hooks line was
+// tightened): 14 607 / 14 575, plus headroom.
+test('the rendered rules file is at most 14 700 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 14700, `${merge}: ${text.length} characters`);
   }
 });
 

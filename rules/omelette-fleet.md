@@ -28,9 +28,9 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 - **Tag what a line is, and never edit a wrong one.** A claim by a unit, a coder or a tester is `candidate` until the orchestrator verified it; then `verified` or `rejected`. A ruling that turned out wrong stays in place and gets a `Superseded by:` line — the reader after a compaction sees what was decided, why it changed, and what it cost.
 - **Close a plan with its review yield.** One line, `review yield: <findings> found / <accepted> accepted / <rejected> rejected — <the two or three that mattered>`. It is the cheap measure of what the reviews were worth; keep it honest.
 - **Before a compaction** — announced or suspected — **and at every natural pause, append a handoff block**: where the work stands, open findings, agents in flight, next action.
-- **After a compaction, re-read the ledger before doing anything else.**
+- **After a compaction or a `/clear`, re-read the ledger before doing anything else.** At a goal's boundary — a release out, a new plan next — write the handoff and suggest `/clear` to the operator.
 - `omelette-fleet rules --hooks` wires the ledger hooks, which say nothing unless `.omelette/` holds a `ledger-*.md`; how each one works: `docs/CONFIG.md`, "The handoff hooks".
-- The hooks reach only a ledger in this session's own repository and stay silent on some compactions, so the handoff blocks above are yours to write; the hook is a net under that practice, not a replacement for it.
+- The hooks reach only this repository's ledger and miss some compactions and every `/clear`: the handoff blocks are yours to write; the hook is a net, not a replacement.
 
 ## Tester flow
 
