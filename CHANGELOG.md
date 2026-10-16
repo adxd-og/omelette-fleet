@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.7.1 — unreleased
+## 1.7.1 — 2026-10-16
 
 - **The Gemini catalog's heavy tier is Gemini 4 Argon.** agy 1.4.0 lists `Gemini 4 Argon (Low|Medium|High)`; they replace `Gemini 3.1 Pro (Low|High)`, which agy no longer lists or runs. Unlike Pro, Argon is a code and agentic model: the High entry draws its use and its limits from the DeepMind card (DeepSWE v1.1 77.9, FrontierSWE v2 55.0) and Artificial Analysis, read 2026-10-14 (Index 53 at $1.99 per task; strongest of the four compared on AutomationBench-AA, level with Flash on long-context retrieval, behind GPT-6.1 Sol on PDF work). Low and Medium are unmeasured and say so. On a Google AI Pro subscription Argon's quota is small, so there it is a named one-call route, like Claude via agy; no tool refuses it. The 2M window left with 3.1 Pro: nothing in the catalog takes inputs past 1M tokens.
 - **Upgrading with `gemini.model` pinned to a 3.1 Pro id:** the id is no longer in the catalog, so the unit logs that it is not in the catalog and uses agy's own default.
@@ -8,7 +8,7 @@
 - **GPT-OSS 120B leaves Antigravity on 2026-11-02;** the catalog and ORCHESTRATION say so, and the release after that date removes it.
 - **The orchestrator suggests `/clear` at a goal's boundary** — a release out, a new plan next — after writing the handoff, and re-reads the ledger after a `/clear` as after a compaction. The handoff hook still fires on compaction only.
 - **The tester writes a test only where it earns its place:** a mutant no other test kills, or a defect the spec requires fixed; behaviour through a public entry point, never the text of a source file, a doc or the changelog — a wrong string is a finding. Eight duplicate copies of two rules-file pins are gone.
-- **The fleet pane forgets a sub-agent 10 minutes after it reported** — a workflow's agents had piled up as `+171 more` — keeping its role in the history; a forgotten agent comes back only when the engine lists it running again (arrived on main through the small-change lane, fa9deab and 435f97b; a second lane change, 700e195, is reverted in this release).
+- **The fleet pane forgets a sub-agent 10 minutes after it reported** — a workflow's agents had piled up as `+171 more` — keeping its role in the history; a forgotten agent comes back when it is spawned again or the engine lists it running (arrived on main through the small-change lane, fa9deab and 435f97b; a second lane change, 700e195, is reverted in this release).
 
 ## 1.7.0 — 2026-10-09
 

@@ -96,7 +96,7 @@ const DUTIES = [
 // 13 672 / 13 640 -> 14 492 / 14 460), plus headroom.
 // 1.7.1: 14 590 -> 14 700 — the tie-breaker row (+33) and the /clear duty at a
 // goal's boundary (operator, 2026-10-16; +82 net after the hooks line was
-// tightened): 14 607 / 14 575, plus headroom.
+// tightened; the review fixes' tester line +36): 14 643 / 14 611, plus headroom.
 test('the rendered rules file is at most 14 700 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
