@@ -334,7 +334,7 @@ function forget(state, at) {
   const gone = new Map(state.nodes.filter((n) => n.kind === 'agent' && n.status === 'reported' && at - n.since > FORGET_MS).map((n) => [n.id, n.role]));
   if (gone.size === 0) return state;
   const history = state.history.map((l) => (gone.has(l.from) || gone.has(l.to) ? patched(l, { fromRole: l.fromRole ?? gone.get(l.from), toRole: l.toRole ?? gone.get(l.to) }) : l));
-  return { ...state, history, nodes: state.nodes.filter((n) => !gone.has(n.id)), forgotten: [...(state.forgotten ?? []), ...[...gone].map(([id, role]) => ({ id, role }))].slice(-FORGOTTEN_CAP) };
+  return { ...state, history, nodes: state.nodes.filter((n) => !gone.has(n.id)), forgotten: [...(state.forgotten ?? []).filter((f) => !gone.has(typeof f === 'string' ? f : f?.id)), ...[...gone].map(([id, role]) => ({ id, role }))].slice(-FORGOTTEN_CAP) };
 }
 
 /**
@@ -344,7 +344,8 @@ function forget(state, at) {
  * @returns {string | undefined}
  */
 export function forgottenRole(state, id) {
-  for (const f of state.forgotten ?? []) {
+  // Newest first: an agent forgotten again carries its latest role.
+  for (const f of [...(state.forgotten ?? [])].reverse()) {
     if (f === id) return 'agent';
     if (f && typeof f === 'object' && f.id === id) return f.role;
   }

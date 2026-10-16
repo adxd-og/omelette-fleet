@@ -752,3 +752,12 @@ test('agents: a forgotten teammate the engine lists as idle or waiting stays for
   assert.equal(node(reduce(legacy, { type: 'agents', at: T0, list: [{ id: HELPER, type: 'teammate', status: 'idle' }] }), HELPER), undefined);
   assert.equal(node(reduce(legacy, { type: 'agents', at: T0, list: [{ id: HELPER, type: 'teammate', status: 'running' }] }), HELPER).status, 'running');
 });
+
+test('forget: an agent forgotten again replaces its earlier entry, a bare id from an older build included, so its role is the latest', () => {
+  const legacy = { ...initialState(T0), forgotten: [CODER] };
+  const s = run(legacy,
+    { type: 'agents', at: T0, list: [{ id: CODER, type: 'omelette-coder', status: 'pending' }] },
+    { type: 'stop', at: T0 + MIN, agentId: CODER },
+    { type: 'tick', at: T0 + MIN + FORGET_MS + 1 });
+  assert.deepEqual(s.forgotten, [{ id: CODER, role: 'omelette-coder' }]);
+});
