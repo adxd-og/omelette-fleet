@@ -467,7 +467,7 @@ Round one of the evals, 2026-10-16, on agy 1.4.0, codex 0.162.1 and grok 1.0.60:
 | GPT-6.1 Sol · xhigh | 2 | 10 | 43 % | 83 % | 273 s |
 | GPT-6 Astra · xhigh | 2 | 10 | 43 % | 93 % | 328 s |
 
-\* one prompt for all ten questions. Recall is key defects found, of 7. Precision is the findings that are key items or new defects the session confirmed, over all findings; a new finding the session could not confirm (10 in the round, most of them hanging on how the engine behaves) counts against it.
+\* one prompt for all ten questions; a per-question Argon round follows in the week of 2026-10-19. Recall is key defects found, of 7. Precision is the findings that are key items or new defects the session confirmed, over all findings; a new finding the session could not confirm (10 in the round, most of them hanging on how the engine behaves) counts against it.
 
 | Question | What round one says (N = 1–2) |
 |---|---|
