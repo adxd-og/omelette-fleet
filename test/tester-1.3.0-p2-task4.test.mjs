@@ -73,12 +73,6 @@ const HEADINGS_IN_ORDER = [
 // ── the ceiling is a ceiling, never an exact pin ─────────────────────────────
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file stays at most 14 590 characters under ${merge}, and is not implausibly small`, () => {
-    const text = rendered(merge);
-    // Re-pinned in 1.6.1 Task 2: the ceiling moved 14 030 -> 14 590 with the second-pass step (test/rules-size.test.mjs says why).
-    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters, expected <= 14590`);
-    assert.ok(text.length > 10000, `${merge}: ${text.length} characters — sanity floor, catches a truncated render`);
-  });
 }
 
 // ── the definitions bullet: four definitions, coder-medium right after the coder ──

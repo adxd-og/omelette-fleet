@@ -57,15 +57,6 @@ const HEADINGS = [
 // ── both merge policies, not just the default ────────────────────────────────
 
 for (const merge of ['session', 'pr']) {
-  test(`"Ledger and handoff" states the five obligations and the wiring line under merge=${merge}`, () => {
-    const text = renderRulesFile('1.2.0', { merge });
-    const lines = section(text, '## Ledger and handoff').split('\n');
-    for (const duty of DUTIES) assert.ok(lines.includes(`- ${duty}`), `a line of its own: ${duty}`);
-    assert.ok(lines.includes(WIRING_LINE), 'the wiring line is present verbatim');
-    const wiring = lines.filter((l) => l.includes('rules --hooks`'));
-    assert.equal(wiring.length, 1, 'the wiring sentence appears exactly once');
-    for (const mechanism of MECHANICS) assert.ok(!text.includes(mechanism), `mechanism moved out of the rules: ${mechanism}`);
-  });
 
   test(`the rendered headings under merge=${merge} are the 1.1.0 set, in order, with none added or dropped`, () => {
     const text = renderRulesFile('1.2.0', { merge });

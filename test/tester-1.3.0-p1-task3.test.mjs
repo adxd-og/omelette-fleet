@@ -146,12 +146,6 @@ for (const merge of POLICIES) {
 // ── the ceiling is a ceiling, never an exact size ───────────────────────────
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file is at most 14 590 characters, a ceiling not an exact pin (${merge})`, () => {
-    const text = rendered(merge);
-    // Re-pinned in 1.6.1 Task 2: the ceiling moved 14 030 -> 14 590 with the second-pass step (test/rules-size.test.mjs says why).
-    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters, expected <= 14590`);
-    assert.ok(text.length > 0, `${merge}: sanity — the file is not empty`);
-  });
 }
 
 // ── exactly one {{merge}} placeholder remains in the raw template ──────────

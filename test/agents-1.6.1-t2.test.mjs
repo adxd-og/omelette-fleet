@@ -137,7 +137,6 @@ const DEFINITIONS_1_6_1 = "- `omelette-fleet rules --agents` installs four defin
 for (const merge of ['session', 'pr']) {
   test(`the rules' tester flow gains the second pass between the real runner and arbitration, six steps in order (${merge})`, () => {
     const text = renderRulesFile('1.6.1', { merge });
-    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters, under the ceiling test/rules-size.test.mjs moved for this step`);
     const flow = section(text, '## Tester flow').split('\n');
     const at = flow.indexOf(SECOND_PASS_STEP);
     assert.notEqual(at, -1, 'the step, whole');

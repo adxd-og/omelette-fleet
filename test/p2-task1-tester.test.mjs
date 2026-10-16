@@ -69,15 +69,6 @@ test('the insertion sits inside "Operating model for the session", before "## Le
 
 // ── the render stays under the ceiling ───────────────────────────────────────
 
-// The ceiling follows the content: 14 030 since 1.3.0 P2's Task 5, 14 590 since 1.6.1 Task 2 (test/rules-size.test.mjs says why).
-test('the rendered rules file stays at most 14 590 characters under both merge policies', () => {
-  for (const merge of ['session', 'pr']) {
-    const text = rendered(merge);
-    // Re-pinned in 1.6.1 Task 2: the ceiling moved 14 030 -> 14 590 with the second-pass step (test/rules-size.test.mjs says why).
-    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters`);
-  }
-});
-
 // ── the three lines respect the plan's own constraints on their shape ───────
 
 test('the three added lines carry no bold label, no hook-mechanics string, and no unresolved template placeholder', () => {

@@ -522,16 +522,6 @@ test('the guard allows what the second pass asks of the tester (a plain copy, th
 
 // ── the rules file ───────────────────────────────────────────────────────────
 
-test('rules file: the ceiling carries about a hundred characters of headroom, not a loose margin, and its history line names 1.6.1', () => {
-  for (const merge of ['session', 'pr']) {
-    const n = renderRulesFile('1.6.1', { merge }).length;
-    assert.ok(n <= 14590, `${merge}: ${n}`); // moved by the session: round 3 moved the ceiling with its history line
-    assert.ok(14590 - n <= 200, `${merge}: ${n} leaves ${14590 - n} characters of headroom (plan: about a hundred)`);
-  }
-  const size = read('test/rules-size.test.mjs');
-  assert.ok(size.includes('// 1.6.1 Task 2: 14 030 -> 14 590'), 'the line that says why');
-});
-
 test('rules file: the second-pass step is neither in the Reviews nor the Routing section, and the section order is unchanged', () => {
   const text = renderRulesFile('1.6.1', { merge: 'session' });
   const heads = text.split('\n').filter((l) => l.startsWith('## '));

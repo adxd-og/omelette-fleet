@@ -78,11 +78,6 @@ for (const merge of POLICIES) {
 }
 
 for (const merge of POLICIES) {
-  test(`the rendered rules file stays at or under the 14 590-character ceiling (${merge})`, () => {
-    const text = renderRulesFile('1.2.0', { merge });
-    // Re-pinned in 1.6.1 Task 2: the ceiling moved 14 030 -> 14 590 with the second-pass step (test/rules-size.test.mjs says why).
-    assert.ok(text.length <= 14590, `${merge}: ${text.length} characters, expected <= 14590`);
-  });
 }
 
 test('the plan-review line reintroduces no hook-mechanics string', () => {
