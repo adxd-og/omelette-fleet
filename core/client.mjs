@@ -49,7 +49,10 @@ const rpcError = (m) => {
 /**
  * @param {{serverPath:string, tool:string, args?:object, timeoutS?:number, env?:object,
  *          onStderr?:(chunk:string)=>void, onProgress?:(line:string)=>void}} o
- * @returns {Promise<{text:string, isError:boolean, durationMs:number, serverInfo:object, tools:string[]}>}
+ * @returns {Promise<{text:string, isError:boolean, durationMs:number, serverInfo:object, tools:string[], pid:number}>}
+ *   `pid` is the server process's: a unit files each call's result under an id
+ *   holding its own pid (core/unit.mjs makeResultId), so it is how a caller finds
+ *   the spool record of the call it made and no other.
  */
 export function callUnitServer({
   serverPath, tool, args = {}, timeoutS = 900, env = process.env,
@@ -146,7 +149,7 @@ export function callUnitServer({
         const text = (r.content || []).map((c) => c && c.text).filter(Boolean).join('\n');
         // Settle FIRST: everything below is the goodbye, and the stdin close
         // it causes must not read as the server hanging up on us.
-        ok({ text, isError: !!r.isError, durationMs: Date.now() - t0, serverInfo: serverInfo || {}, tools: toolNames });
+        ok({ text, isError: !!r.isError, durationMs: Date.now() - t0, serverInfo: serverInfo || {}, tools: toolNames, pid: child.pid });
         child.stdin.end(); // the server exits on EOF
         const bye = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 2000);
         if (bye.unref) bye.unref();
