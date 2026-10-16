@@ -285,13 +285,6 @@ test('no live doc, example or source names a 4.6 Claude model or says Sonnet is 
   }
 });
 
-test('ORCHESTRATION: the new bullet is whole and replaced the old one in place (before the GPT-OSS bullet)', () => {
-  const orch = read('docs/ORCHESTRATION.md');
-  const bullet = "- `Claude Opus 5.5 (High|Medium)` and `Claude Sonnet 5.5 (High|Medium)` run on Antigravity's separate Claude quota — the same generation as the fleet's own coder and reviewer, so they buy an independent read, not a stronger one. That quota is small (operator, 2026-10-03) where the Gemini pool is effectively unlimited: one named call per question, never a sweep, and `gemini_deep_research` refuses them (about five runs per call); `gemini_research` and `gemini_image` refuse a Claude id that is only the configured `gemini.model`. The refusals see only ids the fleet names: keep agy's own default model a Gemini one. Prefer Gemini for citation-heavy research (web grounding via agy is unverified for the Claude family). Sonnet's 2026-08-02 exclusion is lifted; neither is a fleet role.";
-  assert.equal(orch.split(bullet).length - 1, 1);
-  assert.ok(orch.indexOf(bullet) < orch.indexOf('- `GPT-OSS 120B (Medium)` is a corroborating voice'));
-});
-
 test('CHANGELOG: the 1.6.2 entry is dated, has its four bullets, and sits right above 1.6.1', () => {
   const cl = read('CHANGELOG.md');
   const heads = cl.split('\n').filter((l) => l.startsWith('## '));

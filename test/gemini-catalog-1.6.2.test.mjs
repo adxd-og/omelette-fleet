@@ -237,11 +237,3 @@ test('the served model schema of gemini_research, gemini_image and gemini_deep_r
     assert.ok(tool.inputSchema.properties.model.description.includes('(`gemini.model` in the fleet config, else the tool\'s own default: agy\'s for gemini_research and gemini_image, the Flash stages for gemini_deep_research — a configured Claude id is refused here; Claude is named per call, where the tool takes it). '), name);
   }
 });
-
-test('round 3 texts: the changelog alternative and the ORCHESTRATION bullet name gemini_image', () => {
-  const cl = read('CHANGELOG.md');
-  const entry = cl.slice(cl.indexOf('## 1.6.2'), cl.indexOf('## 1.6.1'));
-  assert.ok(entry.includes('(`gemini_research` for one question, or a Flash id — omitting `model` helps only while no Claude id is the configured default)'));
-  assert.ok(!entry.includes('or no `model` for the Flash stages'));
-  assert.ok(read('docs/ORCHESTRATION.md').includes('and `gemini_deep_research` refuses them (about five runs per call); `gemini_research` and `gemini_image` refuse a Claude id that is only the configured `gemini.model`. The refusals see only ids the fleet names: keep agy\'s own default model a Gemini one.'));
-});

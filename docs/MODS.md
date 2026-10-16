@@ -50,7 +50,7 @@ ctx 31% · 5h 11% · 7d 71%
 | Box, line 2 | Model and effort (`claude-opus-5-5` reads `opus`). A unit shows its tool here. |
 | Box, line 3 | What it is doing now (`Bash: npm test`, `Edit adapter.mjs`), or its state with a time (`reported 3:10`, `idle 12m`). A unit shows its model and the elapsed time. |
 | Lines between boxes | Who called whom. Sub-agents above, the orchestrator in the middle, the units below. A line is bold and in the accent colour while the call is live; every other line is dim. |
-| Sub-agent row | One row, as many boxes as the width holds (three at 53 columns, up to six). Running and waiting ones come first; the rest fold into a last box, `+N more`. A sub-agent leaves the pane 10 minutes after it reported; the history keeps its role. |
+| Sub-agent row | One row, as many boxes as the width holds (three at 53 columns, up to six). Running and waiting ones come first; the rest fold into a last box, `+N more`. A sub-agent leaves the pane 10 minutes after it reported; the history keeps its role. Forgetting runs while the pane ticks, so a pane opened again drops at once whatever reported more than 10 minutes before. |
 | History | The newest links first, as many as the pane's height leaves under the graph (on a short terminal pane that can be one; the desktop shows at least three): time, caller, callee, tool. Kept for the session, the last 200. A unit called from a sub-agent is marked `← coder-medium`. |
 
 State glyphs:
