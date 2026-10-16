@@ -495,7 +495,7 @@ test('the tester stop paragraph closes the procedure part and precedes the Agent
 
 test('the tester procedure still has its four numbered steps and the five-section report contract was not touched by the second pass', () => {
   const t = renderAgentFile('omelette-tester.md', '1.6.1', {});
-  for (const start of ['1. From the spec, list the behaviours', '2. Write additional tests', '3. Run your file with the real runner', '4. For every failing test, rule:']) assert.ok(t.includes(start), start);
+  for (const start of ['1. From the spec, list the behaviours', '2. Probe what is uncovered', '3. Run your file with the real runner', '4. For every failing test, rule:']) assert.ok(t.includes(start), start);
   for (const h of ['`## TASK`', '`## FINDINGS`', '`## DIFF`', '`## TEST RESULTS`', '`## OPEN QUESTIONS`']) assert.ok(t.includes(h), `the first report's section ${h}`);
 });
 
