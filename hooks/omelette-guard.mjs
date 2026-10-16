@@ -27,7 +27,8 @@
  * added to the session's context, where PreCompact's is documented nowhere. So
  * the session that opens after a compaction is handed the last handoff block of
  * every ledger in the project, bounded, and nothing at all on a startup, a
- * resume, a `/clear` or a fork — none of those lost a context.
+ * resume, a `/clear` or a fork. A `/clear` does lose the context; the rules
+ * file covers it (re-read the ledger), and printing here is a 1.8.0 candidate.
  *
  * The two ledger hooks answer to one switch, `handoff.enabled`, rendered into
  * this script as a literal (HANDOFF_CONFIG below): false turns the stamp and
@@ -1064,8 +1065,9 @@ const TAIL_NOTE = '[… ledger larger than 1 MiB — read from its tail; a fence
 
 /**
  * The handoff, back into the context that just lost it. Only `source ===
- * 'compact'`: a startup, a resume, a `/clear` and a fork have a context nobody
- * lost, and printing a handoff into each of them is noise on every session.
+ * 'compact'`: a startup, a resume and a fork have a context nobody lost, and
+ * printing a handoff into each of them is noise on every session. A `/clear`
+ * lost one; the rules file has the orchestrator re-read the ledger there.
  *
  * Same ledgers as PreCompact and the same rule about them — `<cwd>/.omelette/
  * ledger-*.md`, sorted, a directory that is not a symlink (ledgerDir), lstat

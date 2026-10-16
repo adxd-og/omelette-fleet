@@ -615,8 +615,8 @@ export const shellWord = (s, platform = process.platform) => (/^[\w@%+=:,./-]+$/
  *
  * THE MATCHERS ARE NOT INTERCHANGEABLE. `PreToolUse` is matched against a TOOL
  * name and `SessionStart` against the session's SOURCE — `startup`, `resume`,
- * `clear`, `compact`, `fork` — and only `compact` is a context somebody just
- * lost, which is the one the guard has anything to print into. `PreCompact` is
+ * `clear`, `compact`, `fork` — and the guard prints into `compact` only. A
+ * `clear` loses the context too; the rules file covers it (re-read the ledger). `PreCompact` is
  * matched on nothing: every compaction is one the ledger has to be stamped for.
  *
  * @returns {string[]} the snippet's lines, together a parseable JSON object.
