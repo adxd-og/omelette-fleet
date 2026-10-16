@@ -27,8 +27,8 @@ export type FleetLink = { at: number; from: string; to: string; label: string; f
 
 export type FleetUsage = { contextPercent?: number; fiveHour?: number; sevenDay?: number }
 
-/** `forgotten`: the ids of agents dropped after their report, newest last. */
-export type FleetState = { nodes: FleetNode[]; history: FleetLink[]; usage: FleetUsage; now: number; isOpen: boolean; forgotten?: string[] }
+/** `forgotten`: the agents dropped after their report, newest last (a bare id from an older build). */
+export type FleetState = { nodes: FleetNode[]; history: FleetLink[]; usage: FleetUsage; now: number; isOpen: boolean; forgotten?: ({ id: string; role: string } | string)[] }
 
 declare module 'claude-code' {
   interface PluginState {

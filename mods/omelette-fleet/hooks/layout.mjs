@@ -11,7 +11,7 @@
  * measured (`clean`), and every width is measured in terminal cells (`cells`,
  * `cut`), never in string length.
  */
-import { MAIN } from './model.mjs';
+import { MAIN, forgottenRole } from './model.mjs';
 import { cells, clean, clock, cut, duration, familyOf, shortModel, shortRole } from './text.mjs';
 
 /** @import { FleetNode, FleetState } from './model.mjs' */
@@ -189,7 +189,11 @@ function roleOf(state, id) {
   if (id === MAIN) return 'orchestrator';
   if (id === OTHER) return 'other';
   const node = state.nodes.find((n) => n.id === id);
-  if (!node) return String(id);
+  if (!node) {
+    // A link made after its agent was forgotten (a SendMessage to it) still reads as its role.
+    const gone = forgottenRole(state, id);
+    return gone === undefined ? String(id) : shortRole(gone);
+  }
   return node.kind === 'agent' ? shortRole(node.role) : node.role;
 }
 

@@ -550,3 +550,8 @@ test('historyRows: the end of a link whose agent was forgotten reads as the role
   const state = { ...stateOf([]), history: [{ at: NOW - MIN, from: 'a7c0de01', to: 'main', label: 'report', fromRole: 'omelette-coder' }] };
   assert.match(plainRows(historyRows(state, { columns: 60, count: 3, tzOffsetAt: UTC })).join('\n'), /coder → orchestrator · report/);
 });
+
+test('historyRows: a link made after its agent was forgotten reads as the forgotten role', () => {
+  const state = { ...stateOf([]), forgotten: [{ id: 'a7c0de01', role: 'omelette-coder' }], history: [{ at: NOW - MIN, from: 'main', to: 'a7c0de01', label: 'SendMessage' }] };
+  assert.match(plainRows(historyRows(state, { columns: 60, count: 3, tzOffsetAt: UTC })).join('\n'), /orchestrator → coder · SendMessage/);
+});

@@ -729,7 +729,7 @@ test('tick: an agent reported more than FORGET_MS ago is dropped, its history li
   assert.equal(node(out, CODER), undefined);
   assert.equal(node(out, TESTER).status, 'running');
   assert.equal(node(out, HELPER).status, 'reported', 'reported later: kept');
-  assert.deepEqual(out.forgotten, [CODER]);
+  assert.deepEqual(out.forgotten, [{ id: CODER, role: 'omelette-coder' }]);
   const links = out.history.filter((l) => l.from === CODER || l.to === CODER);
   assert.deepEqual(links.map((l) => [l.label, l.fromRole, l.toRole]), [['Agent', undefined, 'omelette-coder'], ['report', 'omelette-coder', undefined]]);
   assert.ok(out.history.filter((l) => l.from === TESTER || l.to === TESTER).every((l) => !('toRole' in l) && !('fromRole' in l)));
@@ -741,4 +741,14 @@ test('agents: a forgotten agent the engine still lists as ended does not come ba
   assert.equal(node(ended, CODER), undefined);
   const resumed = reduce(ended, { type: 'agents', at: T0 + 21 * MIN, list: [{ id: CODER, type: 'omelette-coder', status: 'running' }] });
   assert.equal(node(resumed, CODER).status, 'running');
+});
+
+test('agents: a forgotten teammate the engine lists as idle or waiting stays forgotten; a bare forgotten id from an older build counts too', () => {
+  const s = run(initialState(T0), spawn(T0, HELPER, 'teammate'), { type: 'stop', at: T0 + MIN, agentId: HELPER }, { type: 'tick', at: T0 + MIN + FORGET_MS + 1 });
+  for (const status of ['idle', 'waiting', 'completed', 'killed']) {
+    assert.equal(node(reduce(s, { type: 'agents', at: T0 + 30 * MIN, list: [{ id: HELPER, type: 'teammate', status }] }), HELPER), undefined, status);
+  }
+  const legacy = { ...initialState(T0), forgotten: [HELPER] };
+  assert.equal(node(reduce(legacy, { type: 'agents', at: T0, list: [{ id: HELPER, type: 'teammate', status: 'idle' }] }), HELPER), undefined);
+  assert.equal(node(reduce(legacy, { type: 'agents', at: T0, list: [{ id: HELPER, type: 'teammate', status: 'running' }] }), HELPER).status, 'running');
 });
