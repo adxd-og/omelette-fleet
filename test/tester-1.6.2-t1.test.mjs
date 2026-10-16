@@ -80,12 +80,12 @@ test('ids are unique across the catalog and the ALLOWLIST is exactly the catalog
   for (const id of ids) assert.ok(!/Claude.*\(Low\)/.test(id), id);
 });
 
-test('the Claude entries sit between Gemini 3.1 Pro (High) and GPT-OSS 120B (Medium)', () => {
+test('the Claude entries sit between Gemini 4 Argon (High) and GPT-OSS 120B (Medium)', () => {
   const ids = GEMINI_MODELS.map((m) => m.id);
-  const pro = ids.indexOf('Gemini 3.1 Pro (High)');
+  const argon = ids.indexOf('Gemini 4 Argon (High)');
   const oss = ids.indexOf('GPT-OSS 120B (Medium)');
-  assert.ok(pro >= 0 && oss >= 0);
-  assert.equal(oss, pro + 5);
+  assert.ok(argon >= 0 && oss >= 0);
+  assert.equal(oss, argon + 5);
 });
 
 test('the Claude entries carry the plan\'s load-bearing wording', () => {
@@ -97,9 +97,8 @@ test('the Claude entries carry the plan\'s load-bearing wording', () => {
   assert.match(byId['Claude Sonnet 5.5 (Medium)'].useFor, /^The lightest Claude read/);
 });
 
-test('models.js header: synced to agy 1.2.14 on 2026-10-03, SCOPE rewritten, no 2026-08-02 "Sonnet stays excluded" prose, JSDoc updated', () => {
+test('models.js header: SCOPE rewritten, no 2026-08-02 "Sonnet stays excluded" prose, JSDoc updated', () => {
   const src = read('units/gemini/models.js');
-  assert.match(src, /SYNCED TO agy \(verified 2026-10-03, agy 1\.2\.14\)/);
   assert.ok(!src.includes('agy 1.1.25'));
   assert.match(src, /SCOPE: Gemini family \+ GPT-OSS \+ Claude Opus 5\.5 and Sonnet 5\.5 via Antigravity\./);
   assert.ok(!/Claude SONNET stays excluded/.test(src));
@@ -286,12 +285,11 @@ test('no live doc, example or source names a 4.6 Claude model or says Sonnet is 
   }
 });
 
-test('ORCHESTRATION: the new bullet is whole and replaced the old one in place (between the Flash-vs-Pro bullet and GPT-OSS)', () => {
+test('ORCHESTRATION: the new bullet is whole and replaced the old one in place (before the GPT-OSS bullet)', () => {
   const orch = read('docs/ORCHESTRATION.md');
   const bullet = "- `Claude Opus 5.5 (High|Medium)` and `Claude Sonnet 5.5 (High|Medium)` run on Antigravity's separate Claude quota — the same generation as the fleet's own coder and reviewer, so they buy an independent read, not a stronger one. That quota is small (operator, 2026-10-03) where the Gemini pool is effectively unlimited: one named call per question, never a sweep, and `gemini_deep_research` refuses them (about five runs per call); `gemini_research` and `gemini_image` refuse a Claude id that is only the configured `gemini.model`. The refusals see only ids the fleet names: keep agy's own default model a Gemini one. Prefer Gemini for citation-heavy research (web grounding via agy is unverified for the Claude family). Sonnet's 2026-08-02 exclusion is lifted; neither is a fleet role.";
   assert.equal(orch.split(bullet).length - 1, 1);
   assert.ok(orch.indexOf(bullet) < orch.indexOf('- `GPT-OSS 120B (Medium)` is a corroborating voice'));
-  assert.ok(orch.indexOf('Plain 128K retrieval is **not**') < orch.indexOf(bullet));
 });
 
 test('CHANGELOG: the 1.6.2 entry is dated, has its four bullets, and sits right above 1.6.1', () => {

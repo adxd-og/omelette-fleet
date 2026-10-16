@@ -17,9 +17,9 @@ const CLAUDE = [
   ['Claude Sonnet 5.5 (Medium)', 'Medium'],
 ];
 
-test('the four Claude 5.5 entries follow Gemini 3.1 Pro (High), in order, heavy, with their efforts', () => {
+test('the four Claude 5.5 entries follow Gemini 4 Argon (High), in order, heavy, with their efforts', () => {
   const ids = GEMINI_MODELS.map((m) => m.id);
-  const at = ids.indexOf('Gemini 3.1 Pro (High)');
+  const at = ids.indexOf('Gemini 4 Argon (High)');
   assert.ok(at >= 0);
   assert.deepEqual(ids.slice(at + 1, at + 5), CLAUDE.map(([id]) => id));
   for (const [id, effort] of CLAUDE) {

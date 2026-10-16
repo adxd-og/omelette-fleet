@@ -10,10 +10,36 @@
  * (gemini-3.8-flash-high, Gemini 3.8 Flash (High)); --model accepts both, and the display names are kept here because they carry
  * the effort level readably.
  *
- * SYNCED TO agy (verified 2026-10-03, agy 1.2.14). If agy adds/renames/removes
- * a model, re-check and update GEMINI_MODELS below (and re-confirm the bench
- * notes in useFor/avoid). The (Low/Medium/High) suffix is the model's
- * reasoning/thinking-effort level (Low=fast/cheap, High=more deliberation).
+ * SYNCED TO agy (verified 2026-10-16, agy 1.4.0). This sync: Gemini 4 Argon
+ * (Low|Medium|High) added — agy lists all three, and (Low) ran headless on
+ * 2026-10-16; Gemini 3.1 Pro removed — agy no longer lists it; GPT-OSS 120B's
+ * removal date recorded (Antigravity's model page: 2026-11-02). If agy
+ * adds/renames/removes a model, re-check and update GEMINI_MODELS below (and
+ * re-confirm the bench notes in useFor/avoid). The (Low/Medium/High) suffix is
+ * the model's reasoning/thinking-effort level (Low=fast/cheap, High=more
+ * deliberation).
+ *
+ * GENERATION SWEEP 2026-10-16: Gemini 4 Argon (DeepMind model card, published
+ * 2026-10-13) replaced the two 3.1 Pro entries outright — operator decision, the
+ * same standing policy as for Flash (the newer generation replaces the older).
+ * It is not a like-for-like swap. 3.1 Pro was kept for long inputs and formal
+ * reasoning and was NOT a code or agentic model; Argon is one — DeepSWE v1.1 77.9
+ * (card), AutomationBench-AA 78 (Artificial Analysis) — so the heavy Gemini tier
+ * now means agentic depth, not a bigger window. On a Google AI Pro subscription
+ * its quota is small (operator, 2026-10-16), which makes it a named one-call
+ * route there; see SCOPE. The 2M window left with 3.1 Pro: Argon's 1M is shared
+ * by input and output (card), and nothing in this catalog now takes inputs past
+ * 1M tokens.
+ *
+ * ARGON SOURCES (checked this sweep): the DeepMind card for DeepSWE v1.1,
+ * FrontierSWE v2, the window, the March 2026 knowledge cutoff and the modalities
+ * (text, image, audio and video in; text out); Artificial Analysis, read
+ * 2026-10-14, for every other figure — Argon at High only, Flash at High, GPT-6.1
+ * Sol and Opus 5.5 at Max. Each comparison below stays inside one source. AA
+ * measured neither Argon (Medium) nor (Low): those entries inherit High's
+ * profile, unmeasured. AA's Terminal-Bench 4.0 (Flash High 20) is a different
+ * version from the Terminal-Bench 2.1 in the Flash entries (89.4); do not compare
+ * the two.
  *
  * GENERATION SWEEP 2026-09-03: 3.8 Flash (GA, released 2026-09-02) replaced the
  * 3.7 Flash entries outright — operator decision, standing policy (the current
@@ -53,6 +79,12 @@
  * a Sonnet 5.5 call on the Antigravity bucket costs the Claude Code pool nothing, and
  * that pool is the expensive one. Neither is a fleet role — the coder, tester and
  * reviewer stay native (guard, diff, transcript).
+ * Gemini 4 Argon's quota is small too on a Google AI Pro subscription (operator,
+ * 2026-10-16: half of it gone after a day of light use); "effectively unlimited"
+ * above was observed on Flash, and whether Argon draws on its own bucket is not
+ * known. There it is the same kind of named one-call route: never the default,
+ * never a sweep, never a deep-research stage, never gemini.model. Unlike Claude,
+ * no tool refuses it: the rule lives in the entries and the GUIDE.
  *
  * Zero deps. Plain ESM (.js), importable by both .js modules and the .mjs MCP.
  */
@@ -70,6 +102,11 @@
  * @property {string} avoid   When NOT to pick it.
  */
 
+/** The quota rule every Argon entry's `avoid` ends on (operator, 2026-10-16; see SCOPE). */
+const ARGON_QUOTA =
+  'On a Google AI Pro subscription Argon\'s quota is small: there it is a named one-call route like Claude via agy — ' +
+  'never a sweep, a deep-research stage, gemini.model or the default.';
+
 /** @type {GeminiModel[]} */
 export const GEMINI_MODELS = [
   {
@@ -81,7 +118,7 @@ export const GEMINI_MODELS = [
     useFor:
       'Quick lookups, fact-checking, short summaries, single-doc skims, and fast routing — the cheapest/fastest pick in the fleet. Pricing is UNCHANGED from 3.7: $0.75/$3.75 per Mtok in/out through 2026-12-31, then $1.50/$7.50. This is also the FIRST of the two efficiency exits Google names for 3.8: since 3.8 spends more thinking tokens than 3.7 at equal effort, dropping the effort level is how you buy that back.',
     avoid:
-      'Multi-step reasoning, expert analysis, and dense long-context retrieval — Low effort under-thinks hard problems; step up to Medium/High or Pro.',
+      'Multi-step reasoning, expert analysis, and dense long-context retrieval — Low effort under-thinks hard problems; step up to Medium/High.',
   },
   {
     id: 'Gemini 3.8 Flash (Medium)',
@@ -92,7 +129,7 @@ export const GEMINI_MODELS = [
     useFor:
       'Explicit pick when High-effort latency or token overhead is unwanted — synthesis, structured summaries, light analysis, and multi-file/agentic tool work where speed outranks depth. The fleet default is High (operator policy), so Medium is a deliberate exit, not a fallback — and on 3.8 it is the one that matters most, because this generation trades tokens for depth at every effort level.',
     avoid:
-      'Hardest novel reasoning and 1M+ context work — 3.1 Pro leads there (GPQA Diamond 94.3; 2M context window vs 3.8\'s 1M). Don\'t use it for long-horizon engineering where High\'s first-pass accuracy pays for itself in fewer retries.',
+      'Hard knowledge and science questions — Argon (High) leads Flash High there (HLE 57 vs 48, SciCode 62 vs 57; AA, read 2026-10-14; on a Pro subscription one named call, see Argon). Don\'t use it for long-horizon engineering where High\'s first-pass accuracy pays for itself in fewer retries.',
   },
   {
     id: 'Gemini 3.8 Flash (High)',
@@ -103,37 +140,56 @@ export const GEMINI_MODELS = [
     useFor:
       'The FLEET DEFAULT for all delegated research/agentic work (GA 2026-09-02). Same-harness gains over 3.7 Flash: DeepSWE v1.1 73.8 vs 65.3; Terminal-Bench 2.1 89.4 vs 85.8; OSWorld 2.0 (agentic) 59.0 vs 47.9; BioMysteryBench human-difficult 56.5 vs 43.5; LAB-Bench2 86.2 vs 82.1; CharXiv w/o tools 86.2 vs 84.5; LVBench 87.1 vs 85.4; HLE-Verified 54.9 vs 53.6. The reason that matters most for THIS fleet is not in that table: Gray Swan prompt-injection robustness took a significant leap over 3.7 (vendor blog), and every unit here ingests untrusted web content by design. Price per token is unchanged from 3.7.',
     avoid:
-      'Routine work on a shared subscription quota. 3.8 is built ON 3.7 and deliberately spends MORE thinking tokens for its depth; Google\'s own guidance is that efficiency-first callers "utilize lower effort levels to minimize token overhead or continue to rely on Gemini 3.7 Flash" — the first half is our exit, so drop to Low/Medium rather than paying High for lookups. Frontier scientific/formal reasoning and 1M+ context still go to 3.1 Pro: GPQA Diamond 94.3 and ARC-AGI-2 77.1 are unpublished for 3.8 (3.7 scored 90.4 on GPQA), and Pro\'s 2M window still beats 3.8\'s 1M in / 64K out. FrontierCode 1.1, AutomationBench, MRCR v2 128K and WebDev Arena Elo are ALSO unpublished for 3.8 — the fleet\'s UI-prompt and 128K-retrieval routing rests on 3.7-generation evidence, so treat those two calls as inherited, not re-verified.',
+      'Routine work on a shared subscription quota. 3.8 is built ON 3.7 and deliberately spends MORE thinking tokens for its depth; Google\'s own guidance is that efficiency-first callers "utilize lower effort levels to minimize token overhead or continue to rely on Gemini 3.7 Flash" — the first half is our exit, so drop to Low/Medium rather than paying High for lookups. Hard knowledge and science research, terminal agents and multi-step automation go up to Argon (High): HLE 57 vs 48, SciCode 62 vs 57, Terminal-Bench 4.0 57 vs 20, AutomationBench-AA 78 vs 60 (AA, read 2026-10-14, both at High); on a Pro subscription that is one named call (see Argon). Long-context retrieval stays here: AA-LCR 81 against Argon\'s 80 (AA). FrontierCode 1.1, AutomationBench, MRCR v2 128K and WebDev Arena Elo are ALSO unpublished for 3.8 (AA\'s own AutomationBench-AA is the 60 above) — the fleet\'s UI-prompt routing rests on 3.7-generation evidence, so treat that call as inherited, not re-verified.',
   },
   {
-    id: 'Gemini 3.1 Pro (Low)',
-    label: 'Gemini 3.1 Pro · Low',
+    id: 'Gemini 4 Argon (Low)',
+    label: 'Gemini 4 Argon · Low',
     family: 'gemini',
     effort: 'Low',
     tier: 'heavy',
     useFor:
-      'The Pro-grade 2M window at balanced cost — the one capability no Flash generation has (3.8 Flash caps at 1M in / 64K out). ' +
-      'Same two niches as Pro (High): inputs past 1M tokens, and formal / scientific reasoning where 3.8 Flash has no published ' +
-      'numbers. NOT for code or agentic work.',
+      'The lightest Argon read: a simpler question that still wants Argon rather than Flash. How agy\'s (Low) maps to ' +
+      'Google\'s API thinking levels is not published; no figures — AA measured only High — so it inherits High\'s ' +
+      'profile, unmeasured.',
     avoid:
-      'Code and agentic work (3.8 Flash leads 68.1 vs 46.2 coding and 67.6 vs 40.1 agentic at roughly a third of the price), ' +
-      'quick/cheap lookups and routine loops (Flash is faster and cheaper), and the very hardest formal reasoning (use Pro High). ' +
-      'Note 128K retrieval is not a reason to reach for Pro — the Flash line led MRCR v2 128K 97.0 vs 84.9.',
+      'As Argon (High); a quick lookup or a short summary is Flash Low\'s, not Argon\'s. ' + ARGON_QUOTA,
   },
   {
-    id: 'Gemini 3.1 Pro (High)',
-    label: 'Gemini 3.1 Pro · High',
+    id: 'Gemini 4 Argon (Medium)',
+    label: 'Gemini 4 Argon · Medium',
+    family: 'gemini',
+    effort: 'Medium',
+    tier: 'heavy',
+    useFor:
+      'Argon between Low and High, for coding and agent work that wants Argon\'s profile without High\'s depth. How ' +
+      'agy\'s (Medium) maps to Google\'s API thinking levels is not published; no figures — AA measured only High — so it ' +
+      'inherits High\'s profile, unmeasured.',
+    avoid:
+      'As Argon (High). Anything that leans on a measured figure, the tie-breaker included, wants High: it is the only level ' +
+      'measured. ' + ARGON_QUOTA,
+  },
+  {
+    id: 'Gemini 4 Argon (High)',
+    label: 'Gemini 4 Argon · High',
     family: 'gemini',
     effort: 'High',
     tier: 'heavy',
     useFor:
-      'Two niches only: inputs past 1M tokens (the 2M context window), and formal / scientific reasoning where 3.8 Flash has ' +
-      'no published numbers (GPQA Diamond 94.3, ARC-AGI-2 77.1 — both unpublished for 3.8). Also the fleet\'s TIE-BREAKER when ' +
-      'Grok and Flash disagree. Cards dated February 2026 — seven months older than Flash.',
+      'The fleet\'s TIE-BREAKER when Grok and Flash disagree, and the step up from Flash where depth pays: multi-step ' +
+      'automation and agent workflows (AutomationBench-AA 78, the best of the four AA compared — Opus 5.5 Max 70, GPT-6.1 Sol ' +
+      'Max 65, Flash High 60); hard knowledge and science research where Flash falls short (HLE 57 vs 48, SciCode 62 vs 57, ' +
+      'AA-Omniscience 42 vs 30 — fewer confident errors); terminal agents, where Flash collapses (Terminal-Bench 4.0 57 vs 20); ' +
+      'repository-level code (DeepSWE v1.1 77.9 against GPT-6 Astra 74.1 and Opus 5.5 74.2, DeepMind card). AA, read ' +
+      '2026-10-14, Argon at High: Intelligence Index 53 at $1.99 per Index task (GPT-6.1 Sol Max 52 at $0.72). The depth ' +
+      'does not cost more output tokens: Flash High spends 71k per AA task against Argon\'s 62k. 1M tokens for input and ' +
+      'output together, knowledge cutoff March 2026, text/image/audio/video in, text out (card).',
     avoid:
-      'Code and agentic work — 3.8 Flash beats 3.1 Pro on public coding (68.1 vs 46.2) and agentic (67.6 vs 40.1) lanes with ' +
-      'non-overlapping intervals at roughly a third of the price, so Pro is NOT the heavy-reasoning upgrade any more. ' +
-      'Latency-sensitive or routine work, lookups, summaries, and plain 128K retrieval (the Flash line led MRCR v2 128K 97.0 vs 84.9).',
+      'PDF and document-heavy knowledge work (GDP.pdf 22, against GPT-6.1 Sol 31 and Opus 5.5 26 — route to Codex); ' +
+      'long-context retrieval (AA-LCR 80, level with Flash High\'s 81 — no reason to go up); the hardest software engineering ' +
+      '(FrontierSWE v2 55.0 against GPT-6 Astra 65.5, card — route to Codex); frontier physics (CritPt 27 vs GPT-6.1 Sol 32); ' +
+      'quick lookups (Flash Low). Opus 5.5 (Max) leads it on almost every AA row but AutomationBench, at three times the cost ' +
+      'per task. ' + ARGON_QUOTA,
   },
   {
     id: 'Claude Opus 5.5 (High)',
@@ -188,7 +244,7 @@ export const GEMINI_MODELS = [
     useFor:
       'Non-Google open-weights SECOND OPINION — cross-check a Gemini answer with a different model family, math-heavy reasoning (strong on AIME/competition math), and de-biasing when you suspect single-vendor blind spots. Apache-2.0 MoE (~5.1B active params); near-parity with o4-mini on core reasoning (MMLU ~90%).',
     avoid:
-      'Primary frontier work and long-context tasks — it trails the frontier Gemini models on overall reasoning/agentic depth and has no long-context retrieval advantage. Use as a corroborating voice, not the lead researcher.',
+      'Primary frontier work and long-context tasks — it trails the frontier Gemini models on overall reasoning/agentic depth and has no long-context retrieval advantage. Use as a corroborating voice, not the lead researcher. Antigravity removes it on 2026-11-02; the release after that date takes it out of the catalog.',
   },
 ];
 
@@ -261,10 +317,11 @@ export const GUIDE =
   '$0.75/$3.75 per Mtok in/out through 2026-12-31, then $1.50/$7.50); ' +
   '3.8 Flash (Medium)=when High-effort latency or token overhead is unwanted (the fleet default ' +
   'is High); ' +
-  'Gemini 3.1 Pro (Low)=the same two niches at balanced cost, on the 2M context window; ' +
-  'Pro (High)=ONLY for >1M-token inputs, formal/scientific reasoning where Flash has no numbers ' +
-  '(GPQA 94.3, ARC-AGI-2 77.1), and as the tie-breaker when Grok and Flash disagree — not a code ' +
-  'or agentic model (3.8 Flash 68.1 vs 46.2 coding, 67.6 vs 40.1 agentic); ' +
+  'Gemini 4 Argon (High)=the tie-breaker when Grok and Flash disagree, and the step up from Flash for agentic, ' +
+  'terminal and repository-code work and hard science (DeepSWE v1.1 77.9, Google; AA Index 53 at $1.99 per task ' +
+  'vs GPT-6.1 Sol\'s 52 at $0.72); Argon (Medium|Low)=the same profile at lighter levels, unmeasured; on a Google AI ' +
+  'Pro subscription Argon\'s quota is small: there it is a named one-call route like Claude via agy — never a sweep, ' +
+  'a deep-research stage, gemini.model or the default; ' +
   'Claude Opus 5.5 (High|Medium) and Claude Sonnet 5.5 (High|Medium)=Antigravity\'s SEPARATE Claude quota, and a ' +
   'SMALL one: one named call per question — an independent Opus read, a hard verification pass, a cheap Sonnet ' +
   'cross-check — when the Claude Code pool is the constraint; never the default, never a sweep, never a ' +
