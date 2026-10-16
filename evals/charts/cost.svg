@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="cost-title cost-desc" viewBox="0 0 760 554" width="760" height="554">
+<title id="cost-title">Cost: score against time and tokens per call</title>
+<desc id="cost-desc">Cost: score against time and tokens per call. 2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals. CLI versions: agy 1.4.0, codex 0.162.1, grok 1.0.60. Gemini's token counts exclude thinking tokens: the unit reports input and output only. 1 Gemini 3.8 Flash · Low R: 90 %, 22 s. 1 Gemini 3.8 Flash · Low V: 21 %, 12 s. 2 Gemini 3.8 Flash · Medium R: 90 %, 34 s. 2 Gemini 3.8 Flash · Medium V: 43 %, 497 s. 3 Gemini 3.8 Flash · High R: 85 %, 58 s. 3 Gemini 3.8 Flash · High V: 29 %, 511 s. 4 Gemini 4 Argon · Low R: 80 %, 201 s. 4 Gemini 4 Argon · Low V: 29 %, 58 s. 5 Gemini 4 Argon · Medium R: 90 %, 185 s. 5 Gemini 4 Argon · Medium V: 29 %, 69 s. 6 Gemini 4 Argon · High R: 90 %, 258 s. 6 Gemini 4 Argon · High V: 29 %, 560 s. 7 Grok 4.7 R: 100 %, 31 s. 7 Grok 4.7 V: 36 %, 924 s. 8 GPT-6.1 Sol · xhigh R: 100 %, 30 s. 8 GPT-6.1 Sol · xhigh V: 43 %, 273 s. 9 GPT-6 Astra · xhigh R: 100 %, 29 s. 9 GPT-6 Astra · xhigh V: 43 %, 328 s. 1 Gemini 3.8 Flash · Low R: 90 %, 49.2K. 1 Gemini 3.8 Flash · Low V: 21 %, 9.2K. 2 Gemini 3.8 Flash · Medium R: 90 %, 55.5K. 2 Gemini 3.8 Flash · Medium V: 43 %, 159.4K. 3 Gemini 3.8 Flash · High R: 85 %, 64.9K. 3 Gemini 3.8 Flash · High V: 29 %, 173.8K. 4 Gemini 4 Argon · Low R: 80 %, 48.4K. 4 Gemini 4 Argon · Low V: 29 %, 22.5K. 5 Gemini 4 Argon · Medium R: 90 %, 193.8K. 5 Gemini 4 Argon · Medium V: 29 %, 22.2K. 6 Gemini 4 Argon · High R: 90 %, 58K. 6 Gemini 4 Argon · High V: 29 %, 72.6K. 7 Grok 4.7 R: 100 %, 53.1K. 7 Grok 4.7 V: 36 %, 191.7K. 8 GPT-6.1 Sol · xhigh R: 100 %, 136.7K. 8 GPT-6.1 Sol · xhigh V: 43 %, 778.4K. 9 GPT-6 Astra · xhigh R: 100 %, 108.8K. 9 GPT-6 Astra · xhigh V: 43 %, 660.4K.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.t{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e1e0d9}.base{stroke:#c3c2b7}
+.c1{fill:#2a78d6}.c2{fill:#eb6834}.c3{fill:#1baf7a}.k1{stroke:#2a78d6}.k2{stroke:#eb6834}.k3{stroke:#1baf7a}
+.ring{stroke:#ffffff;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.run{fill-opacity:0.45}
+@media (prefers-color-scheme: dark){
+.t{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.base{stroke:#383835}
+.c1{fill:#3987e5}.c2{fill:#d95926}.c3{fill:#199e70}.k1{stroke:#3987e5}.k2{stroke:#d95926}.k3{stroke:#199e70}
+.ring{stroke:#0d1117}
+}
+</style>
+<text class="t" x="16" y="26" font-size="16" font-weight="600">Cost: score against time and tokens per call</text>
+<text class="t2" x="16" y="46" font-size="12">One point per arm and suite: R the share answered correctly, V recall. Numbers name the arms (key below)</text>
+<text class="t2" x="16" y="66" font-size="12">2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals</text>
+<text class="t2" x="16" y="82" font-size="12">CLI versions: agy 1.4.0, codex 0.162.1, grok 1.0.60</text>
+<text class="t2" x="16" y="98" font-size="12">Gemini's token counts exclude thinking tokens: the unit reports input and output only.</text>
+<circle class="c1" cx="21" cy="132" r="5"/>
+<text class="t" x="32" y="136" font-size="12">R · share correct</text>
+<rect class="c2" x="170.24" y="127" width="10" height="10" rx="2"/>
+<text class="t" x="186.24" y="136" font-size="12">V · recall</text>
+<text class="t" x="64" y="158" font-size="13" font-weight="600">Mean wall time per call (log scale)</text>
+<g class="plot" data-measure="wallMs" data-x0="64" data-x1="376" data-min="10000" data-max="1000000" data-y0="392" data-y1="172">
+<line class="base" x1="64" y1="392" x2="376" y2="392" stroke-width="1"/>
+<text class="t2" x="56" y="396" font-size="11" text-anchor="end">0 %</text>
+<line class="grid" x1="64" y1="337" x2="376" y2="337" stroke-width="1"/>
+<text class="t2" x="56" y="341" font-size="11" text-anchor="end">25 %</text>
+<line class="grid" x1="64" y1="282" x2="376" y2="282" stroke-width="1"/>
+<text class="t2" x="56" y="286" font-size="11" text-anchor="end">50 %</text>
+<line class="grid" x1="64" y1="227" x2="376" y2="227" stroke-width="1"/>
+<text class="t2" x="56" y="231" font-size="11" text-anchor="end">75 %</text>
+<line class="grid" x1="64" y1="172" x2="376" y2="172" stroke-width="1"/>
+<text class="t2" x="56" y="176" font-size="11" text-anchor="end">100 %</text>
+<line class="grid" x1="64" y1="172" x2="64" y2="392" stroke-width="1"/>
+<text class="t2" x="64" y="410" font-size="11" text-anchor="middle">10 s</text>
+<line class="grid" x1="138.43" y1="172" x2="138.43" y2="392" stroke-width="1"/>
+<text class="t2" x="138.43" y="410" font-size="11" text-anchor="middle">30 s</text>
+<line class="grid" x1="220" y1="172" x2="220" y2="392" stroke-width="1"/>
+<text class="t2" x="220" y="410" font-size="11" text-anchor="middle">100 s</text>
+<line class="grid" x1="294.43" y1="172" x2="294.43" y2="392" stroke-width="1"/>
+<text class="t2" x="294.43" y="410" font-size="11" text-anchor="middle">300 s</text>
+<line class="grid" x1="376" y1="172" x2="376" y2="392" stroke-width="1"/>
+<text class="t2" x="376" y="410" font-size="11" text-anchor="middle">1000 s</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 3.8 Flash (Low)" data-measure="wallMs" data-x="21618.5" data-value="90" cx="116.23" cy="194" r="5"><title>1 Gemini 3.8 Flash · Low, R: 90 % at 22 s</title></circle>
+<text class="t2" x="124.23" y="188" font-size="10">1</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 3.8 Flash (Low)" data-measure="wallMs" data-x="12285" data-value="21.42857" x="72.94" y="339.86" width="10" height="10" rx="1"><title>1 Gemini 3.8 Flash · Low, V: 21 % at 12 s</title></rect>
+<text class="t2" x="85.94" y="338.86" font-size="10">1</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-measure="wallMs" data-x="33636.05" data-value="90" cx="146.18" cy="194" r="5"><title>2 Gemini 3.8 Flash · Medium, R: 90 % at 34 s</title></circle>
+<text class="t2" x="154.18" y="188" font-size="10">2</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-measure="wallMs" data-x="496846" data-value="42.85714" x="323.61" y="292.71" width="10" height="10" rx="1"><title>2 Gemini 3.8 Flash · Medium, V: 43 % at 497 s</title></rect>
+<text class="t2" x="336.61" y="291.71" font-size="10">2</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 3.8 Flash (High)" data-measure="wallMs" data-x="57545.5" data-value="85" cx="182.56" cy="205" r="5"><title>3 Gemini 3.8 Flash · High, R: 85 % at 58 s</title></circle>
+<text class="t2" x="190.56" y="199" font-size="10">3</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 3.8 Flash (High)" data-measure="wallMs" data-x="510587" data-value="28.57143" x="325.46" y="324.14" width="10" height="10" rx="1"><title>3 Gemini 3.8 Flash · High, V: 29 % at 511 s</title></rect>
+<text class="t2" x="338.46" y="323.14" font-size="10">3</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 4 Argon (Low)" data-measure="wallMs" data-x="200697" data-value="80" cx="267.2" cy="216" r="5"><title>4 Gemini 4 Argon · Low, R: 80 % at 201 s</title></circle>
+<text class="t2" x="275.2" y="210" font-size="10">4</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 4 Argon (Low)" data-measure="wallMs" data-x="58048" data-value="28.57143" x="178.15" y="324.14" width="10" height="10" rx="1"><title>4 Gemini 4 Argon · Low, V: 29 % at 58 s</title></rect>
+<text class="t2" x="191.15" y="323.14" font-size="10">4</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 4 Argon (Medium)" data-measure="wallMs" data-x="184860" data-value="90" cx="261.63" cy="194" r="5"><title>5 Gemini 4 Argon · Medium, R: 90 % at 185 s</title></circle>
+<text class="t2" x="269.63" y="188" font-size="10">5</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 4 Argon (Medium)" data-measure="wallMs" data-x="68537" data-value="28.57143" x="189.4" y="324.14" width="10" height="10" rx="1"><title>5 Gemini 4 Argon · Medium, V: 29 % at 69 s</title></rect>
+<text class="t2" x="202.4" y="323.14" font-size="10">5</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 4 Argon (High)" data-measure="wallMs" data-x="257872" data-value="90" cx="284.18" cy="194" r="5"><title>6 Gemini 4 Argon · High, R: 90 % at 258 s</title></circle>
+<text class="t2" x="292.18" y="188" font-size="10">6</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 4 Argon (High)" data-measure="wallMs" data-x="559994" data-value="28.57143" x="331.72" y="324.14" width="10" height="10" rx="1"><title>6 Gemini 4 Argon · High, V: 29 % at 560 s</title></rect>
+<text class="t2" x="344.72" y="323.14" font-size="10">6</text>
+<circle class="point c1 ring" data-suite="R" data-arm="grok:grok-4.7" data-measure="wallMs" data-x="31216.5" data-value="100" cx="141.12" cy="172" r="5"><title>7 Grok 4.7, R: 100 % at 31 s</title></circle>
+<text class="t2" x="149.12" y="166" font-size="10">7</text>
+<rect class="point c2 ring" data-suite="V" data-arm="grok:grok-4.7" data-measure="wallMs" data-x="924061" data-value="35.714290000000005" x="365.65" y="308.43" width="10" height="10" rx="1"><title>7 Grok 4.7, V: 36 % at 924 s</title></rect>
+<text class="t2" x="378.65" y="307.43" font-size="10">7</text>
+<circle class="point c1 ring" data-suite="R" data-arm="codex:gpt-6.1-sol" data-measure="wallMs" data-x="29959.1" data-value="100" cx="138.34" cy="172" r="5"><title>8 GPT-6.1 Sol · xhigh, R: 100 % at 30 s</title></circle>
+<text class="t2" x="146.34" y="166" font-size="10">8</text>
+<rect class="point c2 ring" data-suite="V" data-arm="codex:gpt-6.1-sol" data-measure="wallMs" data-x="272562.5" data-value="42.85714" x="282.93" y="292.71" width="10" height="10" rx="1"><title>8 GPT-6.1 Sol · xhigh, V: 43 % at 273 s</title></rect>
+<text class="t2" x="295.93" y="291.71" font-size="10">8</text>
+<circle class="point c1 ring" data-suite="R" data-arm="codex:gpt-6-astra" data-measure="wallMs" data-x="28587.05" data-value="100" cx="135.16" cy="172" r="5"><title>9 GPT-6 Astra · xhigh, R: 100 % at 29 s</title></circle>
+<text class="t2" x="143.16" y="166" font-size="10">9</text>
+<rect class="point c2 ring" data-suite="V" data-arm="codex:gpt-6-astra" data-measure="wallMs" data-x="327815.5" data-value="42.85714" x="295.44" y="292.71" width="10" height="10" rx="1"><title>9 GPT-6 Astra · xhigh, V: 43 % at 328 s</title></rect>
+<text class="t2" x="308.44" y="291.71" font-size="10">9</text>
+</g>
+<text class="t" x="432" y="158" font-size="13" font-weight="600">Mean tokens per call, where reported (log scale)</text>
+<g class="plot" data-measure="tokens" data-x0="432" data-x1="744" data-min="1000" data-max="1000000" data-y0="392" data-y1="172">
+<line class="base" x1="432" y1="392" x2="744" y2="392" stroke-width="1"/>
+<text class="t2" x="424" y="396" font-size="11" text-anchor="end">0 %</text>
+<line class="grid" x1="432" y1="337" x2="744" y2="337" stroke-width="1"/>
+<text class="t2" x="424" y="341" font-size="11" text-anchor="end">25 %</text>
+<line class="grid" x1="432" y1="282" x2="744" y2="282" stroke-width="1"/>
+<text class="t2" x="424" y="286" font-size="11" text-anchor="end">50 %</text>
+<line class="grid" x1="432" y1="227" x2="744" y2="227" stroke-width="1"/>
+<text class="t2" x="424" y="231" font-size="11" text-anchor="end">75 %</text>
+<line class="grid" x1="432" y1="172" x2="744" y2="172" stroke-width="1"/>
+<text class="t2" x="424" y="176" font-size="11" text-anchor="end">100 %</text>
+<line class="grid" x1="432" y1="172" x2="432" y2="392" stroke-width="1"/>
+<text class="t2" x="432" y="410" font-size="11" text-anchor="middle">1K</text>
+<line class="grid" x1="481.62" y1="172" x2="481.62" y2="392" stroke-width="1"/>
+<text class="t2" x="481.62" y="410" font-size="11" text-anchor="middle">3K</text>
+<line class="grid" x1="536" y1="172" x2="536" y2="392" stroke-width="1"/>
+<text class="t2" x="536" y="410" font-size="11" text-anchor="middle">10K</text>
+<line class="grid" x1="585.62" y1="172" x2="585.62" y2="392" stroke-width="1"/>
+<text class="t2" x="585.62" y="410" font-size="11" text-anchor="middle">30K</text>
+<line class="grid" x1="640" y1="172" x2="640" y2="392" stroke-width="1"/>
+<text class="t2" x="640" y="410" font-size="11" text-anchor="middle">100K</text>
+<line class="grid" x1="689.62" y1="172" x2="689.62" y2="392" stroke-width="1"/>
+<text class="t2" x="689.62" y="410" font-size="11" text-anchor="middle">300K</text>
+<line class="grid" x1="744" y1="172" x2="744" y2="392" stroke-width="1"/>
+<text class="t2" x="744" y="410" font-size="11" text-anchor="middle">1M</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 3.8 Flash (Low)" data-measure="tokens" data-x="49181.4" data-value="90" cx="607.95" cy="194" r="5"><title>1 Gemini 3.8 Flash · Low, R: 90 % at 49.2K</title></circle>
+<text class="t2" x="615.95" y="188" font-size="10">1</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 3.8 Flash (Low)" data-measure="tokens" data-x="9171" data-value="21.42857" x="527.09" y="339.86" width="10" height="10" rx="1"><title>1 Gemini 3.8 Flash · Low, V: 21 % at 9.2K</title></rect>
+<text class="t2" x="540.09" y="338.86" font-size="10">1</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-measure="tokens" data-x="55450.4" data-value="90" cx="613.37" cy="194" r="5"><title>2 Gemini 3.8 Flash · Medium, R: 90 % at 55.5K</title></circle>
+<text class="t2" x="621.37" y="188" font-size="10">2</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-measure="tokens" data-x="159384" data-value="42.85714" x="656.05" y="292.71" width="10" height="10" rx="1"><title>2 Gemini 3.8 Flash · Medium, V: 43 % at 159.4K</title></rect>
+<text class="t2" x="669.05" y="291.71" font-size="10">2</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 3.8 Flash (High)" data-measure="tokens" data-x="64896.8" data-value="85" cx="620.47" cy="205" r="5"><title>3 Gemini 3.8 Flash · High, R: 85 % at 64.9K</title></circle>
+<text class="t2" x="628.47" y="199" font-size="10">3</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 3.8 Flash (High)" data-measure="tokens" data-x="173795.5" data-value="28.57143" x="659.96" y="324.14" width="10" height="10" rx="1"><title>3 Gemini 3.8 Flash · High, V: 29 % at 173.8K</title></rect>
+<text class="t2" x="672.96" y="323.14" font-size="10">3</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 4 Argon (Low)" data-measure="tokens" data-x="48371" data-value="80" cx="607.2" cy="216" r="5"><title>4 Gemini 4 Argon · Low, R: 80 % at 48.4K</title></circle>
+<text class="t2" x="615.2" y="210" font-size="10">4</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 4 Argon (Low)" data-measure="tokens" data-x="22518" data-value="28.57143" x="567.66" y="324.14" width="10" height="10" rx="1"><title>4 Gemini 4 Argon · Low, V: 29 % at 22.5K</title></rect>
+<text class="t2" x="580.66" y="323.14" font-size="10">4</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 4 Argon (Medium)" data-measure="tokens" data-x="193827" data-value="90" cx="669.89" cy="194" r="5"><title>5 Gemini 4 Argon · Medium, R: 90 % at 193.8K</title></circle>
+<text class="t2" x="677.89" y="188" font-size="10">5</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 4 Argon (Medium)" data-measure="tokens" data-x="22154" data-value="28.57143" x="566.93" y="324.14" width="10" height="10" rx="1"><title>5 Gemini 4 Argon · Medium, V: 29 % at 22.2K</title></rect>
+<text class="t2" x="579.93" y="323.14" font-size="10">5</text>
+<circle class="point c1 ring" data-suite="R" data-arm="gemini:Gemini 4 Argon (High)" data-measure="tokens" data-x="58017" data-value="90" cx="615.41" cy="194" r="5"><title>6 Gemini 4 Argon · High, R: 90 % at 58K</title></circle>
+<text class="t2" x="623.41" y="188" font-size="10">6</text>
+<rect class="point c2 ring" data-suite="V" data-arm="gemini:Gemini 4 Argon (High)" data-measure="tokens" data-x="72559" data-value="28.57143" x="620.51" y="324.14" width="10" height="10" rx="1"><title>6 Gemini 4 Argon · High, V: 29 % at 72.6K</title></rect>
+<text class="t2" x="633.51" y="323.14" font-size="10">6</text>
+<circle class="point c1 ring" data-suite="R" data-arm="grok:grok-4.7" data-measure="tokens" data-x="53119.6" data-value="100" cx="611.43" cy="172" r="5"><title>7 Grok 4.7, R: 100 % at 53.1K</title></circle>
+<text class="t2" x="619.43" y="166" font-size="10">7</text>
+<rect class="point c2 ring" data-suite="V" data-arm="grok:grok-4.7" data-measure="tokens" data-x="191727.5" data-value="35.714290000000005" x="664.4" y="308.43" width="10" height="10" rx="1"><title>7 Grok 4.7, V: 36 % at 191.7K</title></rect>
+<text class="t2" x="677.4" y="307.43" font-size="10">7</text>
+<circle class="point c1 ring" data-suite="R" data-arm="codex:gpt-6.1-sol" data-measure="tokens" data-x="136721.35" data-value="100" cx="654.13" cy="172" r="5"><title>8 GPT-6.1 Sol · xhigh, R: 100 % at 136.7K</title></circle>
+<text class="t2" x="662.13" y="166" font-size="10">8</text>
+<rect class="point c2 ring" data-suite="V" data-arm="codex:gpt-6.1-sol" data-measure="tokens" data-x="778350.5" data-value="42.85714" x="727.68" y="292.71" width="10" height="10" rx="1"><title>8 GPT-6.1 Sol · xhigh, V: 43 % at 778.4K</title></rect>
+<text class="t2" x="740.68" y="291.71" font-size="10">8</text>
+<circle class="point c1 ring" data-suite="R" data-arm="codex:gpt-6-astra" data-measure="tokens" data-x="108816.25" data-value="100" cx="643.82" cy="172" r="5"><title>9 GPT-6 Astra · xhigh, R: 100 % at 108.8K</title></circle>
+<text class="t2" x="651.82" y="166" font-size="10">9</text>
+<rect class="point c2 ring" data-suite="V" data-arm="codex:gpt-6-astra" data-measure="tokens" data-x="660427.5" data-value="42.85714" x="720.26" y="292.71" width="10" height="10" rx="1"><title>9 GPT-6 Astra · xhigh, V: 43 % at 660.4K</title></rect>
+<text class="t2" x="733.26" y="291.71" font-size="10">9</text>
+</g>
+<text class="key t2" data-arm="gemini:Gemini 3.8 Flash (Low)" x="16" y="438" font-size="12">1  Gemini 3.8 Flash · Low</text>
+<text class="key t2" data-arm="gemini:Gemini 3.8 Flash (Medium)" x="16" y="454" font-size="12">2  Gemini 3.8 Flash · Medium</text>
+<text class="key t2" data-arm="gemini:Gemini 3.8 Flash (High)" x="16" y="470" font-size="12">3  Gemini 3.8 Flash · High</text>
+<text class="key t2" data-arm="gemini:Gemini 4 Argon (Low)" x="16" y="486" font-size="12">4  Gemini 4 Argon · Low *</text>
+<text class="key t2" data-arm="gemini:Gemini 4 Argon (Medium)" x="16" y="502" font-size="12">5  Gemini 4 Argon · Medium *</text>
+<text class="key t2" data-arm="gemini:Gemini 4 Argon (High)" x="396" y="438" font-size="12">6  Gemini 4 Argon · High *</text>
+<text class="key t2" data-arm="grok:grok-4.7" x="396" y="454" font-size="12">7  Grok 4.7</text>
+<text class="key t2" data-arm="codex:gpt-6.1-sol" x="396" y="470" font-size="12">8  GPT-6.1 Sol · xhigh</text>
+<text class="key t2" data-arm="codex:gpt-6-astra" x="396" y="486" font-size="12">9  GPT-6 Astra · xhigh</text>
+<text class="t2" x="16" y="530" font-size="12">* one prompt for all questions (its R point)</text>
+</svg>

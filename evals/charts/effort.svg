@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="effort-title effort-desc" viewBox="0 0 760 446" width="760" height="446">
+<title id="effort-title">Effort: Gemini scores at Low, Medium and High</title>
+<desc id="effort-desc">Effort: Gemini scores at Low, Medium and High. 2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals. CLI versions: agy 1.4.0. R Gemini 3.8 Flash · Low: 90 % (runs 90 %, 90 %). R Gemini 3.8 Flash · Medium: 90 % (runs 90 %, 90 %). R Gemini 3.8 Flash · High: 85 % (runs 80 %, 90 %). R Gemini 4 Argon · Low: 80 % (runs 80 %), one prompt for all questions. R Gemini 4 Argon · Medium: 90 % (runs 90 %), one prompt for all questions. R Gemini 4 Argon · High: 90 % (runs 90 %), one prompt for all questions. V Gemini 3.8 Flash · Low: 21 % (runs 14 %, 29 %). V Gemini 3.8 Flash · Medium: 43 % (runs 43 %, 43 %). V Gemini 3.8 Flash · High: 29 % (runs 29 %, 29 %). V Gemini 4 Argon · Low: 29 % (runs 29 %). V Gemini 4 Argon · Medium: 29 % (runs 29 %). V Gemini 4 Argon · High: 29 % (runs 29 %).</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.t{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e1e0d9}.base{stroke:#c3c2b7}
+.c1{fill:#2a78d6}.c2{fill:#eb6834}.c3{fill:#1baf7a}.k1{stroke:#2a78d6}.k2{stroke:#eb6834}.k3{stroke:#1baf7a}
+.ring{stroke:#ffffff;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.run{fill-opacity:0.45}
+@media (prefers-color-scheme: dark){
+.t{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.base{stroke:#383835}
+.c1{fill:#3987e5}.c2{fill:#d95926}.c3{fill:#199e70}.k1{stroke:#3987e5}.k2{stroke:#d95926}.k3{stroke:#199e70}
+.ring{stroke:#0d1117}
+}
+</style>
+<text class="t" x="16" y="26" font-size="16" font-weight="600">Effort: Gemini scores at Low, Medium and High</text>
+<text class="t2" x="16" y="46" font-size="12">R: share of questions answered correctly · V: recall. The large point is the mean, the small ones the runs</text>
+<text class="t2" x="16" y="66" font-size="12">2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals</text>
+<text class="t2" x="16" y="82" font-size="12">CLI versions: agy 1.4.0</text>
+<circle class="c1" cx="21" cy="116" r="5"/>
+<text class="t" x="32" y="120" font-size="12">Gemini 3.8 Flash</text>
+<circle class="c2" cx="168.52" cy="116" r="5"/>
+<text class="t" x="179.52" y="120" font-size="12">Gemini 4 Argon *</text>
+<text class="t" x="64" y="142" font-size="13" font-weight="600">R · share correct</text>
+<g class="plot" data-suite="R" data-y0="376" data-y1="156" data-x-low="88" data-x-medium="220" data-x-high="352">
+<line class="base" x1="64" y1="376" x2="376" y2="376" stroke-width="1"/>
+<text class="t2" x="56" y="380" font-size="11" text-anchor="end">0 %</text>
+<line class="grid" x1="64" y1="321" x2="376" y2="321" stroke-width="1"/>
+<text class="t2" x="56" y="325" font-size="11" text-anchor="end">25 %</text>
+<line class="grid" x1="64" y1="266" x2="376" y2="266" stroke-width="1"/>
+<text class="t2" x="56" y="270" font-size="11" text-anchor="end">50 %</text>
+<line class="grid" x1="64" y1="211" x2="376" y2="211" stroke-width="1"/>
+<text class="t2" x="56" y="215" font-size="11" text-anchor="end">75 %</text>
+<line class="grid" x1="64" y1="156" x2="376" y2="156" stroke-width="1"/>
+<text class="t2" x="56" y="160" font-size="11" text-anchor="end">100 %</text>
+<text class="t2" x="88" y="394" font-size="11" text-anchor="middle">Low</text>
+<text class="t2" x="220" y="394" font-size="11" text-anchor="middle">Medium</text>
+<text class="t2" x="352" y="394" font-size="11" text-anchor="middle">High</text>
+<path class="line k1" d="M 88 178 L 220 178 L 352 189"/>
+<circle class="c1 run ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="Low" data-run="1" data-value="90" cx="88" cy="178" r="4"><title>Gemini 3.8 Flash · Low, R run 1: 90 %</title></circle>
+<circle class="c1 run ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="Low" data-run="2" data-value="90" cx="88" cy="178" r="4"><title>Gemini 3.8 Flash · Low, R run 2: 90 %</title></circle>
+<circle class="mean c1 ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="Low" data-value="90" cx="88" cy="178" r="6"><title>Gemini 3.8 Flash · Low, R mean: 90 %</title></circle>
+<circle class="c1 run ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="Medium" data-run="1" data-value="90" cx="220" cy="178" r="4"><title>Gemini 3.8 Flash · Medium, R run 1: 90 %</title></circle>
+<circle class="c1 run ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="Medium" data-run="2" data-value="90" cx="220" cy="178" r="4"><title>Gemini 3.8 Flash · Medium, R run 2: 90 %</title></circle>
+<circle class="mean c1 ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="Medium" data-value="90" cx="220" cy="178" r="6"><title>Gemini 3.8 Flash · Medium, R mean: 90 %</title></circle>
+<circle class="c1 run ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="High" data-run="1" data-value="80" cx="352" cy="200" r="4"><title>Gemini 3.8 Flash · High, R run 1: 80 %</title></circle>
+<circle class="c1 run ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="High" data-run="2" data-value="90" cx="352" cy="178" r="4"><title>Gemini 3.8 Flash · High, R run 2: 90 %</title></circle>
+<circle class="mean c1 ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="High" data-value="85" cx="352" cy="189" r="6"><title>Gemini 3.8 Flash · High, R mean: 85 %</title></circle>
+<text class="t2" x="362" y="181" font-size="11">85 %</text>
+<path class="line k2" d="M 88 200 L 220 178 L 352 178"/>
+<circle class="c2 run ring" data-suite="R" data-family="Gemini 4 Argon" data-level="Low" data-run="1" data-value="80" cx="88" cy="200" r="4"><title>Gemini 4 Argon · Low, R run 1: 80 %</title></circle>
+<circle class="mean c2 ring" data-suite="R" data-family="Gemini 4 Argon" data-level="Low" data-value="80" cx="88" cy="200" r="6"><title>Gemini 4 Argon · Low, R mean: 80 %</title></circle>
+<circle class="c2 run ring" data-suite="R" data-family="Gemini 4 Argon" data-level="Medium" data-run="1" data-value="90" cx="220" cy="178" r="4"><title>Gemini 4 Argon · Medium, R run 1: 90 %</title></circle>
+<circle class="mean c2 ring" data-suite="R" data-family="Gemini 4 Argon" data-level="Medium" data-value="90" cx="220" cy="178" r="6"><title>Gemini 4 Argon · Medium, R mean: 90 %</title></circle>
+<circle class="c2 run ring" data-suite="R" data-family="Gemini 4 Argon" data-level="High" data-run="1" data-value="90" cx="352" cy="178" r="4"><title>Gemini 4 Argon · High, R run 1: 90 %</title></circle>
+<circle class="mean c2 ring" data-suite="R" data-family="Gemini 4 Argon" data-level="High" data-value="90" cx="352" cy="178" r="6"><title>Gemini 4 Argon · High, R mean: 90 %</title></circle>
+<text class="t2" x="362" y="170" font-size="11">90 %</text>
+</g>
+<text class="t" x="432" y="142" font-size="13" font-weight="600">V · recall</text>
+<g class="plot" data-suite="V" data-y0="376" data-y1="156" data-x-low="456" data-x-medium="588" data-x-high="720">
+<line class="base" x1="432" y1="376" x2="744" y2="376" stroke-width="1"/>
+<text class="t2" x="424" y="380" font-size="11" text-anchor="end">0 %</text>
+<line class="grid" x1="432" y1="321" x2="744" y2="321" stroke-width="1"/>
+<text class="t2" x="424" y="325" font-size="11" text-anchor="end">25 %</text>
+<line class="grid" x1="432" y1="266" x2="744" y2="266" stroke-width="1"/>
+<text class="t2" x="424" y="270" font-size="11" text-anchor="end">50 %</text>
+<line class="grid" x1="432" y1="211" x2="744" y2="211" stroke-width="1"/>
+<text class="t2" x="424" y="215" font-size="11" text-anchor="end">75 %</text>
+<line class="grid" x1="432" y1="156" x2="744" y2="156" stroke-width="1"/>
+<text class="t2" x="424" y="160" font-size="11" text-anchor="end">100 %</text>
+<text class="t2" x="456" y="394" font-size="11" text-anchor="middle">Low</text>
+<text class="t2" x="588" y="394" font-size="11" text-anchor="middle">Medium</text>
+<text class="t2" x="720" y="394" font-size="11" text-anchor="middle">High</text>
+<path class="line k1" d="M 456 328.86 L 588 281.71 L 720 313.14"/>
+<circle class="c1 run ring" data-suite="V" data-family="Gemini 3.8 Flash" data-level="Low" data-run="1" data-value="14.28571" cx="456" cy="344.57" r="4"><title>Gemini 3.8 Flash · Low, V run 1: 14 %</title></circle>
+<circle class="c1 run ring" data-suite="V" data-family="Gemini 3.8 Flash" data-level="Low" data-run="2" data-value="28.57143" cx="456" cy="313.14" r="4"><title>Gemini 3.8 Flash · Low, V run 2: 29 %</title></circle>
+<circle class="mean c1 ring" data-suite="V" data-family="Gemini 3.8 Flash" data-level="Low" data-value="21.42857" cx="456" cy="328.86" r="6"><title>Gemini 3.8 Flash · Low, V mean: 21 %</title></circle>
+<circle class="c1 run ring" data-suite="V" data-family="Gemini 3.8 Flash" data-level="Medium" data-run="1" data-value="42.85714" cx="588" cy="281.71" r="4"><title>Gemini 3.8 Flash · Medium, V run 1: 43 %</title></circle>
+<circle class="c1 run ring" data-suite="V" data-family="Gemini 3.8 Flash" data-level="Medium" data-run="2" data-value="42.85714" cx="588" cy="281.71" r="4"><title>Gemini 3.8 Flash · Medium, V run 2: 43 %</title></circle>
+<circle class="mean c1 ring" data-suite="V" data-family="Gemini 3.8 Flash" data-level="Medium" data-value="42.85714" cx="588" cy="281.71" r="6"><title>Gemini 3.8 Flash · Medium, V mean: 43 %</title></circle>
+<circle class="c1 run ring" data-suite="V" data-family="Gemini 3.8 Flash" data-level="High" data-run="1" data-value="28.57143" cx="720" cy="313.14" r="4"><title>Gemini 3.8 Flash · High, V run 1: 29 %</title></circle>
+<circle class="c1 run ring" data-suite="V" data-family="Gemini 3.8 Flash" data-level="High" data-run="2" data-value="28.57143" cx="720" cy="313.14" r="4"><title>Gemini 3.8 Flash · High, V run 2: 29 %</title></circle>
+<circle class="mean c1 ring" data-suite="V" data-family="Gemini 3.8 Flash" data-level="High" data-value="28.57143" cx="720" cy="313.14" r="6"><title>Gemini 3.8 Flash · High, V mean: 29 %</title></circle>
+<text class="t2" x="730" y="305.14" font-size="11">29 %</text>
+<path class="line k2" d="M 456 313.14 L 588 313.14 L 720 313.14"/>
+<circle class="c2 run ring" data-suite="V" data-family="Gemini 4 Argon" data-level="Low" data-run="1" data-value="28.57143" cx="456" cy="313.14" r="4"><title>Gemini 4 Argon · Low, V run 1: 29 %</title></circle>
+<circle class="mean c2 ring" data-suite="V" data-family="Gemini 4 Argon" data-level="Low" data-value="28.57143" cx="456" cy="313.14" r="6"><title>Gemini 4 Argon · Low, V mean: 29 %</title></circle>
+<circle class="c2 run ring" data-suite="V" data-family="Gemini 4 Argon" data-level="Medium" data-run="1" data-value="28.57143" cx="588" cy="313.14" r="4"><title>Gemini 4 Argon · Medium, V run 1: 29 %</title></circle>
+<circle class="mean c2 ring" data-suite="V" data-family="Gemini 4 Argon" data-level="Medium" data-value="28.57143" cx="588" cy="313.14" r="6"><title>Gemini 4 Argon · Medium, V mean: 29 %</title></circle>
+<circle class="c2 run ring" data-suite="V" data-family="Gemini 4 Argon" data-level="High" data-run="1" data-value="28.57143" cx="720" cy="313.14" r="4"><title>Gemini 4 Argon · High, V run 1: 29 %</title></circle>
+<circle class="mean c2 ring" data-suite="V" data-family="Gemini 4 Argon" data-level="High" data-value="28.57143" cx="720" cy="313.14" r="6"><title>Gemini 4 Argon · High, V mean: 29 %</title></circle>
+<text class="t2" x="730" y="305.14" font-size="11">29 %</text>
+</g>
+<text class="t2" x="16" y="422" font-size="12">* one prompt for all questions in R, one call per level</text>
+</svg>

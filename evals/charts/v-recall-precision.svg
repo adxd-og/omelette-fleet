@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="v-recall-precision-title v-recall-precision-desc" viewBox="0 0 760 602" width="760" height="602">
+<title id="v-recall-precision-title">V: review against a known-defect key</title>
+<desc id="v-recall-precision-desc">Recall (key defects found, of 7) and precision (real findings over all findings): the bar is the mean, each dot a run. 2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals. CLI versions: agy 1.4.0, codex 0.162.1, grok 1.0.60. Gemini 3.8 Flash · Low: Recall 21 % (runs 14 %, 29 %); Precision 27 % (runs 20 %, 33 %). Gemini 3.8 Flash · Medium: Recall 43 % (runs 43 %, 43 %); Precision 40 % (runs 43 %, 38 %). Gemini 3.8 Flash · High: Recall 29 % (runs 29 %, 29 %); Precision 24 % (runs 25 %, 22 %). Gemini 4 Argon · Low: Recall 29 % (runs 29 %); Precision 22 % (runs 22 %). Gemini 4 Argon · Medium: Recall 29 % (runs 29 %); Precision 38 % (runs 38 %). Gemini 4 Argon · High: Recall 29 % (runs 29 %); Precision 50 % (runs 50 %). Grok 4.7: Recall 36 % (runs 29 %, 43 %); Precision 64 % (runs 57 %, 71 %). GPT-6.1 Sol · xhigh: Recall 43 % (runs 43 %, 43 %); Precision 83 % (runs 100 %, 67 %). GPT-6 Astra · xhigh: Recall 43 % (runs 43 %, 43 %); Precision 93 % (runs 86 %, 100 %).</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.t{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e1e0d9}.base{stroke:#c3c2b7}
+.c1{fill:#2a78d6}.c2{fill:#eb6834}.c3{fill:#1baf7a}.k1{stroke:#2a78d6}.k2{stroke:#eb6834}.k3{stroke:#1baf7a}
+.ring{stroke:#ffffff;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.run{fill-opacity:0.45}
+@media (prefers-color-scheme: dark){
+.t{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.base{stroke:#383835}
+.c1{fill:#3987e5}.c2{fill:#d95926}.c3{fill:#199e70}.k1{stroke:#3987e5}.k2{stroke:#d95926}.k3{stroke:#199e70}
+.ring{stroke:#0d1117}
+}
+</style>
+<text class="t" x="16" y="26" font-size="16" font-weight="600">V: review against a known-defect key</text>
+<text class="t2" x="16" y="46" font-size="12">Recall (key defects found, of 7) and precision (real findings over all findings): the bar is the mean, each dot a run</text>
+<text class="t2" x="16" y="66" font-size="12">2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals</text>
+<text class="t2" x="16" y="82" font-size="12">CLI versions: agy 1.4.0, codex 0.162.1, grok 1.0.60</text>
+<rect class="c1" x="16" y="111" width="10" height="10" rx="2"/>
+<text class="t" x="32" y="120" font-size="12">Recall</text>
+<rect class="c2" x="96.32000000000001" y="111" width="10" height="10" rx="2"/>
+<text class="t" x="112.32000000000001" y="120" font-size="12">Precision</text>
+<g class="plot" data-x0="200.00000000000003" data-x1="700" data-max="100">
+<line class="grid" x1="200" y1="142" x2="200" y2="520" stroke-width="1"/>
+<text class="t2" x="200" y="536" font-size="11" text-anchor="middle">0 %</text>
+<line class="grid" x1="300" y1="142" x2="300" y2="520" stroke-width="1"/>
+<text class="t2" x="300" y="536" font-size="11" text-anchor="middle">20 %</text>
+<line class="grid" x1="400" y1="142" x2="400" y2="520" stroke-width="1"/>
+<text class="t2" x="400" y="536" font-size="11" text-anchor="middle">40 %</text>
+<line class="grid" x1="500" y1="142" x2="500" y2="520" stroke-width="1"/>
+<text class="t2" x="500" y="536" font-size="11" text-anchor="middle">60 %</text>
+<line class="grid" x1="600" y1="142" x2="600" y2="520" stroke-width="1"/>
+<text class="t2" x="600" y="536" font-size="11" text-anchor="middle">80 %</text>
+<line class="grid" x1="700" y1="142" x2="700" y2="520" stroke-width="1"/>
+<text class="t2" x="700" y="536" font-size="11" text-anchor="middle">100 %</text>
+<text class="t2" x="450" y="554" font-size="12" text-anchor="middle">Percent</text>
+<text class="t" x="190.00000000000003" y="167" font-size="12" text-anchor="end">Gemini 3.8 Flash · Low</text>
+<path class="bar c1" data-arm="gemini:Gemini 3.8 Flash (Low)" data-series="recall" data-value="21.4285714" d="M 200 150 H 303.14 Q 307.14 150 307.14 154 V 158 Q 307.14 162 303.14 162 H 200 Z"><title>Gemini 3.8 Flash · Low: Recall, mean 21 %</title></path>
+<text class="t2" x="354.86" y="160" font-size="11">21 %</text>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 3.8 Flash (Low)" data-series="recall" data-run="1" data-value="14.2857143" cx="271.43" cy="156" r="4"><title>Gemini 3.8 Flash · Low: Recall, run 1: 14 %</title></circle>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 3.8 Flash (Low)" data-series="recall" data-run="2" data-value="28.5714286" cx="342.86" cy="156" r="4"><title>Gemini 3.8 Flash · Low: Recall, run 2: 29 %</title></circle>
+<path class="bar c2" data-arm="gemini:Gemini 3.8 Flash (Low)" data-series="precision" data-value="26.6666667" d="M 200 164 H 329.33 Q 333.33 164 333.33 168 V 172 Q 333.33 176 329.33 176 H 200 Z"><title>Gemini 3.8 Flash · Low: Precision, mean 27 %</title></path>
+<text class="t2" x="378.67" y="174" font-size="11">27 %</text>
+<circle class="dot c2 ring" data-arm="gemini:Gemini 3.8 Flash (Low)" data-series="precision" data-run="1" data-value="20" cx="300" cy="170" r="4"><title>Gemini 3.8 Flash · Low: Precision, run 1: 20 %</title></circle>
+<circle class="dot c2 ring" data-arm="gemini:Gemini 3.8 Flash (Low)" data-series="precision" data-run="2" data-value="33.3333333" cx="366.67" cy="170" r="4"><title>Gemini 3.8 Flash · Low: Precision, run 2: 33 %</title></circle>
+<text class="t" x="190.00000000000003" y="209" font-size="12" text-anchor="end">Gemini 3.8 Flash · Medium</text>
+<path class="bar c1" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-series="recall" data-value="42.8571429" d="M 200 192 H 410.29 Q 414.29 192 414.29 196 V 200 Q 414.29 204 410.29 204 H 200 Z"><title>Gemini 3.8 Flash · Medium: Recall, mean 43 %</title></path>
+<text class="t2" x="426.29" y="202" font-size="11">43 %</text>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-series="recall" data-run="1" data-value="42.8571429" cx="414.29" cy="198" r="4"><title>Gemini 3.8 Flash · Medium: Recall, run 1: 43 %</title></circle>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-series="recall" data-run="2" data-value="42.8571429" cx="414.29" cy="198" r="4"><title>Gemini 3.8 Flash · Medium: Recall, run 2: 43 %</title></circle>
+<path class="bar c2" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-series="precision" data-value="40.178571399999996" d="M 200 206 H 396.89 Q 400.89 206 400.89 210 V 214 Q 400.89 218 396.89 218 H 200 Z"><title>Gemini 3.8 Flash · Medium: Precision, mean 40 %</title></path>
+<text class="t2" x="426.29" y="216" font-size="11">40 %</text>
+<circle class="dot c2 ring" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-series="precision" data-run="1" data-value="42.8571429" cx="414.29" cy="212" r="4"><title>Gemini 3.8 Flash · Medium: Precision, run 1: 43 %</title></circle>
+<circle class="dot c2 ring" data-arm="gemini:Gemini 3.8 Flash (Medium)" data-series="precision" data-run="2" data-value="37.5" cx="387.5" cy="212" r="4"><title>Gemini 3.8 Flash · Medium: Precision, run 2: 38 %</title></circle>
+<text class="t" x="190.00000000000003" y="251" font-size="12" text-anchor="end">Gemini 3.8 Flash · High</text>
+<path class="bar c1" data-arm="gemini:Gemini 3.8 Flash (High)" data-series="recall" data-value="28.5714286" d="M 200 234 H 338.86 Q 342.86 234 342.86 238 V 242 Q 342.86 246 338.86 246 H 200 Z"><title>Gemini 3.8 Flash · High: Recall, mean 29 %</title></path>
+<text class="t2" x="354.86" y="244" font-size="11">29 %</text>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 3.8 Flash (High)" data-series="recall" data-run="1" data-value="28.5714286" cx="342.86" cy="240" r="4"><title>Gemini 3.8 Flash · High: Recall, run 1: 29 %</title></circle>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 3.8 Flash (High)" data-series="recall" data-run="2" data-value="28.5714286" cx="342.86" cy="240" r="4"><title>Gemini 3.8 Flash · High: Recall, run 2: 29 %</title></circle>
+<path class="bar c2" data-arm="gemini:Gemini 3.8 Flash (High)" data-series="precision" data-value="23.611111100000002" d="M 200 248 H 314.06 Q 318.06 248 318.06 252 V 256 Q 318.06 260 314.06 260 H 200 Z"><title>Gemini 3.8 Flash · High: Precision, mean 24 %</title></path>
+<text class="t2" x="337" y="258" font-size="11">24 %</text>
+<circle class="dot c2 ring" data-arm="gemini:Gemini 3.8 Flash (High)" data-series="precision" data-run="1" data-value="25" cx="325" cy="254" r="4"><title>Gemini 3.8 Flash · High: Precision, run 1: 25 %</title></circle>
+<circle class="dot c2 ring" data-arm="gemini:Gemini 3.8 Flash (High)" data-series="precision" data-run="2" data-value="22.2222222" cx="311.11" cy="254" r="4"><title>Gemini 3.8 Flash · High: Precision, run 2: 22 %</title></circle>
+<text class="t" x="190.00000000000003" y="293" font-size="12" text-anchor="end">Gemini 4 Argon · Low</text>
+<path class="bar c1" data-arm="gemini:Gemini 4 Argon (Low)" data-series="recall" data-value="28.5714286" d="M 200 276 H 338.86 Q 342.86 276 342.86 280 V 284 Q 342.86 288 338.86 288 H 200 Z"><title>Gemini 4 Argon · Low: Recall, mean 29 %</title></path>
+<text class="t2" x="354.86" y="286" font-size="11">29 %</text>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 4 Argon (Low)" data-series="recall" data-run="1" data-value="28.5714286" cx="342.86" cy="282" r="4"><title>Gemini 4 Argon · Low: Recall, run 1: 29 %</title></circle>
+<path class="bar c2" data-arm="gemini:Gemini 4 Argon (Low)" data-series="precision" data-value="22.2222222" d="M 200 290 H 307.11 Q 311.11 290 311.11 294 V 298 Q 311.11 302 307.11 302 H 200 Z"><title>Gemini 4 Argon · Low: Precision, mean 22 %</title></path>
+<text class="t2" x="323.11" y="300" font-size="11">22 %</text>
+<circle class="dot c2 ring" data-arm="gemini:Gemini 4 Argon (Low)" data-series="precision" data-run="1" data-value="22.2222222" cx="311.11" cy="296" r="4"><title>Gemini 4 Argon · Low: Precision, run 1: 22 %</title></circle>
+<text class="t" x="190.00000000000003" y="335" font-size="12" text-anchor="end">Gemini 4 Argon · Medium</text>
+<path class="bar c1" data-arm="gemini:Gemini 4 Argon (Medium)" data-series="recall" data-value="28.5714286" d="M 200 318 H 338.86 Q 342.86 318 342.86 322 V 326 Q 342.86 330 338.86 330 H 200 Z"><title>Gemini 4 Argon · Medium: Recall, mean 29 %</title></path>
+<text class="t2" x="354.86" y="328" font-size="11">29 %</text>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 4 Argon (Medium)" data-series="recall" data-run="1" data-value="28.5714286" cx="342.86" cy="324" r="4"><title>Gemini 4 Argon · Medium: Recall, run 1: 29 %</title></circle>
+<path class="bar c2" data-arm="gemini:Gemini 4 Argon (Medium)" data-series="precision" data-value="37.5" d="M 200 332 H 383.5 Q 387.5 332 387.5 336 V 340 Q 387.5 344 383.5 344 H 200 Z"><title>Gemini 4 Argon · Medium: Precision, mean 38 %</title></path>
+<text class="t2" x="399.5" y="342" font-size="11">38 %</text>
+<circle class="dot c2 ring" data-arm="gemini:Gemini 4 Argon (Medium)" data-series="precision" data-run="1" data-value="37.5" cx="387.5" cy="338" r="4"><title>Gemini 4 Argon · Medium: Precision, run 1: 38 %</title></circle>
+<text class="t" x="190.00000000000003" y="377" font-size="12" text-anchor="end">Gemini 4 Argon · High</text>
+<path class="bar c1" data-arm="gemini:Gemini 4 Argon (High)" data-series="recall" data-value="28.5714286" d="M 200 360 H 338.86 Q 342.86 360 342.86 364 V 368 Q 342.86 372 338.86 372 H 200 Z"><title>Gemini 4 Argon · High: Recall, mean 29 %</title></path>
+<text class="t2" x="354.86" y="370" font-size="11">29 %</text>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 4 Argon (High)" data-series="recall" data-run="1" data-value="28.5714286" cx="342.86" cy="366" r="4"><title>Gemini 4 Argon · High: Recall, run 1: 29 %</title></circle>
+<path class="bar c2" data-arm="gemini:Gemini 4 Argon (High)" data-series="precision" data-value="50" d="M 200 374 H 446 Q 450 374 450 378 V 382 Q 450 386 446 386 H 200 Z"><title>Gemini 4 Argon · High: Precision, mean 50 %</title></path>
+<text class="t2" x="462" y="384" font-size="11">50 %</text>
+<circle class="dot c2 ring" data-arm="gemini:Gemini 4 Argon (High)" data-series="precision" data-run="1" data-value="50" cx="450" cy="380" r="4"><title>Gemini 4 Argon · High: Precision, run 1: 50 %</title></circle>
+<text class="t" x="190.00000000000003" y="419" font-size="12" text-anchor="end">Grok 4.7</text>
+<path class="bar c1" data-arm="grok:grok-4.7" data-series="recall" data-value="35.714285700000005" d="M 200 402 H 374.57 Q 378.57 402 378.57 406 V 410 Q 378.57 414 374.57 414 H 200 Z"><title>Grok 4.7: Recall, mean 36 %</title></path>
+<text class="t2" x="426.29" y="412" font-size="11">36 %</text>
+<circle class="dot c1 ring" data-arm="grok:grok-4.7" data-series="recall" data-run="1" data-value="28.5714286" cx="342.86" cy="408" r="4"><title>Grok 4.7: Recall, run 1: 29 %</title></circle>
+<circle class="dot c1 ring" data-arm="grok:grok-4.7" data-series="recall" data-run="2" data-value="42.8571429" cx="414.29" cy="408" r="4"><title>Grok 4.7: Recall, run 2: 43 %</title></circle>
+<path class="bar c2" data-arm="grok:grok-4.7" data-series="precision" data-value="64.2857143" d="M 200 416 H 517.43 Q 521.43 416 521.43 420 V 424 Q 521.43 428 517.43 428 H 200 Z"><title>Grok 4.7: Precision, mean 64 %</title></path>
+<text class="t2" x="569.14" y="426" font-size="11">64 %</text>
+<circle class="dot c2 ring" data-arm="grok:grok-4.7" data-series="precision" data-run="1" data-value="57.1428571" cx="485.71" cy="422" r="4"><title>Grok 4.7: Precision, run 1: 57 %</title></circle>
+<circle class="dot c2 ring" data-arm="grok:grok-4.7" data-series="precision" data-run="2" data-value="71.42857140000001" cx="557.14" cy="422" r="4"><title>Grok 4.7: Precision, run 2: 71 %</title></circle>
+<text class="t" x="190.00000000000003" y="461" font-size="12" text-anchor="end">GPT-6.1 Sol · xhigh</text>
+<path class="bar c1" data-arm="codex:gpt-6.1-sol" data-series="recall" data-value="42.8571429" d="M 200 444 H 410.29 Q 414.29 444 414.29 448 V 452 Q 414.29 456 410.29 456 H 200 Z"><title>GPT-6.1 Sol · xhigh: Recall, mean 43 %</title></path>
+<text class="t2" x="426.29" y="454" font-size="11">43 %</text>
+<circle class="dot c1 ring" data-arm="codex:gpt-6.1-sol" data-series="recall" data-run="1" data-value="42.8571429" cx="414.29" cy="450" r="4"><title>GPT-6.1 Sol · xhigh: Recall, run 1: 43 %</title></circle>
+<circle class="dot c1 ring" data-arm="codex:gpt-6.1-sol" data-series="recall" data-run="2" data-value="42.8571429" cx="414.29" cy="450" r="4"><title>GPT-6.1 Sol · xhigh: Recall, run 2: 43 %</title></circle>
+<path class="bar c2" data-arm="codex:gpt-6.1-sol" data-series="precision" data-value="83.33333329999999" d="M 200 458 H 612.67 Q 616.67 458 616.67 462 V 466 Q 616.67 470 612.67 470 H 200 Z"><title>GPT-6.1 Sol · xhigh: Precision, mean 83 %</title></path>
+<text class="t2" x="712" y="468" font-size="11">83 %</text>
+<circle class="dot c2 ring" data-arm="codex:gpt-6.1-sol" data-series="precision" data-run="1" data-value="100" cx="700" cy="464" r="4"><title>GPT-6.1 Sol · xhigh: Precision, run 1: 100 %</title></circle>
+<circle class="dot c2 ring" data-arm="codex:gpt-6.1-sol" data-series="precision" data-run="2" data-value="66.66666670000001" cx="533.33" cy="464" r="4"><title>GPT-6.1 Sol · xhigh: Precision, run 2: 67 %</title></circle>
+<text class="t" x="190.00000000000003" y="503" font-size="12" text-anchor="end">GPT-6 Astra · xhigh</text>
+<path class="bar c1" data-arm="codex:gpt-6-astra" data-series="recall" data-value="42.8571429" d="M 200 486 H 410.29 Q 414.29 486 414.29 490 V 494 Q 414.29 498 410.29 498 H 200 Z"><title>GPT-6 Astra · xhigh: Recall, mean 43 %</title></path>
+<text class="t2" x="426.29" y="496" font-size="11">43 %</text>
+<circle class="dot c1 ring" data-arm="codex:gpt-6-astra" data-series="recall" data-run="1" data-value="42.8571429" cx="414.29" cy="492" r="4"><title>GPT-6 Astra · xhigh: Recall, run 1: 43 %</title></circle>
+<circle class="dot c1 ring" data-arm="codex:gpt-6-astra" data-series="recall" data-run="2" data-value="42.8571429" cx="414.29" cy="492" r="4"><title>GPT-6 Astra · xhigh: Recall, run 2: 43 %</title></circle>
+<path class="bar c2" data-arm="codex:gpt-6-astra" data-series="precision" data-value="92.8571429" d="M 200 500 H 660.29 Q 664.29 500 664.29 504 V 508 Q 664.29 512 660.29 512 H 200 Z"><title>GPT-6 Astra · xhigh: Precision, mean 93 %</title></path>
+<text class="t2" x="712" y="510" font-size="11">93 %</text>
+<circle class="dot c2 ring" data-arm="codex:gpt-6-astra" data-series="precision" data-run="1" data-value="85.7142857" cx="628.57" cy="506" r="4"><title>GPT-6 Astra · xhigh: Precision, run 1: 86 %</title></circle>
+<circle class="dot c2 ring" data-arm="codex:gpt-6-astra" data-series="precision" data-run="2" data-value="100" cx="700" cy="506" r="4"><title>GPT-6 Astra · xhigh: Precision, run 2: 100 %</title></circle>
+<line class="base" x1="200.00000000000003" y1="142" x2="200.00000000000003" y2="520" stroke-width="1"/>
+</g>
+<text class="t2" x="16" y="578" font-size="12">Codex and Grok review a snapshot of the commit; Gemini, which has no review tool, gets the file as text in its brief.</text>
+</svg>
