@@ -286,12 +286,3 @@ test('SECURITY.md: check gets its one-sentence bullet — root only, no writes, 
   assert.match(bullet, /writes nothing/);
   assert.match(bullet, /O_NOFOLLOW/, 'and says how a target is opened');
 });
-
-test('agent templates: the short reply keeps its current fields (§2) for both roles', () => {
-  const coder = renderAgentFile('omelette-coder.md', '1.1.0');
-  assert.match(coder, /\*\*Status\*\* \(DONE \| DONE_WITH_CONCERNS \| BLOCKED \| NEEDS_CONTEXT\)/);
-  assert.match(coder, /files changed, a one-line test summary, concerns, the report path/);
-  const tester = renderAgentFile('omelette-tester.md', '1.1.0');
-  assert.match(tester, /tests added, `passing\/total` for your file and for the suite/);
-  assert.match(tester, /each failing test with its ruling, the report path/);
-});

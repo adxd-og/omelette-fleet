@@ -16,4 +16,4 @@ Diff of the working tree, taken from git at invocation (uncommitted work include
 Untracked files (read them by path if they are part of the change):
 !`git -C "$1" ls-files --others --exclude-standard`
 
-Now follow your procedure: list the behaviours the spec promises, check coverage, write additional tests in a NEW file, run them through the real runner, quote the raw output, and rule each failure test-vs-spec. Never edit the implementation or the implementer's tests.
+Now follow your procedure: list the behaviours the spec promises, check coverage, probe what is uncovered, write a test in a NEW file only where it earns its place (a mutant no other test kills, or a defect the spec requires fixed), run the tests through the real runner, quote the raw output, and rule each failure test-vs-spec. Never edit the implementation or the implementer's tests.

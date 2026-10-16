@@ -140,7 +140,7 @@ for (const merge of ['session', 'pr']) {
     const flow = section(text, '## Tester flow').split('\n');
     const at = flow.indexOf(SECOND_PASS_STEP);
     assert.notEqual(at, -1, 'the step, whole');
-    assert.ok(flow[at - 1].startsWith('3. The tester writes tests and **runs them through the real runner**'), 'after the real runner');
+    assert.ok(flow[at - 1].startsWith('3. The tester writes a test only where it earns its place and **runs the tests through the real runner**'), 'after the real runner');
     assert.ok(flow[at + 1].startsWith('5. **Arbitration comes first, and it belongs to the orchestrator.**'), 'before arbitration');
     const numbers = flow.filter((l) => /^\d+\. /.test(l)).map((l) => Number(l.split('.')[0]));
     assert.deepEqual(numbers, [1, 2, 3, 4, 5, 6]);
