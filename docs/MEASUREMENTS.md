@@ -476,6 +476,14 @@ Round one of the evals, 2026-10-16, on agy 1.4.0, codex 0.162.1 and grok 1.0.60:
 | Effort | Neither Gemini model gains steadily from Low to High: Flash's best V recall is at Medium, and Argon High doubles Low's precision at ten times the wall time. |
 | Grok | 20 of 20 on research here does not lift [never a sole source](ORCHESTRATION.md#never-a-sole-source): ten questions, two runs. |
 
+<img src="../evals/charts/r-accuracy.svg" alt="R: correct answers out of 10 and invented URLs per arm, the bar the mean and each dot a run." width="760">
+
+<img src="../evals/charts/v-recall-precision.svg" alt="V: recall of the 7 key defects and precision per arm, the bar the mean and each dot a run." width="760">
+
+<img src="../evals/charts/effort.svg" alt="Effort: Gemini 3.8 Flash and Gemini 4 Argon at Low, Medium and High, R share correct and V recall." width="760">
+
+<img src="../evals/charts/cost.svg" alt="Cost: R share correct and V recall per arm against mean wall time and tokens per call, log scales." width="760">
+
 **How it was graded.** One clean `omelette-reviewer` graded the blinded answers (383 lines). The session checked every uncertain grade and every claimed new defect, plus a seeded 10 % sample of the rest (33 lines, none changed). It overturned 8 grades: 7 under one ruling (a race in the tick that the key's stale-tick defect covers), 1 for consistency with a matching finding. It dropped 13 duplicate lines for that same race.
 
 ## How the numbers are taken
