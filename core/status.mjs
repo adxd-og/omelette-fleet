@@ -60,10 +60,14 @@ const READ_FLAGS = constants.O_RDONLY | NOFOLLOW | NONBLOCK;
  * that same fd must say regular file — no path is looked at twice, so nothing
  * can be swapped in between. `wanted(stat)` may refuse it too (the trim's size
  * test). Returns null for anything refused; THROWS on an fs error, which every
- * caller's fail-soft catch takes. Shared with core/update.mjs (the cache read).
+ * caller's fail-soft catch takes. Shared with core/update.mjs (the cache read),
+ * core/config.mjs and the CLI (the config, with `follow`).
  */
-export function readRegularFile(path, wanted = () => true) {
-  const fd = openSync(path, READ_FLAGS);
+export function readRegularFile(path, wanted = () => true, { follow = false } = {}) {
+  // `follow`: the operator's own file (fleet.config.json) may legitimately be a
+  // symlink — a dotfile manager's shape — so the link is followed there; the
+  // fd's fstat still refuses a FIFO or anything but a regular file at its end.
+  const fd = openSync(path, follow ? (constants.O_RDONLY | NONBLOCK) : READ_FLAGS);
   try {
     const st = fstatSync(fd);
     if (!st.isFile() || !wanted(st)) return null;

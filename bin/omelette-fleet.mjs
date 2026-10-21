@@ -2996,7 +2996,7 @@ const describeSpec = (spec) => {
 function readConfigRaw(env = process.env) {
   const path = configPath(env);
   let raw;
-  try { raw = readRegularFile(path); if (raw === null) throw new Error('not a regular file'); } // one O_NOFOLLOW | O_NONBLOCK fd: a FIFO at the config's name cannot hold the CLI
+  try { raw = readRegularFile(path, () => true, { follow: true }); if (raw === null) throw new Error('not a regular file'); } // one O_NONBLOCK fd, fstat'd as a regular file: a FIFO at the config's name cannot hold the CLI; a symlinked config (a dotfile manager's) is followed
   catch (e) { return e && e.code === 'ENOENT' ? { path, config: {}, existed: false } : { path, config: null, existed: true, error: (e && e.message) || String(e) }; }
   try {
     const parsed = JSON.parse(raw);

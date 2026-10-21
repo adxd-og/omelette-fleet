@@ -168,9 +168,9 @@ export function loadFleetConfig(env = process.env) {
   }
   if (cache.path === path && cache.mtimeMs === st.mtimeMs) return { config: cache.data, path, error: cache.error };
   try {
-    // Through one O_NOFOLLOW | O_NONBLOCK fd (core/status.mjs): a FIFO at the
-    // config's name, or a link to one, would otherwise hold the server's start.
-    const text = readRegularFile(path);
+    // Through one O_NONBLOCK fd that must fstat as a regular file (core/status.mjs):
+    // a FIFO at the config's name, or a link to one, would otherwise hold the server's start.
+    const text = readRegularFile(path, () => true, { follow: true }); // a symlinked config is the operator's choice (stow, chezmoi); a FIFO at its end is still refused
     if (text === null) throw new Error('not a regular file');
     const parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('top-level must be an object');
