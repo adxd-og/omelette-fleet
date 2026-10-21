@@ -5,7 +5,7 @@
  * (plan docs/superpowers/plans/2026-10-16-evals-mvp.md, Task 2).
  *
  *   node scripts/eval-blind.mjs --date YYYY-MM-DD [--dir D] [--seed N]
- *   node scripts/eval-blind.mjs --date YYYY-MM-DD --aggregate [--dir D]
+ *   node scripts/eval-blind.mjs --date YYYY-MM-DD --aggregate [--dir D] [--merge YYYY-MM-DD]
  *
  * BLIND reads every run line of the date (`<D>/runs/<date>/*.jsonl`), redacts
  * each answer, shuffles with a seed it prints, and writes into
@@ -30,6 +30,10 @@
  * A run whose calls all failed has no score (its score fields are null), is
  * counted in the arm's `failedRuns`, and stays out of every score's mean.
  * A grade the session overturned (`overturned: {from, to}`) counts as `to`.
+ * `--merge D2` carries into the aggregate every arm of `aggregates/<D2>.json`
+ * that this date did not run (a partial re-run keeps the other arms): each
+ * carried arm says `carriedFrom`, the `date` says how many, and `grades` and
+ * `overturned` count this date's grades only.
  *
  * This file holds no task text, no key and no answer.
  */
@@ -48,7 +52,7 @@ import { GROK_MODELS } from '../units/grok/models.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
-const USAGE = 'usage: node scripts/eval-blind.mjs --date YYYY-MM-DD [--dir D] [--seed N] | --date YYYY-MM-DD --aggregate [--dir D]';
+const USAGE = 'usage: node scripts/eval-blind.mjs --date YYYY-MM-DD [--dir D] [--seed N] | --date YYYY-MM-DD --aggregate [--dir D] [--merge YYYY-MM-DD]';
 
 /** The family words the plan names, beside the catalogs' own ids and labels. */
 export const FAMILY_WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra'];
@@ -369,7 +373,7 @@ function cmdBlind({ dir, date, seed, out }) {
   out('give the grader blinded.jsonl, rubric.md and the keys — never mapping.json');
 }
 
-function cmdAggregate({ dir, date, out }) {
+function cmdAggregate({ dir, date, merge, out }) {
   const g = join(dir, 'grading', date);
   for (const f of ['mapping.json', 'grades.jsonl']) if (!existsSync(join(g, f))) throw new Error(`no ${f} at ${g}`);
   const mapping = JSON.parse(readFileSync(join(g, 'mapping.json'), 'utf8'));
@@ -382,11 +386,20 @@ function cmdAggregate({ dir, date, out }) {
     keys[s] = existsSync(p) ? readJsonl(p) : [];
   }
   const agg = aggregate({ grades, mapping, keys });
+  if (merge) {
+    const prevPath = join(dir, 'aggregates', `${merge}.json`);
+    if (!existsSync(prevPath)) throw new Error(`no aggregate to merge at ${prevPath}`);
+    const ran = new Set(agg.arms.map((a) => `${a.suite}\u0000${a.arm}`));
+    const carried = JSON.parse(readFileSync(prevPath, 'utf8')).arms.filter((a) => !ran.has(`${a.suite}\u0000${a.arm}`)).map((a) => ({ ...a, carriedFrom: merge }));
+    agg.arms = [...agg.arms, ...carried].sort((x, y) => x.suite.localeCompare(y.suite) || x.arm.localeCompare(y.arm));
+    agg.date = `${date} (${ran.size} arm${ran.size === 1 ? '' : 's'}; ${carried.length} carried from ${merge})`;
+    agg.carriedFrom = merge;
+  }
   const path = join(dir, 'aggregates', `${date}.json`);
   writePrivate(path, JSON.stringify(agg, null, 2) + '\n');
   for (const a of agg.arms) {
     const ungraded = a.runs.reduce((n, r) => n + r.ungraded, 0);
-    out(`${a.suite} ${a.arm}: ${a.n} run(s)${ungraded ? `, ${ungraded} item(s) ungraded` : ''}`);
+    out(`${a.suite} ${a.arm}: ${a.n} run(s)${ungraded ? `, ${ungraded} item(s) ungraded` : ''}${a.carriedFrom ? `, carried from ${a.carriedFrom}` : ''}`);
   }
   out(`${agg.grades} grade(s), ${agg.overturned} overturned → ${path}`);
 }
@@ -396,7 +409,7 @@ export function main(argv = process.argv.slice(2), { out = (l) => console.log(l)
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { date: { type: 'string' }, dir: { type: 'string' }, seed: { type: 'string' }, aggregate: { type: 'boolean' } },
+      options: { date: { type: 'string' }, dir: { type: 'string' }, seed: { type: 'string' }, aggregate: { type: 'boolean' }, merge: { type: 'string' } },
       strict: true, allowPositionals: false,
     }));
   } catch (e) { err(`eval-blind: ${e.message}\n${USAGE}`); return 2; }
@@ -405,10 +418,11 @@ export function main(argv = process.argv.slice(2), { out = (l) => console.log(l)
   const seed = values.seed === undefined ? randomInt(0, 2 ** 31 - 1) : Number(values.seed);
   if (!Number.isSafeInteger(seed) || seed < 0) errors.push('--seed must be a whole number, 0 or more');
   if (values.aggregate && values.seed !== undefined) errors.push('--seed is for blinding, not --aggregate');
+  if (values.merge !== undefined && (!values.aggregate || !/^\d{4}-\d\d-\d\d$/.test(values.merge))) errors.push('--merge YYYY-MM-DD goes with --aggregate');
   if (errors.length) { for (const e of errors) err(`eval-blind: ${e}`); err(USAGE); return 2; }
   const dir = resolve(values.dir || DEFAULT_DIR);
   try {
-    if (values.aggregate) cmdAggregate({ dir, date: values.date, out });
+    if (values.aggregate) cmdAggregate({ dir, date: values.date, merge: values.merge, out });
     else cmdBlind({ dir, date: values.date, seed, out });
   } catch (e) { err(`eval-blind: ${(e && e.message) || e}`); return 1; }
   return 0;

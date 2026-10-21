@@ -30,7 +30,7 @@ The unit catalogs describe each model from vendor model cards and public benchma
 1. **Run.** `scripts/eval-run.mjs` calls each unit through its real server, as `omelette-fleet call` does, so the fleet's guards, sandboxes, timeouts and config apply. R goes to each unit's research tool. V goes to Codex's and Grok's review tools on a `git archive` snapshot of the commit, with no history reachable from it; Gemini has no review tool and gets the file as text. Each call records its answer, the model and effort the unit reports, the CLI version, the wall time and the token usage from the unit's own result record. A failed call is recorded as failed, never retried.
 2. **Blind.** `scripts/eval-blind.mjs` strips model names, ids, tool names and CLI versions from every answer, shuffles with a printed seed, and gives each answer a blind id. The mapping back to the model stays private.
 3. **Grade.** A clean-context reviewer grades the blinded answers against the keys by a written rubric, told nothing about who wrote what. The session checks every uncertain grade, every claimed new defect and a random 10 % of the rest; a grade it overturns keeps both values and counts by the new one.
-4. **Aggregate and draw.** `eval-blind.mjs --aggregate` turns the grades into numbers per arm and run; `scripts/eval-chart.mjs` draws them.
+4. **Aggregate and draw.** `eval-blind.mjs --aggregate` turns the grades into numbers per arm and run; `scripts/eval-chart.mjs` draws them. A round that re-measures some arms only (`--merge <earlier date>`) carries the other arms from the earlier aggregate, each marked `carriedFrom`; the charts' captions say how many.
 
 Read the numbers with their limits: one or two runs per arm (the charts show runs, not intervals), ten questions and one file, Argon's R score from a single prompt holding every question, and a V input that differs by unit.
 
@@ -80,5 +80,7 @@ node scripts/eval-run.mjs --suite V --runs 2 --arm "gemini:Gemini 3.8 Flash:low"
 # Blind, grade (the reviewer writes grading/<date>/grades.jsonl), aggregate, draw
 node scripts/eval-blind.mjs --date 2026-10-16
 node scripts/eval-blind.mjs --date 2026-10-16 --aggregate
+# A partial re-run (one arm re-measured): its own grades, the other arms carried from the earlier aggregate, marked as such
+node scripts/eval-blind.mjs --date 2026-10-21 --aggregate --merge 2026-10-16
 node scripts/eval-chart.mjs --date 2026-10-16
 ```

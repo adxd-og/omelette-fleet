@@ -234,6 +234,38 @@ test('--aggregate writes aggregates/<date>.json from grades.jsonl, the mapping a
   assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS }));
 });
 
+test('--aggregate --merge D2 carries D2\'s arms this date did not run, marked carriedFrom, and names the count in date', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-evals-merge-'));
+  const g = join(dir, 'grading', '2026-10-21');
+  mkdirSync(g, { recursive: true });
+  mkdirSync(join(dir, 'aggregates'), { recursive: true });
+  const prev = aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS });
+  writeFileSync(join(dir, 'aggregates', '2026-10-16.json'), JSON.stringify(prev));
+  // This date re-ran only the first arm of the earlier round.
+  const [rerun] = prev.arms;
+  const blinds = Object.fromEntries(Object.entries(MAPPING.blinds).filter(([, e]) => e.suite === rerun.suite && e.arm === rerun.arm));
+  writeFileSync(join(g, 'mapping.json'), JSON.stringify({ ...MAPPING, date: '2026-10-21', blinds, failed: [] }));
+  writeFileSync(join(g, 'grades.jsonl'), GRADES.filter((l) => blinds[l.blindId]).map((l) => JSON.stringify(l)).join('\n') + '\n');
+  for (const [suite, lines] of Object.entries(KEYS)) {
+    mkdirSync(join(dir, 'suites', suite), { recursive: true });
+    writeFileSync(join(dir, 'suites', suite, 'key.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  }
+  const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-10-21', '--dir', dir, '--aggregate', '--merge', '2026-10-16'], { encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-10-21.json'), 'utf8'));
+  assert.equal(agg.date, `2026-10-21 (1 arm; ${prev.arms.length - 1} carried from 2026-10-16)`);
+  assert.equal(agg.carriedFrom, '2026-10-16');
+  assert.equal(agg.arms.length, prev.arms.length);
+  const own = agg.arms.filter((a) => !a.carriedFrom);
+  assert.deepEqual(own.map((a) => [a.suite, a.arm]), [[rerun.suite, rerun.arm]]);
+  assert.deepEqual(agg.arms.filter((a) => a.carriedFrom).map(({ carriedFrom, ...a }) => a), prev.arms.slice(1));
+  assert.equal(agg.grades, GRADES.filter((l) => blinds[l.blindId]).length);
+  assert.match(res.stdout, /carried from 2026-10-16/);
+  // --merge without --aggregate, or with a malformed date, is refused.
+  assert.equal(spawnSync(process.execPath, [SCRIPT, '--date', '2026-10-21', '--dir', dir, '--merge', '2026-10-16'], { encoding: 'utf8' }).status, 2);
+  assert.equal(spawnSync(process.execPath, [SCRIPT, '--date', '2026-10-21', '--dir', dir, '--aggregate', '--merge', 'x'], { encoding: 'utf8' }).status, 2);
+});
+
 test('a run whose calls all failed has no score: it is counted as failed and left out of the means', () => {
   const mapping = {
     date: 'd', seed: 1,
