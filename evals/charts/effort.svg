@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="effort-title effort-desc" viewBox="0 0 760 446" width="760" height="446">
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="effort-title effort-desc" viewBox="0 0 760 430" width="760" height="430">
 <title id="effort-title">Effort: Gemini scores at Low, Medium and High</title>
-<desc id="effort-desc">Effort: Gemini scores at Low, Medium and High. 2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals. CLI versions: agy 1.4.0. R Gemini 3.8 Flash · Low: 90 % (runs 90 %, 90 %). R Gemini 3.8 Flash · Medium: 90 % (runs 90 %, 90 %). R Gemini 3.8 Flash · High: 85 % (runs 80 %, 90 %). R Gemini 4 Argon · Low: 80 % (runs 80 %), one prompt for all questions. R Gemini 4 Argon · Medium: 90 % (runs 90 %), one prompt for all questions. R Gemini 4 Argon · High: 90 % (runs 90 %), one prompt for all questions. V Gemini 3.8 Flash · Low: 21 % (runs 14 %, 29 %). V Gemini 3.8 Flash · Medium: 43 % (runs 43 %, 43 %). V Gemini 3.8 Flash · High: 29 % (runs 29 %, 29 %). V Gemini 4 Argon · Low: 29 % (runs 29 %). V Gemini 4 Argon · Medium: 29 % (runs 29 %). V Gemini 4 Argon · High: 29 % (runs 29 %).</desc>
+<desc id="effort-desc">Effort: Gemini scores at Low, Medium and High. 2026-10-21 (3 arms; 15 carried from 2026-10-16) · N = 1–2 runs per arm · runs shown, no intervals. CLI versions: agy 1.4.0, agy 1.4.4. R Gemini 3.8 Flash · Low: 90 % (runs 90 %, 90 %). R Gemini 3.8 Flash · Medium: 90 % (runs 90 %, 90 %). R Gemini 3.8 Flash · High: 85 % (runs 80 %, 90 %). R Gemini 4 Argon · Low: 80 % (runs 80 %). R Gemini 4 Argon · Medium: 90 % (runs 90 %). R Gemini 4 Argon · High: 80 % (runs 80 %). V Gemini 3.8 Flash · Low: 21 % (runs 14 %, 29 %). V Gemini 3.8 Flash · Medium: 43 % (runs 43 %, 43 %). V Gemini 3.8 Flash · High: 29 % (runs 29 %, 29 %). V Gemini 4 Argon · Low: 29 % (runs 29 %). V Gemini 4 Argon · Medium: 29 % (runs 29 %). V Gemini 4 Argon · High: 29 % (runs 29 %).</desc>
 <style>
 text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 .t{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e1e0d9}.base{stroke:#c3c2b7}
@@ -14,12 +14,12 @@ text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 </style>
 <text class="t" x="16" y="26" font-size="16" font-weight="600">Effort: Gemini scores at Low, Medium and High</text>
 <text class="t2" x="16" y="46" font-size="12">R: share of questions answered correctly · V: recall. The large point is the mean, the small ones the runs</text>
-<text class="t2" x="16" y="66" font-size="12">2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals</text>
-<text class="t2" x="16" y="82" font-size="12">CLI versions: agy 1.4.0</text>
+<text class="t2" x="16" y="66" font-size="12">2026-10-21 (3 arms; 15 carried from 2026-10-16) · N = 1–2 runs per arm · runs shown, no intervals</text>
+<text class="t2" x="16" y="82" font-size="12">CLI versions: agy 1.4.0, agy 1.4.4</text>
 <circle class="c1" cx="21" cy="116" r="5"/>
 <text class="t" x="32" y="120" font-size="12">Gemini 3.8 Flash</text>
 <circle class="c2" cx="168.52" cy="116" r="5"/>
-<text class="t" x="179.52" y="120" font-size="12">Gemini 4 Argon *</text>
+<text class="t" x="179.52" y="120" font-size="12">Gemini 4 Argon</text>
 <text class="t" x="64" y="142" font-size="13" font-weight="600">R · share correct</text>
 <g class="plot" data-suite="R" data-y0="376" data-y1="156" data-x-low="88" data-x-medium="220" data-x-high="352">
 <line class="base" x1="64" y1="376" x2="376" y2="376" stroke-width="1"/>
@@ -46,14 +46,14 @@ text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 <circle class="c1 run ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="High" data-run="2" data-value="90" cx="352" cy="178" r="4"><title>Gemini 3.8 Flash · High, R run 2: 90 %</title></circle>
 <circle class="mean c1 ring" data-suite="R" data-family="Gemini 3.8 Flash" data-level="High" data-value="85" cx="352" cy="189" r="6"><title>Gemini 3.8 Flash · High, R mean: 85 %</title></circle>
 <text class="t2" x="362" y="181" font-size="11">85 %</text>
-<path class="line k2" d="M 88 200 L 220 178 L 352 178"/>
+<path class="line k2" d="M 88 200 L 220 178 L 352 200"/>
 <circle class="c2 run ring" data-suite="R" data-family="Gemini 4 Argon" data-level="Low" data-run="1" data-value="80" cx="88" cy="200" r="4"><title>Gemini 4 Argon · Low, R run 1: 80 %</title></circle>
 <circle class="mean c2 ring" data-suite="R" data-family="Gemini 4 Argon" data-level="Low" data-value="80" cx="88" cy="200" r="6"><title>Gemini 4 Argon · Low, R mean: 80 %</title></circle>
 <circle class="c2 run ring" data-suite="R" data-family="Gemini 4 Argon" data-level="Medium" data-run="1" data-value="90" cx="220" cy="178" r="4"><title>Gemini 4 Argon · Medium, R run 1: 90 %</title></circle>
 <circle class="mean c2 ring" data-suite="R" data-family="Gemini 4 Argon" data-level="Medium" data-value="90" cx="220" cy="178" r="6"><title>Gemini 4 Argon · Medium, R mean: 90 %</title></circle>
-<circle class="c2 run ring" data-suite="R" data-family="Gemini 4 Argon" data-level="High" data-run="1" data-value="90" cx="352" cy="178" r="4"><title>Gemini 4 Argon · High, R run 1: 90 %</title></circle>
-<circle class="mean c2 ring" data-suite="R" data-family="Gemini 4 Argon" data-level="High" data-value="90" cx="352" cy="178" r="6"><title>Gemini 4 Argon · High, R mean: 90 %</title></circle>
-<text class="t2" x="362" y="170" font-size="11">90 %</text>
+<circle class="c2 run ring" data-suite="R" data-family="Gemini 4 Argon" data-level="High" data-run="1" data-value="80" cx="352" cy="200" r="4"><title>Gemini 4 Argon · High, R run 1: 80 %</title></circle>
+<circle class="mean c2 ring" data-suite="R" data-family="Gemini 4 Argon" data-level="High" data-value="80" cx="352" cy="200" r="6"><title>Gemini 4 Argon · High, R mean: 80 %</title></circle>
+<text class="t2" x="362" y="192" font-size="11">80 %</text>
 </g>
 <text class="t" x="432" y="142" font-size="13" font-weight="600">V · recall</text>
 <g class="plot" data-suite="V" data-y0="376" data-y1="156" data-x-low="456" data-x-medium="588" data-x-high="720">
@@ -90,5 +90,4 @@ text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 <circle class="mean c2 ring" data-suite="V" data-family="Gemini 4 Argon" data-level="High" data-value="28.57143" cx="720" cy="313.14" r="6"><title>Gemini 4 Argon · High, V mean: 29 %</title></circle>
 <text class="t2" x="730" y="305.14" font-size="11">29 %</text>
 </g>
-<text class="t2" x="16" y="422" font-size="12">* one prompt for all questions in R, one call per level</text>
 </svg>

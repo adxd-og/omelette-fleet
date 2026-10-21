@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="r-accuracy-title r-accuracy-desc" viewBox="0 0 760 602" width="760" height="602">
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="r-accuracy-title r-accuracy-desc" viewBox="0 0 760 586" width="760" height="586">
 <title id="r-accuracy-title">R: research answers that match the key</title>
-<desc id="r-accuracy-desc">Correct answers out of 10 questions, and cited URLs that were unreachable or invented: the bar is the mean, each dot a run. 2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals. CLI versions: agy 1.4.0, codex 0.162.1, grok 1.0.60. Gemini 3.8 Flash · Low: Correct (of 10) 9 (runs 9, 9); Invented or unreachable URLs 0 (runs 0, 0). Gemini 3.8 Flash · Medium: Correct (of 10) 9 (runs 9, 9); Invented or unreachable URLs 0 (runs 0, 0). Gemini 3.8 Flash · High: Correct (of 10) 8.5 (runs 8, 9); Invented or unreachable URLs 0 (runs 0, 0). Gemini 4 Argon · Low (one prompt for all questions): Correct (of 10) 8 (runs 8); Invented or unreachable URLs 0 (runs 0). Gemini 4 Argon · Medium (one prompt for all questions): Correct (of 10) 9 (runs 9); Invented or unreachable URLs 0 (runs 0). Gemini 4 Argon · High (one prompt for all questions): Correct (of 10) 9 (runs 9); Invented or unreachable URLs 0 (runs 0). Grok 4.7: Correct (of 10) 10 (runs 10, 10); Invented or unreachable URLs 0 (runs 0, 0). GPT-6.1 Sol · xhigh: Correct (of 10) 10 (runs 10, 10); Invented or unreachable URLs 0 (runs 0, 0). GPT-6 Astra · xhigh: Correct (of 10) 10 (runs 10, 10); Invented or unreachable URLs 0 (runs 0, 0).</desc>
+<desc id="r-accuracy-desc">Correct answers out of 10 questions, and cited URLs that were unreachable or invented: the bar is the mean, each dot a run. 2026-10-21 (3 arms; 15 carried from 2026-10-16) · N = 1–2 runs per arm · runs shown, no intervals. CLI versions: agy 1.4.0, agy 1.4.4, codex 0.162.1, grok 1.0.60. Gemini 3.8 Flash · Low: Correct (of 10) 9 (runs 9, 9); Invented or unreachable URLs 0 (runs 0, 0). Gemini 3.8 Flash · Medium: Correct (of 10) 9 (runs 9, 9); Invented or unreachable URLs 0 (runs 0, 0). Gemini 3.8 Flash · High: Correct (of 10) 8.5 (runs 8, 9); Invented or unreachable URLs 0 (runs 0, 0). Gemini 4 Argon · Low: Correct (of 10) 8 (runs 8); Invented or unreachable URLs 0 (runs 0). Gemini 4 Argon · Medium: Correct (of 10) 9 (runs 9); Invented or unreachable URLs 0 (runs 0). Gemini 4 Argon · High: Correct (of 10) 8 (runs 8); Invented or unreachable URLs 0 (runs 0). Grok 4.7: Correct (of 10) 10 (runs 10, 10); Invented or unreachable URLs 0 (runs 0, 0). GPT-6.1 Sol · xhigh: Correct (of 10) 10 (runs 10, 10); Invented or unreachable URLs 0 (runs 0, 0). GPT-6 Astra · xhigh: Correct (of 10) 10 (runs 10, 10); Invented or unreachable URLs 0 (runs 0, 0).</desc>
 <style>
 text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 .t{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e1e0d9}.base{stroke:#c3c2b7}
@@ -14,8 +14,8 @@ text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 </style>
 <text class="t" x="16" y="26" font-size="16" font-weight="600">R: research answers that match the key</text>
 <text class="t2" x="16" y="46" font-size="12">Correct answers out of 10 questions, and cited URLs that were unreachable or invented: the bar is the mean, each dot a run</text>
-<text class="t2" x="16" y="66" font-size="12">2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals</text>
-<text class="t2" x="16" y="82" font-size="12">CLI versions: agy 1.4.0, codex 0.162.1, grok 1.0.60</text>
+<text class="t2" x="16" y="66" font-size="12">2026-10-21 (3 arms; 15 carried from 2026-10-16) · N = 1–2 runs per arm · runs shown, no intervals</text>
+<text class="t2" x="16" y="82" font-size="12">CLI versions: agy 1.4.0, agy 1.4.4, codex 0.162.1, grok 1.0.60</text>
 <rect class="c1" x="16" y="111" width="10" height="10" rx="2"/>
 <text class="t" x="32" y="120" font-size="12">Correct (of 10)</text>
 <rect class="c2" x="156.8" y="111" width="10" height="10" rx="2"/>
@@ -71,24 +71,24 @@ text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 <text class="t2" x="212" y="258" font-size="11">0</text>
 <circle class="dot c2 ring" data-arm="gemini:Gemini 3.8 Flash (High)" data-series="invented-urls" data-run="1" data-value="0" cx="200" cy="254" r="4"><title>Gemini 3.8 Flash · High: Invented or unreachable URLs, run 1: 0</title></circle>
 <circle class="dot c2 ring" data-arm="gemini:Gemini 3.8 Flash (High)" data-series="invented-urls" data-run="2" data-value="0" cx="200" cy="254" r="4"><title>Gemini 3.8 Flash · High: Invented or unreachable URLs, run 2: 0</title></circle>
-<text class="t" x="190.00000000000003" y="293" font-size="12" text-anchor="end">Gemini 4 Argon · Low *</text>
+<text class="t" x="190.00000000000003" y="293" font-size="12" text-anchor="end">Gemini 4 Argon · Low</text>
 <path class="bar c1" data-arm="gemini:Gemini 4 Argon (Low)" data-series="correct" data-value="8" d="M 200 276 H 596 Q 600 276 600 280 V 284 Q 600 288 596 288 H 200 Z"><title>Gemini 4 Argon · Low: Correct (of 10), mean 8</title></path>
 <text class="t2" x="612" y="286" font-size="11">8</text>
 <circle class="dot c1 ring" data-arm="gemini:Gemini 4 Argon (Low)" data-series="correct" data-run="1" data-value="8" cx="600" cy="282" r="4"><title>Gemini 4 Argon · Low: Correct (of 10), run 1: 8</title></circle>
 <path class="bar c2" data-arm="gemini:Gemini 4 Argon (Low)" data-series="invented-urls" data-value="0" d="M 200 290 H 200 V 302 H 200 Z"><title>Gemini 4 Argon · Low: Invented or unreachable URLs, mean 0</title></path>
 <text class="t2" x="212" y="300" font-size="11">0</text>
 <circle class="dot c2 ring" data-arm="gemini:Gemini 4 Argon (Low)" data-series="invented-urls" data-run="1" data-value="0" cx="200" cy="296" r="4"><title>Gemini 4 Argon · Low: Invented or unreachable URLs, run 1: 0</title></circle>
-<text class="t" x="190.00000000000003" y="335" font-size="12" text-anchor="end">Gemini 4 Argon · Medium *</text>
+<text class="t" x="190.00000000000003" y="335" font-size="12" text-anchor="end">Gemini 4 Argon · Medium</text>
 <path class="bar c1" data-arm="gemini:Gemini 4 Argon (Medium)" data-series="correct" data-value="9" d="M 200 318 H 646 Q 650 318 650 322 V 326 Q 650 330 646 330 H 200 Z"><title>Gemini 4 Argon · Medium: Correct (of 10), mean 9</title></path>
 <text class="t2" x="662" y="328" font-size="11">9</text>
 <circle class="dot c1 ring" data-arm="gemini:Gemini 4 Argon (Medium)" data-series="correct" data-run="1" data-value="9" cx="650" cy="324" r="4"><title>Gemini 4 Argon · Medium: Correct (of 10), run 1: 9</title></circle>
 <path class="bar c2" data-arm="gemini:Gemini 4 Argon (Medium)" data-series="invented-urls" data-value="0" d="M 200 332 H 200 V 344 H 200 Z"><title>Gemini 4 Argon · Medium: Invented or unreachable URLs, mean 0</title></path>
 <text class="t2" x="212" y="342" font-size="11">0</text>
 <circle class="dot c2 ring" data-arm="gemini:Gemini 4 Argon (Medium)" data-series="invented-urls" data-run="1" data-value="0" cx="200" cy="338" r="4"><title>Gemini 4 Argon · Medium: Invented or unreachable URLs, run 1: 0</title></circle>
-<text class="t" x="190.00000000000003" y="377" font-size="12" text-anchor="end">Gemini 4 Argon · High *</text>
-<path class="bar c1" data-arm="gemini:Gemini 4 Argon (High)" data-series="correct" data-value="9" d="M 200 360 H 646 Q 650 360 650 364 V 368 Q 650 372 646 372 H 200 Z"><title>Gemini 4 Argon · High: Correct (of 10), mean 9</title></path>
-<text class="t2" x="662" y="370" font-size="11">9</text>
-<circle class="dot c1 ring" data-arm="gemini:Gemini 4 Argon (High)" data-series="correct" data-run="1" data-value="9" cx="650" cy="366" r="4"><title>Gemini 4 Argon · High: Correct (of 10), run 1: 9</title></circle>
+<text class="t" x="190.00000000000003" y="377" font-size="12" text-anchor="end">Gemini 4 Argon · High</text>
+<path class="bar c1" data-arm="gemini:Gemini 4 Argon (High)" data-series="correct" data-value="8" d="M 200 360 H 596 Q 600 360 600 364 V 368 Q 600 372 596 372 H 200 Z"><title>Gemini 4 Argon · High: Correct (of 10), mean 8</title></path>
+<text class="t2" x="612" y="370" font-size="11">8</text>
+<circle class="dot c1 ring" data-arm="gemini:Gemini 4 Argon (High)" data-series="correct" data-run="1" data-value="8" cx="600" cy="366" r="4"><title>Gemini 4 Argon · High: Correct (of 10), run 1: 8</title></circle>
 <path class="bar c2" data-arm="gemini:Gemini 4 Argon (High)" data-series="invented-urls" data-value="0" d="M 200 374 H 200 V 386 H 200 Z"><title>Gemini 4 Argon · High: Invented or unreachable URLs, mean 0</title></path>
 <text class="t2" x="212" y="384" font-size="11">0</text>
 <circle class="dot c2 ring" data-arm="gemini:Gemini 4 Argon (High)" data-series="invented-urls" data-run="1" data-value="0" cx="200" cy="380" r="4"><title>Gemini 4 Argon · High: Invented or unreachable URLs, run 1: 0</title></circle>
@@ -121,5 +121,4 @@ text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 <circle class="dot c2 ring" data-arm="codex:gpt-6-astra" data-series="invented-urls" data-run="2" data-value="0" cx="200" cy="506" r="4"><title>GPT-6 Astra · xhigh: Invented or unreachable URLs, run 2: 0</title></circle>
 <line class="base" x1="200.00000000000003" y1="142" x2="200.00000000000003" y2="520" stroke-width="1"/>
 </g>
-<text class="t2" x="16" y="578" font-size="12">* one prompt for all questions</text>
 </svg>

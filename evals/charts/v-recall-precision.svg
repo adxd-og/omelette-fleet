@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="v-recall-precision-title v-recall-precision-desc" viewBox="0 0 760 602" width="760" height="602">
 <title id="v-recall-precision-title">V: review against a known-defect key</title>
-<desc id="v-recall-precision-desc">Recall (key defects found, of 7) and precision (real findings over all findings): the bar is the mean, each dot a run. 2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals. CLI versions: agy 1.4.0, codex 0.162.1, grok 1.0.60. Gemini 3.8 Flash · Low: Recall 21 % (runs 14 %, 29 %); Precision 27 % (runs 20 %, 33 %). Gemini 3.8 Flash · Medium: Recall 43 % (runs 43 %, 43 %); Precision 40 % (runs 43 %, 38 %). Gemini 3.8 Flash · High: Recall 29 % (runs 29 %, 29 %); Precision 24 % (runs 25 %, 22 %). Gemini 4 Argon · Low: Recall 29 % (runs 29 %); Precision 22 % (runs 22 %). Gemini 4 Argon · Medium: Recall 29 % (runs 29 %); Precision 38 % (runs 38 %). Gemini 4 Argon · High: Recall 29 % (runs 29 %); Precision 50 % (runs 50 %). Grok 4.7: Recall 36 % (runs 29 %, 43 %); Precision 64 % (runs 57 %, 71 %). GPT-6.1 Sol · xhigh: Recall 43 % (runs 43 %, 43 %); Precision 83 % (runs 100 %, 67 %). GPT-6 Astra · xhigh: Recall 43 % (runs 43 %, 43 %); Precision 93 % (runs 86 %, 100 %).</desc>
+<desc id="v-recall-precision-desc">Recall (key defects found, of 7) and precision (real findings over all findings): the bar is the mean, each dot a run. 2026-10-21 (3 arms; 15 carried from 2026-10-16) · N = 1–2 runs per arm · runs shown, no intervals. CLI versions: agy 1.4.0, codex 0.162.1, grok 1.0.60. Gemini 3.8 Flash · Low: Recall 21 % (runs 14 %, 29 %); Precision 27 % (runs 20 %, 33 %). Gemini 3.8 Flash · Medium: Recall 43 % (runs 43 %, 43 %); Precision 40 % (runs 43 %, 38 %). Gemini 3.8 Flash · High: Recall 29 % (runs 29 %, 29 %); Precision 24 % (runs 25 %, 22 %). Gemini 4 Argon · Low: Recall 29 % (runs 29 %); Precision 22 % (runs 22 %). Gemini 4 Argon · Medium: Recall 29 % (runs 29 %); Precision 38 % (runs 38 %). Gemini 4 Argon · High: Recall 29 % (runs 29 %); Precision 50 % (runs 50 %). Grok 4.7: Recall 36 % (runs 29 %, 43 %); Precision 64 % (runs 57 %, 71 %). GPT-6.1 Sol · xhigh: Recall 43 % (runs 43 %, 43 %); Precision 83 % (runs 100 %, 67 %). GPT-6 Astra · xhigh: Recall 43 % (runs 43 %, 43 %); Precision 93 % (runs 86 %, 100 %).</desc>
 <style>
 text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 .t{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e1e0d9}.base{stroke:#c3c2b7}
@@ -14,7 +14,7 @@ text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 </style>
 <text class="t" x="16" y="26" font-size="16" font-weight="600">V: review against a known-defect key</text>
 <text class="t2" x="16" y="46" font-size="12">Recall (key defects found, of 7) and precision (real findings over all findings): the bar is the mean, each dot a run</text>
-<text class="t2" x="16" y="66" font-size="12">2026-10-16 · N = 1–2 runs per arm · runs shown, no intervals</text>
+<text class="t2" x="16" y="66" font-size="12">2026-10-21 (3 arms; 15 carried from 2026-10-16) · N = 1–2 runs per arm · runs shown, no intervals</text>
 <text class="t2" x="16" y="82" font-size="12">CLI versions: agy 1.4.0, codex 0.162.1, grok 1.0.60</text>
 <rect class="c1" x="16" y="111" width="10" height="10" rx="2"/>
 <text class="t" x="32" y="120" font-size="12">Recall</text>

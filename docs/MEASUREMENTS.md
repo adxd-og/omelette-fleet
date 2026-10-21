@@ -453,25 +453,25 @@ Each release adds its row at the live gate (a step of the release procedure the 
 
 ## The fleet's units on our own tasks
 
-Round one of the evals, 2026-10-16, on agy 1.4.0, codex 0.162.1 and grok 1.0.60: 138 calls, none failed. The method, its limits and the charts are in [evals/README](../evals/README.md); the tasks, keys and answers stay private.
+Round one of the evals, 2026-10-16, on agy 1.4.0, codex 0.162.1 and grok 1.0.60: 138 calls, none failed; Argon's R row re-measured per question on 2026-10-21 (agy 1.4.4, 30 calls, none failed), the other arms carried from round one. The method, its limits and the charts are in [evals/README](../evals/README.md); the tasks, keys and answers stay private.
 
 | Arm | Runs | R correct, of 10 | V recall | V precision | V wall per call |
 |---|---:|---:|---:|---:|---:|
 | Gemini 3.8 Flash · Low | 2 | 9 | 21 % | 27 % | 12 s |
 | Gemini 3.8 Flash · Medium | 2 | 9 | 43 % | 40 % | 497 s |
 | Gemini 3.8 Flash · High | 2 | 8.5 | 29 % | 24 % | 511 s |
-| Gemini 4 Argon · Low | 1 | 8 * | 29 % | 22 % | 58 s |
-| Gemini 4 Argon · Medium | 1 | 9 * | 29 % | 38 % | 69 s |
-| Gemini 4 Argon · High | 1 | 9 * | 29 % | 50 % | 560 s |
+| Gemini 4 Argon · Low | 1 | 8 † | 29 % | 22 % | 58 s |
+| Gemini 4 Argon · Medium | 1 | 9 † | 29 % | 38 % | 69 s |
+| Gemini 4 Argon · High | 1 | 8 † | 29 % | 50 % | 560 s |
 | Grok 4.7 | 2 | 10 | 36 % | 64 % | 924 s |
 | GPT-6.1 Sol · xhigh | 2 | 10 | 43 % | 83 % | 273 s |
 | GPT-6 Astra · xhigh | 2 | 10 | 43 % | 93 % | 328 s |
 
-\* one prompt for all ten questions; a per-question Argon round follows in the week of 2026-10-19. Recall is key defects found, of 7. Precision is the findings that are key items or new defects the session confirmed, over all findings; a new finding the session could not confirm (10 in the round, most of them hanging on how the engine behaves) counts against it.
+† R per question, 2026-10-21, agy 1.4.4; the batched round-one figures (one prompt for all ten questions, agy 1.4.0) were 8, 9 and 9. Recall is key defects found, of 7. Precision is the findings that are key items or new defects the session confirmed, over all findings; a new finding the session could not confirm (10 in the round, most of them hanging on how the engine behaves) counts against it.
 
 | Question | What round one says (N = 1–2) |
 |---|---|
-| Research | Codex and Grok answered all ten in every run; every Gemini arm missed the same question, naming a later release where the key asks for the first. No cited URL was invented (58 graded). The trap question caught one Flash High run. |
+| Research | Codex and Grok answered all ten in every run; every Gemini arm missed the same question, naming a later release where the key asks for the first. No cited URL was invented (58 graded), but no Gemini answer cited a URL at all, in either round: for Gemini the invented-URL count measures nothing. The trap question caught one Flash High run and Argon High per question, which said "not published" and then listed a SWE-bench figure as Google's. Argon per question scores as it did in one prompt: 8, 9, 8 against 8, 9, 9. |
 | Review | Codex is the most precise reviewer (83–93 %), and no arm found more than 3 of the 7 key defects; three of them no arm found. Gemini's precision ran 22–50 %. |
 | Effort | Neither Gemini model gains steadily from Low to High: Flash's best V recall is at Medium, and Argon High doubles Low's precision at ten times the wall time. |
 | Grok | 20 of 20 on research here does not lift [never a sole source](ORCHESTRATION.md#never-a-sole-source): ten questions, two runs. |
