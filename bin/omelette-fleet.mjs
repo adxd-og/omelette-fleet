@@ -371,7 +371,10 @@ function whichBin(bin, env = process.env) {
   const exts = process.platform === 'win32' ? String(env.PATHEXT || '.EXE;.CMD;.BAT').split(';') : [''];
   // Only absolute entries: a relative one would find `bin/codex` in whatever repository doctor runs in.
   for (const dir of absolutePathEntries(env.PATH)) {
-    for (const ext of exts) { const p = join(dir, bin + ext); if (isExec(p)) return p; }
+    // Joined as the OS joins it, as core/unit.mjs's locateBin does, NOT with path.join:
+    // join() folds `..` away as text, so `/repo/nonexistent/../bin` would be looked up
+    // in `/repo/bin`, where the shell's PATH walk never looks.
+    for (const ext of exts) { const p = dir.endsWith('/') ? `${dir}${bin}${ext}` : `${dir}/${bin}${ext}`; if (isExec(p)) return p; }
   }
   return null;
 }
@@ -1283,9 +1286,10 @@ async function mergePolicy({ cwd = process.cwd(), env = process.env } = {}) {
 // ─── install / uninstall ─────────────────────────────────────────────────────
 
 /**
- * `claude` is the OPERATOR's own tool, not a sandboxed model, so it is the one
- * child in this package that runs with `inheritEnv` (core/spawn.mjs): the whole
- * parent environment, because CLAUDE_CONFIG_DIR alone decides WHERE the
+ * `claude` is the OPERATOR's own tool, not a sandboxed model, so it runs with
+ * `inheritEnv` (core/spawn.mjs), as do the `gh` probe and `runGit` below: the
+ * parent environment with PATH reduced to its absolute entries, every other
+ * variable whole, because CLAUDE_CONFIG_DIR alone decides WHERE the
  * registration lands and a version manager's variables decide which node runs
  * it. The allowlist exists to keep secrets away from a model, and there is no
  * model in `claude mcp add`.
@@ -1489,10 +1493,12 @@ async function cmdUninstall(argv) {
 // ─── update ──────────────────────────────────────────────────────────────────
 
 /**
- * `git` is the OPERATOR's own tool, exactly like `claude` above, so it is the
- * other child that runs with `inheritEnv` (core/spawn.mjs): a pull has to see
- * the ssh agent, the credential helper, the proxy and every GIT_* variable the
- * operator set. There is no model reading this environment either.
+ * `git` is the OPERATOR's own tool, exactly like `claude` above, so it is one
+ * of the three children that run with `inheritEnv` (core/spawn.mjs; the `gh`
+ * probe is the third): PATH reduced to its absolute entries, every other
+ * variable whole, since a pull has to see the ssh agent, the credential helper,
+ * the proxy and every GIT_* variable the operator set. There is no model
+ * reading this environment either.
  *
  * WHAT THIS COMMAND WILL NOT DO: write the working tree over local changes
  * (a dirty tree is refused with the list), merge (--ff-only only), or touch the

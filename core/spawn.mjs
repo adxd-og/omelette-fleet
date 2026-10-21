@@ -36,7 +36,8 @@
  *   3. OMELETTE_ENV_PASSTHROUGH — comma-separated names/patterns, the
  *      operator's fleet-wide escape hatch when a CLI needs one more variable.
  *   4. THEN the billing scrub (a vendor prefix pattern can otherwise re-admit
- *      the API key the unit deletes on purpose), and only then `extra`, the
+ *      the API key the unit deletes on purpose) and the scrub of every other
+ *      vendor's credential (VENDOR_CREDENTIALS), and only then `extra`, the
  *      adapter's own additions (e.g. GROK_WEB_FETCH=1), which always apply.
  * A variable that is absent from the parent env is absent from the child —
  * empty strings are NOT synthesized, because "set but empty" means something
@@ -147,6 +148,24 @@ export const BILLING_ENV = [
   'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES',
 ];
 
+/**
+ * Every vendor's own login credential that its adapter ADMITS by name (its
+ * `envPassthrough`), so no scrub list can hold it: through the fleet-wide
+ * OMELETTE_ENV_PASSTHROUGH a `CODEX_*` pattern would hand Codex's token to Grok
+ * and Gemini. buildChildEnv scrubs each of these from every child whose own
+ * `passthrough` does not name it — the unit keeps its own vendor's credential.
+ * A copy, not an import, as BILLING_ENV; test/billing-scrub-1.7.2.test.mjs fails
+ * the suite when a credential-looking passthrough name is neither here nor a
+ * named exception there. Left out: AGY_ADC_AUTH (a boolean switch, `=true`,
+ * selecting the ADC login, not a secret), CODEX_HOME and GROK_HOME (state
+ * directories: a path, not a secret) and grok's GROK_AUTH_* label and timing
+ * preferences (class B).
+ */
+export const VENDOR_CREDENTIALS = [
+  // units/codex/adapter.mjs `PASSTHROUGH`: codex-cli 0.156.1's documented explicit access token
+  'CODEX_ACCESS_TOKEN',
+];
+
 const matches = (pattern, name) => (pattern.endsWith('*')
   ? name.startsWith(pattern.slice(0, -1))
   : name === pattern);
@@ -162,8 +181,12 @@ export function absolutePathEntries(path) {
   return String(path || '').split(delimiter).filter((dir) => dir && isAbsolute(dir));
 }
 
-/** The parent env for an `inheritEnv` child: every variable, PATH reduced to its absolute entries (see header). */
-function inheritedEnv(env) {
+/**
+ * The parent env for an `inheritEnv` child: every variable, PATH reduced to its
+ * absolute entries (see header). Exported for core/client.mjs, which starts a
+ * unit server with it. Never mutates `env`.
+ */
+export function inheritedEnv(env) {
   const out = { ...env };
   if (out.PATH !== undefined) {
     const absolute = absolutePathEntries(out.PATH);
@@ -176,7 +199,8 @@ function inheritedEnv(env) {
 /**
  * Build a child environment from the allowlist. Pure — exported for tests.
  * @param {{env?:object, allow?:string[], passthrough?:string[], scrub?:string[], extra?:object}} o
- *   passthrough: exact names or `PREFIX_*` patterns, added to `allow`.
+ *   passthrough: exact names or `PREFIX_*` patterns, added to `allow`; a
+ *     VENDOR_CREDENTIALS name survives only when this list names it exactly.
  *   scrub: names deleted AFTER the allowlist (billing keys), in addition to BILLING_ENV.
  *   extra: applied last and unconditionally.
  */
@@ -199,6 +223,8 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
     else delete out.PATH;
   }
   for (const name of [...BILLING_ENV, ...scrub]) delete out[name];
+  // Exact names only: an OMELETTE_ENV_PASSTHROUGH pattern or name never makes another vendor's credential "own".
+  for (const name of VENDOR_CREDENTIALS) if (!passthrough.includes(name)) delete out[name];
   return extra ? { ...out, ...extra } : out;
 }
 

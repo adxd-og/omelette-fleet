@@ -4,7 +4,8 @@
  * already drop it), not by `doctor`/`install` resolving a binary (`whichBin`),
  * not by the `git` that `check` runs inside the checked repository.
  * `whichBin` is driven through `doctor` as a child process: the bin file runs
- * `main` on import, so it cannot be imported.
+ * `main` on import, so it cannot be imported. `callUnitServer` (`omelette-fleet
+ * call`) is driven against a stand-in server that answers with its own env.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { absolutePathEntries, runProcess } from '../core/spawn.mjs';
+import { callUnitServer } from '../core/client.mjs';
 import { changedSince } from '../core/check.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -62,6 +64,13 @@ test('whichBin (via doctor): a relative PATH entry is never searched; an absolut
   assert.match(doctorCodexLine(dir, PATH), new RegExp(`^codex → ${planted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s`));
 });
 
+test('whichBin (via doctor): an entry `<dir>/nonexistent/../bin` is looked up as the OS does, not folded to `<dir>/bin`', { skip: WIN && 'POSIX executables' }, () => {
+  const dir = tmp();
+  fakeCodex(join(dir, 'bin'));
+  // `nonexistent` does not exist, so the kernel's walk stops there; path.join would fold it away.
+  assert.match(doctorCodexLine(dir, `${dir}/nonexistent/../bin`), /^codex → not found in PATH/);
+});
+
 test('changedSince: the git child gets no relative PATH entry', { skip: WIN && 'POSIX shell stub' }, () => {
   const dir = tmp();
   const stubDir = join(dir, 'stub');
@@ -94,4 +103,24 @@ test('runProcess inheritEnv: the parent env passes whole, except PATH\'s relativ
   const seen = JSON.parse(r.stdout);
   assert.deepEqual(seen.PATH.split(delimiter), [usrBin]);
   assert.equal(seen.FOO, 'bar', 'every other variable still passes');
+});
+
+test('callUnitServer: the unit server it starts gets no relative PATH entry; every other variable passes whole', async () => {
+  const dir = tmp();
+  const server = join(dir, 'env-server.mjs');
+  writeFileSync(server, [
+    'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
+    'let buf = ""; process.stdin.setEncoding("utf8");',
+    'process.stdin.on("data", (c) => { buf += c; let nl; while ((nl = buf.indexOf("\\n")) >= 0) { const l = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!l) continue; const m = JSON.parse(l);',
+    '  if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "f", version: "0" } } });',
+    '  else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "t", description: "d", inputSchema: { type: "object" } }] } });',
+    '  else if (m.id === 3) send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: JSON.stringify({ PATH: process.env.PATH, FOO: process.env.FOO }) }] } }); } });',
+  ].join('\n'));
+  const usrBin = resolve('/usr/bin');
+  const parent = { PATH: ['rel', '', usrBin].join(delimiter), FOO: 'bar' };
+  const r = await callUnitServer({ serverPath: server, tool: 't', timeoutS: 20, env: parent });
+  const seen = JSON.parse(r.text);
+  assert.deepEqual(seen.PATH.split(delimiter), [usrBin]);
+  assert.equal(seen.FOO, 'bar', 'every other variable still passes');
+  assert.equal(parent.PATH, ['rel', '', usrBin].join(delimiter), 'the caller\'s env object is not mutated');
 });

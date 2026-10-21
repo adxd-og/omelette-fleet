@@ -38,14 +38,18 @@ test('buildChildEnv: `extra` is applied after the scrub, even for a BILLING_ENV 
 
 test('buildChildEnv: an EXACT name in OMELETTE_ENV_PASSTHROUGH or in the adapter\'s own passthrough cannot re-admit another vendor\'s key', () => {
   const keys = ['CODEX_API_KEY', 'XAI_API_KEY', 'GEMINI_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GROK_TRACE_UPLOAD_URL', 'GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES', 'CODEX_EXEC_SERVER_URL'];
-  const env = { PATH: usrBin, OMELETTE_ENV_PASSTHROUGH: keys.join(', ') };
-  for (const k of keys) env[k] = 'v';
-  const viaEnv = buildChildEnv({ env, scrub: [] });
-  const viaAdapter = buildChildEnv({ env, passthrough: keys, scrub: [] });
+  // CODEX_TIMEOUT_S is the positive control: a harmless name each path admits, so an absent key is the scrub's doing.
+  const parent = { PATH: usrBin, CODEX_TIMEOUT_S: '30' };
+  for (const k of keys) parent[k] = 'v';
+  const viaEnv = buildChildEnv({ env: { ...parent, OMELETTE_ENV_PASSTHROUGH: [...keys, 'CODEX_TIMEOUT_S'].join(', ') }, scrub: [] });
+  // No OMELETTE_ENV_PASSTHROUGH here: the adapter's own list is the only way in.
+  const viaAdapter = buildChildEnv({ env: parent, passthrough: [...keys, 'CODEX_TIMEOUT_S'], scrub: [] });
   for (const k of keys) {
     assert.equal(viaEnv[k], undefined, `${k} via OMELETTE_ENV_PASSTHROUGH`);
     assert.equal(viaAdapter[k], undefined, `${k} via the adapter passthrough`);
   }
+  assert.equal(viaEnv.CODEX_TIMEOUT_S, '30', 'OMELETTE_ENV_PASSTHROUGH admits a harmless name');
+  assert.equal(viaAdapter.CODEX_TIMEOUT_S, '30', 'the adapter passthrough alone admits a harmless name');
 });
 
 test('runProcess: no scrubEnv at all, the fleet-wide scrub still holds the other vendors\' keys back', async () => {

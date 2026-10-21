@@ -15,6 +15,11 @@
  * NEVER SHELLS OUT: spawn(process.execPath, [serverPath]) with an args array,
  * so a path with a space or a `$` is a path, not shell syntax.
  *
+ * THE SERVER GETS `env` WHOLE, PATH REDUCED to its absolute entries
+ * (core/spawn.mjs `inheritedEnv`): it is our own code and builds its vendor
+ * children's env from an allowlist, but no child of the fleet sees a relative
+ * PATH entry — one would resolve inside whatever repository `call` runs in.
+ *
  * EVERY WAY THE CALL CAN DIE IS A REJECTION, and none of them waits out the
  * timeout: a JSON-RPC `error` reply (to any of the three requests), a child
  * that exits, a stdin that closes under us. The one that used to hurt: an
@@ -27,6 +32,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createLineSplitter, DEFAULT_PROTOCOL } from './jsonrpc.mjs';
+import { inheritedEnv } from './spawn.mjs';
 
 /**
  * Node's timers are int32 milliseconds: anything past ~24.8 days silently
@@ -62,7 +68,7 @@ export function callUnitServer({
     const seconds = Math.min(Math.max(Number(timeoutS) || 0, 1), MAX_TIMEOUT_S);
     let child;
     try {
-      child = spawn(process.execPath, [serverPath], { stdio: ['pipe', 'pipe', 'pipe'], env });
+      child = spawn(process.execPath, [serverPath], { stdio: ['pipe', 'pipe', 'pipe'], env: inheritedEnv(env) });
     } catch (e) {
       reject(new Error(`could not start ${serverPath}: ${(e && e.message) || e}`));
       return;
