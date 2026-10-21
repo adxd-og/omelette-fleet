@@ -2823,6 +2823,8 @@ async function cmdDoctor(argv) {
     out(`  config      ${ceilingLine(name, cfg)}`);
     for (const line of configRows(name, cfg, '              ')) out(line);
     for (const w of cfg.warnings) out(`  warning     ${visible(w)}`);
+    // A notice, never a problem: it does not reach `problems` or the exit code.
+    if (name === 'gemini') out(`  notice      Antigravity's FAQ calls wrapping agy inside another coding agent "not supported under consumer plans" (read 2026-10-21): a grey zone, and your account's risk — docs/SECURITY.md, "Antigravity's terms: a grey zone"`);
     // A registration whose server file is gone cannot start at all — that is a
     // fault in its own right, however healthy the vendor CLI looks.
     if (reg && !reg.exists) problems.push(`the registered server file is missing (${visible(reg.target || 'no args')})`);

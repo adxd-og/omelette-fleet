@@ -15,6 +15,7 @@ The short version: units read, the manager writes. Everything below explains wha
 | How is Codex's sandbox actually enforced? | [Codex — one real layer, plus isolation](#codex--one-real-layer-plus-isolation) |
 | What are Grok's layers of enforcement? | [Grok — layers L1–L6](#grok--layers-l1l6) |
 | Why is Gemini's read-only posture the weakest in the fleet? | [Gemini — the weakest posture, documented as such](#gemini--the-weakest-posture-documented-as-such) |
+| Is running the Gemini unit on a consumer Antigravity plan allowed? | [Antigravity's terms: a grey zone](#antigravitys-terms-a-grey-zone) |
 | What does `doctor --probe-sandbox` actually prove? | [The sandbox probe](#the-sandbox-probe) |
 | How do I know an answer is incomplete rather than finished? | [Partial answers are never passed off as clean ones](#partial-answers-are-never-passed-off-as-clean-ones) |
 | What does the guard hook actually block, and how? | [The guard hook](#the-guard-hook) |
@@ -222,6 +223,12 @@ What the unit does enforce:
 `gemini_image` always runs with `--mode accept-edits`, because the image tool has to save its artifact. It is given a **freshly created temp directory under the OS temp dir as its cwd**, so even a cwd-relative save lands outside every project. The tool returns the absolute path; you import the file by hand. Its prompt carries the same "do not run terminal commands — they are unavailable" instruction as the research preamble: the first live image call was lost to the model reaching for the shell `command` tool, which headless agy auto-denies. That instruction is in the prompt rather than something a retry gets lucky with — this run is not retried.
 
 **What that leaves, tool by tool.** `gemini_research` with the ceiling closed passes **no** `--mode` at all: agy runs in its standard mode, and every tool your `permissions.allow` lists runs without a prompt — an edit or shell tool in that list is honoured headless, and nothing in this package can tell. `gemini_image` passes `--mode accept-edits` whatever the ceiling says: agy approves file edits itself, and the temp cwd decides where a cwd-relative save lands, not whether an edit to an absolute path elsewhere is approved — that is agy's policy, and this package has not measured it. Keep edit and shell tools out of that list ([below](#recommended-agy-allow-rules)).
+
+### Antigravity's terms: a grey zone
+
+Read 2026-10-21. The Antigravity Additional Terms of Service, §6, name "using third party software, tools, or services to access the Service" as a breach (the example given is OpenClaw with Antigravity OAuth), "including, but not limited to, using the Service in connection with products not provided by us", and make it grounds for suspension or termination of the Antigravity and/or Gemini CLI accounts. The Antigravity FAQ: "Antigravity CLI headless mode (`agy -p`) is intended for direct scripting and CI workflows. Wrapping `agy` inside third-party coding agents or applications, or automating account rotation, is not supported under consumer plans." and "To use a third-party coding agent with Gemini, we recommend using a Gemini Enterprise or Google AI Studio API key."
+
+The unit runs the official `agy` binary under your own login, handles no key and rotates no account: the first clause is not its case. Wrapping agy inside a coding agent on a consumer plan is its case to the letter. Unsupported is not forbidden, but the FAQ files that answer under its Terms-of-Service question; no suspension for calling the official CLI is known to us. The account risk is yours. The API-key route is not one this unit offers: it scrubs such keys on purpose ([The environment allowlist](#the-environment-allowlist)); an opt-in key mode is a separate feature, not in this release. `doctor` prints this as a `notice` line in the gemini block.
 
 ## The sandbox probe
 
