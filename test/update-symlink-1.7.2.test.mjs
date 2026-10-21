@@ -5,6 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { lstatSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,4 +36,21 @@ test('writeCache: a symlink at the cache is replaced by a regular file; one at t
   assert.equal(readFileSync(atOldTmp, 'utf8'), 'tmp victim\n');
   assert.ok(lstatSync(cache).isFile(), 'the rename replaced the link with our own file');
   assert.equal(JSON.parse(readFileSync(cache, 'utf8')).latest, '9.9.9');
+});
+
+test('readCache reads nothing through a link to a FIFO: cachedCheck resolves instead of waiting for a writer', { skip: !symlinksWork && 'POSIX symlinks and FIFOs' }, () => {
+  const home = mkdtempSync(join(tmpdir(), 'omelette-upd-fifo-'));
+  const fifo = join(mkdtempSync(join(tmpdir(), 'omelette-fifo-')), 'pipe');
+  execFileSync('mkfifo', [fifo]);
+  symlinkSync(fifo, join(home, CHECK_FILE));
+  const code = `import { cachedCheck } from ${JSON.stringify(new URL('../core/update.mjs', import.meta.url).href)};
+const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ tag_name: 'v9.9.9' }) });
+console.log(JSON.stringify(await cachedCheck({ home: ${JSON.stringify(home)}, current: '0.1.0', fetchImpl })));`;
+  // A read through the link opens the FIFO and waits for a writer that never comes.
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { timeout: 5000, encoding: 'utf8' });
+  assert.equal(r.error, undefined, 'the check must not wait on the FIFO');
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.latest, '9.9.9');
+  assert.equal(out.cached, false, 'the link was treated as no cache');
 });

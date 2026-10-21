@@ -39,7 +39,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync,
-  statSync, unlinkSync, writeFileSync, writeSync,
+  unlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
 
@@ -51,6 +51,27 @@ const NOFOLLOW = constants.O_NOFOLLOW || 0; // 0 where the platform has no such 
 // reader appears — inside a tool call. Non-blocking, it fails (ENXIO) instead.
 const NONBLOCK = constants.O_NONBLOCK || 0;
 const LOG_FLAGS = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | NOFOLLOW | NONBLOCK;
+// A plain O_RDONLY open of a FIFO (or of a link to one) waits for a writer — inside server start.
+const READ_FLAGS = constants.O_RDONLY | NOFOLLOW | NONBLOCK;
+
+/**
+ * A fleet-home file's text, read through ONE fd: O_NOFOLLOW refuses a symlink
+ * at the name, O_NONBLOCK keeps a FIFO from blocking the open, and the fstat of
+ * that same fd must say regular file — no path is looked at twice, so nothing
+ * can be swapped in between. `wanted(stat)` may refuse it too (the trim's size
+ * test). Returns null for anything refused; THROWS on an fs error, which every
+ * caller's fail-soft catch takes. Shared with core/update.mjs (the cache read).
+ */
+export function readRegularFile(path, wanted = () => true) {
+  const fd = openSync(path, READ_FLAGS);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || !wanted(st)) return null;
+    return readFileSync(fd, 'utf8');
+  } finally {
+    try { closeSync(fd); } catch { /* gone */ }
+  }
+}
 
 /**
  * tmp + rename, 0600. The tmp name is unpredictable and opened O_EXCL (`wx`):
@@ -126,9 +147,9 @@ export function createStatus({ unit, spawnTools, resolve, pid = process.pid }) {
   /**
    * One O_APPEND write per event, never through a link: O_NOFOLLOW refuses a
    * symlink at the log's name (the line is dropped, the link left as it is),
-   * and anything that opens but is not a regular file is skipped. A log left
-   * wider than 0600 is narrowed before the line goes in — `mode` on the open
-   * applies only to a file the open creates.
+   * and anything that opens but is not a regular file with a single name is
+   * skipped. A log left wider than 0600 is narrowed before the line goes in —
+   * `mode` on the open applies only to a file the open creates.
    */
   function logLine(obj) {
     let fd = null;
@@ -138,6 +159,8 @@ export function createStatus({ unit, spawnTools, resolve, pid = process.pid }) {
       fd = openSync(log, LOG_FLAGS, 0o600);
       const st = fstatSync(fd);
       if (!st.isFile()) return;
+      // A hard link is a second name for another file's inode: O_NOFOLLOW cannot see it, the link count can.
+      if (st.nlink !== 1) return;
       if (st.mode & 0o777 & ~0o600) fchmodSync(fd, 0o600);
       writeSync(fd, JSON.stringify({ schema: STATUS_SCHEMA, ...obj }) + '\n');
     } catch { /* fail-soft */ } finally {
@@ -145,13 +168,20 @@ export function createStatus({ unit, spawnTools, resolve, pid = process.pid }) {
     }
   }
 
+  /**
+   * A symlink, a hard link or anything but a regular file at the log's name is
+   * left alone: its target's tail would otherwise be copied into a new fleet
+   * log. The fd read decides — it opens once, and its fstat gives both the type
+   * and the size. The lstat stays as the one link check where the platform has
+   * no O_NOFOLLOW (READ_FLAGS then follows a symlink).
+   */
   function trimLog() {
     try {
       const { log } = paths();
-      // A link at the log's name would otherwise have its target's tail copied into a new fleet log.
       if (!lstatSync(log).isFile()) return;
-      if (statSync(log).size <= LOG_TRIM_BYTES) return;
-      const lines = readFileSync(log, 'utf8').split('\n').filter(Boolean);
+      const text = readRegularFile(log, (st) => st.nlink === 1 && st.size > LOG_TRIM_BYTES);
+      if (text === null) return;
+      const lines = text.split('\n').filter(Boolean);
       writeAtomic(log, lines.slice(-LOG_KEEP_LINES).join('\n') + '\n');
     } catch { /* log may not exist yet */ }
   }
@@ -166,7 +196,9 @@ export function createStatus({ unit, spawnTools, resolve, pid = process.pid }) {
         const m = SNAPSHOT_NAME_RE.exec(name);
         if (!m || m[1] !== unit || m[2] === String(pid)) continue;
         if (!pidIsGone(Number(m[2]))) continue;
-        const parsed = JSON.parse(readFileSync(join(dir, name), 'utf8'));
+        const text = readRegularFile(join(dir, name)); // a link, a FIFO, a directory: kept, never read
+        if (text === null) continue;
+        const parsed = JSON.parse(text);
         if (!(parsed && parsed.schema >= 2 && parsed.unit === unit && parsed.pid === Number(m[2]))) continue;
         rmSync(join(dir, name), { force: true });
       } catch { /* this file only; the next one is still looked at */ }

@@ -64,7 +64,7 @@ test('trim: an oversized log is cut to its last 1000 lines, 0600, no tmp, and a 
   assert.deepEqual(tmps(dir).filter((n) => !lstatSync(join(dir, n)).isSymbolicLink()), []);
 });
 
-test('trim of an oversized log reached through a symlink leaves the victim byte-identical (the link itself is replaced)', { skip }, () => {
+test('an oversized log reached through a symlink: after boot and a logged event the victim stays byte-identical and the link stays', { skip }, () => {
   const { st, log } = make();
   const victim = join(mkdtempSync(join(tmpdir(), 'omelette-t2-v-')), '.zshrc');
   writeFileSync(victim, bigLog());
@@ -74,6 +74,7 @@ test('trim of an oversized log reached through a symlink leaves the victim byte-
   const tok = st.start('t', 'echo $(touch /tmp/x)');
   st.end(tok, 'ok');
   assert.deepEqual(readFileSync(victim), before);
+  assert.ok(lstatSync(log).isSymbolicLink(), 'neither the trim nor the append replaced the link');
 });
 
 test('existing log modes wider than 0600 are narrowed, whichever bits are wide', { skip }, () => {

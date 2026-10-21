@@ -31,6 +31,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, u
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fleetHome, fleetSettings } from './config.mjs';
+import { readRegularFile } from './status.mjs';
 
 export const RELEASES_URL = 'https://api.github.com/repos/adxd-og/omelette-fleet/releases/latest';
 export const RELEASES_PAGE = 'https://github.com/adxd-og/omelette-fleet/releases/latest';
@@ -143,9 +144,16 @@ export async function checkLatest({
   }
 }
 
+/**
+ * Read through one O_NOFOLLOW | O_NONBLOCK fd that must fstat as a regular file
+ * (core/status.mjs `readRegularFile`): a link to a FIFO at the cache's name
+ * would otherwise block the read inside server start, and no catch interrupts that.
+ */
 function readCache(file) {
   try {
-    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    const text = readRegularFile(file);
+    if (text === null) return null;
+    const raw = JSON.parse(text);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const checkedAt = Number(raw.checkedAt);
     const latest = typeof raw.latest === 'string' ? raw.latest.trim() : '';
