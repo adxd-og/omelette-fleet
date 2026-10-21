@@ -293,7 +293,9 @@ const AUTH_HELP =
  * expanded. Research prompts get every `@` replaced by `＠` so a web-only run
  * never carries local bytes. Residual: an e-mail or a handle in a research
  * prompt reads `a＠b` to the model. Review prompts keep `@` — review is
- * local-only, and `@path` there is the same as read_file.
+ * local-only, and `@path` there is the same as read_file. The two image tools
+ * neutralise their prompt text too (same residual: an e-mail reads `a＠b` to
+ * the model); grok_image_edit's image path stays as the caller gave it.
  */
 const neutraliseAt = (s) => s.replace(/@/g, '＠');
 
@@ -354,7 +356,7 @@ function imageEditPrompt(imagePath, prompt) {
     'mentioned unchanged. When the tool reports the saved file, reply with ' +
     'ONLY the absolute path of the NEW saved image file (never the source ' +
     'path) — no markdown, no quotes, no other text.\n\n' +
-    'Transformation: ' + prompt
+    'Transformation: ' + neutraliseAt(prompt)
   );
 }
 
@@ -859,7 +861,7 @@ export default defineUnit({
         // The run's own start: an image file older than it is one the CLI
         // merely named, never one it saved (core/artifact.mjs).
         const since = Date.now();
-        const { out, res } = await runGrokRaw(ctx, { prompt: IMAGE_GEN_PREFIX + prompt, tools: IMAGE_GEN_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
+        const { out, res } = await runGrokRaw(ctx, { prompt: IMAGE_GEN_PREFIX + neutraliseAt(prompt), tools: IMAGE_GEN_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
         return imageAnswer(ctx, out, res, extractImagePath(runText(out), '', since));
       },
     },
