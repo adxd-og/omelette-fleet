@@ -85,3 +85,11 @@ test('doctor: the notice is not a problem — a registered, healthy gemini is no
   assert.doesNotMatch(r.out, /FAULT/);
   assert.match(r.out, /No faults in units that are both enabled and registered\./);
 });
+
+test('doctor: no gemini binary and no gemini registration — no grey-zone notice', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-grey-'));
+  const fake = fakeBin(dir);
+  const r = cli(['doctor'], dir, { AGY_BIN: join(dir, 'no-such-agy'), GROK_BIN: fake, CODEX_BIN: fake });
+  assert.match(block(r.out, 'gemini'), /not found in PATH/);
+  assert.doesNotMatch(r.out, /notice|grey zone/);
+});

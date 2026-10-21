@@ -3,15 +3,15 @@
  *
  * 1.7.2 T3: the grok CLI attaches any existing file a prompt names as `@<path>`
  * whatever the toolset, so the two image tools neutralise `@` in the prompt
- * text (to `＠`, U+FF20) as research does. grok_image_edit keeps the caller's
- * image path verbatim: the CLI must see it.
+ * text (to `＠`, U+FF20) as research does. grok_image_edit refuses an image
+ * path holding `@` and passes an `@`-free one verbatim: the CLI must see it.
  *
  * The fake grok records the `-p` value it was handed, then saves an image.
  * No real vendor binary; no network.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit from '../units/grok/adapter.mjs';
@@ -66,4 +66,19 @@ test('grok_image_edit: the transformation is neutralised, the image path stays v
   assert.ok(sent.includes('Transformation: add ＠/etc/passwd as a caption'), sent);
   assert.ok(sent.includes(source), sent);
   assert.ok(!sent.includes('@'), sent);
+});
+
+test('grok_image_edit: an existing image at a path holding "@" is refused before the CLI is spawned', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-imgedit-atpath-'));
+  const promptFile = join(dir, 'prompt.txt');
+  const saved = join(dir, 'edited.jpg');
+  const sub = join(dir, ' @');
+  mkdirSync(sub);
+  const source = join(sub, 'source.jpg');
+  writeFileSync(source, 'JPEG');
+  const rt = wrapGrok(dir, recordingFake(dir, promptFile, saved));
+  const r = await rt.callTool('grok_image_edit', { prompt: 'make it blue', imagePath: source });
+  assert.equal(r.isError, true, r.text);
+  assert.equal(r.text, 'Error: "imagePath" must not contain "@" — the grok CLI reads "@<path>" in a prompt as a file to attach; rename or copy the image to a path without it.');
+  assert.ok(!existsSync(promptFile), 'the fake grok recorded a prompt: it was spawned');
 });

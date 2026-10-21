@@ -253,11 +253,11 @@ const VERSION_TOKEN = /^\d+\.\d+(\.\d+)?([-+.\w]*)?$/;
  */
 export async function cliVersion(unit, env = process.env) {
   const bin = locateBin(resolveBin(unit, env), env);
-  if (!bin) return 'unknown (not found)';
+  if (!bin) return 'unknown';
   let r;
   try {
     r = await runProcess({ bin, args: ['--version'], env, hardKillMs: 10000, envPassthrough: unit.envPassthrough, scrubEnv: unit.riskEnv });
-  } catch (e) { return `unknown (${(e && e.message) || e})`; }
+  } catch { return 'unknown'; }
   if (r.killed) return 'unknown (no answer in 10s)';
   if (r.code !== 0) return `unknown (exit ${r.code})`;
   const first = (s) => String(s || '').trim().split('\n')[0].trim();

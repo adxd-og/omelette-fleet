@@ -295,7 +295,9 @@ const AUTH_HELP =
  * prompt reads `a＠b` to the model. Review prompts keep `@` — review is
  * local-only, and `@path` there is the same as read_file. The two image tools
  * neutralise their prompt text too (same residual: an e-mail reads `a＠b` to
- * the model); grok_image_edit's image path stays as the caller gave it.
+ * the model); grok_image_edit refuses an image path holding `@` at all — the
+ * CLI expands `@ /abs` inside a path too, so a crafted existing path would
+ * attach another file — and passes an `@`-free path as the caller gave it.
  */
 const neutraliseAt = (s) => s.replace(/@/g, '＠');
 
@@ -884,7 +886,7 @@ export default defineUnit({
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'What to change and/or the target style. Everything not mentioned is kept as-is.' },
-          imagePath: { type: 'string', description: 'ABSOLUTE path to the source/reference image file. Validated before spawn: must be absolute, exist, and be a regular file.' },
+          imagePath: { type: 'string', description: 'ABSOLUTE path to the source/reference image file. Validated before spawn: must be absolute, exist, be a regular file, and hold no "@" (the grok CLI reads "@<path>" in a prompt as a file to attach).' },
           model: MODEL_PROP,
         },
         required: ['prompt', 'imagePath'],
@@ -897,6 +899,7 @@ export default defineUnit({
         let st;
         try { st = statSync(imagePath); } catch { st = null; }
         if (!st || !st.isFile()) return { text: `Error: "imagePath" is not an existing file: ${imagePath}`, isError: true };
+        if (imagePath.includes('@')) return { text: 'Error: "imagePath" must not contain "@" — the grok CLI reads "@<path>" in a prompt as a file to attach; rename or copy the image to a path without it.', isError: true };
         const since = Date.now();
         const { out, res } = await runGrokRaw(ctx, { prompt: imageEditPrompt(imagePath, prompt), tools: IMAGE_EDIT_TOOLS, maxTurns: ctx.cfg.imageMaxTurns });
         // The SOURCE path is never the answer: the edit's artifact is a NEW
