@@ -49,6 +49,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { absolutePathEntries, runProcess } from '../core/spawn.mjs';
+import { readRegularFile } from '../core/status.mjs';
 import { visible } from '../core/log.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
@@ -2995,7 +2996,7 @@ const describeSpec = (spec) => {
 function readConfigRaw(env = process.env) {
   const path = configPath(env);
   let raw;
-  try { raw = readFileSync(path, 'utf8'); }
+  try { raw = readRegularFile(path); if (raw === null) throw new Error('not a regular file'); } // one O_NOFOLLOW | O_NONBLOCK fd: a FIFO at the config's name cannot hold the CLI
   catch (e) { return e && e.code === 'ENOENT' ? { path, config: {}, existed: false } : { path, config: null, existed: true, error: (e && e.message) || String(e) }; }
   try {
     const parsed = JSON.parse(raw);

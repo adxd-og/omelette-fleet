@@ -43,12 +43,12 @@ function fakeCodex(dir) {
   return p;
 }
 
-function doctorCodexLine(dir, PATH) {
+function doctorCodexLine(dir, PATH, extraEnv = {}) {
   const gone = join(dir, 'no-such');
   const r = spawnSync(process.execPath, [BIN, 'doctor'], {
     cwd: dir,
     encoding: 'utf8',
-    env: { PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: gone },
+    env: { PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: gone, ...extraEnv },
   });
   return ((r.stdout || '').match(/── codex[\s\S]*?bin\s+(.*)/) || [])[1] || `no codex bin line: ${r.stdout}${r.stderr}`;
 }

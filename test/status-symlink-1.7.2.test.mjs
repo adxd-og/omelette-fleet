@@ -91,9 +91,11 @@ test('boot reads nothing through a link to a FIFO: neither the log nor a dead sn
   const dir = mkdtempSync(join(tmpdir(), 'omelette-status-fifo-'));
   const fifo = join(mkdtempSync(join(tmpdir(), 'omelette-fifo-')), 'pipe');
   execFileSync('mkfifo', [fifo]);
-  assert.throws(() => process.kill(999999, 0), 'the snapshot below must name a dead pid, or the sweep never reads it');
+  // A pid that is certainly gone and OURS: a child that has exited. 999999 could belong to another user, where kill gives EPERM and the sweep (rightly) treats it as alive — and never reads the snapshot.
+  const dead = spawnSync(process.execPath, ['-e', '0']).pid;
+  assert.throws(() => process.kill(dead, 0), (e) => e.code === 'ESRCH', 'the snapshot below must name a dead pid, or the sweep never reads it');
   symlinkSync(fifo, join(dir, 'fleet-log.ndjson'));
-  symlinkSync(fifo, join(dir, 'status-testunit-999999.json'));
+  symlinkSync(fifo, join(dir, `status-testunit-${dead}.json`));
   const code = `import { createStatus } from ${JSON.stringify(new URL('../core/status.mjs', import.meta.url).href)};
 createStatus({ unit: 'testunit', spawnTools: new Set(), resolve: () => ({ dir: ${JSON.stringify(dir)}, enabled: true }) }).boot();
 console.log('booted');`;

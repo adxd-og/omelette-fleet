@@ -47,10 +47,7 @@
  * `<home>/results/<unit>` are lstatted before every write, listing, read and
  * prune — a link planted at either of them would redirect the whole spool.
  */
-import {
-  closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, readSync,
-  readdirSync, renameSync, unlinkSync, writeFileSync,
-} from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** `<YYYYMMDDTHHMMSSZ>-<pid>-<seq>`, as core/unit.mjs's makeResultId builds it. */
@@ -70,6 +67,7 @@ const HEADER_MAX_BYTES = 8192;     // a listing reads the header only, never a 4
 const TMP_STALE_MS = 60 * 60 * 1000;
 const UNIT_RE = /^[a-z][a-z0-9-]*$/;
 const NOFOLLOW = constants.O_NOFOLLOW || 0; // 0 where the platform has no such flag
+const NONBLOCK = constants.O_NONBLOCK || 0;
 
 export function isValidResultId(id) {
   return typeof id === 'string' && id.length <= MAX_ID_LENGTH && RESULT_ID_RE.test(id);
@@ -255,7 +253,8 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
     try {
       const st = lstatSync(path);
       if (!st.isFile()) return null;
-      fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+      fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK); // NONBLOCK: a FIFO swapped in after the lstat cannot hold the open
+      if (!fstatSync(fd).isFile()) return null; // the fd's own type, not the path's a moment ago
       const buf = Buffer.alloc(HEADER_MAX_BYTES);
       const n = readSync(fd, buf, 0, HEADER_MAX_BYTES, 0);
       closeSync(fd);
@@ -326,7 +325,8 @@ export function createResultStore({ home, unit, keep = 50, maxBytes = 50 * 1024 
     try {
       const st = lstatSync(path); // the symlink refusal, before anything is opened
       if (!st.isFile()) return null;
-      fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+      fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK); // NONBLOCK: a FIFO swapped in after the lstat cannot hold the open
+      if (!fstatSync(fd).isFile()) return null; // the fd's own type, not the path's a moment ago
       const raw = readFileSync(fd, 'utf8');
       closeSync(fd);
       fd = null;

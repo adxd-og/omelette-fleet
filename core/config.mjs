@@ -38,6 +38,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unl
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { INVISIBLE_CHARS } from './log.mjs';
+import { readRegularFile } from './status.mjs';
 
 export const CONFIG_VERSION = 1;
 export const CONFIG_FILE = 'fleet.config.json';
@@ -167,7 +168,11 @@ export function loadFleetConfig(env = process.env) {
   }
   if (cache.path === path && cache.mtimeMs === st.mtimeMs) return { config: cache.data, path, error: cache.error };
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    // Through one O_NOFOLLOW | O_NONBLOCK fd (core/status.mjs): a FIFO at the
+    // config's name, or a link to one, would otherwise hold the server's start.
+    const text = readRegularFile(path);
+    if (text === null) throw new Error('not a regular file');
+    const parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('top-level must be an object');
     const error = typeof parsed.version === 'number' && parsed.version > CONFIG_VERSION
       ? `${path}: version ${parsed.version} is newer than this fleet understands (${CONFIG_VERSION}) — unknown keys will be ignored`
