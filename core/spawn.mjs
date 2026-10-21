@@ -125,6 +125,28 @@ export const liveGroupCount = () => LIVE.size;
 /** Fleet-wide operator extension of the allowlist. */
 export const ENV_PASSTHROUGH_VAR = 'OMELETTE_ENV_PASSTHROUGH';
 
+/**
+ * Every vendor's riskEnv, scrubbed from EVERY unit's child. OMELETTE_ENV_PASSTHROUGH
+ * applies fleet-wide, so a `CODEX_*` pattern meant for Codex would otherwise hand
+ * CODEX_API_KEY to Grok and Gemini, whose own lists do not name it. A copy, not an
+ * import (core never depends on units): a vendor adds a key, its adapter names it,
+ * and this union is updated at the next release — test/billing-scrub-1.7.2.test.mjs
+ * fails the suite until it is.
+ */
+export const BILLING_ENV = [
+  // units/codex/adapter.mjs `riskEnv`
+  'OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_EXEC_SERVER_URL',
+  // units/grok/adapter.mjs `RISK_ENV`
+  'XAI_API_KEY', 'GROK_CODE_XAI_API_KEY', 'GROK_WEB_FETCH_ALLOW_LOCAL', 'GROK_MEMORY',
+  'GROK_FOLDER_TRUST', 'GROK_AUTH_PROVIDER_COMMAND', 'GROK_WEB_FETCH_PROXY',
+  'GROK_TRACE_UPLOAD_URL', 'GROK_TRACE_UPLOAD_BUCKET', 'GROK_TRACE_UPLOAD_ENDPOINT_URL',
+  'GROK_TRACE_UPLOAD_CREDENTIALS_FILE', 'GROK_CLAUDE_HOOKS_ENABLED', 'GROK_CURSOR_HOOKS_ENABLED',
+  // units/gemini/adapter.mjs `RISK_ENV`
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY',
+  'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CREDENTIALS', 'GOOGLE_GENAI_USE_VERTEXAI',
+  'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES',
+];
+
 const matches = (pattern, name) => (pattern.endsWith('*')
   ? name.startsWith(pattern.slice(0, -1))
   : name === pattern);
@@ -155,7 +177,7 @@ function inheritedEnv(env) {
  * Build a child environment from the allowlist. Pure — exported for tests.
  * @param {{env?:object, allow?:string[], passthrough?:string[], scrub?:string[], extra?:object}} o
  *   passthrough: exact names or `PREFIX_*` patterns, added to `allow`.
- *   scrub: names deleted AFTER the allowlist (billing keys).
+ *   scrub: names deleted AFTER the allowlist (billing keys), in addition to BILLING_ENV.
  *   extra: applied last and unconditionally.
  */
 export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthrough = [], scrub = [], extra } = {}) {
@@ -176,7 +198,7 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
     if (absolute.length) out.PATH = absolute.join(delimiter);
     else delete out.PATH;
   }
-  for (const name of scrub) delete out[name];
+  for (const name of [...BILLING_ENV, ...scrub]) delete out[name];
   return extra ? { ...out, ...extra } : out;
 }
 
