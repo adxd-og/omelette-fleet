@@ -46,9 +46,9 @@
  */
 import { accessSync, chmodSync, closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, opendirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, delimiter, dirname, join, resolve as resolvePath } from 'node:path';
+import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runProcess } from '../core/spawn.mjs';
+import { absolutePathEntries, runProcess } from '../core/spawn.mjs';
 import { visible } from '../core/log.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
@@ -369,8 +369,8 @@ function whichBin(bin, env = process.env) {
   const isExec = (p) => { try { accessSync(p, constants.X_OK); return statSync(p).isFile(); } catch { return false; } };
   if (bin.includes('/') || bin.includes('\\')) { const p = resolvePath(bin); return isExec(p) ? p : null; }
   const exts = process.platform === 'win32' ? String(env.PATHEXT || '.EXE;.CMD;.BAT').split(';') : [''];
-  for (const dir of String(env.PATH || '').split(delimiter)) {
-    if (!dir) continue;
+  // Only absolute entries: a relative one would find `bin/codex` in whatever repository doctor runs in.
+  for (const dir of absolutePathEntries(env.PATH)) {
     for (const ext of exts) { const p = join(dir, bin + ext); if (isExec(p)) return p; }
   }
   return null;

@@ -49,7 +49,8 @@
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { devNull } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { absolutePathEntries } from './spawn.mjs';
 
 /** At most this many pointer lines per checked file; more is a usage error. */
 export const MAX_POINTERS = 2000;
@@ -193,9 +194,13 @@ export function gitChildEnv(parentEnv = process.env) {
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: devNull,
   };
-  for (const key of ['PATH', 'HOME', 'LANG', 'LC_ALL']) {
+  for (const key of ['HOME', 'LANG', 'LC_ALL']) {
     if (parentEnv && parentEnv[key] !== undefined) env[key] = parentEnv[key];
   }
+  // PATH keeps its absolute entries only: git runs with cwd = the checked
+  // repository, where a relative entry (`bin`) would resolve to its own files.
+  const path = absolutePathEntries(parentEnv && parentEnv.PATH);
+  if (path.length) env.PATH = path.join(delimiter);
   return env;
 }
 

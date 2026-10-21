@@ -51,9 +51,13 @@
  * itself a search of the current directory.
  *
  * `inheritEnv: true` OPTS OUT of all of the above: the child gets the parent
- * environment untouched — no allowlist, no passthrough, no billing scrub (only
- * `extraEnv` still applies on top). FOR THE OPERATOR'S OWN TOOLS ONLY — that
- * is `claude mcp add` from bin/omelette-fleet.mjs, which must see
+ * environment — no allowlist, no passthrough, no billing scrub (only
+ * `extraEnv` still applies on top) — with ONE thing removed: PATH's relative
+ * and empty entries, by the same rule as above. Those children (the `gh`
+ * probe, `runGit` and `runClaude` in bin/omelette-fleet.mjs) run with a cwd
+ * inside a repository, where a relative entry (`bin`) finds that repository's
+ * own files. FOR THE OPERATOR'S OWN TOOLS ONLY — e.g.
+ * `claude mcp add` from bin/omelette-fleet.mjs, which must see
  * CLAUDE_CONFIG_DIR and the version-manager variables that decide WHERE the
  * registration lands and which node runs it. NEVER for a vendor CLI: there is
  * no model reading the environment in `claude mcp add`, and there always is
@@ -126,6 +130,28 @@ const matches = (pattern, name) => (pattern.endsWith('*')
   : name === pattern);
 
 /**
+ * The absolute, non-empty entries of a PATH value, in order. An empty or
+ * relative entry is searched in whatever directory the child (or the lookup)
+ * happens to stand in — a foreign repository's `bin/` — so it is dropped.
+ * @param {string|undefined} path
+ * @returns {string[]}
+ */
+export function absolutePathEntries(path) {
+  return String(path || '').split(delimiter).filter((dir) => dir && isAbsolute(dir));
+}
+
+/** The parent env for an `inheritEnv` child: every variable, PATH reduced to its absolute entries (see header). */
+function inheritedEnv(env) {
+  const out = { ...env };
+  if (out.PATH !== undefined) {
+    const absolute = absolutePathEntries(out.PATH);
+    if (absolute.length) out.PATH = absolute.join(delimiter);
+    else delete out.PATH;
+  }
+  return out;
+}
+
+/**
  * Build a child environment from the allowlist. Pure — exported for tests.
  * @param {{env?:object, allow?:string[], passthrough?:string[], scrub?:string[], extra?:object}} o
  *   passthrough: exact names or `PREFIX_*` patterns, added to `allow`.
@@ -146,7 +172,7 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
     }
   }
   if (out.PATH !== undefined) {
-    const absolute = String(out.PATH).split(delimiter).filter((dir) => dir && isAbsolute(dir));
+    const absolute = absolutePathEntries(out.PATH);
     if (absolute.length) out.PATH = absolute.join(delimiter);
     else delete out.PATH;
   }
@@ -160,7 +186,7 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
  *          outputCap?:number, stdinText?:string, notFoundHelp?:string, log?:(m:string)=>void,
  *          signal?:AbortSignal}} o
  *   env is the PARENT environment to select from — never the child env itself.
- *   inheritEnv: hand the parent env over untouched (operator tools only, see header).
+ *   inheritEnv: hand the parent env over, PATH's relative entries removed (operator tools only, see header).
  *   outputCap: tail-keeping cap on stdout — the unit's `outputCap` config value.
  *   signal: when it aborts, the process GROUP is SIGKILLed exactly as the
  *     hard-kill timeout does, and the result carries `cancelled: true`.
@@ -175,7 +201,7 @@ export function runProcess({
 }) {
   return new Promise((resolve, reject) => {
     const childEnv = inheritEnv
-      ? { ...env, ...(extraEnv || {}) }
+      ? { ...inheritedEnv(env), ...(extraEnv || {}) }
       : buildChildEnv({ env, passthrough: envPassthrough, scrub: scrubEnv, extra: extraEnv });
 
     let child;
