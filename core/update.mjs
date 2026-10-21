@@ -26,7 +26,8 @@
  * bin/omelette-fleet.mjs): it is honoured by `packageRoot`, and therefore by
  * `detectInstall` and the `update` command, and by nothing else.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fleetHome, fleetSettings } from './config.mjs';
@@ -157,15 +158,29 @@ function readCache(file) {
   }
 }
 
-/** tmp + rename, 0600: a half-written cache would be read as garbage on the next start. */
+/**
+ * tmp + rename, 0600: a half-written cache would be read as garbage on the next
+ * start. The tmp name is unpredictable and opened O_EXCL (`wx`), so a file or
+ * link planted at it fails the open instead of being followed — and a tmp we
+ * did not create is never removed. renameSync replaces a symlink at the cache's
+ * own name with our regular file rather than following it — that is the intent.
+ */
 function writeCache(file, data) {
+  let tmp = null;
+  let fd = null;
   try {
     mkdirSync(dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
+    const name = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    fd = openSync(name, 'wx', 0o600);
+    tmp = name; // ours from here on: any later failure removes it
+    writeFileSync(fd, JSON.stringify(data, null, 2) + '\n');
+    closeSync(fd);
+    fd = null;
     renameSync(tmp, file);
     return true;
   } catch {
+    if (fd !== null) { try { closeSync(fd); } catch { /* gone */ } }
+    if (tmp !== null) { try { unlinkSync(tmp); } catch { /* gone */ } }
     return false; // a cache we cannot write is a slower check, not a failure
   }
 }

@@ -36,12 +36,44 @@
  * per event through `resolve()`, so switching the feed off in the fleet
  * config takes effect on the next call without a restart.
  */
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync,
+  statSync, unlinkSync, writeFileSync, writeSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 export const STATUS_SCHEMA = 2;
 const LOG_TRIM_BYTES = 500 * 1024;
 const LOG_KEEP_LINES = 1000;
+const NOFOLLOW = constants.O_NOFOLLOW || 0; // 0 where the platform has no such flag
+// A FIFO planted at the log's name would block a plain O_WRONLY open until a
+// reader appears — inside a tool call. Non-blocking, it fails (ENXIO) instead.
+const NONBLOCK = constants.O_NONBLOCK || 0;
+const LOG_FLAGS = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | NOFOLLOW | NONBLOCK;
+
+/**
+ * tmp + rename, 0600. The tmp name is unpredictable and opened O_EXCL (`wx`):
+ * a file or link planted at it fails the open instead of being followed, and a
+ * tmp we did not create is never removed. renameSync replaces a symlink at the
+ * target with our regular file rather than following it — that is the intent.
+ * THROWS; every caller wraps it in its own fail-soft catch.
+ */
+function writeAtomic(target, data) {
+  const tmp = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  const fd = openSync(tmp, 'wx', 0o600); // a failed open: the tmp is not ours, nothing to clean
+  let open = true;
+  try {
+    writeFileSync(fd, data);
+    closeSync(fd);
+    open = false;
+    renameSync(tmp, target); // atomic — same directory
+  } catch (e) {
+    if (open) { try { closeSync(fd); } catch { /* gone */ } }
+    try { unlinkSync(tmp); } catch { /* gone */ }
+    throw e;
+  }
+}
 
 /**
  * The one preview rule: control characters collapsed to spaces, trimmed, 200
@@ -80,35 +112,47 @@ export function createStatus({ unit, spawnTools, resolve, pid = process.pid }) {
     try {
       const { dir, snapshot } = paths();
       mkdirSync(dir, { recursive: true });
-      const tmp = `${snapshot}.${pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({
+      writeAtomic(snapshot, JSON.stringify({
         schema: STATUS_SCHEMA,
         unit,
         pid,
         active: [...active.values()],
         lastEvent,
         updatedAt: new Date().toISOString(),
-      }), { mode: 0o600 });
-      renameSync(tmp, snapshot); // atomic — same directory
+      }));
     } catch { /* fail-soft */ }
   }
 
+  /**
+   * One O_APPEND write per event, never through a link: O_NOFOLLOW refuses a
+   * symlink at the log's name (the line is dropped, the link left as it is),
+   * and anything that opens but is not a regular file is skipped. A log left
+   * wider than 0600 is narrowed before the line goes in — `mode` on the open
+   * applies only to a file the open creates.
+   */
   function logLine(obj) {
+    let fd = null;
     try {
       const { dir, log } = paths();
       mkdirSync(dir, { recursive: true });
-      appendFileSync(log, JSON.stringify({ schema: STATUS_SCHEMA, ...obj }) + '\n', { mode: 0o600 });
-    } catch { /* fail-soft */ }
+      fd = openSync(log, LOG_FLAGS, 0o600);
+      const st = fstatSync(fd);
+      if (!st.isFile()) return;
+      if (st.mode & 0o777 & ~0o600) fchmodSync(fd, 0o600);
+      writeSync(fd, JSON.stringify({ schema: STATUS_SCHEMA, ...obj }) + '\n');
+    } catch { /* fail-soft */ } finally {
+      if (fd !== null) { try { closeSync(fd); } catch { /* gone */ } }
+    }
   }
 
   function trimLog() {
     try {
       const { log } = paths();
+      // A link at the log's name would otherwise have its target's tail copied into a new fleet log.
+      if (!lstatSync(log).isFile()) return;
       if (statSync(log).size <= LOG_TRIM_BYTES) return;
       const lines = readFileSync(log, 'utf8').split('\n').filter(Boolean);
-      const tmp = `${log}.${process.pid}.tmp`;
-      writeFileSync(tmp, lines.slice(-LOG_KEEP_LINES).join('\n') + '\n', { mode: 0o600 });
-      renameSync(tmp, log);
+      writeAtomic(log, lines.slice(-LOG_KEEP_LINES).join('\n') + '\n');
     } catch { /* log may not exist yet */ }
   }
 
