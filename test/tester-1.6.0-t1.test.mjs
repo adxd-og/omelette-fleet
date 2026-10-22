@@ -3,9 +3,9 @@
  * Clean-context tester coverage for 1.6.0 R1 ("one rule for `partial`") that
  * test/partial-1.6.0.test.mjs (the coder's own invariant test) does not
  * exercise: the FULL runtime path (spawn → adapter → status feed → spool →
- * `results --stats`), the image-tool standing exception end to end, the
- * clean-run absence of the key, and an independent byte-for-byte check of
- * every marker string against the pre-1.6.0 adapters (git 9b2f9f9).
+ * `results --stats`), the image-tool standing exception end to end, and the
+ * clean-run absence of the key. The marker strings themselves are pinned in
+ * test/partial-1.6.0.test.mjs.
  *
  * Fake vendor binaries are `node <script>` the way test/codex.test.mjs and
  * test/gemini.test.mjs build them: OMELETTE_HOME is a fresh temp dir per
@@ -13,13 +13,13 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createUnitRuntime } from '../core/unit.mjs';
-import { partialMark, PARTIAL_MARK_RE } from '../core/partial.mjs';
+import { PARTIAL_MARK_RE } from '../core/partial.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
 import grokUnit from '../units/grok/adapter.mjs';
 import codexUnit from '../units/codex/adapter.mjs';
@@ -201,83 +201,3 @@ for (const u of UNITS) {
     assert.ok(!('partial' in endLine), `expected NO partial key in the log line, got: ${JSON.stringify(endLine)}`);
   });
 }
-
-// --- marker strings: byte-identical to the pre-1.6.0 adapters ---------------
-
-// Fetched at test time from the commit BEFORE this feature (9b2f9f9), so the
-// comparison is against git history, not a hand transcription that could
-// carry the same slip the new code does.
-// A shallow clone (CI's checkout, depth 1) may not hold that commit: then the
-// history comparison is skipped as a whole rather than failing on `git show`
-// (1.6.1 lane fix: one of four CI jobs lacked it on the v1.6.1 run).
-const showOld = (path) => {
-  try { return execFileSync('git', ['show', `9b2f9f9:${path}`], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
-  catch { return null; }
-};
-const oldGemini = showOld('units/gemini/adapter.mjs');
-const oldGrok = showOld('units/grok/adapter.mjs');
-const oldCodex = showOld('units/codex/adapter.mjs');
-const HISTORY = oldGemini !== null && oldGrok !== null && oldCodex !== null;
-const historyTest = (name, fn) => test(name, { skip: HISTORY ? false : 'commit 9b2f9f9 is not in this clone (shallow checkout)' }, fn);
-
-/** Every fixed (non-interpolated) piece of the old template must survive verbatim. */
-const assertAnchors = (src, anchors, where) => {
-  for (const a of anchors) assert.ok(src.includes(a), `${where}: expected the pre-1.6.0 source to contain ${JSON.stringify(a)}`);
-};
-
-historyTest('partialMark: capped is byte-identical to every pre-1.6.0 adapter (fixed text either side of the number)', () => {
-  const anchors = ['output capped at ', ' chars — the beginning of the stream was dropped; treat the answer as partial'];
-  assertAnchors(oldGemini, anchors, 'gemini 9b2f9f9');
-  assertAnchors(oldGrok, anchors, 'grok 9b2f9f9');
-  assertAnchors(oldCodex, anchors, 'codex 9b2f9f9');
-  for (const unit of ['gemini', 'grok', 'codex']) {
-    const m = partialMark(unit, 'capped', { outputCap: 12345 });
-    assert.equal(m, `[${unit}: output capped at 12345 chars — the beginning of the stream was dropped; treat the answer as partial]`);
-  }
-});
-
-historyTest('partialMark: killed is byte-identical to every pre-1.6.0 adapter', () => {
-  for (const unit of ['gemini', 'grok', 'codex']) {
-    const src = { gemini: oldGemini, grok: oldGrok, codex: oldCodex }[unit];
-    assertAnchors(src, ['hard-killed after ', 's — treat the answer as partial; raise ', `${unit}.timeoutS in the fleet config`], `${unit} 9b2f9f9`);
-    const m = partialMark(unit, 'killed', { after: 600 });
-    assert.equal(m, `[${unit}: hard-killed after 600s — treat the answer as partial; raise ${unit}.timeoutS in the fleet config]`);
-  }
-});
-
-historyTest('partialMark: cancelled (default tail) is byte-identical to every pre-1.6.0 adapter', () => {
-  for (const unit of ['gemini', 'grok', 'codex']) {
-    const src = { gemini: oldGemini, grok: oldGrok, codex: oldCodex }[unit];
-    assertAnchors(src, ['cancelled by the client'], `${unit} 9b2f9f9`);
-    assert.equal(partialMark(unit, 'cancelled'), `[${unit}: cancelled by the client — treat the answer as partial]`);
-  }
-  // grok's own cancelTail variant (the standing exception to the default tail).
-  assert.ok(oldGrok.includes('cancelled by the client${cancelTail'), 'grok 9b2f9f9: expected the cancelTail template');
-  assert.equal(
-    partialMark('grok', 'cancelled', { tail: ' — Grok had reported: boom' }),
-    '[grok: cancelled by the client — Grok had reported: boom]',
-  );
-});
-
-historyTest('partialMark: exited is byte-identical to every pre-1.6.0 adapter', () => {
-  for (const unit of ['gemini', 'grok', 'codex']) {
-    const src = { gemini: oldGemini, grok: oldGrok, codex: oldCodex }[unit];
-    assertAnchors(src, ['CLI exited ', ' — treat the answer as partial'], `${unit} 9b2f9f9`);
-    assert.equal(partialMark(unit, 'exited', { code: 7 }), `[${unit}: CLI exited 7 — treat the answer as partial]`);
-  }
-});
-
-historyTest('partialMark: grok\'s early stop, gemini\'s status, codex\'s unfinished and gemini\'s stages line are byte-identical', () => {
-  assertAnchors(oldGrok, ['run ended early — stopReason='], 'grok 9b2f9f9');
-  assert.equal(partialMark('grok', 'early', { stopReason: 'max_tokens' }), '[grok: run ended early — stopReason=max_tokens]');
-
-  assertAnchors(oldGemini, ['run ended early — status='], 'gemini 9b2f9f9');
-  assert.equal(partialMark('gemini', 'status', { status: 'TIMEOUT' }), '[gemini: run ended early — status=TIMEOUT]');
-
-  assertAnchors(oldCodex, ['run ended before turn.completed — treat as partial'], 'codex 9b2f9f9');
-  assert.equal(partialMark('codex', 'unfinished'), '[codex: run ended before turn.completed — treat as partial]');
-
-  assertAnchors(oldGemini, [' of ', ' stages returned partial answers'], 'gemini 9b2f9f9');
-  assert.equal(partialMark('gemini', 'stages', { n: 2, m: 5 }), '[gemini: 2 of 5 stages returned partial answers]');
-});
-

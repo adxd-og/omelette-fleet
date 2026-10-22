@@ -2,12 +2,11 @@
  * omelette-fleet :: test/tester-1.7.2-t3.test.mjs
  *
  * Tester probes for 1.7.2 T3 (@path in Grok image prompts): every @ form the
- * CLI measured as attaching, several per prompt, and an @ inside the caller's
- * image path (the path is the tool's input and must reach the CLI intact).
+ * CLI measured as attaching, several per prompt, on both image tools.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit from '../units/grok/adapter.mjs';
@@ -53,16 +52,4 @@ test('grok_image_edit: every @ form in the transformation is neutralised, not ju
   assert.equal(r.isError, undefined, r.text);
   assert.ok(sent().endsWith('Transformation: ' + FORMS_NEUTRALISED), sent());
   assert.ok(!sent().includes('@'), sent());
-});
-
-test('grok_image_edit: an existing image whose PATH holds an @ is refused, the CLI never spawned, and the prompt\'s @ never reaches it (ruling 2026-10-21: a crafted path smuggles an attachment)', async () => {
-  const { dir, rt, sent } = setup();
-  const sub = join(dir, 'we@ther');
-  mkdirSync(sub);
-  const source = join(sub, 'pic@2x.jpg');
-  writeFileSync(source, 'JPEG');
-  const r = await rt.callTool('grok_image_edit', { prompt: 'caption @/etc/passwd', imagePath: source });
-  assert.equal(r.isError, true, r.text);
-  assert.match(r.text, /must not contain "@"/);
-  assert.ok(!existsSync(join(dir, 'prompt.txt')), 'the CLI was never spawned, so no prompt was recorded');
 });

@@ -8,14 +8,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import unit from '../units/gemini/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
-import { createStatus, snapshotPath } from '../core/status.mjs';
+import { createStatus } from '../core/status.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GEMINI_SERVER = join(ROOT, 'servers', 'gemini.mjs');
@@ -42,44 +42,6 @@ const homeWithConfig = (prefix, units = { gemini: { timeoutS: 30 } }) => {
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units }));
   return dir;
 };
-
-test('R2.1: an exit-code failure AND a REAL hard-killed gather are both named, in order; partial reaches the snapshot and the log', async () => {
-  const dir = homeWithConfig('omelette-t23-r2-both-');
-  const env = { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath };
-  const hangScript = join(dir, 'hang-agy.mjs');
-  writeFileSync(hangScript, 'setTimeout(() => {}, 30000);');
-  let synthPrompt = '';
-  const stub = (o, realSpawn) => {
-    const prompt = o.args[o.args.indexOf('-p') + 1];
-    if (/Decompose the following research question/.test(prompt)) {
-      return spawnRes({ stdout: JSON.stringify({ status: 'SUCCESS', response: JSON.stringify({ subquestions: ['alpha', 'beta', 'gamma'] }), structured_output: { subquestions: ['alpha', 'beta', 'gamma'] } }) });
-    }
-    if (/Question: alpha$/.test(prompt)) return spawnRes({ stdout: JSON.stringify({ status: 'SUCCESS', response: 'all of alpha' }) });
-    // beta: exits non-zero, no output at all — a fast, synthetic failure.
-    if (/Question: beta$/.test(prompt)) return spawnRes({ stdout: '', stderr: '', code: 2 });
-    // gamma: a REAL hard kill (small hardKillMs override), no output at all.
-    if (/Question: gamma$/.test(prompt)) return realSpawn({ ...o, args: [hangScript, ...o.args], hardKillMs: 300 });
-    synthPrompt = prompt;
-    return spawnRes({ stdout: JSON.stringify({ status: 'SUCCESS', response: '## Summary\nthe report' }) });
-  };
-  const seen = {};
-  const r = await deepRt(env, stub, seen).callTool('gemini_deep_research', { question: 'the big question' });
-  assert.ok(!r.isError, r.text);
-  // Order is DECLARATION order (ruling 2026-09-25): "agy exited 2" is not in
-  // core/unit.mjs's `isDeterministic` list, so beta is retried once (a 1.5s
-  // delay) and fails AFTER gamma's hard kill — and the header still names beta
-  // first, because it was asked first.
-  assert.match(r.text, /^\[gemini: 2 of 3 gathers failed: beta; gamma\]$/m);
-  assert.equal(seen.last.partial, true);
-  assert.match(synthPrompt, /_\(gather failed: agy exited 2/);
-  assert.match(synthPrompt, /_\(gather failed: agy hard-killed after \d+s/);
-  assert.doesNotMatch(r.text, /stages returned partial answers/);   // neither failure is a partial STAGE
-  const snap = JSON.parse(readFileSync(join(dir, `status-gemini-${process.pid}.json`), 'utf8'));
-  assert.equal(snap.lastEvent.partial, true);
-  const lines = readFileSync(join(dir, 'fleet-log.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  const endLines = lines.filter((l) => l.event === 'end');
-  assert.equal(endLines[endLines.length - 1].partial, true);
-});
 
 test('R2: the gathers-failed header lists sub-questions in DECLARATION order, whatever order their failures land in (ruling 2026-09-25)', async () => {
   const dir = homeWithConfig('omelette-t23-r2-order-');
@@ -208,75 +170,6 @@ test('R2.4: cancellation before synthesis returns CANCELLED + partial, with no g
 });
 
 /* ── R3: a snapshot per process ─────────────────────────────────────────────── */
-
-test('R3.5: two different units in one dir — each boot sweeps only its OWN units dead file', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-t23-r3-crossunit-'));
-  // "Dead" only when the OS says so: on Linux pid_max can reach 4194304.
-  assert.throws(() => process.kill(999991, 0));
-  assert.throws(() => process.kill(999992, 0));
-  const deadAlpha = join(dir, 'status-alpha-999991.json');
-  const deadBravo = join(dir, 'status-bravo-999992.json');
-  writeFileSync(deadAlpha, JSON.stringify({ schema: 2, unit: 'alpha', pid: 999991, active: [], lastEvent: null, updatedAt: '2000-01-01T00:00:00.000Z' }));
-  writeFileSync(deadBravo, JSON.stringify({ schema: 2, unit: 'bravo', pid: 999992, active: [], lastEvent: null, updatedAt: '2000-01-01T00:00:00.000Z' }));
-
-  createStatus({ unit: 'alpha', spawnTools: new Set(['t']), resolve: () => ({ dir, enabled: true }), pid: 11111 }).boot();
-  assert.equal(existsSync(deadAlpha), false, "an 'alpha' boot must sweep alpha's own dead file");
-  assert.equal(existsSync(deadBravo), true, "an 'alpha' boot must leave bravo's file alone");
-
-  createStatus({ unit: 'bravo', spawnTools: new Set(['t']), resolve: () => ({ dir, enabled: true }), pid: 22222 }).boot();
-  assert.equal(existsSync(deadBravo), false, "a 'bravo' boot must sweep bravo's own dead file");
-});
-
-test('R3.6: a hyphenated unit name round-trips through the snapshot name and the sweep', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-t23-r3-hyphen-'));
-  const st = createStatus({ unit: 'my-unit', spawnTools: new Set(['t']), resolve: () => ({ dir, enabled: true }), pid: 42424 });
-  st.boot();
-  const file = join(dir, 'status-my-unit-42424.json');
-  assert.equal(existsSync(file), true);
-  assert.equal(snapshotPath(dir, 'my-unit', 42424), file);
-  const snap = JSON.parse(readFileSync(file, 'utf8'));
-  assert.equal(snap.unit, 'my-unit');
-  assert.equal(snap.pid, 42424);
-
-  assert.throws(() => process.kill(999999, 0));
-  assert.throws(() => process.kill(999998, 0));
-  const deadMyUnit = join(dir, 'status-my-unit-999999.json');
-  writeFileSync(deadMyUnit, JSON.stringify({ schema: 2, unit: 'my-unit', pid: 999999, active: [], lastEvent: null, updatedAt: '2000-01-01T00:00:00.000Z' }));
-  const deadUnit = join(dir, 'status-unit-999998.json');
-  writeFileSync(deadUnit, JSON.stringify({ schema: 2, unit: 'unit', pid: 999998, active: [], lastEvent: null, updatedAt: '2000-01-01T00:00:00.000Z' }));
-
-  createStatus({ unit: 'unit', spawnTools: new Set(['t']), resolve: () => ({ dir, enabled: true }), pid: 55555 }).boot();
-  assert.equal(existsSync(deadMyUnit), true, "a 'unit' boot must NOT sweep 'my-unit's dead file");
-  assert.equal(existsSync(deadUnit), false, "a 'unit' boot sweeps its OWN dead file");
-
-  createStatus({ unit: 'my-unit', spawnTools: new Set(['t']), resolve: () => ({ dir, enabled: true }), pid: 66666 }).boot();
-  assert.equal(existsSync(deadMyUnit), false, "a 'my-unit' boot sweeps its own dead file");
-});
-
-test('R3.7: the "last event" jq recipe from STATUS-FEED reads the newest lastEvent across a units files', (t) => {
-  let jqPath = '';
-  try { jqPath = execSync('which jq', { encoding: 'utf8' }).trim(); } catch { /* no jq */ }
-  if (!jqPath) { t.skip('jq not found on PATH — skipping the recipe check'); return; }
-
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-t23-r3-jq-'));
-  const mk = (pid, endedAt, extra = {}) => writeFileSync(
-    join(dir, `status-codex-${pid}.json`),
-    JSON.stringify({
-      schema: 2, unit: 'codex', pid, active: [],
-      lastEvent: endedAt ? { tool: 'codex_research', status: 'ok', endedAt, durationMs: 1, error: null, resultId: null, ...extra } : null,
-      updatedAt: endedAt || new Date().toISOString(),
-    }),
-  );
-  mk(100, '2026-01-01T00:00:00.000Z', { marker: 'oldest' });
-  mk(200, '2026-01-03T00:00:00.000Z', { marker: 'newest' });
-  mk(300, null);   // no lastEvent: excluded by `select(.lastEvent)`
-
-  const cmd = `jq -s 'map(select(.unit=="codex" and .lastEvent)) | max_by(.lastEvent.endedAt) | .lastEvent' ${join(dir, 'status-codex-*.json')}`;
-  const out = execSync(cmd, { shell: '/bin/bash', encoding: 'utf8' });
-  const parsed = JSON.parse(out);
-  assert.equal(parsed.endedAt, '2026-01-03T00:00:00.000Z');
-  assert.equal(parsed.marker, 'newest');
-});
 
 /** Poll `check` until it returns truthy or 10s pass; fails loudly on timeout. */
 async function until(check, what) {

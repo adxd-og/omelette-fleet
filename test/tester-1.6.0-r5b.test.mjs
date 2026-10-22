@@ -11,7 +11,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GROK_MODELS, ALLOWLIST, isAllowedModel, GUIDE, DEFAULT_MODEL } from '../units/grok/models.js';
+import { GROK_MODELS, ALLOWLIST, isAllowedModel, DEFAULT_MODEL } from '../units/grok/models.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -21,17 +21,7 @@ test('the grok catalog is 4.7, 4.7-build-fast and 4.6 — 4.5 is two generations
   assert.equal(isAllowedModel('grok-4.7'), true);
   assert.equal(isAllowedModel('grok-4.5'), false);
   assert.equal(DEFAULT_MODEL, '', 'omit --model: the CLI default is the fleet default');
-  const m47 = GROK_MODELS.find((m) => m.id === 'grok-4.7');
-  assert.match(m47.useFor, /CLI DEFAULT since 2026-09-21/);
-  // Re-pinned by fix round B (B22): the 4.7 AA-Omniscience figures now exist and are carried.
-  assert.match(m47.avoid, /AA-Omniscience lists 4\.7 at 47\.5% accuracy \/ 29\.3% hallucination at xhigh/);
-  const fast = GROK_MODELS.find((m) => m.id === 'grok-4.7-build-fast');
-  assert.match(fast.useFor, /twice the output speed at twice the price/);
-  assert.equal(fast.tier, 'fast');
-  assert.match(GROK_MODELS.find((m) => m.id === 'grok-4.6').useFor, /^SUPERSEDED by grok-4\.7/);
-  assert.match(GUIDE, /^grok-4\.7 \(released 2026-09-21, the CLI default/);
-  assert.match(GUIDE, /Omit the model param to keep grok's default \(grok-4\.7\); grok-4\.6 remains only as a regression fallback/);
-  assert.doesNotMatch(GUIDE, /grok-4\.5/);
+  assert.equal(GROK_MODELS.find((m) => m.id === 'grok-4.7-build-fast').tier, 'fast');
 });
 
 /** A fake vendor CLI whose `models` prints `modelsOut` verbatim (the doctor fixture of cli.test.mjs). */

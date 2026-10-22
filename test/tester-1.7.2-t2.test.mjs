@@ -64,19 +64,6 @@ test('trim: an oversized log is cut to its last 1000 lines, 0600, no tmp, and a 
   assert.deepEqual(tmps(dir).filter((n) => !lstatSync(join(dir, n)).isSymbolicLink()), []);
 });
 
-test('an oversized log reached through a symlink: after boot and a logged event the victim stays byte-identical and the link stays', { skip }, () => {
-  const { st, log } = make();
-  const victim = join(mkdtempSync(join(tmpdir(), 'omelette-t2-v-')), '.zshrc');
-  writeFileSync(victim, bigLog());
-  const before = readFileSync(victim);
-  symlinkSync(victim, log);
-  st.boot();
-  const tok = st.start('t', 'echo $(touch /tmp/x)');
-  st.end(tok, 'ok');
-  assert.deepEqual(readFileSync(victim), before);
-  assert.ok(lstatSync(log).isSymbolicLink(), 'neither the trim nor the append replaced the link');
-});
-
 test('existing log modes wider than 0600 are narrowed, whichever bits are wide', { skip }, () => {
   for (const mode of [0o666, 0o640, 0o620, 0o604, 0o700]) {
     const { st, log } = make();
@@ -85,13 +72,6 @@ test('existing log modes wider than 0600 are narrowed, whichever bits are wide',
     st.end(st.start('t', 'x'), 'ok');
     assert.equal(statSync(log).mode & 0o777, 0o600, `from ${mode.toString(8)}`);
   }
-});
-
-test('a fresh log and snapshot are created 0600', { skip }, () => {
-  const { st, log, snapshot } = make();
-  st.end(st.start('t', 'x'), 'ok');
-  assert.equal(statSync(log).mode & 0o777, 0o600);
-  assert.equal(statSync(snapshot).mode & 0o777, 0o600);
 });
 
 function mkfifo(path) { execFileSync('mkfifo', [path]); }

@@ -3,8 +3,8 @@
  * U1 (1.6.0), over real processes: `call --timeout` cancels the request before
  * it signals the server (SIGTERM, then SIGKILL for a server that ignores both);
  * a unit server that receives SIGTERM kills its live vendor process groups —
- * the vendor child AND what it spawned — and removes its status snapshot; a
- * client that closes stdin still gets the answer to a short call in flight.
+ * the vendor child AND what it spawned — and removes its status snapshot. (A
+ * client that closes stdin with a call in flight: tester-1.6.0-r3.test.mjs.)
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -97,17 +97,6 @@ function groupAgy(dir, pidFile) {
     `writeFileSync(${JSON.stringify(pidFile + '.tmp')}, JSON.stringify({ agy: process.pid, grandchild: g.pid }));`,
     `renameSync(${JSON.stringify(pidFile + '.tmp')}, ${JSON.stringify(pidFile)});`,
     'setTimeout(() => {}, 60000);',
-  ].join('\n'));
-  chmodSync(p, 0o755);
-  return p;
-}
-
-/** A fake `agy` that answers after 2 s. */
-function slowAgy(dir) {
-  const p = join(dir, 'fake-agy-slow');
-  writeFileSync(p, [
-    `#!${process.execPath}`,
-    'setTimeout(() => process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "landed after stdin closed" })), 2000);',
   ].join('\n'));
   chmodSync(p, 0o755);
   return p;
@@ -212,24 +201,6 @@ test('SIGTERM to a unit server kills its live process groups — the vendor chil
   } finally {
     s.kill();
     if (pids) { killQuietly(pids.agy); killQuietly(pids.grandchild); }
-  }
-});
-
-test('stdin end still lets a short call land: the answer arrives, then the server exits', async () => {
-  const t0 = Date.now();
-  const w = workspace(slowAgy);
-  const s = startServer(w.env, w.dir);
-  try {
-    s.send(INITIALIZE);
-    assert.ok((await s.reply(1)).result, 'initialize answered');
-    s.send(research(2, 'short'));
-    s.child.stdin.end();
-    const r = await s.reply(2);
-    assert.match(r.result.content[0].text, /landed after stdin closed/);
-    assert.deepEqual(await within(s.exited, 'the server to exit after the drain'), { code: 0, signal: null });
-    assert.ok(Date.now() - t0 < DEADLINE_MS, `took ${Date.now() - t0} ms`);
-  } finally {
-    s.kill();
   }
 });
 

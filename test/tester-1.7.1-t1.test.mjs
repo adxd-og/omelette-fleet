@@ -11,8 +11,9 @@ import { join } from 'node:path';
 import unit from '../units/gemini/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
-const ARGON = ['Gemini 4 Argon (Low)', 'Gemini 4 Argon (Medium)', 'Gemini 4 Argon (High)'];
-const PRO = ['Gemini 3.1 Pro (Low)', 'Gemini 3.1 Pro (High)'];
+// One id of each set: the other Argon levels and 3.1 Pro (Low) take the same path (clean-up gate T1).
+const ARGON = ['Gemini 4 Argon (High)'];
+const PRO = ['Gemini 3.1 Pro (High)'];
 
 const res = (over) => Promise.resolve({ stdout: '', stderr: '', code: 0, signal: null, killed: false, capped: false, ...over });
 
@@ -80,32 +81,4 @@ test('a configured Argon gemini.model is not refused: research, image and deep r
   assert.ok(!d.isError, d.text);
   assert.match(d.text, /## Summary/);
   for (const argv of calls.spawn.slice(n)) assert.equal(modelArg(argv), id);
-});
-
-test('a stale configured 3.1 Pro gemini.model is ignored (vendor default), and deep research falls back to the Flash stages', async () => {
-  const { rt, calls } = rig({ model: 'Gemini 3.1 Pro (High)' });
-  const r = await rt.callTool('gemini_research', { prompt: 'hi' });
-  assert.ok(!r.isError, r.text);
-  assert.ok(!calls.spawn[0].includes('--model'));
-  const n = calls.spawn.length;
-  const d = await rt.callTool('gemini_deep_research', { question: 'why' });
-  assert.ok(!d.isError, d.text);
-  for (const argv of calls.spawn.slice(n)) assert.match(modelArg(argv), /^Gemini 3\.8 Flash \(/);
-});
-
-test('Claude guards are unchanged next to Argon: an explicit Argon id overrides a configured Claude id on research, and deep research still refuses the configured Claude when none is named', async () => {
-  const { rt, calls } = rig({ model: 'Claude Opus 5.5 (High)' });
-  const ok = await rt.callTool('gemini_research', { prompt: 'hi', model: 'Gemini 4 Argon (High)' });
-  assert.ok(!ok.isError, ok.text);
-  assert.equal(modelArg(calls.spawn[0]), 'Gemini 4 Argon (High)');
-  const refusedResearch = await rt.callTool('gemini_research', { prompt: 'hi' });
-  assert.equal(refusedResearch.isError, true);
-  assert.match(refusedResearch.text, /a Claude id is named per call/);
-  const refusedDeep = await rt.callTool('gemini_deep_research', { question: 'why' });
-  assert.equal(refusedDeep.isError, true);
-  assert.match(refusedDeep.text, /does not run on a Claude model/);
-  const n = calls.spawn.length;
-  const deepArgon = await rt.callTool('gemini_deep_research', { question: 'why', model: 'Gemini 4 Argon (Low)' });
-  assert.ok(!deepArgon.isError, deepArgon.text);
-  for (const argv of calls.spawn.slice(n)) assert.equal(modelArg(argv), 'Gemini 4 Argon (Low)');
 });

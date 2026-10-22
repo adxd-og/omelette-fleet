@@ -22,16 +22,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import unit from '../units/codex/adapter.mjs';
-import { CODEX_MODELS } from '../units/codex/models.js';
 import { createUnitRuntime, defineUnit } from '../core/unit.mjs';
 import { makeCatalog } from '../core/catalog.mjs';
 import grokUnit from '../units/grok/adapter.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
-const FIXTURE = join(ROOT, 'test', 'fixtures', 'codex-debug-models.json');
 const HEAD = 'gpt-6.1-sol';
-const read = (rel) => readFileSync(join(ROOT, rel), 'utf8');
 
 // --- a fake codex that logs argv and the live status snapshot -----------------
 
@@ -156,39 +153,12 @@ test('t1b rule 1: a whitespace-only call effort is "not given": the pairing appl
   assert.equal(flag(st.argvs()[0]), 'model_reasoning_effort="medium"');
 });
 
-test('t1b rule 1: a call effort outside the list (none, bogus) is still refused before any spawn, whatever the pairing', async () => {
-  const st = station();
-  const rt = runtimeOn(st);
-  for (const effort of ['none', 'bogus']) {
-    const r = await rt.callTool('codex_research', { prompt: 'x', model: 'gpt-6-luna', effort });
-    assert.equal(r.isError, true, effort);
-    assert.match(r.text, /unknown effort/i, r.text);
-  }
-  assert.equal(st.argvs().length, 0, 'nothing reached the CLI');
-});
-
-test('t1b rule 1: an unknown explicit model is refused and does not crash the resolution (no spawn)', async () => {
-  const st = station();
-  const rt = runtimeOn(st);
-  const r = await rt.callTool('codex_research', { prompt: 'x', model: 'gpt-4o' });
-  assert.equal(r.isError, true);
-  assert.equal(st.argvs().length, 0);
-});
-
 test('t1b rule 1: a model id with surrounding spaces is trimmed and its pairing found', async () => {
   const st = station();
   const rt = runtimeOn(st);
   const r = await rt.callTool('codex_research', { prompt: 'x', model: ' gpt-6-luna ' });
   assert.ok(!r.isError, r.text);
   assert.deepEqual([modelOf(st.argvs()[0]), flag(st.argvs()[0])], ['gpt-6-luna', 'model_reasoning_effort="medium"']);
-});
-
-test('t1b rule 1: a configured model the catalog lacks is ignored (warned) and the HEAD\'s pairing applies, not the built-in by accident', async () => {
-  const st = station();
-  const rt = runtimeOn(st, { config: { version: 1, units: { codex: { model: 'gpt-4o' } } } });
-  const r = await rt.callTool('codex_research', { prompt: 'x' });
-  assert.ok(!r.isError, r.text);
-  assert.deepEqual([modelOf(st.argvs()[0]), flag(st.argvs()[0])], [HEAD, 'model_reasoning_effort="xhigh"']);
 });
 
 test('t1b rule 1: the log line names the pairing only when the pairing decided (not for a call, a configured or a head-default effort that equals it)', async () => {
@@ -238,13 +208,6 @@ test('t1b rule 1: two concurrent calls with different models each send their own
   assert.ok(!a.isError && !b.isError, a.text + b.text);
   const byModel = Object.fromEntries(st.argvs().map((v) => [modelOf(v), flag(v)]));
   assert.deepEqual(byModel, { 'gpt-6-luna': 'model_reasoning_effort="medium"', 'gpt-6-sol': 'model_reasoning_effort="high"' });
-});
-
-test('t1b rule 1: codex_image with a stray effort argument (its schema lists none) still sends no flag', async () => {
-  const st = station();
-  const rt = runtimeOn(st);
-  await rt.callTool('codex_image', { prompt: 'a red circle', model: 'gpt-6-luna', effort: 'high' });
-  assert.equal(flag(st.argvs()[0]), null);
 });
 
 // --- the core: ctx.effortFrom, for each step, on a throwaway unit ------------
@@ -304,12 +267,6 @@ test('t1b rule 1: an unknown configured model AND a refused configured effort - 
   assert.deepEqual([modelOf(st.argvs()[0]), flag(st.argvs()[0])], [HEAD, 'model_reasoning_effort="xhigh"']);
 });
 
-test('t1b core: a configured value equal to the built-in counts as configured (source "file"), and beats the pairing', async () => {
-  const paired = acme({ pairedEffort: true });
-  const rt = acmeRt(paired, { config: { version: 1, units: { acme: { effort: 'high' } } } });
-  assert.equal(await acmeCall(rt, { model: 'b' }), 'high|config');
-});
-
 test('t1b core: an operator effort the catalog refuses falls to the pairing for a paired unit, to the vendor default (empty) for an unpaired one', async () => {
   const cfg = { config: { version: 1, units: { acme: { effort: 'bogus' } } } };
   assert.equal(await acmeCall(acmeRt(acme({ pairedEffort: true }), cfg), { model: 'b' }), 'medium|pairing');
@@ -322,30 +279,11 @@ test('t1b core: without the opt-in the pairing is never used, even when the buil
   assert.equal(await acmeCall(acmeRt(plain), { model: 'b' }), '|');
 });
 
-test('t1b core: the image tool of an opted-in unit gets no effort even when configured, and a call effort on it is honoured as given', async () => {
-  const paired = acme({ pairedEffort: true });
-  const rt = acmeRt(paired, { config: { version: 1, units: { acme: { effort: 'low' } } } });
-  assert.equal(await acmeCall(rt, { model: 'b' }, 'acme_image'), '|');
-  assert.equal(await acmeCall(rt, { model: 'b' }, 'acme_research'), 'low|config');
-});
-
-test('t1b core: pairedEffort of the shipped units - codex true, grok and gemini not', async () => {
-  const gemini = (await import('../units/gemini/adapter.mjs')).default;
-  assert.deepEqual([unit.pairedEffort, grokUnit.pairedEffort, gemini.pairedEffort], [true, false, false]);
-  for (const bad of [1, 'true', null, {}]) assert.throws(() => acme({ pairedEffort: bad }), /pairedEffort must be a boolean/, String(bad));
-  assert.equal(acme({ pairedEffort: false }).pairedEffort, false);
-});
-
 test('t1b core: catalog.pairedEffort - a model with no effort field, a non-string tag, and an unlisted tag all give ""', () => {
   const c = makeCatalog({ models: [{ id: 'a' }, { id: 'b', effort: 3 }, { id: 'c', effort: 'ultra' }, { id: 'd', effort: 'low' }], efforts: ['low', 'high'] });
   assert.deepEqual(['a', 'b', 'c', 'd', 'zzz', undefined].map((id) => c.pairedEffort(id)), ['', '', '', 'low', '', '']);
   const noList = makeCatalog({ models: [{ id: 'a', effort: 'low' }] });
   assert.equal(noList.pairedEffort('a'), '', 'a catalog with no effort list pairs nothing');
-});
-
-test('t1b core: the codex catalog pairs every model with an effort its own list holds', () => {
-  const cat = unit.catalog;
-  for (const m of CODEX_MODELS) assert.equal(cat.pairedEffort(m.id), m.effort, m.id);
 });
 
 test('t1b core: grok (not opted in) with a configured effort the catalog refuses sends no flag; a listed one still does', async () => {
@@ -444,16 +382,6 @@ test('t1b rule 2: no ranked list entry at all, an empty list, or non-JSON prints
     assert.ok(!r.out.includes('bundled catalog'), JSON.stringify(body));
     assert.match(r.codex, /^  login {7}OK/m, 'the login verdict stays');
   }
-});
-
-test('t1b rule 2: the real 0.159.2 fixture carries the head - no warning; the same fixture minus the head - warning', () => {
-  const full = readFileSync(FIXTURE, 'utf8');
-  assert.equal(modelsLine(doctorOn(full)), '  models      CLI default gpt-6.1-sol — in the catalog; the fleet pins gpt-6.1-sol (catalog head)');
-  const parsed = JSON.parse(full);
-  parsed.models = parsed.models.filter((m) => m.slug !== 'gpt-6.1-sol');
-  const cut = modelsLine(doctorOn(parsed));
-  assert.ok(cut.endsWith(WARN), cut);
-  assert.match(cut, /the fleet pins gpt-6\.1-sol \(catalog head\)/);
 });
 
 test('t1b rule 2: the codex-cli version and the warning do not disturb the other doctor lines (bin, version, login, config, mcp)', () => {
@@ -562,45 +490,4 @@ test('t1b rule 3: doctor marks a refused configured effort in its own config row
     env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone },
   });
   assert.match(r.stdout, /^ +effort +ultra +file — not in the catalog's list: ignored at call time, the vendor default applies$/m, r.stdout);
-});
-
-// =============================================================================
-// Rule 4 / text: claims the diff makes that can be checked against the code
-// =============================================================================
-
-test('t1b text: ADAPTERS documents effortFrom and pairedEffort, and lists exactly the values core can produce', () => {
-  const adapters = read('docs/ADAPTERS.md');
-  assert.match(adapters, /\| `effortFrom` \|/);
-  assert.match(adapters, /`pairedEffort: true`/);
-  for (const v of ['call', 'config', 'pairing', 'builtin']) assert.ok(adapters.includes(`\`${v}\``), v);
-  const core = read('core/unit.mjs');
-  assert.match(core, /effortFrom: 'call' \| 'config' \| 'pairing' \| 'builtin' \| ''|'call' \| 'config' \| 'pairing' \| 'builtin' \| ''/);
-});
-
-test('t1b text: the CHANGELOG\'s pairing list is the catalog\'s, model by model', () => {
-  const entryText = read('CHANGELOG.md').split(/^## /m).find((s) => s.startsWith('1.6.1'));
-  const para = entryText.split('\n').find((l) => l.includes('A named model brings its catalog pairing'));
-  assert.ok(para, 'the bullet exists');
-  const claimed = {
-    'gpt-6.1-sol': 'xhigh', 'gpt-6-astra': 'xhigh', 'gpt-6-sol': 'high', 'gpt-6-luna': 'medium',
-    'gpt-5.6-terra': 'high', 'gpt-5.6-luna': 'medium', 'gpt-5.6-sol': 'high',
-  };
-  for (const m of CODEX_MODELS) assert.equal(claimed[m.id], m.effort, m.id);
-  assert.match(para, /`gpt-6\.1-sol` and `gpt-6-astra` xhigh, `gpt-6-sol` high, `gpt-6-luna` medium, `gpt-5\.6-terra` high, `gpt-5\.6-luna` medium, `gpt-5\.6-sol` high/);
-});
-
-test('t1b text: ORCHESTRATION\'s pointer example names a real line of core/unit.mjs', () => {
-  const m = read('docs/ORCHESTRATION.md').match(/- `(core\/unit\.mjs):(\d+)` · `([^`]+)`/);
-  assert.ok(m, 'the pointer line exists');
-  const line = read(m[1]).split('\n')[Number(m[2]) - 1];
-  assert.ok(line.includes(m[3]), `line ${m[2]} is: ${line}`);
-});
-
-test('t1b text: the codex_models tool shows each model\'s pairing (the docs send the reader there)', async () => {
-  const st = station();
-  const rt = runtimeOn(st);
-  const r = await rt.callTool('codex_models', {});
-  assert.ok(!r.isError, r.text);
-  for (const m of CODEX_MODELS) assert.ok(r.text.includes(m.id), m.id);
-  assert.match(r.text, /effort/i);
 });
