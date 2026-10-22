@@ -1,6 +1,6 @@
 // scripts/mutants.mjs, fix round 1 — what the runner promises about the world around
 // it: where a scratch may be, what a child inherits, which reporter a child loads, what
-// a signal leaves behind, which files are never measured. Every fixture repository is
+// a signal leaves behind, which files are never measured, what --stragglers finds. Every fixture repository is
 // built under a fresh tmp directory; neither this checkout nor the real catalogue is
 // touched. (Named mutants*.test.mjs: the runner never measures its own tests.)
 import { test } from 'node:test';
@@ -8,14 +8,34 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { main, prepareScratch } from '../scripts/mutants.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'mutants.mjs');
 const ENTRIES = ['lib', 'test'];
-const LIB = "export function hang() {\n  return 1;\n}\n";
-// Records what the process around it looks like, leaves a marker in HOME, and (when asked) a pid trail.
+const LIB = "import { spawn } from 'node:child_process';\nimport { fileURLToPath } from 'node:url';\nexport function hang() {\n  return 1;\n}\n";
+// Started by the hanging mutant: it starts itself again in a process group of its own and exits, so
+// the copy is nobody's descendant — init's child, its command line holding its scratch path (work/):
+// only the scratch sweep reaches it. Once reparented, the copy adds `<pid> orphan` to MUT_PIDFILE.
+const ORPHAN = [
+  "import { spawn } from 'node:child_process';",
+  "import { appendFileSync } from 'node:fs';",
+  "import { fileURLToPath } from 'node:url';",
+  "if (process.argv[2] !== 'copy') {",
+  "  spawn(process.execPath, [fileURLToPath(import.meta.url), 'copy', String(process.pid)], { detached: true, stdio: 'ignore' }).unref();",
+  '} else {',
+  '  const watch = setInterval(() => {',
+  '    if (process.ppid === Number(process.argv[3])) return;',
+  '    clearInterval(watch);',
+  '    appendFileSync(process.env.MUT_PIDFILE, `${process.pid} orphan\\n`);',
+  '  }, 20);',
+  '  setInterval(() => {}, 1000);',
+  '}',
+  '',
+].join('\n');
+// Records what the process around it looks like, leaves a marker in HOME, and (when asked) a pid trail
+// and a straggler in its process group whose command line holds MUT_MARK.
 const PROBE = [
   "import test from 'node:test';",
   "import assert from 'node:assert/strict';",
@@ -34,7 +54,7 @@ const PROBE = [
   '}',
   'if (e.MUT_PIDFILE) {',
   '  appendFileSync(e.MUT_PIDFILE, `${process.pid}\\n`);',
-  "  const c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+  "  const c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', e.MUT_MARK || ''], { stdio: 'ignore' });",
   '  c.unref();',
   '  appendFileSync(e.MUT_PIDFILE, `${c.pid}\\n`);',
   '}',
@@ -42,18 +62,43 @@ const PROBE = [
   '',
 ].join('\n');
 const MUTANT = { id: 'm-ret', file: 'lib/core.mjs', find: 'return 1;', replace: 'return 2;', breaks: 'x' };
-const HANG = { id: 'm-hang', file: 'lib/core.mjs', find: 'return 1;', replace: 'for (;;);', breaks: 'x' };
+// The hanging mutant first leaves a grandchild in a process group of its own, whose command line
+// holds MUT_MARK and no scratch path: only a walk of the process tree reaches it. Once running it
+// adds `<pid> detached` to MUT_PIDFILE. Then it starts ORPHAN, and spins.
+const DETACHED = "spawn(process.execPath, ['-e', \"require('node:fs').appendFileSync(process.env.MUT_PIDFILE, process.pid + ' detached' + require('node:os').EOL); setInterval(() => {}, 1000);\", process.env.MUT_MARK], { detached: true, stdio: 'ignore' }).unref();";
+const ORPHANING = "spawn(process.execPath, [fileURLToPath(new URL('../test/orphan.mjs', import.meta.url))], { detached: true, stdio: 'ignore' }).unref();";
+const HANG = { id: 'm-hang', file: 'lib/core.mjs', find: 'return 1;', replace: `${DETACHED} ${ORPHANING} for (;;);`, breaks: 'x' };
 
 const sandbox = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-mutants-isolation-test-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cleanups = [];
+  t.after(() => {
+    for (const fn of cleanups.reverse()) { try { fn(); } catch { /* the next one still runs */ } }
+    rmSync(dir, { recursive: true, force: true });
+  });
   const root = join(dir, 'repo');
   mkdirSync(join(root, 'lib'), { recursive: true });
   mkdirSync(join(root, 'test'), { recursive: true });
   writeFileSync(join(root, 'lib', 'core.mjs'), LIB);
   writeFileSync(join(root, 'test', 'a.test.mjs'), PROBE);
-  return { dir, root };
+  writeFileSync(join(root, 'test', 'orphan.mjs'), ORPHAN);
+  return { dir, root, real: realpathSync(dir), onCleanup: (fn) => cleanups.push(fn) };
 };
+// Every live process whose command line holds the sandbox (as named or as its real path) — every
+// scratch of these tests lives in it. A `ps` read of the test's own, not the runner's.
+const survivors = (sb) => execFileSync('ps', ['-A', '-ww', '-o', 'pid=,stat=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  .split('\n').map((l) => /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(l)).filter(Boolean)
+  .filter(([, pid, stat, command]) => Number(pid) !== process.pid && !stat.startsWith('Z') && (command.includes(sb.dir) || command.includes(sb.real)))
+  .map(([, pid, , command]) => `${pid} ${command}`);
+// The scan once nothing is left, or the last one after 5 s: a bound for a failed test, never a wait a pass needs.
+const settle = async (sb) => {
+  for (const deadline = Date.now() + 5000; ;) {
+    const left = survivors(sb);
+    if (!left.length || Date.now() >= deadline) return left;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
+const killSurvivors = (sb) => { for (const line of survivors(sb)) { try { process.kill(Number(line.split(' ')[0]), 'SIGKILL'); } catch { /* gone */ } } };
 const capture = () => {
   const lines = { out: [], err: [] };
   return { lines, out: (s) => lines.out.push(s), err: (s) => lines.err.push(s) };
@@ -65,10 +110,9 @@ const withEnv = async (vars, fn) => {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 };
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_') && k !== 'NODE_TEST_CONTEXT'));
 
-test('a suite child gets HOME and OMELETTE_HOME on <scratch>/home, emptied before every run, no GIT_* and no write gate, and loads the reporter copy from the scratch', async (t) => {
+test('a suite child gets HOME and OMELETTE_HOME on <scratch>/home, emptied before every run, no GIT_* and no write gate, loads the reporter copy from the scratch, and has the cap as its --test-timeout', async (t) => {
   const sb = sandbox(t);
   const scratch = join(sb.dir, 'scratch');
   const envfile = join(sb.dir, 'env.ndjson');
@@ -93,6 +137,10 @@ test('a suite child gets HOME and OMELETTE_HOME on <scratch>/home, emptied befor
     assert.ok(r.parent.includes(`--test-reporter=${reporterUrl}`), `the reporter is the scratch copy, saw: ${r.parent.slice(0, 300)}`);
     assert.ok(!r.parent.includes(pathToFileURL(SCRIPT).href), 'not the live scripts/mutants.mjs');
   }
+  // node's own per-file cap is the runner's, so a suite whose runner died still ends a hung file.
+  const { timeoutMs } = JSON.parse(readFileSync(join(sb.dir, 'report.json'), 'utf8'));
+  assert.match(records[0].parent, /--test-timeout=\d+ /);
+  assert.ok(records[1].parent.includes(`--test-timeout=${timeoutMs} `), `the mutant's suite has the cap, saw: ${records[1].parent.slice(0, 300)}`);
 });
 
 test('with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE set, preparing a scratch leaves the operator repository, its origin and its staged index alone', async (t) => {
@@ -173,7 +221,7 @@ test("the runner's own tests are never run: --files naming only them fails, nami
 });
 
 for (const [signal, ownScratch] of [['SIGTERM', true], ['SIGINT', false], ['SIGHUP', true]]) {
-  test(`${signal} during a hanging mutant: the run ends by the signal, no suite process is left${ownScratch ? ', and a scratch the runner made is removed' : ', and a --scratch the operator named is kept'}`, async (t) => {
+  test(`${signal} during a hanging mutant: the run ends by the signal, no process from the sandbox is left (one outside the suite's process group and one no longer under the suite included)${ownScratch ? ', and a scratch the runner made is removed' : ', and a --scratch the operator named is kept'}`, async (t) => {
     const sb = sandbox(t);
     const tmp = join(sb.dir, 'tmp');
     mkdirSync(tmp);
@@ -186,18 +234,20 @@ for (const [signal, ownScratch] of [['SIGTERM', true], ['SIGINT', false], ['SIGH
     const scratch = join(sb.dir, 'named-scratch');
     const args = ['--timeout', '120', '--out', join(sb.dir, 'report.json'), ...(ownScratch ? [] : ['--scratch', scratch])];
     const child = spawn(process.execPath, [driver, sb.root, cataloguePath, JSON.stringify(args)], {
-      cwd: sb.dir, env: { ...cleanEnv(), TMPDIR: tmp, MUT_PIDFILE: pidfile }, stdio: ['ignore', 'ignore', 'pipe'],
+      cwd: sb.dir, env: { ...cleanEnv(), TMPDIR: tmp, MUT_PIDFILE: pidfile, MUT_MARK: join(sb.dir, 'mark') }, stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';
     child.stderr.on('data', (c) => { stderr += c; });
     const exited = new Promise((resolve) => child.on('exit', (code, sig) => resolve({ code, sig })));
-    t.after(() => {
+    sb.onCleanup(() => {
       try { child.kill('SIGKILL'); } catch { /* gone */ }
-      if (existsSync(pidfile)) for (const p of readFileSync(pidfile, 'utf8').split('\n').filter(Boolean)) { try { process.kill(Number(p), 'SIGKILL'); } catch { /* gone */ } }
+      killSurvivors(sb);
+      if (existsSync(pidfile)) for (const l of readFileSync(pidfile, 'utf8').split('\n').filter(Boolean)) { try { process.kill(Number(l.split(' ')[0]), 'SIGKILL'); } catch { /* gone */ } }
     });
-    // baseline: a probe process and its straggler; the hanging mutant: another pair.
+    // baseline: a probe process and its straggler; the hanging mutant: another pair, its detached grandchild, the orphan.
     const deadline = Date.now() + 60_000;
-    while (!(existsSync(pidfile) && readFileSync(pidfile, 'utf8').split('\n').filter(Boolean).length >= 4)) {
+    const trail = () => (existsSync(pidfile) ? readFileSync(pidfile, 'utf8') : '');
+    while (!(trail().includes(' detached') && trail().includes(' orphan'))) {
       assert.ok(Date.now() < deadline, `the mutant never started; stderr: ${stderr}`);
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -206,8 +256,104 @@ for (const [signal, ownScratch] of [['SIGTERM', true], ['SIGINT', false], ['SIGH
     assert.equal(sig, signal, `the exit reflects the signal; stderr: ${stderr}`);
     assert.deepEqual(readdirSync(tmp).filter((n) => n.startsWith('omelette-mutants')), [], 'no scratch left in the OS temp directory');
     assert.equal(existsSync(scratch), !ownScratch, ownScratch ? 'n/a' : 'the named scratch stays');
-    await new Promise((r) => setTimeout(r, 300));
-    for (const p of readFileSync(pidfile, 'utf8').split('\n').filter(Boolean).map(Number)) assert.equal(alive(p), false, `pid ${p} is still alive`);
+    assert.equal(existsSync(join(scratch, 'owner.pid')), false, 'and no longer names an owner');
+    assert.deepEqual(await settle(sb), [], 'no process whose command line holds the sandbox survives');
     assert.equal(readFileSync(join(sb.root, 'lib', 'core.mjs'), 'utf8'), LIB);
   });
 }
+
+test('--stragglers lists each process whose command line holds the mark as pid, age, command and exits 1; --kill ends them and exits 0; with none left it prints nothing', async (t) => {
+  const sb = sandbox(t);
+  const straggler = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', join(sb.dir, 'straggler')], { stdio: 'ignore' });
+  t.after(() => { try { straggler.kill('SIGKILL'); } catch { /* gone */ } });
+  const ended = new Promise((resolve) => straggler.on('exit', (code, sig) => resolve(sig)));
+  await new Promise((resolve, reject) => { straggler.on('spawn', resolve); straggler.on('error', reject); });
+  const scan = async (args, deps = { stragglerMark: sb.dir }) => {
+    const io = capture();
+    const code = await main(args, { ...deps, out: io.out, err: io.err });
+    return { code, ...io.lines };
+  };
+
+  const listed = await scan(['--stragglers']);
+  assert.equal(listed.code, 1, listed.err.join('\n'));
+  assert.equal(listed.out.length, 1, listed.out.join('\n'));
+  assert.match(listed.out[0], new RegExp(`^${straggler.pid}  [\\d:-]+  \\S`));
+  assert.ok(listed.out[0].includes(join(sb.dir, 'straggler')), listed.out[0]);
+  // The default mark is the one every runner scratch and test sandbox carries in its name.
+  const byDefault = await scan(['--stragglers'], {});
+  assert.equal(byDefault.code, 1);
+  assert.ok(byDefault.out.some((l) => l.startsWith(`${straggler.pid}  `)), byDefault.out.join('\n'));
+
+  const killed = await scan(['--stragglers', '--kill']);
+  assert.equal(killed.code, 0, killed.err.join('\n'));
+  assert.equal(await ended, 'SIGKILL');
+  assert.deepEqual(await scan(['--stragglers']), { code: 0, out: [], err: [] });
+  assert.equal((await scan(['--kill'])).code, 2, '--kill alone is a usage error');
+});
+
+test("--stragglers knows a live run by its scratch's owner and never kills it; once the runner is SIGKILLed, a detached grandchild with a neutral command line is a leftover, found by the scratch variable it inherited, and --kill ends it", async (t) => {
+  const sb = sandbox(t);
+  // The baseline's one file leaves that grandchild and a second one with no environment whose command line
+  // names the scratch (known by that alone), records both pids, and holds the run open.
+  writeFileSync(join(sb.root, 'test', 'a.test.mjs'), [
+    "import test from 'node:test';",
+    "import { spawn } from 'node:child_process';",
+    "import { appendFileSync } from 'node:fs';",
+    "import { fileURLToPath } from 'node:url';",
+    "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });",
+    "const h = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', fileURLToPath(import.meta.url)], { detached: true, stdio: 'ignore', env: {} });",
+    'g.unref();',
+    'h.unref();',
+    'appendFileSync(process.env.MUT_PIDFILE, `${g.pid}\\n${h.pid}\\n`);',
+    "test('holds', () => new Promise(() => setInterval(() => {}, 1000)));",
+    '',
+  ].join('\n'));
+  const pidfile = join(sb.dir, 'pids.txt');
+  const cataloguePath = join(sb.dir, 'catalogue.json');
+  writeFileSync(cataloguePath, JSON.stringify([MUTANT]));
+  const driver = join(sb.dir, 'driver.mjs');
+  writeFileSync(driver, `import { main } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};\n`
+    + `process.exitCode = await main(JSON.parse(process.argv[4]), { root: process.argv[2], cataloguePath: process.argv[3], entries: ['lib', 'test'] });\n`);
+  const args = ['--timeout', '600', '--scratch', join(sb.dir, 'scratch'), '--out', join(sb.dir, 'report.json')];
+  const runner = spawn(process.execPath, [driver, sb.root, cataloguePath, JSON.stringify(args)], { cwd: sb.dir, env: { ...cleanEnv(), MUT_PIDFILE: pidfile }, stdio: 'ignore' });
+  const runnerGone = new Promise((resolve) => runner.on('exit', resolve));
+  const recorded = () => (existsSync(pidfile) ? readFileSync(pidfile, 'utf8').split('\n').filter(Boolean).map(Number) : []);
+  sb.onCleanup(() => {
+    try { runner.kill('SIGKILL'); } catch { /* gone */ }
+    for (const p of recorded()) { try { process.kill(p, 'SIGKILL'); } catch { /* gone */ } }
+    killSurvivors(sb);
+  });
+  for (const deadline = Date.now() + 60_000; recorded().length < 2;) {
+    assert.ok(Date.now() < deadline, 'the baseline never started');
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const [g, h] = recorded();
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const scan = async (argv) => {
+    const io = capture();
+    const code = await main(argv, { stragglerMark: basename(sb.dir), out: io.out, err: io.err });
+    return { code, ...io.lines };
+  };
+
+  const live = await scan(['--stragglers']);
+  assert.equal(live.code, 0, live.out.join('\n'));
+  assert.equal(live.out[0], 'live runs (never killed):', live.out.join('\n'));
+  assert.ok(live.out.some((l) => l.startsWith(`  ${g}  `)), `the grandchild is the live run's: ${live.out.join('\n')}`);
+  assert.ok(live.out.some((l) => l.startsWith(`  ${h}  `)), `so is the one known by its command line alone: ${live.out.join('\n')}`);
+  assert.ok(live.out.some((l) => l.startsWith(`  ${runner.pid}  `)), `so is the runner, the scratch's owner: ${live.out.join('\n')}`);
+  const spared = await scan(['--stragglers', '--kill']);
+  assert.deepEqual([spared.code, spared.err], [0, []]);
+  assert.ok(alive(g) && alive(h) && runner.exitCode === null, 'a live run is never killed');
+
+  runner.kill('SIGKILL');
+  await runnerGone;
+  const left = await scan(['--stragglers']);
+  assert.equal(left.code, 1, left.out.join('\n'));
+  assert.ok(left.out.some((l) => l.startsWith(`${g}  `)) && left.out.some((l) => l.startsWith(`${h}  `)), `both are leftovers now: ${left.out.join('\n')}`);
+  assert.ok(!left.out.includes('live runs (never killed):'), left.out.join('\n'));
+  const killed = await scan(['--stragglers', '--kill']);
+  assert.equal(killed.code, 0, killed.err.join('\n'));
+  for (const deadline = Date.now() + 5000; (alive(g) || alive(h)) && Date.now() < deadline;) await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual([g, h].filter(alive), [], 'nothing survives --kill');
+  assert.deepEqual(await scan(['--stragglers']), { code: 0, out: [], err: [] });
+});

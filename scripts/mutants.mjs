@@ -7,6 +7,7 @@
  *
  *   node scripts/mutants.mjs [--only <id,id,…>] [--files <glob,…>] [--timeout <s>]
  *        [--scratch <dir>] [--out <file>] [--list] [--dry-run]
+ *   node scripts/mutants.mjs --stragglers [--kill]
  *
  * THE CATALOGUE is `scripts/mutants.json`: one-line mutants, each an `id`, a
  * `file` (repo-relative), a `find` fragment that occurs EXACTLY ONCE in that
@@ -33,8 +34,11 @@
  * (`--timeout <s>`, default twice the baseline's wall time, at least 120 s),
  * record which test FILES failed, restore. A run that hits the cap is killed:
  * every file still running counts as caught (`caughtByTimeout`, flagged
- * `timedOut`). Which file failed comes from node's own test events, through
- * this module's default export used as the `--test-reporter` — loaded from a
+ * `timedOut`). The cap is also node's own `--test-timeout`, so a suite whose
+ * runner died still cancels a hung file by itself; a file node cancelled that
+ * way counts exactly as one still running at the cap. Which file failed comes
+ * from node's own test events, through this module's default export used as
+ * the `--test-reporter` — loaded from a
  * copy in the scratch directory, so an edit of this file mid-run reaches no
  * later mutant.
  *
@@ -43,8 +47,32 @@
  * the operator's repository) and minus the write gates and the passthrough
  * (OMELETTE_ALLOW_WRITE, ORION_ALLOW_GEMINI_MUTATE, OMELETTE_ENV_PASSTHROUGH);
  * HOME and OMELETTE_HOME are `<scratch>/home`, emptied before every suite run.
- * SIGINT, SIGTERM and SIGHUP kill the running suite's process group, remove a scratch
- * the runner made itself, and re-raise the signal.
+ * SIGINT, SIGTERM and SIGHUP kill the running suite as the cap does (below), sweep
+ * the scratch's stragglers, remove a scratch the runner made itself (of a named
+ * one, its `owner.pid`), and re-raise the signal.
+ *
+ * NO PROCESS LEFT BEHIND. A suite runs in a process group of its own, which a
+ * test's own `detached` spawn leaves, and a runner killed without its handlers
+ * (a SIGKILL) takes its cap with it: `node --test` (ppid 1) and a hung fixture
+ * spinning, the picture of 2026-10-22, which node's `--test-timeout` now ends
+ * unless the file ignores SIGTERM (node never escalates). So the cap and
+ * the signal handlers stop the suite's group (SIGSTOP: nothing in it starts a
+ * child after that), walk the process tree from the suite child (`ps`, every
+ * descendant) and SIGKILL each pid, then the group, then check with `kill -0`
+ * (a zombie counts as gone) and kill the survivors once more after 100 ms.
+ * Every child the runner starts carries OMELETTE_MUTANTS_SCRATCH (the
+ * scratch's real path), which every descendant inherits whatever its command
+ * line. After the baseline, after every mutant and in the run's `finally`, any
+ * process that carries this scratch, or whose command line holds it
+ * (`pristine/`, `work/`, `reporter.mjs`), is killed, and the progress line says
+ * `stragglers: N killed`. `--stragglers` lists every process whose command line
+ * holds `omelette-mutants` or that carries the variable — pid, age, command —
+ * and exits 1 when one is a leftover; `--kill` SIGKILLs the leftovers — ANY
+ * process whose command line holds the mark, a launcher shell of yours
+ * included, and a run started by a runner older than `owner.pid`. A
+ * process of a LIVE run (its scratch's `owner.pid` names a live process, or it
+ * is that owner) is listed under its own heading, never killed, and never
+ * counted.
  *
  * OUTPUT: `.omelette/mutants/<YYYY-MM-DD>T<HHMM>.json` (gitignored; `--out`
  * overrides), rewritten after every mutant so a long run that dies keeps what
@@ -77,18 +105,27 @@ const DROPPED_ENV = ['NODE_TEST_CONTEXT', 'OMELETTE_ALLOW_WRITE', 'ORION_ALLOW_G
 /** The suite runs in flight, so a signal can kill their process groups. */
 const LIVE_SUITES = new Set();
 const SCRATCH_MARK = '.omelette-mutants';
+/** In every runner scratch's name and every test sandbox's: what `--stragglers` looks for. */
+const STRAGGLER_MARK = 'omelette-mutants';
+/** Set on every child the runner starts: the real path of its scratch. */
+const SCRATCH_ENV = 'OMELETTE_MUTANTS_SCRATCH';
+/** In a scratch while its runner lives: the runner's pid. */
+const OWNER_FILE = 'owner.pid';
 const TIMEOUT_FLOOR_MS = 120_000;
 const BASELINE_CAP_MS = 30 * 60_000;
 const EVENT_PREFIX = '@@mutants ';
 
-const USAGE = 'usage: node scripts/mutants.mjs [--only <id,id,…>] [--files <glob,…>] [--timeout <s>] [--scratch <dir>] [--out <file>] [--list] [--dry-run]';
+const USAGE = 'usage: node scripts/mutants.mjs [--only <id,id,…>] [--files <glob,…>] [--timeout <s>] [--scratch <dir>] [--out <file>] [--list] [--dry-run]\n'
+  + '       node scripts/mutants.mjs --stragglers [--kill]';
 
 /**
  * The `--test-reporter`: node's test events in, one marked JSON line per event
  * the runner reads out. `test:complete` arrives in completion order, as each
  * test ends — so a killed run still names every file that finished — and the
  * file-level `test:dequeue` / `test:complete` pair (name === file, nesting 0)
- * says which files were still running when the cap hit.
+ * says which files were still running when the cap hit. A file-level complete
+ * that failed as `testTimeoutFailure` is node's own `--test-timeout` cancelling
+ * the file (the same cap): `timedOut`.
  */
 export default async function* reporter(source) {
   for await (const { type, data = {} } of source) {
@@ -98,7 +135,8 @@ export default async function* reporter(source) {
       yield `${EVENT_PREFIX}${JSON.stringify({ e: 'start', file: data.file })}\n`;
     } else if (type === 'test:complete' && data.file) {
       const passed = !!(data.details && data.details.passed);
-      yield `${EVENT_PREFIX}${JSON.stringify({ e: 'complete', file: data.file, top: fileLevel, passed, todo: !!data.todo })}\n`;
+      const timedOut = fileLevel && !passed && !!(data.details.error && data.details.error.failureType === 'testTimeoutFailure');
+      yield `${EVENT_PREFIX}${JSON.stringify({ e: 'complete', file: data.file, top: fileLevel, passed, todo: !!data.todo, timedOut })}\n`;
     } else if (type === 'test:diagnostic' && data.nesting === 0 && !data.file && typeof data.message === 'string') {
       yield `${EVENT_PREFIX}${JSON.stringify({ e: 'diag', message: data.message })}\n`;
     }
@@ -195,7 +233,8 @@ function realPathOf(p) {
  * our mark, and never inside the tree under test — compared by real paths, so
  * a symlink into the tree (the scratch itself or an ancestor) is refused too,
  * before anything is created. Beside the two copies: `home/`, the children's
- * HOME, and `reporter.mjs`, this file as it is now.
+ * HOME, `reporter.mjs`, this file as it is now, and `owner.pid`, the runner's
+ * pid (removed when the run ends).
  */
 export function prepareScratch({ root, scratch, entries = COPY_ENTRIES }) {
   const rel = relative(realpathSync(root), realPathOf(scratch));
@@ -208,6 +247,7 @@ export function prepareScratch({ root, scratch, entries = COPY_ENTRIES }) {
     throw new Error(`--scratch ${scratch} is not empty and was not made by this runner — refusing to write there`);
   }
   writeFileSync(join(scratch, SCRATCH_MARK), 'omelette-fleet mutant runner scratch: everything here is rewritten on every run\n');
+  writeFileSync(join(scratch, OWNER_FILE), `${process.pid}\n`); // while this pid lives, `--stragglers` reads the scratch as a live run
   const home = join(scratch, 'home');
   rmSync(home, { recursive: true, force: true });
   mkdirSync(home);
@@ -270,22 +310,235 @@ export function applyMutant(work, m) {
  * rebase --exec would point `git -C work` at the operator's repository), none
  * of DROPPED_ENV (NODE_TEST_CONTEXT, set inside a test process, would make the
  * suite's `node --test` act as a child of that one), HOME and OMELETTE_HOME on
- * `home`. PATH and everything else pass.
+ * `home`, and OMELETTE_MUTANTS_SCRATCH on the real path of the scratch (home's
+ * parent) — inherited by every descendant whatever its command line, so the
+ * sweep and `--stragglers` know a run's processes by it. PATH and everything
+ * else pass.
  */
 export function childEnv(home, env = process.env) {
   const out = {};
   for (const [k, v] of Object.entries(env)) if (!k.startsWith('GIT_') && !DROPPED_ENV.includes(k)) out[k] = v;
   out.HOME = home;
   out.OMELETTE_HOME = home;
+  out[SCRATCH_ENV] = realPathOf(dirname(home));
+  return out;
+}
+
+const PS_OPTS = { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] };
+
+/**
+ * Every process as `ps` sees it — pid, parent, state, age, whole command line —
+ * on macOS and Linux alike (`-A`, never `-e`: on macOS that adds the
+ * environment). With `env`, each row also carries `scratch`, its
+ * OMELETTE_MUTANTS_SCRATCH ('' when it has none or it cannot be read). Empty
+ * where `ps` cannot run: the kills below then come down to the process group
+ * alone.
+ */
+function processTable({ env = false } = {}) {
+  let text;
+  try { text = execFileSync('ps', ['-A', '-ww', '-o', 'pid=,ppid=,stat=,etime=,command='], PS_OPTS); } catch { return []; }
+  const rows = [];
+  for (const line of text.split('\n')) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*(.*)$/.exec(line);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), stat: m[3], etime: m[4], command: m[5] });
+  }
+  if (env) {
+    const scratchOf = scratchVariables(rows);
+    for (const r of rows) r.scratch = scratchOf.get(r.pid) || '';
+  }
+  return rows;
+}
+
+/**
+ * Each process's OMELETTE_MUTANTS_SCRATCH, by pid: on Linux from
+ * `/proc/<pid>/environ` (NUL-separated, exact); elsewhere from `ps -Eww`, which
+ * on macOS appends the environment to the command line, space-separated — the
+ * value runs to the next ` NAME=`. Only this user's processes show theirs.
+ * Neither readable: an empty map, and matching comes down to command lines.
+ */
+function scratchVariables(rows) {
+  const out = new Map();
+  const prefix = `${SCRATCH_ENV}=`;
+  if (existsSync('/proc/self/environ')) {
+    for (const { pid } of rows) {
+      try {
+        const hit = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((v) => v.startsWith(prefix));
+        if (hit) out.set(pid, hit.slice(prefix.length));
+      } catch { /* gone, or not ours to read */ }
+    }
+    return out;
+  }
+  let text;
+  try { text = execFileSync('ps', ['-A', '-Eww', '-o', 'pid=,command='], PS_OPTS); } catch { return out; }
+  for (const line of text.split('\n')) {
+    const m = /^\s*(\d+)\s(.*)$/.exec(line);
+    const at = m ? m[2].lastIndexOf(` ${prefix}`) : -1;
+    if (at < 0) continue;
+    const rest = m[2].slice(at + prefix.length + 1);
+    const end = rest.search(/ [A-Za-z_][A-Za-z0-9_]*=/);
+    out.set(Number(m[1]), end < 0 ? rest : rest.slice(0, end));
+  }
+  return out;
+}
+
+/** Every descendant of `pid` in `table`, parents before their children. */
+function descendantsOf(pid, table) {
+  const children = new Map();
+  for (const p of table) children.set(p.ppid, [...(children.get(p.ppid) || []), p.pid]);
+  const out = [];
+  const seen = new Set([pid]);
+  for (const queue = [pid]; queue.length;) {
+    for (const c of children.get(queue.shift()) || []) if (!seen.has(c)) { seen.add(c); out.push(c); queue.push(c); }
+  }
+  return out;
+}
+
+const sigkill = (pid) => { try { process.kill(pid, 'SIGKILL'); } catch { /* gone already, or not ours to kill */ } };
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/** The pids `kill -0` still answers for, less the zombies (dead, waiting for a parent to reap them). */
+function stillAlive(pids) {
+  const answering = pids.filter((p) => { try { process.kill(p, 0); return true; } catch (e) { return !!e && e.code === 'EPERM'; } });
+  if (!answering.length) return [];
+  const zombies = new Set(processTable().filter((p) => p.stat.startsWith('Z')).map((p) => p.pid));
+  return answering.filter((p) => !zombies.has(p));
+}
+
+/** SIGKILL every pid (and the process group `group`, when given); check; once more after 100 ms. Returns the survivors. */
+function killAndCheck(pids, group) {
+  pids.forEach(sigkill);
+  if (group) { try { process.kill(-group, 'SIGKILL'); } catch { /* the group is gone */ } }
+  let left = stillAlive(pids);
+  if (left.length) { sleepSync(100); left.forEach(sigkill); left = stillAlive(left); }
+  return left;
+}
+
+/**
+ * Kill the suite child at `pid` and everything under it. The group is stopped
+ * first (SIGSTOP), so no member can start a child between the table read and
+ * the kill — a file just starting up when the cap lands would otherwise leave a
+ * `detached` grandchild the read never saw. Then each descendant the table
+ * shows — read while `pid` is alive, before a kill hands its children to init —
+ * parents first; then the group. The walk is what reaches a grandchild that
+ * left the group (a test's own `detached` spawn). Synchronous, so a signal
+ * handler can call it. Returns the pids still alive after the second try.
+ *
+ * Belt and braces, each beside a defence that already covers its case, so no
+ * test can tell it is there: the parents-first order (moot once the group is
+ * stopped), the group argument (the walk and the `close` handler's group kill
+ * cover the members), the `pid <= 1` guard (no caller passes one), the callers'
+ * reaped-child check (a pid reused in between — no deterministic test), and the
+ * ancestor exclusion in findProcesses (an ancestor holds a needle only in an
+ * unusual launch).
+ */
+function killTree(pid) {
+  if (!Number.isInteger(pid) || pid <= 1) return [];
+  try { process.kill(-pid, 'SIGSTOP'); } catch { /* the group is gone */ }
+  return killAndCheck([pid, ...descendantsOf(pid, processTable())], pid);
+}
+
+/**
+ * What a process of the run in `dir` carries in its command line: a path under
+ * `pristine/` or `work/`, or the reporter copy — for the scratch as named and as
+ * its real path (node names test files by their real path), as plain paths and
+ * as the file URL `--test-reporter` is given. Never the bare scratch: the
+ * runner's own `--scratch <dir>` would match.
+ */
+function scratchNeedles(dir) {
+  const needles = new Set();
+  for (const base of new Set([resolve(dir), realPathOf(dir)])) {
+    for (const p of [join(base, 'pristine') + sep, join(base, 'work') + sep, join(base, 'reporter.mjs')]) {
+      needles.add(p);
+      needles.add(pathToFileURL(p).pathname); // keeps the trailing separator
+    }
+  }
+  return [...needles];
+}
+
+/** Every live process `matches` accepts (rows with `scratch`) — never this process, nor one of its ancestors. */
+function findProcesses(matches, table = processTable({ env: true })) {
+  const parentOf = new Map(table.map((p) => [p.pid, p.ppid]));
+  const mine = new Set([process.pid]);
+  for (let p = process.ppid; p > 1 && !mine.has(p); p = parentOf.get(p) ?? 0) mine.add(p);
+  return table.filter((p) => !mine.has(p.pid) && !p.stat.startsWith('Z') && matches(p));
+}
+
+/**
+ * Kill this run's stragglers: every process whose command line holds one of
+ * the scratch's needles or whose OMELETTE_MUTANTS_SCRATCH is this scratch.
+ * Only this run's own scratch matches, so no other run is touched.
+ * Returns `{ killed, alive }` counts.
+ */
+function sweepStragglers({ needles, scratch }) {
+  const found = findProcesses((p) => p.scratch === scratch || needles.some((n) => p.command.includes(n)));
+  const alive = found.length ? killAndCheck(found.map((p) => p.pid)).length : 0;
+  return { killed: found.length - alive, alive };
+}
+
+/**
+ * The scratch directories a command line names: the path before each
+ * `/work/`, `/pristine/` or `/reporter.mjs` in it (a file URL decoded) — every
+ * candidate, since a path may hold a `work/` of its own above the scratch.
+ */
+function scratchesIn(command) {
+  const out = [];
+  for (const m of command.matchAll(/\/(?:work\/|pristine\/|reporter\.mjs)/g)) {
+    const before = command.slice(0, m.index);
+    let p = before.slice(Math.max(before.lastIndexOf(' '), before.lastIndexOf('=')) + 1);
+    if (p.startsWith('file://')) { try { p = decodeURIComponent(p.slice('file://'.length)); } catch { continue; } }
+    if (p.startsWith('/')) out.push(p);
+  }
   return out;
 }
 
 /**
- * `node --test <files>` in `cwd`, with `reporter` as its `--test-reporter`,
- * killed (its whole process group) at `timeoutMs`. `home` is emptied first:
- * nothing a test left there reaches the next run. Resolves to the files that
- * failed, the files still running at a kill, the test count node reported, the
- * exit code and the wall time.
+ * `--stragglers`: every process whose command line holds `mark` or that
+ * carries OMELETTE_MUTANTS_SCRATCH (a test's own mark narrows that to a value
+ * holding it), split into `leftovers` and `live`. A process belongs to a live
+ * run when its scratch — the variable's value, or one its command line names —
+ * has an `owner.pid` naming a live process, or when it is such an owner itself:
+ * never listed as a leftover, never killed. No owner file, or a dead owner: a
+ * leftover. (A reused owner pid errs towards live, the side that kills nothing.)
+ */
+function classifyStragglers(mark) {
+  const table = processTable({ env: true });
+  const alive = new Set(table.filter((p) => !p.stat.startsWith('Z')).map((p) => p.pid));
+  const owners = new Map();
+  const liveOwner = (scratch) => {
+    if (!owners.has(scratch)) {
+      let pid = 0;
+      try { pid = Number.parseInt(readFileSync(join(scratch, OWNER_FILE), 'utf8'), 10); } catch { /* no owner file */ }
+      owners.set(scratch, alive.has(pid) ? pid : 0);
+    }
+    return owners.get(scratch);
+  };
+  const found = findProcesses((p) => p.command.includes(mark) || (!!p.scratch && (mark === STRAGGLER_MARK || p.scratch.includes(mark))), table);
+  const liveOwners = new Set();
+  const inLiveRun = new Set();
+  for (const p of found) {
+    const owner = [p.scratch, ...scratchesIn(p.command)].filter(Boolean).map(liveOwner).find(Boolean);
+    if (owner) { inLiveRun.add(p.pid); liveOwners.add(owner); }
+  }
+  const live = found.filter((p) => inLiveRun.has(p.pid) || liveOwners.has(p.pid));
+  return { leftovers: found.filter((p) => !live.includes(p)), live };
+}
+
+/** Remove the scratch's `owner.pid` when it names this process — never a file someone else wrote. */
+function releaseOwner(dir) {
+  try {
+    if (readFileSync(join(dir, OWNER_FILE), 'utf8').trim() === String(process.pid)) rmSync(join(dir, OWNER_FILE), { force: true });
+  } catch { /* none, or not ours */ }
+}
+
+const stragglerNote = ({ killed, alive }) => (killed || alive ? `stragglers: ${killed} killed${alive ? `, ${alive} still alive` : ''}` : '');
+
+/**
+ * `node --test <files>` in `cwd`, with `reporter` as its `--test-reporter` and
+ * `timeoutMs` as its `--test-timeout`, killed (killTree: every descendant and
+ * the process group) at `timeoutMs`. `home` is emptied first: nothing a test
+ * left there reaches the next run. Resolves to the files that failed, the files
+ * still running at the cap (or cancelled by node at it), the test count node
+ * reported, the exit code and the wall time.
  */
 export function runSuite({ cwd, files, timeoutMs, home, reporter = SELF, env = process.env }) {
   rmSync(home, { recursive: true, force: true });
@@ -294,13 +547,14 @@ export function runSuite({ cwd, files, timeoutMs, home, reporter = SELF, env = p
   const base = realpathSync(cwd);
   return new Promise((resolveRun, rejectRun) => {
     const t0 = Date.now();
-    const child = spawn(process.execPath, ['--test', `--test-reporter=${pathToFileURL(reporter).href}`, ...files], {
+    const child = spawn(process.execPath, ['--test', `--test-reporter=${pathToFileURL(reporter).href}`, `--test-timeout=${timeoutMs}`, ...files], {
       cwd, env: childEnv(home, env), detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
     LIVE_SUITES.add(child);
     const started = new Set();
     const finished = new Set();
     const failed = new Set();
+    const cancelled = new Set(); // the files node's own --test-timeout cancelled
     let tests = null;
     let stderr = '';
     let buf = '';
@@ -313,6 +567,7 @@ export function runSuite({ cwd, files, timeoutMs, home, reporter = SELF, env = p
       else if (ev.e === 'complete') {
         if (!ev.passed && !ev.todo) failed.add(file);
         if (ev.top) finished.add(file);
+        if (ev.top && ev.timedOut) cancelled.add(file);
       } else if (ev.e === 'diag') {
         const m = /^tests (\d+)$/.exec(ev.message);
         if (m) tests = Number(m[1]);
@@ -327,15 +582,21 @@ export function runSuite({ cwd, files, timeoutMs, home, reporter = SELF, env = p
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (c) => { stderr = (stderr + c).slice(-4000); });
     const killGroup = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the group is gone */ } };
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; killGroup(); }, timeoutMs);
+    let capHit = false;
+    const timer = setTimeout(() => {
+      capHit = true;
+      // Walked only while node has not reaped the child: a reaped pid may already be someone else's.
+      if (child.exitCode === null && child.signalCode === null) killTree(child.pid); else killGroup();
+    }, timeoutMs);
     child.on('error', (e) => { clearTimeout(timer); LIVE_SUITES.delete(child); rejectRun(e); });
     child.on('close', (code) => {
       clearTimeout(timer);
       LIVE_SUITES.delete(child);
       if (buf) take(buf);
       killGroup(); // a straggler a test left in the group
-      const stillRunning = timedOut ? [...started].filter((f) => !finished.has(f)).sort() : [];
+      const atCap = capHit ? [...started].filter((f) => !finished.has(f)) : [];
+      const stillRunning = [...new Set([...cancelled, ...atCap])].sort();
+      const timedOut = capHit || cancelled.size > 0;
       resolveRun({ failed: [...failed].sort(), stillRunning, timedOut, tests, code, wallMs: Date.now() - t0, stderr });
     });
   });
@@ -380,15 +641,20 @@ export async function runMutants({
   const problems = validateCatalogue(root, catalogue);
   if (problems.length) throw new Error(`the catalogue is not valid against ${root}:\n  ${problems.join('\n  ')}`);
   const ownScratch = !scratch;
-  const dir = scratch || mkdtempSync(join(tmpdir(), 'omelette-mutants-'));
+  const dir = scratch || mkdtempSync(join(tmpdir(), `${STRAGGLER_MARK}-`));
+  const own = { needles: scratchNeedles(dir), scratch: realPathOf(dir) };
   // A signal ends the run as the signal says, but first: no suite left running, no scratch of ours left in the OS temp.
   const handlers = {};
   const unhook = () => { for (const [sig, h] of Object.entries(handlers)) process.off(sig, h); };
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     handlers[sig] = () => {
       unhook();
-      for (const c of LIVE_SUITES) { try { process.kill(-c.pid, 'SIGKILL'); } catch { /* the group is gone */ } }
-      if (ownScratch) rmSync(dir, { recursive: true, force: true });
+      for (const c of LIVE_SUITES) {
+        if (c.exitCode === null && c.signalCode === null) killTree(c.pid);
+        else { try { process.kill(-c.pid, 'SIGKILL'); } catch { /* the group is gone */ } }
+      }
+      sweepStragglers(own);
+      if (ownScratch) rmSync(dir, { recursive: true, force: true }); else releaseOwner(dir);
       process.kill(process.pid, sig); // no listener left: the default action ends the runner
     };
     process.on(sig, handlers[sig]);
@@ -406,7 +672,8 @@ export async function runMutants({
     }
     const baseline = { files: files.length, tests: base.tests, wallMs: base.wallMs };
     const timeoutMs = timeoutS ? timeoutS * 1000 : Math.max(2 * base.wallMs, TIMEOUT_FLOOR_MS);
-    progress(`baseline: ${files.length} file(s), ${base.tests ?? '?'} test(s), ${(base.wallMs / 1000).toFixed(1)}s — green; cap per mutant ${(timeoutMs / 1000).toFixed(0)}s`);
+    const baseStrays = stragglerNote(sweepStragglers(own));
+    progress(`baseline: ${files.length} file(s), ${base.tests ?? '?'} test(s), ${(base.wallMs / 1000).toFixed(1)}s — green; cap per mutant ${(timeoutMs / 1000).toFixed(0)}s${baseStrays ? `  ${baseStrays}` : ''}`);
 
     const results = [];
     if (out) writeReport(out, buildReport({ date, baseline, timeoutMs, results }));
@@ -416,6 +683,7 @@ export async function runMutants({
       let run;
       try { run = await runSuite({ ...suite, timeoutMs }); }
       finally { restoreFiles(paths, [m.file]); }
+      const strays = stragglerNote(sweepStragglers(own));
       if (run.code !== 0 && !run.timedOut && !run.failed.length) {
         // node --test failed without naming a file: the measurement is broken, not the mutant caught.
         throw new Error(`${m.id}: node --test exited ${run.code} with no failing test file${run.stderr ? `\n${run.stderr.trim()}` : ''}`);
@@ -425,13 +693,15 @@ export async function runMutants({
       const verdict = run.timedOut
         ? `timed out, caught by ${caughtBy.length} file(s) (${run.stillRunning.length} still running)`
         : caughtBy.length ? `caught by ${caughtBy.length} file(s)` : 'UNCAUGHT';
-      progress(`[${String(i + 1).padStart(String(catalogue.length).length)}/${catalogue.length}] ${m.id}  ${verdict}  ${(run.wallMs / 1000).toFixed(1)}s`);
+      progress(`[${String(i + 1).padStart(String(catalogue.length).length)}/${catalogue.length}] ${m.id}  ${verdict}  ${(run.wallMs / 1000).toFixed(1)}s${strays ? `  ${strays}` : ''}`);
       if (out) writeReport(out, buildReport({ date, baseline, timeoutMs, results }));
     }
     return buildReport({ date, baseline, timeoutMs, results });
   } finally {
+    const strays = stragglerNote(sweepStragglers(own));
+    if (strays) progress(strays);
     unhook();
-    if (ownScratch) rmSync(dir, { recursive: true, force: true });
+    if (ownScratch) rmSync(dir, { recursive: true, force: true }); else releaseOwner(dir);
   }
 }
 
@@ -458,10 +728,12 @@ const stamp = (d) => {
 
 /**
  * The CLI. `deps` lets a test point it at a fixture repository and catalogue
- * instead of this checkout. Returns the exit code: 0 done, 1 a problem, 2 usage.
+ * instead of this checkout, and `--stragglers` at a mark of its own instead of
+ * every `omelette-mutants` process on the machine. Returns the exit code: 0
+ * done, 1 a problem (or, for `--stragglers`, a straggler found), 2 usage.
  */
 export async function main(argv = process.argv.slice(2), {
-  root = ROOT, cataloguePath = DEFAULT_CATALOGUE, entries = COPY_ENTRIES,
+  root = ROOT, cataloguePath = DEFAULT_CATALOGUE, entries = COPY_ENTRIES, stragglerMark = STRAGGLER_MARK,
   out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n'),
 } = {}) {
   let values;
@@ -472,11 +744,27 @@ export async function main(argv = process.argv.slice(2), {
         only: { type: 'string' }, files: { type: 'string' }, timeout: { type: 'string' },
         scratch: { type: 'string' }, out: { type: 'string' },
         list: { type: 'boolean' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' },
+        stragglers: { type: 'boolean' }, kill: { type: 'boolean' },
       },
       strict: true,
     }));
   } catch (e) { err(`mutants: ${e.message}`); err(USAGE); return 2; }
   if (values.help) { out(USAGE); return 0; }
+  if (values.kill && !values.stragglers) { err('mutants: --kill goes with --stragglers'); err(USAGE); return 2; }
+  if (values.stragglers) {
+    // Nothing found prints nothing; each leftover is `pid  age  command`, a live run's processes follow under their own heading.
+    const { leftovers, live } = classifyStragglers(stragglerMark);
+    for (const p of leftovers) out(`${p.pid}  ${p.etime}  ${p.command}`);
+    if (live.length) {
+      out('live runs (never killed):');
+      for (const p of live) out(`  ${p.pid}  ${p.etime}  ${p.command}`);
+    }
+    if (!values.kill) return leftovers.length ? 1 : 0;
+    if (!leftovers.length) return 0;
+    const alive = killAndCheck(leftovers.map((p) => p.pid));
+    err(stragglerNote({ killed: leftovers.length - alive.length, alive: alive.length }));
+    return alive.length ? 1 : 0;
+  }
   const timeoutS = values.timeout === undefined ? undefined : Number(values.timeout);
   if (timeoutS !== undefined && !(Number.isFinite(timeoutS) && timeoutS > 0)) { err('mutants: --timeout must be a positive number of seconds'); return 2; }
 

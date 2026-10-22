@@ -329,6 +329,13 @@
     "breaks": "a git push / deploy / publish prompt reaches a research unit"
   },
   {
+    "id": "unit-result-refused-disabled",
+    "file": "core/unit.mjs",
+    "find": "run: (args) => answerResult(storeFor(cfgFor()), args, unit.name),",
+    "replace": "run: (args) => (cfgFor().values.enabled ? answerResult(storeFor(cfgFor()), args, unit.name) : { text: 'Error: the unit is disabled.', isError: true }),",
+    "breaks": "<unit>_result refuses while the unit is disabled: a spooled answer cannot be fetched once the operator switched the unit off"
+  },
+  {
     "id": "update-tmp-no-cleanup",
     "file": "core/update.mjs",
     "find": "if (tmp !== null) { try { unlinkSync(tmp); } catch { /* gone */ } }",
@@ -441,6 +448,13 @@
     "breaks": "`set` refuses a symlinked fleet.config.json (1.7.2 re-review 3, said to survive)"
   },
   {
+    "id": "bin-results-id-no-length-bound",
+    "file": "bin/omelette-fleet.mjs",
+    "find": "if (id !== undefined && !isValidResultId(id)) {",
+    "replace": "if (id !== undefined && !/^\\d{8}T\\d{6}Z-\\d+-\\d+$/.test(id)) {",
+    "breaks": "`results <unit> <id>` takes a 200-char id that matches the id format: the CLI has no length bound of its own"
+  },
+  {
     "id": "guard-push-allowed",
     "file": "hooks/omelette-guard.mjs",
     "find": "'pull', 'push', 'stash'",
@@ -460,5 +474,12 @@
     "find": "'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer'",
     "replace": "'omelette-coder-medium', 'omelette-reviewer'",
     "breaks": "omelette-tester may commit, stash or branch"
+  },
+  {
+    "id": "guard-unquote-nested-quote",
+    "file": "hooks/omelette-guard.mjs",
+    "find": "if (quote) { if (c === quote) quote = ''; else out += c; continue; }",
+    "replace": "if (quote) { if (c === '\"' || c === \"'\") quote = ''; else out += c; continue; }",
+    "breaks": "a quote of the other kind ends a quoted span in unquote: sh -c \"git rebase --exec 'echo --abort' main\" reads as an --abort and passes"
   }
 ]
