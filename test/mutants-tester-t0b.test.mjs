@@ -44,7 +44,9 @@ test('a cap that lands while the suite file is starting leaves no process behind
     for (let rep = 0; rep < 2; rep++) {
       const r = await runSuite({ cwd: join(dir, 'repo'), files: ['test/a.test.mjs'], timeoutMs: cap, home: join(dir, 'home') });
       assert.equal(r.timedOut, true, `cap ${cap} ms ends the run`);
-      for (let i = 0; i < 20 && survivors(dir).length; i++) await new Promise((res) => setTimeout(res, 50));
+      // A hang detector, not a clock: a passing run stops polling the moment nothing is left; the 10 s
+      // bound only decides a failed one (under a loaded suite a killed process can stay visible past 1 s).
+      for (let i = 0; i < 100 && survivors(dir).length; i++) await new Promise((res) => setTimeout(res, 100));
       const left = survivors(dir);
       if (left.length) {
         leaks.push(`cap ${cap} ms: ${left.map((p) => `${p.pid} ${p.command.slice(-60)}`).join(' | ')}`);
