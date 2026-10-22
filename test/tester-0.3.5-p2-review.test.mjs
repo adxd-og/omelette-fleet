@@ -94,10 +94,20 @@ test('gemini_image: the spooled result is still filed under (vendor default) —
 test('gemini_deep_research: the model report survives a cancel landing on the decompose spawn itself — before any stage ever ran', async () => {
   const dir = home('omelette-gemini-deepcancel-first-');
   const fake = join(dir, 'fake-agy.mjs');
-  // Whatever runs would answer at once; the point is that nothing gets the
-  // chance to, because the abort lands before the FIRST spawn call.
+  const release = join(dir, 'release');
+  // The fake answers only once `release` exists, and the test creates it only
+  // after ctx.spawn has returned — after the kill an aborted signal sends at
+  // the spawn. A fake that answered at once could beat that kill when this
+  // process was descheduled between the spawn and the kill under load, and its
+  // answer, salvaged from the killed run, made the call the non-error
+  // cancelled note (`isError` undefined, seen once under a loaded suite).
   writeFileSync(fake, [
-    'process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "unreachable" }));',
+    'import { existsSync } from "node:fs";',
+    'const poll = setInterval(() => {',
+    `  if (!existsSync(${JSON.stringify(release)})) return;`,
+    '  clearInterval(poll);',
+    '  process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "unreachable" }));',
+    '}, 5);',
   ].join('\n'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { cancel: 'kill', timeoutS: 60 } } }));
   const controller = new AbortController();
@@ -116,7 +126,9 @@ test('gemini_deep_research: the model report survives a cancel landing on the de
             // answers. If the report happened any later than the top of
             // runDeepResearch, this run would have nothing to name.
             if (spawns.length === 1) controller.abort();
-            return ctx.spawn({ ...o, args: [fake, ...o.args] });
+            const run = ctx.spawn({ ...o, args: [fake, ...o.args] });
+            writeFileSync(release, '');
+            return run;
           },
         }),
       } : t)),

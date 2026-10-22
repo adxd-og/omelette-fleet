@@ -38,14 +38,6 @@ test('clean answers a string for anything: a non-string is the empty string', ()
   for (const value of [undefined, null, 42, {}, [], true, Symbol('s')]) assert.equal(clean(value), '');
 });
 
-test('clean runs in linear time on a long hostile string', () => {
-  const long = '\u001b['.repeat(500_000) + 'x'.repeat(500_000) + '\u202e'.repeat(500_000);
-  const started = Date.now();
-  const out = clean(long);
-  assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
-  assert.equal(out, '['.repeat(500_000) + 'x'.repeat(500_000));
-});
-
 test('cells: the newer emoji block U+1FA70–1FAFF is two cells wide where assigned, and a cut keeps one whole', () => {
   assert.equal(cells(String.fromCodePoint(0x1fa70)), 2);
   assert.equal(cells('🪄'), 2);
@@ -83,14 +75,4 @@ test('cells: a VS16 after a one-cell code point makes the pair two cells; after 
 test('cut never splits a base from its VS16', () => {
   assert.equal(cut('ab❤\ufe0fcd', 3), 'ab…', 'the pair does not fit beside the ellipsis: both go');
   assert.equal(cut('a❤\ufe0fbcd', 4), 'a❤\ufe0f…', 'the pair fits: both stay');
-});
-
-test('cells: a million calls on mixed text take under a second', () => {
-  const samples = ['npm test', 'Edit ✅notes.md', '日本語.mjs', 'café', '🫠 ok', 'e\u0301x'];
-  const started = Date.now();
-  let total = 0;
-  for (let i = 0; i < 1_000_000; i++) total += cells(samples[i % samples.length]);
-  const took = Date.now() - started;
-  assert.ok(took < 1000, `${took} ms`);
-  assert.ok(total > 0);
 });

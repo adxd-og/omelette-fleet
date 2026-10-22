@@ -364,19 +364,48 @@ test('the read cache has a byte budget: past it a target is read and judged but 
   assert.deepEqual(shape({ cacheBytes: 0 }), cached, 'and neither does a budget of none');
 });
 
-test('the worst case is bounded: 2000 mismatching pointers into a 2 MiB target', () => {
+/**
+ * The String.prototype methods a pass over a target's lines reaches for. While
+ * `fn` runs — synchronously, so nothing else runs meanwhile — every call of one
+ * of them is counted, and past `budget` the count throws at once: a quadratic
+ * shape fails in moments instead of running for minutes. The methods are put
+ * back however `fn` ends. Work is counted, not timed, so load cannot move it.
+ */
+const SCAN_METHODS = ['includes', 'indexOf', 'lastIndexOf', 'slice', 'substring', 'split', 'replace', 'replaceAll', 'trim', 'trimStart', 'trimEnd', 'startsWith', 'endsWith', 'match', 'search'];
+function stringWork(fn, budget = Infinity) {
+  const originals = SCAN_METHODS.map((name) => [name, String.prototype[name]]);
+  let calls = 0;
+  for (const [name, original] of originals) {
+    String.prototype[name] = function counted(...args) {
+      if (++calls > budget) throw new Error(`string work past its budget of ${budget} calls`);
+      return Reflect.apply(original, this, args);
+    };
+  }
+  try {
+    const result = fn();
+    return { result, calls };
+  } finally {
+    for (const [name, original] of originals) String.prototype[name] = original;
+  }
+}
+
+test('the worst case is bounded: 2000 mismatching pointers into a 2 MiB target cost one pass over it plus a constant per pointer', () => {
   const root = project({});
   const line = 'the quick brown fox jumps over the lazy dog and keeps on running\n';
   writeFileSync(join(root, 'big.txt'), line.repeat(Math.floor((2 * 1024 * 1024) / line.length)));
-  const text = Array.from({ length: MAX_POINTERS }, (_, i) => `big.txt:${i + 1} · \`quartz vex ${String(i).padStart(5, '0')}\` · claim`).join('\n');
-  const started = Date.now();
-  const { counts } = checkPointers({ text, root, changed: null });
-  const spent = Date.now() - started;
+  writeFileSync(join(root, 'one-line.txt'), line);
+  const pointers = (path, n) => Array.from({ length: n }, (_, i) => `${path}:${i + 1} · \`quartz vex ${String(i).padStart(5, '0')}\` · claim`).join('\n');
+  // The two costs a linear shape is made of, each on its own: the big target
+  // read once (one pointer), and 2000 pointers judged against a target of one
+  // line, where a scan per pointer costs nothing.
+  const readOnce = stringWork(() => checkPointers({ text: pointers('big.txt', 1), root, changed: null })).calls;
+  const perPointer = stringWork(() => checkPointers({ text: pointers('one-line.txt', MAX_POINTERS), root, changed: null })).calls;
+  // Together, twice over, they bound the worst case. The scan-per-pointer
+  // version (28 s on a laptop) cost a pass over the target for every pointer —
+  // about 2000 times `readOnce` — and so does a cache that stops holding the
+  // target and reads it again per pointer.
+  const { result: { counts } } = stringWork(() => checkPointers({ text: pointers('big.txt', MAX_POINTERS), root, changed: null }), 2 * (readOnce + perPointer));
   assert.equal(counts.mismatch, MAX_POINTERS);
-  // The scan-per-pointer version took 28 s on a laptop; this one takes under two.
-  // The bound sits between them with room for a CI runner several times slower:
-  // it is there to catch the quadratic shape coming back, not to race the clock.
-  assert.ok(spent < 15000, `2000 pointers into 2 MiB took ${spent} ms`);
 });
 
 // ─── §4 staleness: the git child ────────────────────────────────────────────

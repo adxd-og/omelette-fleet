@@ -620,18 +620,29 @@ test('doctor --probe-sandbox: a unit that never answers is skipped as timed out,
   const dir = home();
   const gone = join(dir, 'no-such');
   const fake = probeBin(dir, { mode: 'sleep' });
-  registerOurs(dir, ['grok']);
+  // The probe's deadline is the only clock that may decide. gemini's child is
+  // hard-killed at timeoutS + 60 s, so at a 1 s cap only the deadline can end
+  // the call. grok's (and codex's) is killed at timeoutS itself, the same
+  // second as the deadline, and a kill that settles the call first reads
+  // `call failed: … hard-killed` instead (CI, node 20 · macos, e896931).
+  registerOurs(dir, ['gemini']);
+  // The probe directory is made under TMPDIR: a private one shows it gone
+  // whether or not the fake got as far as starting before the deadline.
+  const tmp = join(dir, 'tmp');
+  mkdirSync(tmp);
   const r = cli(['doctor', '--probe-sandbox'], {
     dir,
-    env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone, GROK_TIMEOUT_S: '1' },
+    env: { AGY_BIN: fake.path, GROK_BIN: gone, CODEX_BIN: gone, AGY_TIMEOUT_S: '1', TMPDIR: tmp },
   });
-  assert.match(r.out, /sandbox\s+skipped \(timed out after 1 s\)/);
+  const m = /── gemini[\s\S]*?sandbox\s+skipped \(timed out after (\d+) s\)/.exec(r.out);
+  assert.ok(m, r.out + r.err);
+  // Wall-clock seconds: the deadline cannot fire before the 1 s cap, so the
+  // floor is exact; the ceiling only catches a deadline that never came.
+  assert.ok(Number(m[1]) >= 1 && Number(m[1]) <= 10, m[0]);
   // A timeout proves nothing either way, so it is not a verdict and not an exit code.
   assert.equal(r.code, 0, r.out);
   assert.doesNotMatch(r.out, /BREACHED|held/);
-  const ran = spawnedIn(fake.marker);
-  assert.equal(ran.length, 1);
-  assert.equal(existsSync(ran[0]), false);
+  assert.deepEqual(readdirSync(tmp), []);
 });
 
 test('doctor --probe-sandbox: a file on disk is BREACHED even when the run then hung past the cap', () => {

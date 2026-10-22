@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit, {
@@ -623,11 +623,17 @@ test('grok_research: an absolute `cwd` is passed as --cwd and is where the run h
 test('runtime with a fake grok: a cancel does not swallow the error Grok had already reported', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-grok-cancel-'));
   const fake = join(dir, 'fake-grok-cancel.mjs');
+  const reported = join(dir, 'reported');
   // The CLI reports its own failure and then hangs: the client's cancel is
   // what ends the run, and the reason it was doomed anyway has to survive it.
+  // The cancel comes when the error is OBSERVED, never after a delay: the fake
+  // writes `reported` from the write's callback, once both lines are in the
+  // pipe, and the test aborts on seeing that file.
   writeFileSync(fake, [
+    'import { writeFileSync } from "node:fs";',
     'process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "s" }) + "\\n");',
-    'process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["auth expired"] }) + "\\n");',
+    'process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["auth expired"] }) + "\\n",',
+    `  () => writeFileSync(${JSON.stringify(reported)}, ""));`,
     'setTimeout(() => {}, 30000);',
   ].join('\n'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { grok: { cancel: 'kill', timeoutS: 60 } } }));
@@ -637,9 +643,13 @@ test('runtime with a fake grok: a cancel does not swallow the error Grok had alr
     { env },
   );
   const c = new AbortController();
-  const abort = setTimeout(() => c.abort(), 300);
-  if (abort.unref) abort.unref();
-  const r = await rt.callTool('grok_research', { prompt: 'q' }, { id: 1, signal: c.signal });
+  const watch = setInterval(() => { if (existsSync(reported)) { clearInterval(watch); c.abort(); } }, 10);
+  let r;
+  try {
+    r = await rt.callTool('grok_research', { prompt: 'q' }, { id: 1, signal: c.signal });
+  } finally {
+    clearInterval(watch);
+  }
   assert.equal(r.isError, true);
   assert.match(r.text, /grok cancelled by the client — Grok had reported: auth expired/);
   // The cancel still decides the outcome: `cancelled`, not `error`.
