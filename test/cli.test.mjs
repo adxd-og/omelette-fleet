@@ -638,7 +638,7 @@ test('doctor --probe-sandbox: a unit that never answers is skipped as timed out,
   assert.ok(m, r.out + r.err);
   // Wall-clock seconds: the deadline cannot fire before the 1 s cap, so the
   // floor is exact; the ceiling only catches a deadline that never came.
-  assert.ok(Number(m[1]) >= 1 && Number(m[1]) <= 10, m[0]);
+  assert.ok(Number(m[1]) >= 1 && Number(m[1]) <= 20, m[0]);
   // A timeout proves nothing either way, so it is not a verdict and not an exit code.
   assert.equal(r.code, 0, r.out);
   assert.doesNotMatch(r.out, /BREACHED|held/);
@@ -852,11 +852,17 @@ test('doctor --probe-sandbox: the probe has ONE deadline of its own, it ENDS the
   // fake for a minute, and a hung suite reports nothing.
   const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: fake, GROK_BIN: gone, CODEX_BIN: gone }, timeout: 30000 });
   const elapsed = Date.now() - t0;
-  assert.match(r.out, /── gemini[\s\S]*?sandbox\s+skipped \(timed out after 1 s\)/, r.out + r.err);
+  const m = /── gemini[\s\S]*?sandbox\s+skipped \(timed out after (\d+) s\)/.exec(r.out);
+  assert.ok(m, r.out + r.err);
+  // Wall-clock seconds, as in the never-answers test above: the deadline
+  // cannot fire before the 1 s cap, so the floor is exact; the ceiling only
+  // catches a deadline that never came.
+  assert.ok(Number(m[1]) >= 1 && Number(m[1]) <= 20, m[0]);
   assert.doesNotMatch(r.out, /BREACHED/);
   assert.equal(r.code, 0, r.out);
-  // capS + 5 s: the deadline is 1 s here and the kill is immediate.
-  assert.ok(elapsed < 6000, `doctor took ${elapsed} ms — the abandoned run kept it alive`);
+  // A hang detector, not a race: the deadline is 1 s and the kill immediate (measured ≤ 1.7 s under load);
+  // 20 s keeps the ≥ 10× margin and stays under cli()'s own 30 s timeout.
+  assert.ok(elapsed < 20000, `doctor took ${elapsed} ms — the abandoned run kept it alive`);
   // …and the vendor process is not still running behind it.
   const pid = Number(readFileSync(pidFile, 'utf8').trim());
   assert.ok(pid > 0, 'the fake recorded no pid');
@@ -3008,8 +3014,14 @@ test('doctor: a settings file that would BLOCK the read is named unreadable, and
   // A FIFO with nobody on the other end: an ordinary read of it never returns,
   // and doctor opening one would hang for as long as the operator waits.
   if (spawnSync('mkfifo', [fifo], { encoding: 'utf8' }).status !== 0) return t.skip('mkfifo is unavailable here');
+  // PATH is empty on purpose, as in the rules-file test below: with the real
+  // one, the version and login probes of whatever agy, grok and codex it holds
+  // ran inside the window (the run took 3.8 s under load), so the only thing
+  // that could hold this run now is the FIFO.
+  const empty = join(dir, 'empty-path');
+  mkdirSync(empty, { recursive: true });
   const t0 = Date.now();
-  const r = doctorFromProject(dir);
+  const r = doctorFromProject(dir, { PATH: empty });
   // "At once" against a hang of 20 s (the cli() timeout): 10 s, because 2 s
   // read as a hang whenever two suites shared the machine (2026-09-24/25).
   assert.ok(Date.now() - t0 < 10000, `doctor took ${Date.now() - t0} ms`);

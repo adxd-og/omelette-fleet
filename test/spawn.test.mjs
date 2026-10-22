@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { runProcess, buildChildEnv, ALLOWED_ENV } from '../core/spawn.mjs';
@@ -217,46 +217,87 @@ test('a missing binary rejects with the actionable help text', async () => {
 // --- cancellation: the abort path is the hard-kill path ----------------------
 
 /**
- * A child that spawns a GRANDCHILD in the same process group and then exits on
- * its own after 400 ms. The grandchild writes `marker` 1.5 s in — long after
- * both the cancel and the parent's own exit — so the marker answers exactly one
- * question: did the whole GROUP die, or only the process we hold a handle to?
+ * A child that spawns a GRANDCHILD in the same process group. The grandchild
+ * writes its pid to `ready` (whole, by a rename), then waits for `go` and writes
+ * `marker` when it appears. With `exits` the child ends on its own once `ready`
+ * is there; without it the child stays until it is killed. Nothing here ends on
+ * a schedule the test races: the caps (30 s for the child, 60 s for the
+ * grandchild) only stop a failed test from leaving processes behind.
  */
-function groupFixture(marker) {
+function groupFixture({ exits }) {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-group-'));
+  const ready = join(dir, 'ready');
+  const go = join(dir, 'go');
+  const marker = join(dir, 'grandchild-ran');
+  const inner = [
+    'const fs = require("fs");',
+    `fs.writeFileSync(${JSON.stringify(`${ready}.tmp`)}, String(process.pid));`,
+    `fs.renameSync(${JSON.stringify(`${ready}.tmp`)}, ${JSON.stringify(ready)});`,
+    'const poll = setInterval(() => {',
+    `  if (!fs.existsSync(${JSON.stringify(go)})) return;`,
+    '  clearInterval(poll);',
+    `  fs.writeFileSync(${JSON.stringify(marker)}, "x");`,
+    '  process.exit(0);',
+    '}, 10);',
+    'setTimeout(() => process.exit(0), 60000);',
+  ].join(' ');
   const script = join(dir, 'parent.mjs');
-  const inner = `setTimeout(() => require("fs").writeFileSync(${JSON.stringify(marker)}, "x"), 1500)`;
   writeFileSync(script, [
     'import { spawn } from "node:child_process";',
+    'import { existsSync } from "node:fs";',
     `spawn(process.execPath, ["-e", ${JSON.stringify(inner)}], { stdio: "ignore" });`,
-    'setTimeout(() => process.exit(0), 400);',
+    exits
+      ? `const poll = setInterval(() => { if (existsSync(${JSON.stringify(ready)})) { clearInterval(poll); process.exit(0); } }, 10);`
+      : 'setTimeout(() => process.exit(0), 30000);',
   ].join('\n'));
-  return script;
+  return { script, ready, go, marker };
+}
+
+/** Whether a pid still names a process (a zombie counts until it is reaped). */
+const alive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+};
+/** Wait for `check` to hold, polling; the cap is a hang detector, not the thing tested. */
+async function until(check, what, capMs = 10000) {
+  const end = Date.now() + capMs;
+  while (!check()) {
+    if (Date.now() > end) throw new Error(`gave up waiting for ${what}`);
+    await new Promise((res) => setTimeout(res, 10));
+  }
 }
 
 test('an aborted signal SIGKILLs the whole process group and the result says `cancelled`', async () => {
-  const marker = join(mkdtempSync(join(tmpdir(), 'omelette-marker-')), 'grandchild-ran');
-  const script = groupFixture(marker);
+  const fx = groupFixture({ exits: false });
   const controller = new AbortController();
-  const abort = setTimeout(() => controller.abort(), 150);
-  if (abort.unref) abort.unref();
-  const t0 = Date.now();
-  const r = await runProcess({ bin: node, args: [script], signal: controller.signal });
+  // The cancel comes once the grandchild is OBSERVED running, never on a timer,
+  // and the child never ends on its own, so the run can only end by the cancel.
+  const watch = setInterval(() => { if (existsSync(fx.ready)) { clearInterval(watch); controller.abort(); } }, 10);
+  let r;
+  try {
+    r = await runProcess({ bin: node, args: [fx.script], signal: controller.signal });
+  } finally {
+    clearInterval(watch);
+  }
   assert.equal(r.cancelled, true);
   assert.equal(r.killed, true);
-  assert.ok(Date.now() - t0 < 3000, 'the run ended with the cancel, not on its own schedule');
-  await new Promise((res) => setTimeout(res, 1800));
-  assert.equal(existsSync(marker), false, 'the grandchild died with the group');
+  assert.equal(r.signal, 'SIGKILL', 'the child died of the kill, not on its own schedule');
+  // The grandchild, which nothing held a handle to, went with the group.
+  const pid = Number(readFileSync(fx.ready, 'utf8'));
+  try {
+    await until(() => !alive(pid), 'the grandchild to die with the group');
+  } finally {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* gone, as it should be */ }
+  }
 });
 
 test('…and the same fixture left alone DOES write the marker — the guard above is not vacuous', async () => {
-  const marker = join(mkdtempSync(join(tmpdir(), 'omelette-marker-')), 'grandchild-ran');
-  const script = groupFixture(marker);
-  const r = await runProcess({ bin: node, args: [script] });
+  const fx = groupFixture({ exits: true });
+  const r = await runProcess({ bin: node, args: [fx.script] });
   assert.equal(r.cancelled, false);
   assert.equal(r.killed, false);
-  await new Promise((res) => setTimeout(res, 1800));
-  assert.equal(existsSync(marker), true, 'nothing killed the group, so the grandchild ran');
+  // The child has exited; the grandchild outlived it and still does what it is told.
+  writeFileSync(fx.go, '');
+  await until(() => existsSync(fx.marker), 'the grandchild to write its marker');
 });
 
 test('a signal that is already aborted kills at once; one that never fires changes nothing', async () => {

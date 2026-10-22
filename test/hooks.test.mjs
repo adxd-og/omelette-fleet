@@ -457,12 +457,12 @@ test('PreToolUse: a command of nothing but option-shaped tokens is answered at o
     `git tag${' --contains x'.repeat(800)}`,
     `echo ${'x'.repeat(5000)} # ${'a comment '.repeat(500)}`,
   ]) {
-    const started = Date.now();
+    // The net is fire()'s own: a guard still running at 20 s is killed and
+    // fails as hung. Sixty tokens put the tiled form past it many times over
+    // (11.4 s at forty), while one scanning run takes a process start-up.
     const r = fire(g.path, preToolUse({ tool_input: { command } }));
-    const ms = Date.now() - started;
     assert.equal(r.code, 0, `${command.slice(0, 40)}… should pass: ${r.out}${r.err}`);
     assert.equal(r.err, '');
-    assert.ok(ms < 2000, `the option run tiled instead of scanning: ${ms}ms for ${command.length} characters`);
   }
 });
 

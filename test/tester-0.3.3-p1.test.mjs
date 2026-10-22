@@ -122,21 +122,44 @@ function fakeUnit(overrides = {}) {
   });
 }
 
-/** Writes the grandchild-spawning parent script used by p1_grandchild; returns its path and the marker path. */
-function grandchildFixture(dir, { markerDelayMs = 1200, parentExitMs = 300 } = {}) {
-  const marker = join(dir, 'grandchild-marker');
+/**
+ * Writes the grandchild-spawning parent script used by p1_grandchild; returns
+ * its path and the `ready` path. The grandchild writes its pid to `ready`
+ * (whole, by a rename) and stays; the parent stays too. Neither ends on a
+ * schedule the test races: the caps (30 s for the parent, 60 s for the
+ * grandchild) only stop a failed test from leaving processes behind.
+ */
+function grandchildFixture(dir) {
+  const ready = join(dir, 'grandchild-ready');
   const script = join(dir, 'gc-parent.mjs');
-  const inner = `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(marker)}, 'x'), ${markerDelayMs})`;
+  const inner = [
+    'const fs = require("fs");',
+    `fs.writeFileSync(${JSON.stringify(`${ready}.tmp`)}, String(process.pid));`,
+    `fs.renameSync(${JSON.stringify(`${ready}.tmp`)}, ${JSON.stringify(ready)});`,
+    'setTimeout(() => process.exit(0), 60000);',
+  ].join(' ');
   writeFileSync(script, [
     'import { spawn } from "node:child_process";',
     `spawn(process.execPath, ["-e", ${JSON.stringify(inner)}], { stdio: "ignore" });`,
-    `setTimeout(() => process.exit(0), ${parentExitMs});`,
+    'setTimeout(() => process.exit(0), 30000);',
   ].join('\n'));
-  return { script, marker };
+  return { script, ready };
 }
 
 const tick = () => new Promise((r) => setImmediate(r));
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Whether a pid still names a process (a zombie counts until it is reaped). */
+const alive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+};
+/** Wait for `check` to hold, polling; the cap is a hang detector, not the thing tested. */
+async function until(check, what, capMs = 10000) {
+  const end = Date.now() + capMs;
+  while (!check()) {
+    if (Date.now() > end) throw new Error(`gave up waiting for ${what}`);
+    await wait(10);
+  }
+}
 
 // --- 1b. progress, through the real ticker and the real notify wrapper -----
 
@@ -218,25 +241,32 @@ test('cancel `finish`, whole stack: the response is dropped at once, but the rea
   assert.equal(snap.lastEvent.detached, true, 'but nobody is listening any more');
 });
 
-test('cancel `kill`, whole stack: the response is dropped, the whole process GROUP is reaped (grandchild included), and it happens fast', async () => {
+test('cancel `kill`, whole stack: the response is dropped, the whole process GROUP is reaped (grandchild included) — pinned by the grandchild pid going, not by the clock', async () => {
   const { dir, env: e } = env({ units: { p1fake: { cancel: 'kill' } } });
   const rt = createUnitRuntime(fakeUnit(), { env: e });
   const h = createHandler({ serverInfo: { name: 'p1fake', version: '0' }, tools: rt.tools, callTool: rt.callTool });
-  const { script, marker } = grandchildFixture(dir, { markerDelayMs: 1200, parentExitMs: 400 });
-  const t0 = Date.now();
+  const { script, ready } = grandchildFixture(dir);
   const p = h({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'p1_grandchild', arguments: { script } } });
-  await wait(80);
+  // In flight by observation, not after a fixed wait: the grandchild is up.
+  await until(() => existsSync(ready), 'the grandchild to start');
   assert.equal(h.inflight(), 1);
-  await h({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } });
-  const result = await p;
-  assert.equal(result, null, 'no response is sent for a cancelled request');
-  assert.ok(Date.now() - t0 < 1000, '`kill` ends the call with the cancel, not on the process tree\'s own schedule');
-  assert.equal(h.inflight(), 0);
-  const snap = JSON.parse(readFileSync(join(dir, `status-p1fake-${process.pid}.json`), 'utf8'));
-  assert.equal(snap.lastEvent.status, 'cancelled');
-  assert.equal('detached' in snap.lastEvent, false, 'a killed run was not left to finish');
-  await wait(1300); // long past markerDelayMs, to be sure this isn't a race
-  assert.equal(existsSync(marker), false, 'the grandchild died with the group — a parent-only kill would have missed it');
+  const pid = Number(readFileSync(ready, 'utf8'));
+  try {
+    await h({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } });
+    const result = await p;
+    assert.equal(result, null, 'no response is sent for a cancelled request');
+    assert.equal(h.inflight(), 0);
+    const snap = JSON.parse(readFileSync(join(dir, `status-p1fake-${process.pid}.json`), 'utf8'));
+    assert.equal(snap.lastEvent.status, 'cancelled');
+    assert.equal('detached' in snap.lastEvent, false, 'a killed run was not left to finish');
+    // `kill` ends the call with the cancel, not on the tree's own schedule: the
+    // grandchild, which nothing held a handle to, is gone. A parent-only kill
+    // leaves it running for 60 s; no kill at all holds the call for the
+    // parent's 30 s and then leaves it running all the same.
+    await until(() => !alive(pid), 'the grandchild to die with the group');
+  } finally {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* gone, as it should be */ }
+  }
 });
 
 test('two concurrent requests, whole stack: cancelling one under `kill` leaves the other\'s real child untouched and correctly answered', async () => {

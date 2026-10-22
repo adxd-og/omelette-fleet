@@ -83,11 +83,24 @@ function fakeUnit(overrides = {}) {
         async run(args) { await new Promise((r) => setTimeout(r, Number(args.ms) || 50)); return 'waited'; },
       },
       {
-        // A real child that outlives a cancel unless the signal reaches it.
+        // A real child that outlives a cancel unless the signal reaches it. It
+        // writes `started`, then waits for `go`: it never ends on its own before
+        // the test says so (the 30 s cap only stops a failed test from leaving
+        // it behind), so a cancel always lands mid-run. `signal` is how the
+        // child ended — SIGKILL only when the kill reached it.
         name: 'fake_cancel', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
-        async run(_a, ctx) {
-          const r = await ctx.spawn({ args: ['-e', 'setTimeout(() => process.stdout.write("done"), 800)'] });
-          return `killed=${r.killed};cancelled=${r.cancelled}`;
+        async run(args, ctx) {
+          const r = await ctx.spawn({ args: ['-e', [
+            'const fs = require("fs");',
+            `fs.writeFileSync(${JSON.stringify(args.started)}, "");`,
+            'const poll = setInterval(() => {',
+            `  if (!fs.existsSync(${JSON.stringify(args.go)})) return;`,
+            '  clearInterval(poll);',
+            '  process.stdout.write("done", () => process.exit(0));',
+            '}, 10);',
+            'setTimeout(() => process.exit(0), 30000);',
+          ].join(' ')] });
+          return `killed=${r.killed};cancelled=${r.cancelled};signal=${r.signal}`;
         },
       },
       {
@@ -343,14 +356,32 @@ test('progress: only with a token, every progressEveryMs, elapsed seconds, and n
 
 // --- cancellation and the result record -------------------------------------
 
+/**
+ * fake_cancel's two files, and a cancel that fires once the child has
+ * OBSERVABLY started — never on a timer. `release` then lets the child end on
+ * its own, which is what a `finish` run waits for. Returns the call's args and
+ * the watch's stop.
+ */
+function cancelOnStart(c, { release = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-cancel-'));
+  const args = { started: join(dir, 'started'), go: join(dir, 'go') };
+  const watch = setInterval(() => {
+    if (!existsSync(args.started)) return;
+    clearInterval(watch);
+    c.abort();
+    if (release) writeFileSync(args.go, '');
+  }, 10);
+  return { args, stop: () => clearInterval(watch) };
+}
+
 test('cancel `finish` (the default): the run is left alone, the answer stands, the feed says detached', async () => {
   const { dir, env: e } = env(null);
   const rt = createUnitRuntime(fakeUnit(), { env: e });
   const c = new AbortController();
-  const abort = setTimeout(() => c.abort(), 120);
-  if (abort.unref) abort.unref();
-  const r = await rt.callTool('fake_cancel', {}, { id: 1, signal: c.signal });
-  assert.equal(r.text, 'killed=false;cancelled=false', 'the child ran to the end');
+  // Cancelled mid-run, then released: the child ends on its own, after the cancel.
+  const gate = cancelOnStart(c, { release: true });
+  const r = await rt.callTool('fake_cancel', gate.args, { id: 1, signal: c.signal }).finally(gate.stop);
+  assert.equal(r.text, 'killed=false;cancelled=false;signal=null', 'the child ran to the end');
   const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'ok', 'the outcome is what the run produced');
   assert.equal(snap.lastEvent.detached, true, '…but nobody is listening any more');
@@ -361,12 +392,10 @@ test('cancel `kill`: the signal reaches the spawn, the group is reaped, the feed
   const { dir, env: e } = env({ units: { fake: { cancel: 'kill' } } });
   const rt = createUnitRuntime(fakeUnit(), { env: e });
   const c = new AbortController();
-  const abort = setTimeout(() => c.abort(), 120);
-  if (abort.unref) abort.unref();
-  const t0 = Date.now();
-  const r = await rt.callTool('fake_cancel', {}, { id: 1, signal: c.signal });
-  assert.equal(r.text, 'killed=true;cancelled=true');
-  assert.ok(Date.now() - t0 < 700, 'the child died with the cancel instead of running its course');
+  const gate = cancelOnStart(c);
+  const r = await rt.callTool('fake_cancel', gate.args, { id: 1, signal: c.signal }).finally(gate.stop);
+  // signal=SIGKILL: the child died of the kill instead of running its course.
+  assert.equal(r.text, 'killed=true;cancelled=true;signal=SIGKILL');
   const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   assert.equal('detached' in snap.lastEvent, false, 'a killed run was not left to finish');
@@ -412,12 +441,10 @@ test('createUnitRuntime({ cancel }) overrides the configured policy for that run
   const { dir, env: e } = env({ units: { fake: { cancel: 'finish' } } });
   const killing = createUnitRuntime(fakeUnit(), { env: e, cancel: 'kill' });
   const c = new AbortController();
-  const abort = setTimeout(() => c.abort(), 120);
-  if (abort.unref) abort.unref();
-  const t0 = Date.now();
-  const r = await killing.callTool('fake_cancel', {}, { id: 1, signal: c.signal });
-  assert.equal(r.text, 'killed=true;cancelled=true', 'the config said finish; this runtime kills');
-  assert.ok(Date.now() - t0 < 700, 'the child died with the cancel instead of running its course');
+  const gate = cancelOnStart(c);
+  const r = await killing.callTool('fake_cancel', gate.args, { id: 1, signal: c.signal }).finally(gate.stop);
+  // signal=SIGKILL: the child died of the kill instead of running its course.
+  assert.equal(r.text, 'killed=true;cancelled=true;signal=SIGKILL', 'the config said finish; this runtime kills');
   const snap = JSON.parse(readFileSync(join(dir, `status-fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
   // The adapter sees the signal it only ever gets under `kill`.
@@ -427,16 +454,14 @@ test('createUnitRuntime({ cancel }) overrides the configured policy for that run
   const { env: e2 } = env({ units: { fake: { cancel: 'kill' } } });
   const finishing = createUnitRuntime(fakeUnit(), { env: e2, cancel: 'finish' });
   const c2 = new AbortController();
-  const abort2 = setTimeout(() => c2.abort(), 120);
-  if (abort2.unref) abort2.unref();
-  assert.equal((await finishing.callTool('fake_cancel', {}, { id: 2, signal: c2.signal })).text, 'killed=false;cancelled=false');
+  const gate2 = cancelOnStart(c2, { release: true });
+  assert.equal((await finishing.callTool('fake_cancel', gate2.args, { id: 2, signal: c2.signal }).finally(gate2.stop)).text, 'killed=false;cancelled=false;signal=null');
 
   // Anything that is not one of the two values is not an override at all.
   const configured = createUnitRuntime(fakeUnit(), { env: e2, cancel: 'nonsense' });
   const c3 = new AbortController();
-  const abort3 = setTimeout(() => c3.abort(), 120);
-  if (abort3.unref) abort3.unref();
-  assert.equal((await configured.callTool('fake_cancel', {}, { id: 3, signal: c3.signal })).text, 'killed=true;cancelled=true');
+  const gate3 = cancelOnStart(c3);
+  assert.equal((await configured.callTool('fake_cancel', gate3.args, { id: 3, signal: c3.signal }).finally(gate3.stop)).text, 'killed=true;cancelled=true;signal=SIGKILL');
 });
 
 test('boundedRetry: an abort during the delay ends it and stops the retry instead of paying for a second run', async () => {
