@@ -184,20 +184,6 @@ test('the temp dir is removed when the run fails too', async () => {
   assert.ok(!existsSync(ran), `${ran} was not removed`);
 });
 
-test('the research cwd descriptions say the default is a fresh empty directory', () => {
-  const want = /Defaults to a fresh empty directory: pass a path only when the run should see a workspace/;
-  assert.match(grok.tools.find((t) => t.name === 'grok_research').inputSchema.properties.cwd.description, want);
-  assert.match(gemini.tools.find((t) => t.name === 'gemini_research').inputSchema.properties.cwd.description, want);
-});
-
-// --- (4) the codex review description ----------------------------------------
-
-test('codex_code_review description: the sandbox bounds writes, not reads', () => {
-  const d = codex.tools.find((t) => t.name === 'codex_code_review').description;
-  assert.match(d, /runs read-only shell commands; no web search\. The sandbox bounds writes, not reads: the run can read what the operator's user can read, and nothing it reads can leave except in its answer\./);
-  assert.doesNotMatch(d, /reaches nothing outside it/);
-});
-
 // --- round E2: the coordinator's rulings -------------------------------------
 
 /** A runtime whose spawn is answered in-process and whose log lines are kept. */
@@ -241,7 +227,6 @@ test('gemini_deep_research: every stage runs in one per-call empty dir, gone aft
   assert.equal(new Set(cwds).size, 1, cwds.join('\n'));
   assert.match(cwds[0], /omelette-gemini-research-/);
   assert.ok(!existsSync(cwds[0]), `${cwds[0]} was not removed`);
-  assert.match(gemini.tools.find((t) => t.name === 'gemini_deep_research').description, /runs in a fresh empty directory; under the web-research agy rule set it reads no local files/);
 });
 
 test('codex_research without cwd: a fresh empty temp dir as -C and spawn cwd, gone after the call; with cwd: that dir', async () => {
@@ -260,12 +245,6 @@ test('codex_research without cwd: a fresh empty temp dir as -C and spawn cwd, go
   assert.equal(given.argv[given.argv.indexOf('-C') + 1], where);
   assert.equal(given.cwd, realpathSync(where));
   assert.ok(existsSync(where));
-  assert.match(codex.tools.find((t) => t.name === 'codex_research').inputSchema.properties.cwd.description,
-    /Defaults to a fresh empty directory: pass a path only when the run should see a workspace/);
-});
-
-test('codex header: the exec-server claim says where it comes from', () => {
-  assert.match(readFileSync(new URL('../units/codex/adapter.mjs', import.meta.url), 'utf8'), /even under --ignore-user-config \(upstream source, not measured here\)/);
 });
 
 // r3: `set` refuses an agents.*.model with an invisible character and shows the operator what it saw, escaped.

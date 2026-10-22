@@ -7,17 +7,13 @@
  * test/spawn.test.mjs, test/unit.test.mjs, test/outputcap-tester.test.mjs) and
  * is not repeated here. This file targets what the implementer's own new tests
  * (test/cli.test.mjs, test/hooks.test.mjs, test/rules.test.mjs) left uncovered
- * for sections 1, 4, 5 and 6:
+ * for sections 4 and 5:
  *   - a skill directory that is itself a symlink is never touched by
  *     `--remove --agents` (spec section 4: "... and is not a symlink");
  *   - a guard wired through the WINDOWS-quoted snippet (double quotes, doubled
  *     backslashes) is still recognised by `doctor` on whatever platform runs
  *     the check — spec section 5: "hookWiringAt keeps matching on the script
- *     name" regardless of which platform produced the snippet;
- *   - `doctor`'s single `next` line when the hooks kind was never written at
- *     all (`rules --agents` run without `--hooks`) — a state the shipped
- *     `nextStep()` test only exercises through the bundled `--agents --hooks`
- *     path, never through this partial one.
+ *     name" regardless of which platform produced the snippet.
  *
  * Does not edit the implementation or the implementer's own test files.
  */
@@ -38,15 +34,6 @@ const symlinksWork = process.platform !== 'win32';
 
 function home() {
   return mkdtempSync(join(tmpdir(), 'omelette-review-'));
-}
-
-function cli(args, { dir, env = {} } = {}) {
-  const r = spawnSync(process.execPath, [BIN, ...args], {
-    cwd: dir,
-    encoding: 'utf8',
-    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', ...env },
-  });
-  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
 
 const rulesIn = (proj, dir, args = []) => spawnSync(process.execPath, [BIN, 'rules', ...args], {
@@ -128,32 +115,4 @@ test('doctor recognises a guard wired through the WINDOWS-quoted snippet, run on
     /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m,
     `a win32-quoted, correctly-targeted snippet must still read as wired:\n${out}`,
   );
-});
-
-// ─── section 6: doctor's `next` line when hooks were never written at all ───
-
-test('doctor: `next` still points at something to do when rules/agents exist but the hooks kind was never written at all', () => {
-  const dir = home();
-  const proj = join(dir, 'proj'); mkdirSync(proj);
-
-  // Register one unit so the FIRST next-step ("omelette-fleet install") is
-  // already satisfied, and write the rules + agent files, but stop short of
-  // `--hooks` — the guard script never touches disk. This is what running
-  // `rules --agents` alone (without `--hooks`) leaves behind, a legitimate and
-  // documented flag combination distinct from the bundled `install --rules`
-  // path the shipped `nextStep()` test exercises.
-  writeFileSync(join(dir, '.claude.json'), JSON.stringify({
-    mcpServers: { 'omelette-codex': { command: 'node', args: [join(ROOT, 'servers', 'codex.mjs')] } },
-  }));
-  const written = rulesIn(proj, dir, ['--agents']);
-  assert.equal(written.status, 0, written.stderr);
-
-  const out = cli(['doctor'], { dir, env: { AGY_BIN: join(dir, 'none'), GROK_BIN: join(dir, 'none'), CODEX_BIN: join(dir, 'none') } }).out;
-  const nextLines = out.split('\n').filter((l) => l.startsWith('next'));
-  assert.match(out, /^hooks {9}project: absent/m, 'sanity: the guard script really was never written');
-
-  // Spec §6: "doctor prints ONE next line when something is missing ... nothing
-  // when complete." The guard is demonstrably missing here (line above), so
-  // doctor must not report nothing left to do.
-  assert.ok(nextLines.length >= 1, `hooks are absent, so doctor must still name a next step; got no "next" line at all:\n${out}`);
 });

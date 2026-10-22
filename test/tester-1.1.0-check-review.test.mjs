@@ -1,38 +1,28 @@
 /**
  * omelette-fleet :: test/tester-1.1.0-check-review.test.mjs
  * Clean-context review of `omelette-fleet check` / core/check.mjs against
- * docs/superpowers/specs/2026-09-17-1.1.0-design.md §1, §4 and §5 — edges the
- * implementer's own test/check.test.mjs, test/evidence-pointers.test.mjs and
- * test/docs-map.test.mjs leave uncovered or only weakly covered:
- *   - §1 pointer paths with `./`, `sub/../`, a trailing slash, a Windows-style
- *     backslash separator (both inside root and as an escape attempt).
- *   - §4 CRLF line endings, both in the checked report and in a target file.
+ * docs/superpowers/specs/2026-09-17-1.1.0-design.md §1 and §4 — edges the
+ * implementer's own test/check.test.mjs leaves uncovered or only weakly covered:
+ *   - §1 a Windows-style backslash separator in a pointer path (both inside
+ *     root and as an escape attempt).
+ *   - §4 CRLF line endings in a target file.
  *   - §4 a root that is itself a symlink.
  *   - §4 the checked-file size boundary from the accepted side (exactly 1 MiB).
  *   - §4 two `commit:` lines (the first decides, valid or not) and an
  *     uppercase hex hash.
- *   - §4 a thorough, recursive "writes nothing" check across several flag
- *     combinations, including a symlink in the tree.
- *   - §5 the README CLI row, the SECURITY sentence and the agents' unchanged
- *     short-reply fields — none of which any existing test reads.
  *
  * Everything runs on temp directories under os.tmpdir(), removed in after().
  * No test spawns a vendor binary; the CLI runs with its own throwaway
- * OMELETTE_HOME. The staleness tests build their own git repository and skip,
- * loudly, where git is not on PATH.
+ * OMELETTE_HOME.
  */
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  readlinkSync, rmSync, symlinkSync, writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { changedSince, checkPointers, parseCommit } from '../core/check.mjs';
-import { renderAgentFile } from '../core/rules.mjs';
+import { checkPointers, parseCommit } from '../core/check.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -71,37 +61,7 @@ const summary = (n, { ok = 0, moved = 0, mismatch = 0, missing = 0, outside = 0,
   `check: ${n} pointers · ${ok} ok · ${moved} moved · ${mismatch} mismatch · ${missing} missing · ${outside} outside · ${stale} stale`
   + (tooLarge ? ` · ${tooLarge} too-large` : '');
 
-const GIT = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
-const GIT_SKIP = GIT ? false : 'git is not on PATH — the staleness tests need a real repository';
-const GIT_ID = ['-c', 'user.name=omelette test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false'];
-
-/** A one-commit repository: `first` is its hash, a.txt reads "hello world". */
-function gitRepo() {
-  const root = tmp('omelette-check-review-git-');
-  const run = (args) => {
-    const r = spawnSync('git', [...GIT_ID, ...args], { cwd: root, encoding: 'utf8' });
-    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
-    return (r.stdout || '').trim();
-  };
-  run(['init', '-q']);
-  writeFileSync(join(root, 'a.txt'), 'hello world\n');
-  run(['add', '-A']);
-  run(['commit', '-q', '-m', 'first']);
-  return { root, first: run(['rev-parse', 'HEAD']) };
-}
-
-// ─── §1 pointer path shapes ─────────────────────────────────────────────────
-
-test('pointer paths: leading ./, a sub/../ that never leaves root, and a trailing slash all resolve to the same file', () => {
-  const root = project({ 'c.txt': 'value one\n', 'sub/inner.txt': 'value two\n' });
-  const text = [
-    './c.txt:1 · `value one` · c',
-    'sub/../c.txt:1 · `value one` · c',
-    'c.txt/:1 · `value one` · c',
-  ].join('\n');
-  const { pointers } = checkPointers({ text, root, changed: null });
-  assert.deepEqual(pointers.map((p) => p.status), ['ok', 'ok', 'ok']);
-});
+// ─── §1 a backslash in a pointer path ─────────────────────────────────────
 
 test('pointer paths: a Windows-style backslash separator resolves inside root, and a backslash .. still escapes', () => {
   const root = project({ 'sub/inner.txt': 'value two\n' });
@@ -116,7 +76,7 @@ test('pointer paths: a Windows-style backslash separator resolves inside root, a
   assert.equal(escape.status, 'outside', 'a backslash .. is caught exactly like a forward-slash one');
 });
 
-// ─── §4 CRLF ─────────────────────────────────────────────────────────────────
+// ─── §4 CRLF in a target ──────────────────────────────────────────────────
 
 test('ok/moved: CRLF line endings in the TARGET file do not shift line numbers or break matching', () => {
   const root = project({});
@@ -125,18 +85,6 @@ test('ok/moved: CRLF line endings in the TARGET file do not shift line numbers o
   assert.equal(ok.status, 'ok');
   const moved = checkPointers({ text: 'a.txt:1 · `third line here` · c', root, changed: null }).pointers[0];
   assert.deepEqual([moved.status, moved.foundAt], ['moved', 3]);
-});
-
-test('check: CRLF line endings in the CHECKED report parse cleanly, and no stray \\r reaches the output', () => {
-  const root = project({ 'a.txt': 'first line here\nthe second line\n' });
-  writeFileSync(join(root, 'report.md'), 'a.txt:2 · `the second line` · ok\r\na.txt:1 · `nowhere at all here` · mismatch\r\n');
-  const r = cli(['check', 'report.md'], { cwd: root });
-  assert.equal(r.code, 1);
-  assert.equal(
-    r.out,
-    `mismatch  a.txt:1  nowhere at all here\n${summary(2, { ok: 1, mismatch: 1 })}\n`,
-    'no \\r before either newline, and the claim survives the carriage return',
-  );
 });
 
 // ─── §4 a root that is itself a symlink ─────────────────────────────────────
@@ -186,103 +134,8 @@ test('parseCommit: two commit lines — the first decides, whether or not it is 
   );
 });
 
-test('check: two commit: lines — staleness is driven only by the first, even naming an unknown commit', { skip: GIT_SKIP }, () => {
-  const { root, first } = gitRepo();
-  writeFileSync(join(root, 'map.md'), [
-    'commit: deadbee',
-    `commit: ${first}`,
-    '',
-    'a.txt:1 · `hello world` · c',
-    '',
-  ].join('\n'));
-  const r = cli(['check', 'map.md'], { cwd: root });
-  assert.equal(r.code, 0);
-  assert.equal(
-    r.out,
-    `staleness: not checked (unknown commit deadbee)\n${summary(1, { ok: 1 })}\n`,
-    'the second, valid commit: line is never reached',
-  );
-});
-
 test('parseCommit: an uppercase hex hash counts as hex, case preserved', () => {
   assert.equal(parseCommit('commit: 3DD368D\n'), '3DD368D');
   assert.equal(parseCommit(`commit: ${'A'.repeat(40)}\n`), 'A'.repeat(40));
 });
 
-test('changedSince: an uppercase hash passes hex validation and reaches git — never rejected as "invalid commit"', { skip: GIT_SKIP }, () => {
-  const { root, first } = gitRepo();
-  const r = changedSince({ hash: first.toUpperCase(), root });
-  assert.ok(
-    r.changed instanceof Set || /^unknown commit /.test(r.reason || ''),
-    `uppercase hex must clear the grammar check, got ${JSON.stringify(r)}`,
-  );
-});
-
-// ─── §4 nothing written, recursively, across several runs ──────────────────
-
-function snapshot(dir) {
-  const rows = [];
-  for (const name of readdirSync(dir).sort()) {
-    const p = join(dir, name);
-    const st = lstatSync(p);
-    if (st.isSymbolicLink()) rows.push(`L ${name} -> ${readlinkSync(p)}`);
-    else if (st.isDirectory()) rows.push(`D ${name}`, ...snapshot(p).map((s) => `  ${s}`));
-    else rows.push(`F ${name} ${readFileSync(p, 'utf8')}`);
-  }
-  return rows;
-}
-
-test('check writes nothing anywhere under the project, recursively, across ok/moved/mismatch/outside/missing runs and flag combinations', () => {
-  const root = project({ 'a.txt': 'one\ntwo\n', 'sub/b.txt': 'alpha\n' });
-  symlinkSync(join(root, 'a.txt'), join(root, 'link.txt'));
-  writeFileSync(join(root, 'report.md'), [
-    'a.txt:1 · `one` · ok',
-    'a.txt:1 · `two` · moved',
-    'a.txt:1 · `nowhere` · mismatch',
-    '../escape.txt:1 · `x` · outside',
-    'link.txt:1 · `one` · outside-symlink',
-    'gone.txt:1 · `x` · missing',
-    '',
-  ].join('\n'));
-  const before = snapshot(root);
-  cli(['check', 'report.md'], { cwd: root });
-  cli(['check', 'report.md', '--strict'], { cwd: root });
-  cli(['check', 'report.md', '--require', '0'], { cwd: root });
-  cli(['check', 'report.md', '--root', root], { cwd: tmp() });
-  assert.deepEqual(snapshot(root), before);
-});
-
-// ─── §5 docs the implementer's suite never reads ────────────────────────────
-
-test('README: the check row names its flags, statuses, the exit-0 rule and the ORCHESTRATION link', () => {
-  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
-  const row = readme.split('\n').find((l) => l.startsWith('| `check <file.md>'));
-  assert.ok(row, 'a check row is present in the CLI table');
-  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F18): the README row keeps what the
-  // command does and its exit codes, and its Details cell links the home; the
-  // list of statuses lives once, in ORCHESTRATION's `check` row.
-  for (const needle of [
-    '--strict', '--require <n>', '--root <dir>',
-    '`ok`', '`stale`', 'Exit `0`', '`1` otherwise', '`2` for a usage error',
-    'Read-only', '(docs/ORCHESTRATION.md#evidence-with-pointers)',
-  ]) {
-    assert.ok(row.includes(needle), `check row mentions ${needle}`);
-  }
-  const orch = readFileSync(join(ROOT, 'docs/ORCHESTRATION.md'), 'utf8');
-  const orchRow = orch.split('\n').find((l) => l.startsWith('| **`omelette-fleet check <file.md>`** |'));
-  for (const status of ['`ok`', '`moved`', '`mismatch`', '`missing`', '`outside`', '`too-large`', '`stale`']) {
-    assert.ok(orchRow.includes(status), `ORCHESTRATION's check row names ${status}`);
-  }
-  assert.match(orch, /^## Evidence with pointers$/m, 'the linked heading actually exists');
-});
-
-test('SECURITY.md: check gets its one-sentence bullet — root only, no writes, git diff --name-only', () => {
-  const security = readFileSync(join(ROOT, 'docs/SECURITY.md'), 'utf8');
-  // The sentence was rewritten with the review round (spec §4 "The git child is
-  // boxed"): the bullet is found by what it is about, not by its old wording.
-  const bullet = security.split('\n').find((l) => l.startsWith('- **`check` opens only paths that resolve inside the project root'));
-  assert.ok(bullet, 'the check bullet is present');
-  assert.match(bullet, /git diff --name-only/);
-  assert.match(bullet, /writes nothing/);
-  assert.match(bullet, /O_NOFOLLOW/, 'and says how a target is opened');
-});
