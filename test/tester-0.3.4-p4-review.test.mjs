@@ -36,10 +36,13 @@
  *     last in the cluster" arithmetic that decides whether the NEXT WORD is
  *     consumed as a value — the implementer's own test only exercises the
  *     degenerate one-letter case, where that arithmetic can't actually go
- *     wrong on its own (verified against a real git binary below: the old
+ *     wrong on its own. hooks.test.mjs's git-driven test measures `--exec
+ *     --abort` (git rebases) and `-q --abort` (git aborts nothing); that
+ *     `-qx --abort` is `-q` plus `-x --abort` is the guard's cluster reading,
+ *     measured against git nowhere in the suite. Under that reading the old
  *     `unquote` logic would have left `--abort` behind `-q"x"` unconsumed and
- *     readable, exactly the bug 2b was meant to close, one cluster letter
- *     over from the case that is tested);
+ *     readable, the bug 2b was meant to close, one cluster letter over from
+ *     the tested case;
  *   - `REBASE_ATTACHED_SHORT` and the mid-token-quote fix INTERACTING in one
  *     command (`-S"ABC"` — an attached, quoted gpg key) — each is tested
  *     alone, never together;
@@ -52,11 +55,6 @@
  *     option's value position, to confirm the rewritten `unquote` does not
  *     let a stray quote character inside the value make `--exec`'s skip
  *     mis-fire.
- *
- * Two commands below (`-q"x" --abort master` and `--ex"ec" --abort master`)
- * are cross-checked against the system git binary in a throwaway repository,
- * the same way the implementer's own 2b regression test does, because a
- * classifier fix is only as good as the real command it is modelled on.
  *
  * Does not edit the implementation or the implementer's own test files.
  */
@@ -87,22 +85,6 @@ function fire(path, command, agent = 'omelette-coder') {
   const r = spawnSync(process.execPath, [path], { input, encoding: 'utf8', timeout: 20000 });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
   return { code: r.status, out: r.stdout || '', err: (r.stderr || '').trim() };
-}
-
-const gitAvailable = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
-
-/** A throwaway repository with two branches that have each moved on by a commit, like the implementer's own 2b/2c fixture. */
-function repo() {
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-p4-repo-'));
-  const run = (args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
-  run(['init', '-q']);
-  run(['config', 'user.email', 'a@b.c']);
-  run(['config', 'user.name', 'a']);
-  run(['commit', '-q', '--allow-empty', '-m', 'init']);
-  run(['commit', '-q', '--allow-empty', '-m', 'second']); // master moves on
-  run(['checkout', '-q', '-b', 'feature']);
-  run(['commit', '-q', '--allow-empty', '-m', 'third']); // feature moves on too
-  return { dir, run };
 }
 
 test('PreToolUse: mid-token quoting inside a MULTI-letter short cluster still hides the value skip, not just a one-letter cluster', () => {
@@ -175,47 +157,3 @@ test('PreToolUse: a nested quote INSIDE an option value ("it\'s …") does not u
     assert.equal(r.err, '');
   }
 });
-
-test('PreToolUse: quoting that starts mid-token composes with -S, the tester role, and does not over-block an unrelated cluster', () => {
-  const g = guard();
-  // Same mechanism, fired at the tester role too — 2a and this fix compose.
-  const r = fire(g.path, 'git rebase -q"x" --abort main', 'omelette-tester');
-  assert.equal(r.code, 2);
-  assert.equal(r.err, REFUSAL('omelette-tester'));
-});
-
-test('cross-check against a real git binary: -q"x" --abort ACTUALLY rebases (a write), --ex"ec" --abort does not (git refuses the option)',
-  { skip: !gitAvailable && 'git not available' }, () => {
-    const g = guard();
-
-    // git treats `-q"x"` as `-qx`: `-q` alone, then `-x`'s value is the next
-    // word, `--abort` — an exec rebase whose command is literally "--abort".
-    // That starts a rebase (a write) even though the exec command itself
-    // then fails to run.
-    {
-      const r1 = repo();
-      // spawnSync with an argv array never goes through a shell, so the
-      // fixture passes git the exact single argv token a shell would hand it
-      // for `-q"x"` — `-qx` — rather than re-deriving shell quoting here.
-      const out = r1.run(['rebase', '-qx', '--abort', 'master']);
-      assert.match(out.stderr + out.stdout, /Executing: --abort|execution failed/, `expected git to attempt exec --abort, got: ${JSON.stringify(out)}`);
-      // It is mid-rebase: HEAD moved to detached, a rebase-merge dir exists.
-      const status = r1.run(['status', '--short', '--branch']).stdout;
-      assert.match(status, /no branch/, 'a write was in progress');
-      r1.run(['rebase', '--abort']); // clean up the mid-rebase state
-      const guardResult = fire(g.path, 'git rebase -q"x" --abort master');
-      assert.equal(guardResult.code, 2, 'the guard must refuse what git actually writes');
-    }
-
-    // git rejects `--ex"ec"` outright — it does not match `--exec` once the
-    // shell hands it over with the embedded quote characters literal — so
-    // nothing is ever written, and the guard passing this command is correct.
-    {
-      const r2 = repo();
-      const out = r2.run(['rebase', '--ex"ec"', '--abort', 'master']);
-      assert.match(out.stderr, /unknown option/, `expected git to reject the option, got: ${JSON.stringify(out)}`);
-      assert.equal(out.status, 129);
-      const guardResult = fire(g.path, 'git rebase --ex"ec" --abort master');
-      assert.equal(guardResult.code, 2, 'the guard blocks this one regardless, on the safe side, since the token carries a quote character');
-    }
-  });

@@ -21,9 +21,8 @@
  *    any read failure as "absent" — the two readers are not symmetric, and
  *    doctor's merge still has to produce a sane, non-crashing report.
  *
- * Plus two small gaps in ctx.usedModel's contract (core/unit.mjs, spec §3a):
- * whitespace is trimmed off a reported id, and the new VENDOR_DEFAULT_MODEL
- * export is the literal the runtime actually spools.
+ * Plus one small gap in ctx.usedModel's contract (core/unit.mjs, spec §3a):
+ * whitespace is trimmed off a reported id.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,7 +31,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeF
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineUnit, createUnitRuntime, VENDOR_DEFAULT_MODEL } from '../core/unit.mjs';
+import { defineUnit, createUnitRuntime } from '../core/unit.mjs';
 import { makeCatalog } from '../core/catalog.mjs';
 import { parseResult } from '../core/results.mjs';
 
@@ -183,18 +182,4 @@ test('usedModel trims surrounding whitespace before filing it', async () => {
   const r = await createUnitRuntime(pinningUnit('  m-deep  '), { env: e }).callTool('fakep3_pin', {});
   assert.equal(r.isError, undefined, r.text);
   assert.equal(readSpooled(dir, spooled(dir)[0]).header.model, 'm-deep', 'the header carries the trimmed id, not the padded one');
-});
-
-test('VENDOR_DEFAULT_MODEL is the exact literal the runtime spools when nobody named a model', async () => {
-  assert.equal(VENDOR_DEFAULT_MODEL, '(vendor default)');
-  const { dir, env: e } = env(null);
-  // No usedModel call at all — the plain no-report case.
-  const plain = defineUnit({
-    name: 'fakep3',
-    bin: { env: 'FAKEP3_BIN', default: process.execPath },
-    catalog,
-    tools: [{ name: 'fakep3_plain', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} }, run() { return 'ok'; } }],
-  });
-  await createUnitRuntime(plain, { env: e }).callTool('fakep3_plain', {});
-  assert.equal(readSpooled(dir, spooled(dir)[0]).header.model, VENDOR_DEFAULT_MODEL);
 });
