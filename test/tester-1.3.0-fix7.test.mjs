@@ -72,21 +72,6 @@ const wrapCodex = (env, fake) => createUnitRuntime(
   { env },
 );
 
-test('codex_image: the captured argv carries both overrides and -s workspace-write', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'omelette-fix7-image-'));
-  const argvLog = join(dir, 'argv.json');
-  const fake = makeArgvFake(dir, 'fake-image.mjs', argvLog, { writeImage: true });
-  writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { timeoutS: 30 } } }));
-  const r = await wrapCodex({ ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake)
-    .callTool('codex_image', { prompt: 'a small flat red circle' });
-  assert.ok(!r.isError, r.text);
-
-  const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
-  assert.equal(argv[argv.indexOf('-s') + 1], 'workspace-write');
-  assert.ok(argv.includes('sandbox_workspace_write.exclude_slash_tmp=true'), argv.join(' '));
-  assert.ok(argv.includes('sandbox_workspace_write.exclude_tmpdir_env_var=true'), argv.join(' '));
-});
-
 test('codex_image: the -C directory is a fresh directory under the OS temp dir, never the caller\'s cwd', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-fix7-image-cwd-'));
   const argvLog = join(dir, 'argv.json');

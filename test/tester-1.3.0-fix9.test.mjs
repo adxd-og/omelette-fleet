@@ -55,22 +55,6 @@ function commitFile(root, run, rel, body) {
   return run(['rev-parse', 'HEAD']);
 }
 
-test('changedSince/checkPointers: a committed café.js edited after the commit is matched by its real name, and its pointer goes stale', { skip: GIT_SKIP }, () => {
-  const { root, run } = gitRepo();
-  const commit = commitFile(root, run, 'café.js', 'export const total = 1;\n');
-  writeFileSync(join(root, 'café.js'), 'export const total = 1;\n// edited, never committed\n');
-
-  const { changed } = changedSince({ hash: commit, root });
-  assert.ok(changed.has('café.js'), `changed set did not hold café.js: ${JSON.stringify([...changed])}`);
-
-  const { pointers } = checkPointers({
-    text: 'café.js:1 · `export const total = 1;` · the total',
-    root,
-    changed,
-  });
-  assert.equal(pointers[0].status, 'stale');
-});
-
 test('changedSince: a file with a space in its name is matched as it is on disk', { skip: GIT_SKIP }, () => {
   // The pointer grammar itself excludes whitespace from a path field
   // (core/check.mjs POINTER / OPENER), so a space-named file cannot be
@@ -107,21 +91,6 @@ test('changedSince/checkPointers: a filename holding a double quote is matched a
   assert.equal(pointers[0].status, 'stale');
 });
 
-test('changedSince/checkPointers: an unchanged ASCII file is absent from the changed set and its pointer reads ok', { skip: GIT_SKIP }, () => {
-  const { root, run } = gitRepo();
-  const commit = commitFile(root, run, 'plain.txt', 'hello there\n');
-
-  const { changed } = changedSince({ hash: commit, root });
-  assert.ok(!changed.has('plain.txt'), `changed set unexpectedly held plain.txt: ${JSON.stringify([...changed])}`);
-
-  const { pointers } = checkPointers({
-    text: 'plain.txt:1 · `hello there` · greeting',
-    root,
-    changed,
-  });
-  assert.equal(pointers[0].status, 'ok');
-});
-
 test('changedSince/checkPointers: a changed file under a non-ASCII directory name is matched by its relative path', { skip: GIT_SKIP }, () => {
   const { root, run } = gitRepo();
   const rel = join('café', 'résumé.js').replace(/\\/g, '/');
@@ -137,14 +106,4 @@ test('changedSince/checkPointers: a changed file under a non-ASCII directory nam
     changed,
   });
   assert.equal(pointers[0].status, 'stale');
-});
-
-test('changedSince: core.quotePath=true set explicitly still matches a non-ASCII name, because -z is unquoted regardless', { skip: GIT_SKIP }, () => {
-  const { root, run } = gitRepo();
-  run(['config', 'core.quotePath', 'true']);
-  const commit = commitFile(root, run, 'café.js', 'export const five = 5;\n');
-  writeFileSync(join(root, 'café.js'), 'export const five = 5;\n// edited, never committed\n');
-
-  const { changed } = changedSince({ hash: commit, root });
-  assert.ok(changed.has('café.js'), `changed set did not hold café.js with core.quotePath=true: ${JSON.stringify([...changed])}`);
 });

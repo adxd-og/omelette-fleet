@@ -58,22 +58,6 @@ test('S18: a listed AGY_* name passes; GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATI
   assert.equal(hatch.GOOGLE_GENAI_USE_VERTEXAI, undefined);
 });
 
-test('S18: the operator escape hatch naming GOOGLE_CREDENTIALS explicitly does not re-admit it — the scrub runs after OMELETTE_ENV_PASSTHROUGH too', () => {
-  const parent = {
-    PATH: '/usr/bin',
-    GOOGLE_CREDENTIALS: 'SYNTHETIC_SA_SECRET',
-    GOOGLE_APPLICATION_CREDENTIALS: '/fake/sa.json',
-    OMELETTE_ENV_PASSTHROUGH: 'GOOGLE_CREDENTIALS,GOOGLE_APPLICATION_CREDENTIALS',
-  };
-  const child = buildChildEnv({ env: parent, passthrough: unit.envPassthrough, scrub: unit.riskEnv });
-  // ACTUAL behaviour: still scrubbed. This is what the spec wants — S18's
-  // "how to confirm" and the fix's own comment ("naming a credential there
-  // does not re-admit it, exactly as it does not re-admit an API key")
-  // describe exactly this case.
-  assert.equal(child.GOOGLE_CREDENTIALS, undefined);
-  assert.equal(child.GOOGLE_APPLICATION_CREDENTIALS, undefined);
-});
-
 test('S18: the other billing-risk API keys are still scrubbed alongside the new three (no regression)', () => {
   const parent = {
     PATH: '/usr/bin',

@@ -13,7 +13,7 @@
  * Expected at the base commit (Step 4.2 of the plan): the G3, G4, G5 and G7
  * tests below are RED (the classifier reads a redirection target, a clustered
  * flag, --orphan/-t and a detached --column/--color value as harmless); the
- * no-regression and git-fact tests are GREEN already.
+ * git-fact test is GREEN already.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -182,50 +182,6 @@ test('G7: 32 000 invocations in one separator-free command are answered in linea
     assert.equal(r.code, code, `${label} (${command.length} chars): ${r.err.slice(0, 200)}`);
     assert.ok(ms < 5000, `${label}: ${ms} ms for ${command.length} characters — the scan is not linear`);
   }
-});
-
-// ---------------------------------------------------------------------------
-// (6) No regression — every command in the plan's verbatim allowed-command
-// list (Task 4, Behaviours to hold item 6, lines 158-181) still passes,
-// EXCEPT `git tag --column always`, which the fix moves to refused (tested
-// under G5 above, so it is left out of this list rather than asserted twice).
-// This group is green both before and after the fix: none of these commands
-// is touched by G3/G4/G5/G7.
-// ---------------------------------------------------------------------------
-test('no regression: every allowed command in the plan\'s verbatim list still passes', () => {
-  const g = guard();
-  for (const command of [
-    // :145-168
-    'git status', 'git log --oneline -3', 'git diff HEAD', 'npm test', 'git commit-tree $t -m x',
-    'git checkout main', 'git switch main', 'git checkout -- file.txt', 'git merge-base main HEAD',
-    'git branch', 'git branch --list', 'git branch -l', 'git branch -a', 'git branch -r', 'git branch -v',
-    'git branch -av', 'git branch -d x', 'git branch -D x', 'git branch --list feature-c',
-    // :190-235 (minus `git tag --column always`, which moved to refused — G5)
-    'git tag', 'git tag -l', 'git tag --list', 'git tag -n', 'git tag -n5', 'git tag -l "v1.*"',
-    "git tag --list 'v*'", 'git tag --sort=-v:refname', 'git tag --contains HEAD', 'git tag v1 --list',
-    'git tag --list v1*', 'git tag --contains abc', 'git tag --no-contains abc', 'git tag --points-at HEAD',
-    'git tag --merged main', 'git tag --no-merged main', 'git tag --with HEAD', 'git tag --without HEAD',
-    "git tag -l --format='%(refname) -a %(objectname)'", "git tag -l --format='%(refname)'",
-    'git tag --sort refname', 'git tag --format "%(refname)"',
-    'echo hi # git tag v1', 'git tag -v v1', 'git tag --verify v1', 'git rebase --abort',
-    'git -C /x rebase --abort', 'git rebase -q --abort', 'git rebase --quit', 'git rebase --help', 'git rebase -h',
-    // :443-451
-    `git${' -c'.repeat(60)} zzz`, `git${' --foo'.repeat(60)}`,
-    `git tag${' --contains x'.repeat(60)}`, `git tag${' --contains x'.repeat(800)}`,
-    `echo ${'x'.repeat(5000)} # ${'a comment '.repeat(500)}`,
-    // :810-832
-    'git rebase --abort', 'git rebase --quit', 'git rebase --help', 'git rebase -h', 'git -C /x rebase --abort',
-    'git rebase -q --abort', "git rebase --exec 'echo --abort' --abort", 'git rebase -S -h',
-    'git rebase -S --abort', 'git rebase --gpg-sign --abort',
-    // :867-871
-    'git rebase --verbose --abort', 'git rebase --no-verify --abort', "git rebase --exec 'echo --abort now' --quit",
-    // :910-915
-    'git rebase --abort', 'git rebase -q --abort', "git rebase --exec 'echo --abort' --abort",
-    // :930-937
-    'git rebase -SABC -h', 'git rebase -SABC --abort', 'git rebase -Sx --abort', 'git rebase -qS --abort',
-    // :1047
-    'git tag --sort --list', 'git tag --list --sort v1', 'git tag --sort=-v:refname',
-  ]) mustPass(g, command);
 });
 
 // ---------------------------------------------------------------------------

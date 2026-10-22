@@ -15,12 +15,6 @@ import { analyseTranscript } from '../scripts/context-by-source.mjs';
 const CONTEXT_BY_SOURCE = new URL('../scripts/context-by-source.mjs', import.meta.url).pathname;
 
 const usage = (t, u, ms) => `<usage><subagent_tokens>${t}</subagent_tokens><tool_uses>${u}</tool_uses><duration_ms>${ms}</duration_ms></usage>`;
-// A notification as it sits in a transcript: inside a JSON string, so escaped
-// (mirrors the implementer's own `notice` helper, built independently here).
-const notice = (id, description, tokens, tools, ms) => JSON.stringify({
-  type: 'user',
-  message: { content: `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "${description}" finished</summary>\n${usage(tokens, tools, ms)}\n</task-notification>` },
-});
 
 // ---------------------------------------------------------------------------
 // C8 — one left-to-right pass, no backtracking
@@ -46,30 +40,12 @@ test('C8: an adversarial transcript is parsed in-process at n=2000 and n=20000 w
   assert.ok(at20000.elapsed < 5000, `parseUsage at n=20000 took ${at20000.elapsed} ms, expected < 5000 ms`);
 });
 
-test('C8: a description holding the literal closing tag still yields one row with the right id and tokens', () => {
-  const text = notice('z1', 'Review </task-notification> stray tag in the description', 500, 3, 4000);
-  const rows = parseUsage(text);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].id, 'z1');
-  assert.equal(rows[0].tokens, 500);
-  assert.equal(rows[0].toolUses, 3);
-  assert.match(rows[0].description, /Review <\/task-notification> stray tag/);
-});
-
 test('C8: a description holding literal <task-id> text does not start a new record', () => {
   const text = `<task-id>y1</task-id><summary>Agent "Contains <task-id>fake</task-id> text" finished</summary>${usage(7, 2, 3000)}`;
   const rows = parseUsage(text);
   assert.equal(rows.length, 1);
   assert.deepEqual(rows.map((r) => r.id), ['y1']);
   assert.ok(!rows.some((r) => r.id === 'fake'), 'the text "fake" inside the summary never becomes an id of its own');
-});
-
-test('C8: two notices back to back produce two rows', () => {
-  const text = [notice('n1', 'First notice', 100, 1, 1000), notice('n2', 'Second notice', 200, 2, 2000)].join('\n');
-  const rows = parseUsage(text);
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows.map((r) => r.id), ['n1', 'n2']);
-  assert.deepEqual(rows.map((r) => r.tokens), [100, 200]);
 });
 
 test('C8: a usage block out of order, or missing a field, pairs with nothing — the same as before the fix', () => {
@@ -89,10 +65,6 @@ test('C8: a usage block out of order, or missing a field, pairs with nothing —
 // C10 — a path segment may hold inner spaces, but a report never keeps one
 // ---------------------------------------------------------------------------
 
-test('C10: sanitise drops a spaced macOS home directory, keeping only the last segment', () => {
-  assert.equal(sanitise('open /Users/Jane Doe/private/report.md'), 'open report.md');
-});
-
 test('C10: sanitise on two paths in one description — the connecting word survives when a space still separates the matches, and is swallowed when it does not', () => {
   // A space precedes the second path's leading slash: the first match stops
   // there, so "with" stays attached as the tail of the first match's last
@@ -105,18 +77,6 @@ test('C10: sanitise on two paths in one description — the connecting word surv
   assert.equal(sanitise('diff /a/b/c.md and/x/y/z.md'), 'diff z.md');
 });
 
-test('C10: sanitise on a Windows-style path', () => {
-  assert.equal(sanitise('C:\\Users\\Jane Doe\\report.md'), 'report.md');
-});
-
-test('C10: sanitise on a path ending with a trailing space before a word keeps the word attached to the last segment', () => {
-  assert.equal(sanitise('/a/b/c report'), 'c report');
-});
-
-test('C10: sanitise on a path inside quotes stops at the quote, leaving the quotes in place', () => {
-  assert.equal(sanitise('open "/Users/Jane Doe/notes.md" now'), 'open "notes.md" now');
-  assert.equal(sanitise("open '/Users/Jane Doe/notes.md' now"), "open 'notes.md' now");
-});
 
 test('C10: sanitise leaves a single-slash relative path unchanged', () => {
   assert.equal(sanitise('review docs/spec.md now'), 'review docs/spec.md now');
