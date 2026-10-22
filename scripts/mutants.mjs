@@ -92,7 +92,8 @@ const USAGE = 'usage: node scripts/mutants.mjs [--only <id,id,…>] [--files <gl
  */
 export default async function* reporter(source) {
   for await (const { type, data = {} } of source) {
-    const fileLevel = data.nesting === 0 && data.name === data.file;
+    // The file-level test is named by its absolute path on node 20 and by its cwd-relative one on node 22.
+    const fileLevel = data.nesting === 0 && !!data.file && resolve(data.name || "") === data.file;
     if (type === 'test:dequeue' && fileLevel && data.file) {
       yield `${EVENT_PREFIX}${JSON.stringify({ e: 'start', file: data.file })}\n`;
     } else if (type === 'test:complete' && data.file) {
