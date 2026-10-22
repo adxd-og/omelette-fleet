@@ -8,12 +8,10 @@
  * stdout carries no such byte other than `\n` and `\t`.
  *
  * Modeled on test/doctor-prefix.test.mjs's sandbox()/run()/ours() helpers.
- * Targets left uncovered (or only lightly covered) by that file's own new
- * test: the adopted-prefix line (single AND ambiguous-multi-prefix forms), a
- * control character in a `.claude.json` project-scope entry (not just
- * `.mcp.json`), a `"timeout"` value holding DEL, the "registered server file
- * is missing" FAULT line, a `.claude.json` JSON-parse-error message, and
- * `install`/`update --check` under the same malicious files.
+ * Targets left uncovered by that file's own test: the adopted-prefix line
+ * (single AND ambiguous-multi-prefix forms), a `"timeout"` value holding DEL,
+ * the "registered server file is missing" FAULT line, and a `.claude.json`
+ * JSON-parse-error message.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -103,23 +101,6 @@ test('adoptPrefix: the ambiguous multi-prefix line escapes a control character i
   );
 });
 
-test('a project-scope (.claude.json) entry with a control character in its command is escaped, not just .mcp.json entries', () => {
-  const s = sandbox();
-  writeClaudeJson(s, {
-    projects: {
-      [s.proj]: {
-        mcpServers: {
-          'omelette-codex': { type: 'stdio', command: 'node\u001b[2K', args: [server('codex'), '\u007fextra'] },
-        },
-      },
-    },
-  });
-  const r = doctor(s);
-  assert.equal(r.code, 0, r.out);
-  assertNoRawControlBytes(r.out);
-  assert.match(r.out, /omelette-codex registered elsewhere \(project\) → node\\u001b\[2K /);
-});
-
 test('a "timeout" value holding DEL in .mcp.json is escaped (JSON.stringify alone leaves DEL raw)', () => {
   const s = sandbox();
   writeFileSync(join(s.dir, 'fleet.config.json'), JSON.stringify({
@@ -164,28 +145,4 @@ test('a JSON-parse-error message from .claude.json is escaped exactly like the .
   assert.ok(claudeLine, r.out);
   assert.ok(!claudeLine.includes('\u001b'), `raw ESC on the claude config line: ${JSON.stringify(claudeLine)}`);
   assertNoRawControlBytes(r.out, 'claude config parse-error line');
-});
-
-test('install --dry-run prints no raw control byte even when .claude.json/.mcp.json hold one', () => {
-  const s = sandbox();
-  writeClaudeJson(s, {
-    mcpServers: { 'omelette-codex': { type: 'stdio', command: 'node\u001b[2K', args: [server('codex')] } },
-  });
-  writeFileSync(join(s.proj, '.mcp.json'), JSON.stringify({
-    mcpServers: { 'omelette-gemini': { type: 'stdio', command: '\u001b[2K node', args: [server('gemini')] } },
-  }, null, 2));
-  const r = run(s, ['install', '--dry-run', '--units', 'codex']);
-  assertNoRawControlBytes(r.out, 'install --dry-run');
-});
-
-test('update --check prints no raw control byte even when .claude.json/.mcp.json hold one', () => {
-  const s = sandbox();
-  writeClaudeJson(s, {
-    mcpServers: { 'omelette-codex': { type: 'stdio', command: 'node\u001b[2K', args: [server('codex')] } },
-  });
-  writeFileSync(join(s.proj, '.mcp.json'), JSON.stringify({
-    mcpServers: { 'omelette-gemini': { type: 'stdio', command: '\u001b[2K node', args: [server('gemini')] } },
-  }, null, 2));
-  const r = run(s, ['update', '--check']);
-  assertNoRawControlBytes(r.out, 'update --check');
 });

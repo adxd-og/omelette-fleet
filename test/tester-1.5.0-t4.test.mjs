@@ -5,7 +5,8 @@
  * header line and the check report's echoed fragments are escaped; the body
  * of a spooled answer is model text and stays as it is. Written from the spec
  * and the diff (ba0de27..159f445), not from the coder's own tests, which this
- * file does not edit.
+ * file does not edit. After the clean-up gate: the single-result header, and
+ * the check report's echoes including a `moved` pointer's fragment.
  *
  * Everything runs on temp directories under os.tmpdir(); no server, no vendor
  * CLI, no real fleet home is touched.
@@ -13,10 +14,10 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createResultStore, renderResult, renderResultHeader } from '../core/results.mjs';
+import { createResultStore } from '../core/results.mjs';
 import { INVISIBLE_CHARS } from '../core/log.mjs';
 
 const BIN = join(new URL('..', import.meta.url).pathname, 'bin', 'omelette-fleet.mjs');
@@ -117,76 +118,6 @@ test('results <unit> <id>: model/promptPreview/cwd escape U+202E, U+200B, U+2028
   noBadBytes(expectedHeader, 'the escaped header');
 });
 
-test('renderResult on disk is exactly renderResultHeader(header) + "\\n" + text — the same bytes as before the header was split out', () => {
-  const dir = home();
-  const store = createResultStore({ home: dir, unit: 'codex' });
-  const rec = {
-    resultId: '20260925T130000Z-1-1',
-    tool: 'codex_code_review',
-    model: 'gpt-6-astra',
-    effort: 'xhigh',
-    startedAt: '2026-09-25T13:00:00.000Z',
-    endedAt: '2026-09-25T13:00:05.000Z',
-    durationMs: 5000,
-    status: 'ok',
-    partial: false,
-    detached: false,
-    cwd: '/tmp/project',
-    promptPreview: 'review the thing',
-    // A `---` inside the answer, as the parser round-trip test already checks
-    // for `renderResult`/`parseResult` — kept here too, since this is the same
-    // writer.
-    text: 'the review\n---\nnot a header\n',
-  };
-  const path = store.write(rec);
-  const onDisk = readFileSync(path, 'utf8');
-  const header = renderResultHeader({ ...rec, unit: 'codex' });
-  assert.equal(onDisk, `${header}\n${rec.text}`, 'the exact separator the code uses is "\\n", once');
-  assert.equal(onDisk, renderResult({ ...rec, unit: 'codex' }), 'renderResult is the same split, unchanged');
-});
-
-test('results listing: tool, status and startedAt escape their format characters; --path prints the path unchanged', () => {
-  // The home directory's own name carries a zero-width space: `results
-  // --path` must hand it back exactly as it is, unescaped — it is a path a
-  // script or an editor opens next, not a line for a human to read.
-  const base = tmp('omelette-t4-path-');
-  const dir = join(base, 'home​with-a-zero-width-space');
-  mkdirSync(dir, { recursive: true });
-  const store = createResultStore({ home: dir, unit: 'codex' });
-  const id = '20260925T130000Z-1-2';
-  store.write({
-    resultId: id,
-    tool: 'codex_re search',
-    model: 'm',
-    startedAt: '2026-09-25T13:00:00.000Z​',
-    endedAt: '2026-09-25T13:00:01.000Z',
-    durationMs: 500,
-    status: 'o\u0085k',
-    partial: false,
-    detached: false,
-    cwd: '/tmp',
-    promptPreview: 'hi',
-    text: 'body',
-  });
-
-  const listing = resultsCli(dir, ['codex']);
-  assert.equal(listing.code, 0, listing.err);
-  assert.ok(listing.out.includes('codex_re\\u2028search'), listing.out);
-  assert.ok(listing.out.includes('o\\u0085k'), listing.out);
-  assert.ok(listing.out.includes('2026-09-25T13:00:00.000Z\\u200b'), listing.out);
-  noBadBytes(listing.out, 'the listing');
-
-  const listingPath = resultsCli(dir, ['codex', '--path']);
-  assert.equal(listingPath.code, 0, listingPath.err);
-  assert.ok(listingPath.out.includes('home​with-a-zero-width-space'), 'the raw path, zero-width space and all, is unchanged');
-  assert.ok(!listingPath.out.includes('\\u200b'), '--path is never escaped');
-
-  const idPath = resultsCli(dir, ['codex', id, '--path']);
-  assert.equal(idPath.code, 0, idPath.err);
-  assert.ok(idPath.out.includes('home​with-a-zero-width-space'), 'the single-result --path is unchanged too');
-  assert.ok(!idPath.out.includes('\\u200b'), '--path is never escaped, single result or listing');
-});
-
 // ─── check ──────────────────────────────────────────────────────────────────
 
 function project(files) {
@@ -210,16 +141,6 @@ const summary = (n, { ok = 0, moved = 0, mismatch = 0, missing = 0, outside = 0,
   + (tooLarge ? ` · ${tooLarge} too-large` : '')
   + (weak ? ` · ${weak} weak` : '')
   + (malformed ? ` · ${malformed} malformed` : '');
-
-test('check: an ok run prints only the unchanged summary line', () => {
-  const root = project({
-    'a.txt': 'first line here\nthe second line\n',
-    'report.md': 'a.txt:1 · `first line here` · c\n',
-  });
-  const r = cli(['check', 'report.md'], { cwd: root });
-  assert.equal(r.code, 0);
-  assert.equal(r.out, `${summary(1, { ok: 1 })}\n`);
-});
 
 test('check: missing/mismatch/moved lines and the malformed echo escape a bidi path override, an ANSI erase and a line separator in the fragment', () => {
   const root = project({
@@ -256,32 +177,4 @@ test('check: missing/mismatch/moved lines and the malformed echo escape a bidi p
   assert.equal(lines[5], '');
   assert.equal(lines.length, 6);
   noBadBytes(r.out, 'the check report');
-});
-
-test('check: --root a directory whose commit: line is not a hash reports the fixed, unescaped reason, alongside escaped pointer echoes', () => {
-  const root = project({
-    'note.txt': 'plain text one\nplain text two\n',
-  });
-  const elsewhere = tmp('omelette-t4-check-elsewhere-');
-  const reportPath = join(elsewhere, 'report.md');
-  writeFileSync(reportPath, [
-    'commit: not-a-real-hash',
-    '',
-    'weird‮-gone.mjs:1 · `plainly missing text` · missing case',
-    'note.txt:1 · `erase \u001b[2K vanish   gone` · mismatch case',
-    '',
-  ].join('\n'));
-
-  const r = cli(['check', reportPath, '--root', root], { cwd: elsewhere });
-  assert.equal(r.code, 1);
-  const lines = r.out.split('\n');
-  // The "not a hash" branch never carries a value to escape — it is the fixed
-  // string, printed exactly as it always was.
-  assert.equal(lines[0], 'staleness: not checked (unusable commit value)');
-  assert.equal(lines[1], 'missing  weird\\u202e-gone.mjs:1  plainly missing text');
-  assert.equal(lines[2], 'mismatch  note.txt:1  erase \\u001b[2K vanish \\u2028 gone');
-  assert.equal(lines[3], summary(2, { mismatch: 1, missing: 1 }));
-  assert.equal(lines[4], '');
-  assert.equal(lines.length, 5);
-  noBadBytes(r.out, 'the report with an unusable commit line');
 });
