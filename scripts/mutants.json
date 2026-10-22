@@ -1,0 +1,464 @@
+[
+  {
+    "id": "artifact-exclude-path",
+    "file": "core/artifact.mjs",
+    "find": "if (!p || p === excludePath || !IMAGE_EXT_RE.test(p)) continue;",
+    "replace": "if (!p || !IMAGE_EXT_RE.test(p)) continue;",
+    "breaks": "the source image named in an edit answer is returned as the new image"
+  },
+  {
+    "id": "artifact-stale-text-path",
+    "file": "core/artifact.mjs",
+    "find": "if (st.isFile() && st.mtimeMs >= since - MTIME_SKEW_MS) return p;",
+    "replace": "if (st.isFile()) return p;",
+    "breaks": "an image path in the answer older than the run is taken as its artifact"
+  },
+  {
+    "id": "artifact-capped-finished",
+    "file": "core/artifact.mjs",
+    "find": "res.killed || res.cancelled || res.capped ||",
+    "replace": "res.killed || res.cancelled ||",
+    "breaks": "a run whose output was capped counts as finished, so its image is not flagged partial"
+  },
+  {
+    "id": "catalog-any-model",
+    "file": "core/catalog.mjs",
+    "find": "isAllowedModel: (id) => typeof id === 'string' && ids.includes(id),",
+    "replace": "isAllowedModel: (id) => typeof id === 'string',",
+    "breaks": "any model id passes the catalog check and reaches the vendor CLI"
+  },
+  {
+    "id": "catalog-any-effort",
+    "file": "core/catalog.mjs",
+    "find": "isAllowedEffort: (e) => typeof e === 'string' && efforts.includes(e),",
+    "replace": "isAllowedEffort: (e) => typeof e === 'string',",
+    "breaks": "any effort string passes the catalog check"
+  },
+  {
+    "id": "catalog-empty-ok",
+    "file": "core/catalog.mjs",
+    "find": "if (!Array.isArray(models) || !models.length) throw",
+    "replace": "if (!Array.isArray(models)) throw",
+    "breaks": "an empty model list is accepted as a catalog"
+  },
+  {
+    "id": "check-git-empty-path",
+    "file": "core/check.mjs",
+    "find": "if (path.length) env.PATH = path.join(delimiter);",
+    "replace": "env.PATH = path.join(delimiter);",
+    "breaks": "the git child gets an empty PATH (a search of its cwd) when no entry is absolute (1.7.2 M7)"
+  },
+  {
+    "id": "check-inside-always",
+    "file": "core/check.mjs",
+    "find": "return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));",
+    "replace": "return true;",
+    "breaks": "a pointer that climbs out of the root is read instead of reported outside"
+  },
+  {
+    "id": "check-fragment-min",
+    "file": "core/check.mjs",
+    "find": "const FRAGMENT_MIN = 8;",
+    "replace": "const FRAGMENT_MIN = 4;",
+    "breaks": "a 4-7 character fragment counts as evidence instead of weak"
+  },
+  {
+    "id": "client-inherit-full-env",
+    "file": "core/client.mjs",
+    "find": "env: inheritedEnv(env) });",
+    "replace": "env });",
+    "breaks": "the unit server starts with PATH relative entries kept (1.7.2 fix round B)"
+  },
+  {
+    "id": "client-tool-not-offered",
+    "file": "core/client.mjs",
+    "find": "if (!toolNames.includes(tool)) {",
+    "replace": "if (false) {",
+    "breaks": "a tool the server does not offer is called instead of refused with its list"
+  },
+  {
+    "id": "client-iserror-dropped",
+    "file": "core/client.mjs",
+    "find": "isError: !!r.isError,",
+    "replace": "isError: false,",
+    "breaks": "a tool error comes back as a success"
+  },
+  {
+    "id": "config-ceiling-ignored",
+    "file": "core/config.mjs",
+    "find": "} else if (!ceilingOpen) {",
+    "replace": "} else if (false) {",
+    "breaks": "workspace-write is granted without OMELETTE_ALLOW_WRITE: the write ceiling is open by default"
+  },
+  {
+    "id": "config-legacy-alias-any-unit",
+    "file": "core/config.mjs",
+    "find": "set.add('gemini');",
+    "replace": "{ set.add('gemini'); set.add('codex'); }",
+    "breaks": "the legacy ORION_ALLOW_GEMINI_MUTATE opens codex as well as gemini"
+  },
+  {
+    "id": "config-follow-dropped",
+    "file": "core/config.mjs",
+    "find": "readRegularFile(path, () => true, { follow: true })",
+    "replace": "readRegularFile(path, () => true)",
+    "breaks": "a symlinked fleet.config.json is refused and the units fall back to defaults (1.7.2 re-review S1)"
+  },
+  {
+    "id": "cwd-relative-accepted",
+    "file": "core/cwd.mjs",
+    "find": "if (!cwd || !isAbsolute(cwd)) return",
+    "replace": "if (!cwd) return",
+    "breaks": "a relative cwd is accepted"
+  },
+  {
+    "id": "cwd-file-accepted",
+    "file": "core/cwd.mjs",
+    "find": "if (!st || !st.isDirectory()) return",
+    "replace": "if (!st) return",
+    "breaks": "a cwd that names a file is accepted"
+  },
+  {
+    "id": "cwd-undefined-refused",
+    "file": "core/cwd.mjs",
+    "find": "if (raw === undefined) return { cwd: '' };",
+    "replace": "",
+    "breaks": "a call without cwd is refused instead of running with none"
+  },
+  {
+    "id": "jsonrpc-cancel-ignored",
+    "file": "core/jsonrpc.mjs",
+    "find": "entry.controller.abort();",
+    "replace": "",
+    "breaks": "notifications/cancelled never reaches the running tool call"
+  },
+  {
+    "id": "jsonrpc-cancelled-response-sent",
+    "file": "core/jsonrpc.mjs",
+    "find": "if (controller.signal.aborted) {",
+    "replace": "if (false) {",
+    "breaks": "a cancelled call still sends its response"
+  },
+  {
+    "id": "jsonrpc-protocol-echo",
+    "file": "core/jsonrpc.mjs",
+    "find": "(SUPPORTED_PROTOCOLS.includes(requested) ? requested : DEFAULT_PROTOCOL)",
+    "replace": "(requested || DEFAULT_PROTOCOL)",
+    "breaks": "an unsupported protocol version is echoed back instead of the default"
+  },
+  {
+    "id": "log-no-visible",
+    "file": "core/log.mjs",
+    "find": "${visible(msg)}",
+    "replace": "${msg}",
+    "breaks": "control and bidi characters in a log line reach stderr raw"
+  },
+  {
+    "id": "log-once-repeats",
+    "file": "core/log.mjs",
+    "find": "if (seen.has(msg)) return;",
+    "replace": "",
+    "breaks": "a once-only warning is logged on every call"
+  },
+  {
+    "id": "log-c1-kept",
+    "file": "core/log.mjs",
+    "find": "\\u0000-\\u001f\\u007f-\\u009f",
+    "replace": "\\u0000-\\u001f\\u007f",
+    "breaks": "C1 control characters (U+0080-U+009F) are no longer escaped"
+  },
+  {
+    "id": "partial-empty-text",
+    "file": "core/partial.mjs",
+    "find": "if (!text) return result;",
+    "replace": "",
+    "breaks": "an empty result gains a partial marker"
+  },
+  {
+    "id": "partial-killed-text",
+    "file": "core/partial.mjs",
+    "find": "raise ${unit}.timeoutS in the fleet config",
+    "replace": "raise timeoutS in the fleet config",
+    "breaks": "the hard-kill marker no longer names the unit key, so PARTIAL_MARK_RE stops matching it"
+  },
+  {
+    "id": "partial-flag-false",
+    "file": "core/partial.mjs",
+    "find": "return { ...result, text: `${text}\\n\\n${marker}`, partial: true };",
+    "replace": "return { ...result, text: `${text}\\n\\n${marker}`, partial: false };",
+    "breaks": "a marked object result is not flagged partial"
+  },
+  {
+    "id": "results-keep-off-by-one",
+    "file": "core/results.mjs",
+    "find": "if (i >= keepN || (i > 0 && total > capBytes)) {",
+    "replace": "if (i > keepN || (i > 0 && total > capBytes)) {",
+    "breaks": "the spool keeps resultsKeep + 1 results"
+  },
+  {
+    "id": "results-id-traversal",
+    "file": "core/results.mjs",
+    "find": "return typeof id === 'string' && id.length <= MAX_ID_LENGTH && RESULT_ID_RE.test(id);",
+    "replace": "return typeof id === 'string' && id.length <= MAX_ID_LENGTH;",
+    "breaks": "any string, ../ included, is a valid result id and names a spool path"
+  },
+  {
+    "id": "results-header-newlines",
+    "file": "core/results.mjs",
+    "find": "String(v ?? '').replace(/[\\u0000-\\u001f\\u007f]+/g, ' ').trim()",
+    "replace": "String(v ?? '').trim()",
+    "breaks": "a newline in a header value writes a header line of its own"
+  },
+  {
+    "id": "rules-shellquote-no-escape",
+    "file": "core/rules.mjs",
+    "find": "String(s).replaceAll(\"'\", \"'\\\\''\")",
+    "replace": "String(s)",
+    "breaks": "a path holding a single quote breaks out of the hook command quoting"
+  },
+  {
+    "id": "rules-contract-short-unmarked",
+    "file": "core/rules.mjs",
+    "find": "return text !== null && parseRulesMarker(text) !== null;",
+    "replace": "return text !== null;",
+    "breaks": "any file at the rules path, managed or not, switches the unit to the short contract"
+  },
+  {
+    "id": "rules-agent-value-fn",
+    "file": "core/rules.mjs",
+    "find": "body = body.replaceAll(`{{${key}}}`, () => value);",
+    "replace": "body = body.replaceAll(`{{${key}}}`, value);",
+    "breaks": "a configured agent value holding $& or $' is expanded as a replace pattern"
+  },
+  {
+    "id": "spawn-drop-caller-scrub",
+    "file": "core/spawn.mjs",
+    "find": "for (const name of [...BILLING_ENV, ...scrub]) delete out[name];",
+    "replace": "for (const name of [...BILLING_ENV]) delete out[name];",
+    "breaks": "the caller's own scrub names are no longer deleted (1.7.2 M2)"
+  },
+  {
+    "id": "spawn-no-billing-union",
+    "file": "core/spawn.mjs",
+    "find": "for (const name of [...BILLING_ENV, ...scrub]) delete out[name];",
+    "replace": "for (const name of [...scrub]) delete out[name];",
+    "breaks": "the fleet-wide billing scrub is emptied: another vendor's key admitted by OMELETTE_ENV_PASSTHROUGH reaches every child"
+  },
+  {
+    "id": "spawn-extra-filtered",
+    "file": "core/spawn.mjs",
+    "find": "return extra ? { ...out, ...extra } : out;",
+    "replace": "return extra ? { ...out, ...Object.fromEntries(Object.entries(extra).filter(([k]) => !BILLING_ENV.includes(k))) } : out;",
+    "breaks": "extra is no longer unconditional: a billing name in it is dropped (1.7.2 M13)"
+  },
+  {
+    "id": "spawn-inherit-mutates-parent",
+    "file": "core/spawn.mjs",
+    "find": "const out = { ...env };",
+    "replace": "const out = env;",
+    "breaks": "an inheritEnv child's PATH reduction rewrites the caller's env object (1.7.2 M15)"
+  },
+  {
+    "id": "spawn-vendor-cred-env-names",
+    "file": "core/spawn.mjs",
+    "find": "if (!passthrough.includes(name)) delete out[name];",
+    "replace": "if (!patterns.includes(name)) delete out[name];",
+    "breaks": "an exact name in OMELETTE_ENV_PASSTHROUGH makes another vendor's credential the unit's own (1.7.2 branch review 1)"
+  },
+  {
+    "id": "status-no-nofollow",
+    "file": "core/status.mjs",
+    "find": "constants.O_CREAT | NOFOLLOW | NONBLOCK;",
+    "replace": "constants.O_CREAT | NONBLOCK;",
+    "breaks": "a symlink at the fleet log is followed and its target appended to (1.7.2 T2)"
+  },
+  {
+    "id": "status-no-nonblock",
+    "file": "core/status.mjs",
+    "find": "const NONBLOCK = constants.O_NONBLOCK || 0;",
+    "replace": "const NONBLOCK = 0;",
+    "breaks": "a FIFO at a fleet-home name blocks the open inside a tool call or server start (1.7.2 T2)"
+  },
+  {
+    "id": "status-log-no-isfile",
+    "file": "core/status.mjs",
+    "find": "if (!st.isFile()) return;",
+    "replace": "",
+    "breaks": "a FIFO with a reader at the log path receives the event line (1.7.2 T2)"
+  },
+  {
+    "id": "status-log-no-nlink",
+    "file": "core/status.mjs",
+    "find": "if (st.nlink !== 1) return;",
+    "replace": "",
+    "breaks": "a hard link at the fleet log appends to and narrows the victim file (1.7.2 branch review 2)"
+  },
+  {
+    "id": "status-chmod-group-read",
+    "file": "core/status.mjs",
+    "find": "if (st.mode & 0o777 & ~0o600) fchmodSync(fd, 0o600);",
+    "replace": "if (st.mode & 0o044) fchmodSync(fd, 0o600);",
+    "breaks": "a log left 0620, 0602 or 0700 is not narrowed to 0600 (1.7.2 T2)"
+  },
+  {
+    "id": "status-tmp-no-cleanup",
+    "file": "core/status.mjs",
+    "find": "try { unlinkSync(tmp); } catch { /* gone */ }",
+    "replace": "",
+    "breaks": "a failed snapshot rename leaves its tmp file behind (1.7.2 T2)"
+  },
+  {
+    "id": "unit-disabled-ignored",
+    "file": "core/unit.mjs",
+    "find": "if (!cfg.values.enabled) {",
+    "replace": "if (false) {",
+    "breaks": "a unit disabled in the fleet config still runs its CLI"
+  },
+  {
+    "id": "unit-unknown-model-allowed",
+    "file": "core/unit.mjs",
+    "find": "if (model && !unit.catalog.isAllowedModel(model)) {",
+    "replace": "if (false) {",
+    "breaks": "a model id outside the catalog reaches the vendor CLI"
+  },
+  {
+    "id": "unit-mutate-gate-off",
+    "file": "core/unit.mjs",
+    "find": "if (tool.mutateGate) {",
+    "replace": "if (false) {",
+    "breaks": "a git push / deploy / publish prompt reaches a research unit"
+  },
+  {
+    "id": "update-tmp-no-cleanup",
+    "file": "core/update.mjs",
+    "find": "if (tmp !== null) { try { unlinkSync(tmp); } catch { /* gone */ } }",
+    "replace": "",
+    "breaks": "a cache write whose rename fails leaves its tmp file behind (1.7.2 T2)"
+  },
+  {
+    "id": "update-tmp-mode-0644",
+    "file": "core/update.mjs",
+    "find": "fd = openSync(name, 'wx', 0o600);",
+    "replace": "fd = openSync(name, 'wx', 0o644);",
+    "breaks": "the update cache is written world-readable (1.7.2 T2)"
+  },
+  {
+    "id": "update-read-by-name",
+    "file": "core/update.mjs",
+    "find": "const text = readRegularFile(file);",
+    "replace": "const text = readFileSync(file, 'utf8');",
+    "breaks": "the cache is read by name: a link to a FIFO blocks cachedCheck (1.7.2 fix round A)"
+  },
+  {
+    "id": "gemini-accept-edits-read-only",
+    "file": "units/gemini/adapter.mjs",
+    "find": "const acceptEdits = ctx.mode === 'workspace-write' && !!c.cwd;",
+    "replace": "const acceptEdits = !!c.cwd;",
+    "breaks": "gemini_research with a cwd runs agy in accept-edits mode while the unit is read-only"
+  },
+  {
+    "id": "gemini-deep-claude-allowed",
+    "file": "units/gemini/adapter.mjs",
+    "find": "if (entry && entry.family === 'claude') {",
+    "replace": "if (false) {",
+    "breaks": "gemini_deep_research spends five runs of Antigravity's small Claude quota"
+  },
+  {
+    "id": "gemini-no-git-prefix",
+    "file": "units/gemini/adapter.mjs",
+    "find": "const a = { prompt: NO_GIT_PREFIX + prompt, model: ctx.model, acceptEdits, cwd };",
+    "replace": "const a = { prompt, model: ctx.model, acceptEdits, cwd };",
+    "breaks": "gemini_research's prompt loses the read-only, no-terminal prefix"
+  },
+  {
+    "id": "grok-at-first-only",
+    "file": "units/grok/adapter.mjs",
+    "find": "s.replace(/@/g, '＠')",
+    "replace": "s.replace(/@/, '＠')",
+    "breaks": "only the first @ of a prompt is neutralised; a later @path attaches a local file (1.7.2 T3)"
+  },
+  {
+    "id": "grok-image-no-neutralise",
+    "file": "units/grok/adapter.mjs",
+    "find": "IMAGE_GEN_PREFIX + neutraliseAt(prompt)",
+    "replace": "IMAGE_GEN_PREFIX + prompt",
+    "breaks": "grok_image's prompt keeps its @, which the CLI reads as a file to attach (1.7.2 T3)"
+  },
+  {
+    "id": "grok-image-path-at-allowed",
+    "file": "units/grok/adapter.mjs",
+    "find": "if (imagePath.includes('@')) return",
+    "replace": "if (false) return",
+    "breaks": "an image path holding @ reaches the CLI, which may read it as an attach (1.7.2 fix round C)"
+  },
+  {
+    "id": "codex-sandbox-write",
+    "file": "units/codex/adapter.mjs",
+    "find": "'-s', mode === 'workspace-write' ? 'workspace-write' : 'read-only',",
+    "replace": "'-s', 'workspace-write',",
+    "breaks": "every codex run gets a writable sandbox"
+  },
+  {
+    "id": "codex-review-write-no-cwd",
+    "file": "units/codex/adapter.mjs",
+    "find": "const mode = ctx.mode === 'workspace-write' && c.cwd ? 'workspace-write' : 'read-only';",
+    "replace": "const mode = ctx.mode === 'workspace-write' ? 'workspace-write' : 'read-only';",
+    "breaks": "codex_code_review writes in the server's own cwd when no cwd is given"
+  },
+  {
+    "id": "codex-user-config",
+    "file": "units/codex/adapter.mjs",
+    "find": "'--ignore-user-config', '--ignore-rules',",
+    "replace": "'--ignore-rules',",
+    "breaks": "the operator's ~/.codex/config.toml reaches the run"
+  },
+  {
+    "id": "bin-whichbin-relative",
+    "file": "bin/omelette-fleet.mjs",
+    "find": "for (const dir of absolutePathEntries(env.PATH)) {",
+    "replace": "for (const dir of String(env.PATH || '').split(':').filter(Boolean)) {",
+    "breaks": "doctor finds a vendor binary through a relative PATH entry (1.7.2 T1)"
+  },
+  {
+    "id": "bin-whichbin-join-folds",
+    "file": "bin/omelette-fleet.mjs",
+    "find": "const p = dir.endsWith('/') ? `${dir}${bin}${ext}` : `${dir}/${bin}${ext}`;",
+    "replace": "const p = join(dir, `${bin}${ext}`);",
+    "breaks": "doctor folds `..` in a PATH entry and reports a binary the runtime never finds (1.7.2 fix round B)"
+  },
+  {
+    "id": "bin-notice-registered-only",
+    "file": "bin/omelette-fleet.mjs",
+    "find": "if (name === 'gemini' && (binPath || reg)) out(",
+    "replace": "if (name === 'gemini' && binPath) out(",
+    "breaks": "doctor drops the Antigravity notice for a gemini registration with no binary (1.7.2 re-review, said to survive)"
+  },
+  {
+    "id": "bin-readconfig-no-follow",
+    "file": "bin/omelette-fleet.mjs",
+    "find": "raw = readRegularFile(path, () => true, { follow: true });",
+    "replace": "raw = readRegularFile(path, () => true);",
+    "breaks": "`set` refuses a symlinked fleet.config.json (1.7.2 re-review 3, said to survive)"
+  },
+  {
+    "id": "guard-push-allowed",
+    "file": "hooks/omelette-guard.mjs",
+    "find": "'pull', 'push', 'stash'",
+    "replace": "'pull', 'stash'",
+    "breaks": "a guarded agent may run git push"
+  },
+  {
+    "id": "guard-quoted-span-skipped",
+    "file": "hooks/omelette-guard.mjs",
+    "find": "|| spans.some((span) => (depth < QUOTE_DEPTH ? forbidden(span, depth + 1) : /\\bgit\\b/.test(span)));",
+    "replace": "|| false;",
+    "breaks": "git inside bash -c \"...\", $(...) or backticks passes the guard"
+  },
+  {
+    "id": "guard-tester-unguarded",
+    "file": "hooks/omelette-guard.mjs",
+    "find": "'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer'",
+    "replace": "'omelette-coder-medium', 'omelette-reviewer'",
+    "breaks": "omelette-tester may commit, stash or branch"
+  }
+]

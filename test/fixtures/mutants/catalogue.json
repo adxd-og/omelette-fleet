@@ -1,0 +1,4 @@
+[
+  { "id": "add-minus", "file": "lib/add.mjs", "find": "return a + b;", "replace": "return a - b;", "breaks": "add subtracts" },
+  { "id": "label-upper", "file": "lib/add.mjs", "find": "'adder'", "replace": "'ADDER'", "breaks": "the label changes case" }
+]

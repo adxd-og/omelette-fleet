@@ -1,0 +1,3 @@
+[
+  { "id": "return-twice", "file": "lib/add.mjs", "find": "return ", "replace": "return -", "breaks": "a fragment that occurs twice" }
+]
