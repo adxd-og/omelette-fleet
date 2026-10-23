@@ -56,10 +56,11 @@
  * (a SIGKILL) takes its cap with it: `node --test` (ppid 1) and a hung fixture
  * spinning, the picture of 2026-10-22, which node's `--test-timeout` now ends
  * unless the file ignores SIGTERM (node never escalates). So the cap and
- * the signal handlers stop the suite's group (SIGSTOP: nothing in it starts a
- * child after that), walk the process tree from the suite child (`ps`, every
- * descendant) and SIGKILL each pid, then the group, then check with `kill -0`
- * (a zombie counts as gone) and kill the survivors once more after 100 ms.
+ * the signal handlers first freeze the suite's tree — SIGSTOP the group, then
+ * read the table until every member and every descendant (one outside the
+ * group stopped by pid) reports a stopped state — and only then SIGKILL each
+ * pid of it, then the group, then check with `kill -0` (a zombie counts as
+ * gone) and kill the survivors once more after 100 ms.
  * Every child the runner starts carries OMELETTE_MUTANTS_SCRATCH (the
  * scratch's real path), which every descendant inherits whatever its command
  * line. After the baseline, after every mutant and in the run's `finally`, any
@@ -327,7 +328,7 @@ export function childEnv(home, env = process.env) {
 const PS_OPTS = { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] };
 
 /**
- * Every process as `ps` sees it — pid, parent, state, age, whole command line —
+ * Every process as `ps` sees it — pid, parent, group, state, age, whole command line —
  * on macOS and Linux alike (`-A`, never `-e`: on macOS that adds the
  * environment). With `env`, each row also carries `scratch`, its
  * OMELETTE_MUTANTS_SCRATCH ('' when it has none or it cannot be read). Empty
@@ -336,11 +337,11 @@ const PS_OPTS = { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore
  */
 function processTable({ env = false } = {}) {
   let text;
-  try { text = execFileSync('ps', ['-A', '-ww', '-o', 'pid=,ppid=,stat=,etime=,command='], PS_OPTS); } catch { return []; }
+  try { text = execFileSync('ps', ['-A', '-ww', '-o', 'pid=,ppid=,pgid=,stat=,etime=,command='], PS_OPTS); } catch { return []; }
   const rows = [];
   for (const line of text.split('\n')) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*(.*)$/.exec(line);
-    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), stat: m[3], etime: m[4], command: m[5] });
+    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*(.*)$/.exec(line);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), stat: m[4], etime: m[5], command: m[6] });
   }
   if (env) {
     const scratchOf = scratchVariables(rows);
@@ -413,18 +414,56 @@ function killAndCheck(pids, group) {
   return left;
 }
 
+/** How long freezeTree waits for the tree to stand still before it kills what it has. */
+const FREEZE_MS = 1000;
+const isStopped = (stat) => /^[TtZ]/.test(stat); // stopped (job control or tracing), or already dead
+
 /**
- * Kill the suite child at `pid` and everything under it. The group is stopped
- * first (SIGSTOP), so no member can start a child between the table read and
- * the kill — a file just starting up when the cap lands would otherwise leave a
- * `detached` grandchild the read never saw. Then each descendant the table
- * shows — read while `pid` is alive, before a kill hands its children to init —
- * parents first; then the group. The walk is what reaches a grandchild that
- * left the group (a test's own `detached` spawn). Synchronous, so a signal
- * handler can call it. Returns the pids still alive after the second try.
+ * Stop the whole tree under `pid` before anything in it is killed, and return
+ * it (the tree, parents first, plus every member of the group).
+ *
+ * A kill that reads the table and then kills what it read loses a child born
+ * in between: once its parent dies it is init's, and no later walk finds it.
+ * So nothing is killed until nothing moves. SIGSTOP is only queued when kill()
+ * returns — under load a process runs on until it is next scheduled, and can
+ * start a child then — so the group is stopped and the table read again until
+ * every process of the group and every descendant reports a stopped state; a
+ * descendant in a session of its own (a test's `detached` spawn), which the
+ * group stop does not reach, is stopped by pid as the reads find it. Done when
+ * two consecutive reads find the same tree with nothing running in it, or at
+ * FREEZE_MS: what was found is killed anyway, and the scratch sweep is the
+ * net behind it.
+ */
+function freezeTree(pid) {
+  try { process.kill(-pid, 'SIGSTOP'); } catch { /* the group is gone */ }
+  const deadline = Date.now() + FREEZE_MS;
+  let tree = [pid];
+  let previousCalm = null;
+  for (;;) {
+    const table = processTable();
+    const stat = new Map(table.map((p) => [p.pid, p.stat]));
+    tree = [...new Set([pid, ...descendantsOf(pid, table), ...table.filter((p) => p.pgid === pid).map((p) => p.pid)])];
+    const running = tree.filter((p) => stat.has(p) && !isStopped(stat.get(p)));
+    for (const p of running) { try { process.kill(p, 'SIGSTOP'); } catch { /* gone */ } }
+    const key = tree.join(',');
+    if (!running.length && key === previousCalm) return tree;
+    previousCalm = running.length ? null : key;
+    if (Date.now() >= deadline) return tree;
+    sleepSync(10);
+  }
+}
+
+/**
+ * Kill the suite child at `pid` and everything under it: freezeTree first, so
+ * no process in the tree starts another, then SIGKILL every pid it found —
+ * stopped processes die of it too — then the group, then killAndCheck's check
+ * and second try. The walk is what reaches a grandchild that left the group (a
+ * test's own `detached` spawn); the tree is read while `pid` is alive, before
+ * a kill hands its children to init. Synchronous, so a signal handler can call
+ * it. Returns the pids still alive after the second try.
  *
  * Belt and braces, each beside a defence that already covers its case, so no
- * test can tell it is there: the parents-first order (moot once the group is
+ * test can tell it is there: the parents-first order (moot once the tree is
  * stopped), the group argument (the walk and the `close` handler's group kill
  * cover the members), the `pid <= 1` guard (no caller passes one), the callers'
  * reaped-child check (a pid reused in between — no deterministic test), and the
@@ -433,8 +472,7 @@ function killAndCheck(pids, group) {
  */
 function killTree(pid) {
   if (!Number.isInteger(pid) || pid <= 1) return [];
-  try { process.kill(-pid, 'SIGSTOP'); } catch { /* the group is gone */ }
-  return killAndCheck([pid, ...descendantsOf(pid, processTable())], pid);
+  return killAndCheck(freezeTree(pid), pid);
 }
 
 /**
