@@ -20,24 +20,53 @@ const usage = (t, u, ms) => `<usage><subagent_tokens>${t}</subagent_tokens><tool
 // C8 — one left-to-right pass, no backtracking
 // ---------------------------------------------------------------------------
 
-test('C8: an adversarial transcript is parsed in-process at n=2000 and n=20000 without the old cubic blow-up', () => {
-  const timings = [];
+/**
+ * The characters every RegExp exec and String indexOf scans while `fn` runs,
+ * thrown past `budget` so a quadratic read fails at once instead of running
+ * for minutes. Characters, not calls (check.test.mjs's stringWork counts
+ * calls): the read is searching, and a search restarted from each id to the
+ * end of the text makes a call per id but scans n² characters.
+ */
+function scanWork(fn, budget) {
+  const { exec } = RegExp.prototype;
+  const { indexOf } = String.prototype;
+  let chars = 0;
+  const spend = (n) => { chars += n; if (chars > budget) throw new Error(`scanning past its budget of ${budget} characters`); };
+  RegExp.prototype.exec = function countedExec(input) {
+    const text = String(input);
+    const from = this.global || this.sticky ? this.lastIndex : 0;
+    const m = Reflect.apply(exec, this, [text]);
+    spend((m ? m.index + m[0].length : text.length) - from);
+    return m;
+  };
+  String.prototype.indexOf = function countedIndexOf(needle, position) {
+    const text = String(this);
+    const from = Math.min(Math.max(Math.trunc(Number(position)) || 0, 0), text.length);
+    const at = Reflect.apply(indexOf, text, [needle, position]);
+    spend((at === -1 ? text.length : at + String(needle).length) - from);
+    return at;
+  };
+  try {
+    return { result: fn(), chars };
+  } finally {
+    RegExp.prototype.exec = exec;
+    String.prototype.indexOf = indexOf;
+  }
+}
+
+test('C8: an adversarial transcript is read in a bounded number of passes at n=2000 and n=20000 — the scan counted, not timed', () => {
   for (const n of [2000, 20000]) {
     const text = ('<task-id>x</task-id><summary>Agent "x" finished</summary>').repeat(n);
-    const started = Date.now();
-    const rows = parseUsage(text);
-    const elapsed = Date.now() - started;
-    timings.push({ n, chars: text.length, elapsed });
+    // Six passes over the text: two unescapes, the three patterns, the
+    // closing-tag search. A budget of twice that holds for any linear read at
+    // both sizes; a read that searches to the end from each id passes it at once.
+    // (The cubic pattern 1.3.0 replaced backtracks inside one exec, which no
+    // counter sees: agent-usage.test.mjs runs that case in a child killed at 20 s.)
+    const { result: rows, chars } = scanWork(() => parseUsage(text), 12 * text.length);
     // No usage block anywhere in this text: every id/summary pair is unpaired, so no rows.
     assert.deepEqual(rows, []);
+    assert.ok(chars >= text.length, `the counter saw the read: ${chars} characters for ${text.length}`);
   }
-  // Evidence, not an assertion: the old pattern took ~7 s at 45 KB (n=800); a
-  // cubic regression at n=20000 (11x the length of that 45 KB case) would not
-  // finish in seconds, let alone milliseconds. The bound below only guards
-  // against a return of that blow-up — it is not a performance target.
-  console.log('C8 timings (n, chars, ms):', JSON.stringify(timings));
-  const at20000 = timings.find((t) => t.n === 20000);
-  assert.ok(at20000.elapsed < 5000, `parseUsage at n=20000 took ${at20000.elapsed} ms, expected < 5000 ms`);
 });
 
 test('C8: a description holding literal <task-id> text does not start a new record', () => {

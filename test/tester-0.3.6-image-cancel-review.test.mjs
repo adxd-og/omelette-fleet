@@ -16,7 +16,7 @@
  */
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createUnitRuntime } from '../core/unit.mjs';
@@ -45,30 +45,39 @@ function wrap(unit, env, fake) {
   );
 }
 
-function abortSoon(ms = 400) {
+/**
+ * Call `tool` and cancel it once the fake has written `marker`. Each fake
+ * writes it from its stdout write's callback, so the image (if any) is on disk
+ * and its text is in the pipe before the abort can be sent. Never after a
+ * delay: under load a timer can land before the fake has written anything.
+ */
+async function callCancelledOnMarker(rt, tool, args, marker) {
   const c = new AbortController();
-  const t = setTimeout(() => c.abort(), ms);
-  if (t.unref) t.unref();
-  return c;
+  const watch = setInterval(() => { if (existsSync(marker)) { clearInterval(watch); c.abort(); } }, 10);
+  try {
+    return await rt.callTool(tool, args, { id: 1, signal: c.signal });
+  } finally {
+    clearInterval(watch);
+  }
 }
 
 test('grok_image: a run the client cancels, with the file already on disk, answers with the bare path — no marker, feed says cancelled+partial', async () => {
   const dir = home('grok-img-cancel');
   const saved = join(dir, 'generated.jpg');
   const fake = join(dir, 'fake-grok-img-cancel.mjs');
+  const written = join(dir, 'written');
   // Saves the file, prints the path, then hangs: the client's cancel is what
   // ends it. The RUN writes the file — an image older than the run is not its
   // artifact (core/artifact.mjs).
   writeFileSync(fake, [
     'import { writeFileSync } from "node:fs";',
     `writeFileSync(${JSON.stringify(saved)}, "JPEG");`,
-    `process.stdout.write("Saved to " + ${JSON.stringify(saved)});`,
+    `process.stdout.write("Saved to " + ${JSON.stringify(saved)}, () => writeFileSync(${JSON.stringify(written)}, ""));`,
     'setTimeout(() => {}, 30000);',
   ].join('\n'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { grok: { cancel: 'kill', timeoutS: 60 } } }));
   const rt = wrap(grokUnit, { ...process.env, OMELETTE_HOME: dir, GROK_BIN: process.execPath }, fake);
-  const c = abortSoon();
-  const r = await rt.callTool('grok_image', { prompt: 'a cat' }, { id: 1, signal: c.signal });
+  const r = await callCancelledOnMarker(rt, 'grok_image', { prompt: 'a cat' }, written);
   assert.equal(r.isError, undefined, r.text);
   // THE CONTRACT: bare path, nothing else — the interpreter's cancel marker
   // never reaches the caller.
@@ -84,17 +93,18 @@ test('grok_image: a run the client cancels, with the file already on disk, answe
 test('grok_image: a run the client cancels with NO file on disk is an error naming the cancellation, not a bound to raise', async () => {
   const dir = home('grok-img-cancel-nofile');
   const fake = join(dir, 'fake-grok-img-cancel-nofile.mjs');
+  const written = join(dir, 'written');
   // Text with no path in it at all: the answer is salvaged (not thrown by
   // the interpreter itself, which only throws on cancel with NO text), so
   // imageAnswer's own artifactMiss clause is what names the cancel.
   writeFileSync(fake, [
-    'process.stdout.write("still thinking about it...");',
+    'import { writeFileSync } from "node:fs";',
+    `process.stdout.write("still thinking about it...", () => writeFileSync(${JSON.stringify(written)}, ""));`,
     'setTimeout(() => {}, 30000);',
   ].join('\n'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { grok: { cancel: 'kill', timeoutS: 60 } } }));
   const rt = wrap(grokUnit, { ...process.env, OMELETTE_HOME: dir, GROK_BIN: process.execPath }, fake);
-  const c = abortSoon();
-  const r = await rt.callTool('grok_image', { prompt: 'a cat' }, { id: 1, signal: c.signal });
+  const r = await callCancelledOnMarker(rt, 'grok_image', { prompt: 'a cat' }, written);
   assert.equal(r.isError, true);
   assert.match(r.text, /the run was cancelled by the client before it saved one/);
   assert.doesNotMatch(r.text, /outputCap|timeoutS/);
@@ -103,18 +113,18 @@ test('grok_image: a run the client cancels with NO file on disk is an error nami
 test('gemini_image: a run the client cancels, with the file already on disk, answers with the bare path', async () => {
   const dir = home('gemini-img-cancel');
   const fake = join(dir, 'fake-agy-img-cancel.mjs');
+  const written = join(dir, 'written');
   writeFileSync(fake, [
     'import { writeFileSync } from "node:fs";',
     'import { join } from "node:path";',
     'const saved = join(process.cwd(), "img.png");',
     'writeFileSync(saved, "PNG");',
-    'process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "Saved it to " + saved }));',
+    `process.stdout.write(JSON.stringify({ status: "SUCCESS", response: "Saved it to " + saved }), () => writeFileSync(${JSON.stringify(written)}, ""));`,
     'setTimeout(() => {}, 30000);',
   ].join('\n'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { cancel: 'kill', timeoutS: 60 } } }));
   const rt = wrap(geminiUnit, { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath }, fake);
-  const c = abortSoon();
-  const r = await rt.callTool('gemini_image', { prompt: 'a cat' }, { id: 1, signal: c.signal });
+  const r = await callCancelledOnMarker(rt, 'gemini_image', { prompt: 'a cat' }, written);
   assert.equal(r.isError, undefined, r.text);
   assert.match(r.text, /img\.png$/);
   assert.doesNotMatch(r.text, /cancelled/);
@@ -127,6 +137,7 @@ test('codex_image: a run the client cancels, with image.png already saved, answe
   const dir = home('codex-img-cancel');
   const argvLog = join(dir, 'argv.json');
   const fake = join(dir, 'fake-codex-img-cancel.mjs');
+  const written = join(dir, 'written');
   writeFileSync(fake, [
     'import { writeFileSync } from "node:fs";',
     'import { join } from "node:path";',
@@ -135,15 +146,15 @@ test('codex_image: a run the client cancels, with image.png already saved, answe
     `  writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args));`,
     '  const cwd=args[args.indexOf("-C")+1];',
     '  writeFileSync(join(cwd, "image.png"), "PNG");',
-    '  const line=(o)=>process.stdout.write(JSON.stringify(o)+"\\n");',
-    '  line({type:"item.completed",item:{type:"agent_message",text:"Saved it to "+join(cwd,"image.png")}});',
+    '  const line=(o, done)=>process.stdout.write(JSON.stringify(o)+"\\n", done);',
+    '  line({type:"item.completed",item:{type:"agent_message",text:"Saved it to "+join(cwd,"image.png")}},',
+    `    () => writeFileSync(${JSON.stringify(written)}, ""));`,
     '  setTimeout(() => {}, 30000);',
     '});',
   ].join('\n'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { codex: { cancel: 'kill', timeoutS: 60 } } }));
   const rt = wrap(codexUnit, { ...process.env, OMELETTE_HOME: dir, CODEX_BIN: process.execPath }, fake);
-  const c = abortSoon(500);
-  const r = await rt.callTool('codex_image', { prompt: 'a red circle' }, { id: 1, signal: c.signal });
+  const r = await callCancelledOnMarker(rt, 'codex_image', { prompt: 'a red circle' }, written);
   assert.equal(r.isError, undefined, r.text);
   const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
   assert.equal(r.text, join(argv[argv.indexOf('-C') + 1], 'image.png'));

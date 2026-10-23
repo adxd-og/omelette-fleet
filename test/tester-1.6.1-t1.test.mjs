@@ -401,7 +401,13 @@ test('doctor: when `codex login status` hangs past 20 s the models probe never r
   assert.match(b.codex, /^ {2}login {7}OK — Logged in using ChatGPT$/m, b.codex);
   assert.deepEqual(b.codex.match(MODELS_LINE) || [], []);
   assert.equal(debugHang.calls().filter((c) => c.cmd === 'debug models --bundled').length, 1, 'it was tried once, then killed');
-  assert.ok(b.ms >= 19000 && b.ms < 60000, `one 20 s kill, not two: ${b.ms} ms`);
+  // The floor pins that the probe was not killed early: the kill is due at
+  // 20 s and a timer cannot fire early. The ceiling is a hang detector over the
+  // run's variable part only: 20 s is what this test demands, the rest measured
+  // at most 0.3 s, so 60 s leaves over 100x that. Neither tells the kill from
+  // the fake's own silent exit at 30 s: that the kill fires is
+  // tester-t2c-doctor-kill.test.mjs's. "Once, not twice" is the call count above.
+  assert.ok(b.ms >= 19000 && b.ms < 60000, `not killed before its 20 s, and doctor then ended: ${b.ms} ms`);
 });
 
 // =============================================================================

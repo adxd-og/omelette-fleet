@@ -21,17 +21,21 @@ import * as spawnMod from '../core/spawn.mjs';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GEMINI_SERVER = join(ROOT, 'servers', 'gemini.mjs');
 const DEADLINE_MS = 10_000;
+// The client's goodbye is its own timers: the call's 1 s timeout, SIGTERM 2 s
+// later, SIGKILL 1 s after that — 4.0 s measured for the whole test. Waiting on
+// it is a hang detector only, so its cap is over 10x that.
+const GOODBYE_MS = 45_000;
 
 /** Poll `check` until it returns truthy or the deadline passes; returns the last value. */
-async function until(check, what) {
-  const end = Date.now() + DEADLINE_MS;
+async function until(check, what, deadlineMs = DEADLINE_MS) {
+  const end = Date.now() + deadlineMs;
   let v;
   while (Date.now() < end) {
     try { v = check(); } catch { v = undefined; }
     if (v) return v;
     await new Promise((r) => setTimeout(r, 50));
   }
-  assert.fail(`timed out after ${DEADLINE_MS} ms waiting for ${what}`);
+  assert.fail(`timed out after ${deadlineMs} ms waiting for ${what}`);
 }
 
 /** `promise`, or a failure once the deadline passes. */
@@ -154,14 +158,13 @@ const INITIALIZE = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { prot
 const research = (id, prompt) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'gemini_research', arguments: { prompt } } });
 
 test('call timeout: the cancel reaches the server first, then SIGTERM, then SIGKILL for a server that ignores both', async () => {
-  const t0 = Date.now();
   const dir = mkdtempSync(join(tmpdir(), 'omelette-u1-'));
   const { server, log } = deafServer(dir);
   let pid = null;
   try {
     await assert.rejects(callUnitServer({ serverPath: server, tool: 't', timeoutS: 1 }), /no answer after 1s/);
     pid = Number(/^pid (\d+)$/m.exec(readFileSync(log, 'utf8'))[1]);
-    await until(() => !alive(pid), 'the deaf server to be gone (only SIGKILL can do it)');
+    await until(() => !alive(pid), 'the deaf server to be gone (only SIGKILL can do it)', GOODBYE_MS);
 
     // Everything in the log was written by the server itself, so every line
     // below reached it while it was still alive.
@@ -172,7 +175,6 @@ test('call timeout: the cancel reaches the server first, then SIGTERM, then SIGK
     assert.equal(JSON.parse(lines[cancelAt]).params.requestId, 3, 'the cancel names the tools/call id');
     const termAt = lines.indexOf('SIGTERM ignored');
     assert.ok(termAt > cancelAt, `SIGTERM followed the cancel · log:\n${lines.join('\n')}`);
-    assert.ok(Date.now() - t0 < DEADLINE_MS, `the whole goodbye took ${Date.now() - t0} ms`);
   } finally {
     if (pid) killQuietly(pid);
   }

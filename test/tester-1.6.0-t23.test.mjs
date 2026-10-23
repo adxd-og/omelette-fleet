@@ -65,12 +65,11 @@ test('R2: the gathers-failed header lists sub-questions in DECLARATION order, wh
   const r = await deepRt(env, stub).callTool('gemini_deep_research', { question: 'q' });
   const m = r.text.match(/^\[gemini: 2 of 2 gathers failed: (.+)\]$/m);
   assert.ok(m, r.text);
-  // The spec's header example ("<sub-question 1>; <sub-question 2>") reads as
-  // declaration order; the code instead names each gather in the order its own
-  // `Promise.all` member SETTLES (`failedGathers.push` inside the catch), so a
-  // gather declared LATER but retried NEVER (a deterministic failure) is named
-  // BEFORE one declared earlier that a transient-looking failure gets retried
-  // for. Reported as a finding, not asserted as a bug.
+  // The header names the gathers in the order the sub-questions were asked
+  // (the spec's "<sub-question 1>; <sub-question 2>"), not the order they
+  // settle: beta, declared second, fails first (a hard kill is never retried),
+  // and alpha, declared first, fails last (after its retry's 1.5 s delay) —
+  // and is still named first.
   assert.equal(m[1], 'alpha; beta', `observed order was "${m[1]}" — the header must follow the order the sub-questions were asked in`);
 });
 
@@ -187,7 +186,18 @@ test('R3.8: a real gemini server — notifications/cancelled ends the call as ca
   const dir = mkdtempSync(join(tmpdir(), 'omelette-t23-r3-cancel-'));
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { cancel: 'kill', timeoutS: 60 } } }));
   const fakeAgyPath = join(dir, 'fake-agy');
-  writeFileSync(fakeAgyPath, [`#!${process.execPath}`, 'setInterval(() => {}, 1000);'].join('\n'));
+  // Runs until the cancel kills it, or until its server is gone. It leads a
+  // process group of its own (core/spawn.mjs), so a SIGKILLed server cannot
+  // take it along: it exits once it is orphaned (its parent changed, or it
+  // started already reparented to pid 1) — also when it was still starting as
+  // the server died, which a pid it recorded would miss. The 60 s cap only
+  // bounds what that check cannot see.
+  writeFileSync(fakeAgyPath, [
+    `#!${process.execPath}`,
+    'const parent = process.ppid;',
+    'setInterval(() => { if (process.ppid !== parent || process.ppid === 1) process.exit(0); }, 100);',
+    'setTimeout(() => process.exit(0), 60000);',
+  ].join('\n'));
   chmodSync(fakeAgyPath, 0o755);
   const env = { ...process.env, OMELETTE_HOME: dir, AGY_BIN: fakeAgyPath, OMELETTE_UPDATE_CHECK: '0' };
   const child = spawn(process.execPath, [GEMINI_SERVER], { env, cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -223,6 +233,7 @@ test('R3.8: a real gemini server — notifications/cancelled ends the call as ca
     child.stdin.end();
     await until(() => !existsSync(snapPath), 'the snapshot to be removed on the clean-exit path');
   } finally {
+    // The server, and with it the fake agy, which exits once orphaned.
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
   }
 });

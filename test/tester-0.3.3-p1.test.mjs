@@ -46,13 +46,22 @@ function env(config, extra = {}) {
   return { dir, env: { ...process.env, OMELETTE_HOME: dir, ...extra } };
 }
 
+/** Runs of p1_hold wait here, by name, until the test calls the release `hold` returned. */
+const holds = new Map();
+function hold(name) {
+  let release;
+  holds.set(name, new Promise((r) => { release = r; }));
+  return release;
+}
+
 /**
  * A unit whose "CLI" is node itself, with tools built for cancellation and
- * progress scenarios: a delayed writer (proves a `finish`-mode child really
- * keeps running), a grandchild-spawning script (proves `kill` reaps the
+ * progress scenarios: a delayed writer (a child that writes on its own
+ * schedule unless it is killed), a gated writer (proves a `finish`-mode child
+ * really keeps running), a grandchild-spawning script (proves `kill` reaps the
  * whole group through the real stack), a parametrisable echo-after-delay
- * (for the two-concurrent-requests case), and a plain in-process waiter (for
- * progress).
+ * (for the two-concurrent-requests case), and, for progress, a run the test
+ * releases and a plain in-process waiter.
  */
 function fakeUnit(overrides = {}) {
   return defineUnit({
@@ -61,13 +70,31 @@ function fakeUnit(overrides = {}) {
     bin: { env: 'P1FAKE_BIN', default: node },
     tools: [
       {
-        // Spawns a child that writes `marker` after `ms`. Under `finish` the
-        // client's cancel must not stop this child: the marker either exists
-        // (child ran to completion) or does not (child was killed).
+        // Spawns a child that writes `marker` after `ms` unless it is killed
+        // first: the marker either exists (child ran to completion) or does
+        // not (child was killed).
         name: 'p1_delay', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
         async run(args, ctx) {
           const r = await ctx.spawn({
             args: ['-e', `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(args.marker)}, 'done'), ${Number(args.ms) || 300})`],
+          });
+          return `killed=${r.killed};cancelled=${r.cancelled}`;
+        },
+      },
+      {
+        // Spawns a child that writes `started`, then writes `marker` and exits
+        // only once the test has written `go` (a 30 s cap ends it if the go
+        // never comes). The test decides when the child finishes, never a timer.
+        name: 'p1_gated', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+        async run(args, ctx) {
+          const [started, go, marker] = [args.started, args.go, args.marker].map((path) => JSON.stringify(path));
+          const r = await ctx.spawn({
+            args: ['-e', [
+              'const fs = require("fs");',
+              `fs.writeFileSync(${started}, "");`,
+              `setInterval(() => { if (fs.existsSync(${go})) { fs.writeFileSync(${marker}, "done"); process.exit(0); } }, 10);`,
+              'setTimeout(() => process.exit(0), 30000);',
+            ].join(' ')],
           });
           return `killed=${r.killed};cancelled=${r.cancelled}`;
         },
@@ -95,8 +122,14 @@ function fakeUnit(overrides = {}) {
         },
       },
       {
-        // A pure in-process wait: no child noise, just something the
-        // progress ticker has time to tick against.
+        // Runs until the test releases it (`hold`), never for a fixed time:
+        // the progress test ends the run once it has seen what it waits for.
+        name: 'p1_hold', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+        async run(args) { await holds.get(args.hold); return 'released'; },
+      },
+      {
+        // A pure in-process wait: no child noise, for the call that must send
+        // no progress at all.
         name: 'p1_wait', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
         async run(args) { await new Promise((r) => setTimeout(r, Number(args.ms) || 50)); return 'waited'; },
       },
@@ -165,11 +198,10 @@ async function until(check, what, capMs = 10000) {
 
 test('progress: the real ticker, through the real call.notify wrapper, produces valid JSON-RPC notifications with increasing elapsed seconds, and stops once the response is out', async () => {
   const { env: e } = env(null);
-  // `progress` is Math.round(elapsedMs / 1000): ticks close together within
-  // the same rounded second would not visibly grow, so this spaces them out
-  // (200ms apart, over 900ms) to reliably cross a second boundary — a timing
-  // choice for THIS test's assertion, not a promise the spec makes about any
-  // particular interval.
+  // `progress` is Math.round(elapsedMs / 1000), so it grows only once the run
+  // crosses a rounded second. The run lasts until the test has SEEN three
+  // notifications and that growth, then the test releases it: no count is
+  // held against a clock, and a late ticker only makes the wait longer.
   const rt = createUnitRuntime(fakeUnit(), { env: e, progressEveryMs: 200 });
   const notes = [];
   const h = createHandler({
@@ -178,12 +210,16 @@ test('progress: the real ticker, through the real call.notify wrapper, produces 
     callTool: rt.callTool,
     notify: (m) => notes.push(m),
   });
-  const r = await h({
+  const release = hold('progress');
+  const pending = h({
     jsonrpc: '2.0', id: 1, method: 'tools/call',
-    params: { name: 'p1_wait', arguments: { ms: 900 }, _meta: { progressToken: 'tok-abc' } },
+    params: { name: 'p1_hold', arguments: { hold: 'progress' }, _meta: { progressToken: 'tok-abc' } },
   });
-  assert.equal(r.result.content[0].text, 'waited');
-  assert.ok(notes.length >= 3, `expected several progress notifications through the real stack, got ${notes.length}`);
+  await until(() => notes.length >= 3 && notes.at(-1).params.progress > notes[0].params.progress,
+    'three progress notifications, the elapsed seconds grown between the first and the last');
+  release();
+  const r = await pending;
+  assert.equal(r.result.content[0].text, 'released');
   let prev = -1;
   for (const n of notes) {
     assert.equal(n.jsonrpc, '2.0');
@@ -192,11 +228,10 @@ test('progress: the real ticker, through the real call.notify wrapper, produces 
     assert.equal(n.params.progressToken, 'tok-abc');
     assert.equal(typeof n.params.progress, 'number');
     assert.equal('total' in n.params, false, 'total is unknown by construction');
-    assert.match(n.params.message, /^p1fake p1_wait running · \d+s$/);
+    assert.match(n.params.message, /^p1fake p1_hold running · \d+s$/);
     assert.ok(n.params.progress >= prev, 'progress never goes backwards');
     prev = n.params.progress;
   }
-  assert.ok(notes.at(-1).params.progress > notes[0].params.progress, 'elapsed seconds actually grew over the run');
   const seenAtResponse = notes.length;
   await wait(300);
   assert.equal(notes.length, seenAtResponse, 'nothing is sent once the response has gone out');
@@ -219,19 +254,27 @@ test('cancel `finish`, whole stack: the response is dropped at once, but the rea
   const { dir, env: e } = env(null); // cancel defaults to "finish"
   const rt = createUnitRuntime(fakeUnit(), { env: e });
   const h = createHandler({ serverInfo: { name: 'p1fake', version: '0' }, tools: rt.tools, callTool: rt.callTool });
-  const marker = join(dir, 'delay-marker');
+  const started = join(dir, 'gated-started');
+  const go = join(dir, 'gated-go');
+  const marker = join(dir, 'gated-marker');
   const p = h({
     jsonrpc: '2.0', id: 1, method: 'tools/call',
-    params: { name: 'p1_delay', arguments: { marker, ms: 350 } },
+    params: { name: 'p1_gated', arguments: { started, go, marker } },
   });
-  await wait(80); // well before the request registers as done, safely after the spawn started
-  assert.equal(h.inflight(), 1);
-  assert.equal(await h({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }), null);
-  await tick();
-  // The client cancelled, but `finish` means the vendor CLI runs on: the
-  // request must STILL be in flight, and the marker must NOT exist yet.
-  assert.equal(h.inflight(), 1, 'a `finish`-mode cancel does not clear the in-flight entry early');
-  assert.equal(existsSync(marker), false, 'the child has not had time to finish yet');
+  try {
+    // Mid-flight by observation: the child is up, and it cannot finish before
+    // the test writes `go`.
+    await until(() => existsSync(started), 'the child to start');
+    assert.equal(h.inflight(), 1);
+    assert.equal(await h({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }), null);
+    await tick();
+    // The client cancelled, but `finish` means the vendor CLI runs on: the
+    // request must STILL be in flight, and the marker must NOT exist yet.
+    assert.equal(h.inflight(), 1, 'a `finish`-mode cancel does not clear the in-flight entry early');
+    assert.equal(existsSync(marker), false, 'the child is still waiting for its go');
+  } finally {
+    writeFileSync(go, ''); // the child finishes now, and only now
+  }
   const result = await p;
   assert.equal(result, null, 'no response is sent for a cancelled request, whatever the mode');
   assert.equal(h.inflight(), 0, 'the entry clears once the child actually finishes');
@@ -290,18 +333,18 @@ test('two concurrent requests, whole stack: cancelling one under `kill` leaves t
   assert.equal(h.inflight(), 0);
 });
 
-test('a cancel that arrives before the spawn even starts (`kill`, signal pre-aborted) still kills fast — this is not the same as a mid-flight cancel', async () => {
+test('a cancel that arrives before the spawn even starts (`kill`, signal pre-aborted) still kills the child — this is not the same as a mid-flight cancel', async () => {
   const { dir, env: e } = env({ units: { p1fake: { cancel: 'kill' } } });
   const rt = createUnitRuntime(fakeUnit(), { env: e });
   const marker = join(dir, 'preabort-marker');
   const c = new AbortController();
   c.abort(); // aborted BEFORE callTool is ever invoked — not mid-run
-  const t0 = Date.now();
   const r = await rt.callTool('p1_delay', { marker, ms: 5000 }, { id: 1, signal: c.signal });
   assert.match(r.text, /killed=true/);
   assert.match(r.text, /cancelled=true/);
-  assert.ok(Date.now() - t0 < 2000, 'the run ended almost immediately, not after the full 5s the child was scheduled for');
-  assert.equal(existsSync(marker), false);
+  // The child never reached its 5 s write: a run left to its own schedule
+  // writes the marker before it exits, and the call waits for that exit.
+  assert.equal(existsSync(marker), false, 'the child was killed, not left to run its 5 s');
   const snap = JSON.parse(readFileSync(join(dir, `status-p1fake-${process.pid}.json`), 'utf8'));
   assert.equal(snap.lastEvent.status, 'cancelled');
 });
@@ -327,31 +370,51 @@ test('ctx.retry, wired through the RUNTIME (not boundedRetry called directly): a
 test('stdin end waits out a `finish`-style call still in flight (drop the response, keep waiting) before it exits — real subprocess, real protocol', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-p1-serve-'));
   const script = join(dir, 'finish-server.mjs');
+  const started = join(dir, 'call-started');
+  const ended = join(dir, 'stdin-ended');
+  const go = join(dir, 'call-go');
+  const returned = join(dir, 'call-returned');
   writeFileSync(script, [
+    'import { existsSync, writeFileSync } from "node:fs";',
     `import { serve } from ${JSON.stringify(new URL('../core/jsonrpc.mjs', import.meta.url).href)};`,
     'serve({',
     '  serverInfo: { name: "p1serve", version: "0" },',
     '  tools: [{ name: "slow", description: "d", inputSchema: { type: "object", properties: {} } }],',
     // Ignores call.signal entirely — exactly what `finish` mode does: the run
-    // is deliberately left to end on its own schedule, cancel or not.
-    '  callTool: async () => { await new Promise((r) => setTimeout(r, 700)); return { text: "late" }; },',
+    // ends on its own, cancel or not. It ends when the test writes `go` (a
+    // 30 s cap only bounds a failed test), and says so in `returned` first.
+    '  callTool: async () => {',
+    `    writeFileSync(${JSON.stringify(started)}, "");`,
+    '    const t0 = Date.now();',
+    `    await new Promise((r) => { const poll = setInterval(() => { if (existsSync(${JSON.stringify(go)}) || Date.now() - t0 > 30000) { clearInterval(poll); r(); } }, 10); });`,
+    `    writeFileSync(${JSON.stringify(returned)}, "");`,
+    '    return { text: "late" };',
+    '  },',
     '});',
+    // Registered after serve's own listener, so it runs once serve has read
+    // every frame (the cancel included) and started its stdin-end path.
+    `process.stdin.on("end", () => writeFileSync(${JSON.stringify(ended)}, ""));`,
   ].join('\n'));
   const { spawn } = await import('node:child_process');
   const child = spawn(process.execPath, [script], { stdio: ['pipe', 'pipe', 'pipe'] });
   let out = '';
+  let exit = null;
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (c) => { out += c; });
+  child.on('close', (code) => { exit = { code }; });
   child.stdin.on('error', () => {});
-  const t0 = Date.now();
-  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'slow' } }) + '\n');
-  await wait(100);
-  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }) + '\n');
-  await wait(50);
-  child.stdin.end(); // client says goodbye while the (cancelled, but still finishing) call is running
-  const code = await new Promise((r) => child.on('close', r));
-  const elapsed = Date.now() - t0;
-  assert.equal(code, 0);
-  assert.ok(elapsed >= 650, `exited too early (${elapsed}ms): stdin end must wait for the in-flight call, cancelled or not`);
+  try {
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'slow' } }) + '\n');
+    await until(() => existsSync(started), 'the call to start');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }) + '\n');
+    child.stdin.end(); // client says goodbye while the (cancelled, but still finishing) call is running
+    await until(() => existsSync(ended), 'the server to read the cancel and the end of stdin');
+    writeFileSync(go, ''); // only now may the call finish
+    await until(() => exit, 'the server to exit');
+  } finally {
+    try { child.kill('SIGKILL'); } catch { /* gone, as it should be */ }
+  }
+  assert.equal(exit.code, 0);
+  assert.equal(existsSync(returned), true, 'the server exited only after the in-flight call returned: stdin end waits for it, cancelled or not');
   assert.equal(out.trim(), '', 'no response frame at all: the request was cancelled, so nothing is written even though the server waited for it');
 });
