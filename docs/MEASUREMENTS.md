@@ -23,6 +23,7 @@ What has actually been measured on this project, how each number was taken, and 
 | What did the 1.1.0 review rounds change that a clock can see? | [`check` before and after its reviews](#check-before-and-after-its-reviews) |
 | What are three release reviews worth? | [Review yield per release](#review-yield-per-release) |
 | Does a security brief find what a plain review and a plugin miss? | [Security audit: plain, brief and plugin over one revision](#security-audit-plain-brief-and-plugin-over-one-revision) |
+| What did the clean-up gate take out of the test suite, and did the suite lose a catch? | [The test suite before and after the clean-up gate](#the-test-suite-before-and-after-the-clean-up-gate) |
 
 **Resident context** — the contract, the rules file, the rent:
 
@@ -103,6 +104,22 @@ Every release closes its ledger with one line: findings found, accepted, rejecte
 | 1.3.0 | 34 | 30 | 4 | the guard's invocation cut handing `-b new` to a nested `$(git tag -l)` (a missed write, found by the shipped reviewer and by Codex); `xargs git tag < file`; PATH still reaching an env-shebang vendor; a false "three runs" line in SECURITY; three re-review rounds found process substitutions dropped unread, `reset --hard` passing for every role, and `>>(…)` under zsh |
 
 Across eight releases, 221 findings and 192 accepted: the reviewers are rarely wrong, and the rejected ones are mostly stricter readings of a brief than of the spec. A docs-only release (1.0.0) still produced eight real defects.
+
+## The test suite before and after the clean-up gate
+
+The clean-up gate (spec `docs/superpowers/specs/2026-10-21-cleanup-gate-design.md`, 2026-10-22/23) sorted every tester-written test under one rule — it stays when it pins a spec promise no other test pins, kills a catalogue mutant no other test kills, or guards a found defect; it goes when it is a text pin, repeats a check at the same level, races the clock, or cannot fail — and rewrote every wall-clock bound in `test/`. The judge is `scripts/mutants.mjs` with a hand-written catalogue (`scripts/mutants.json`, 66 mutants at the start, 69 at the end); every full run below is one pass of the whole catalogue over the whole suite on a 4-core aarch64 Linux VM, node 22, nothing else running.
+
+| | Before (f336303) | After (858d0a2) |
+|---|---:|---:|
+| Test files / tests, whole suite | 139 / 1871 | 130 / 1556 |
+| Tester-written files / tests | 62 / 587 | 52 / 312 |
+| Suite wall time, Linux VM | 108 s | 98 s |
+| Catalogue mutants caught | 61 of 66 | 63 of 69 |
+| Mutants caught before and not after | — | 0 |
+| Files with a catch only they make | 18 | 20 |
+| Clocks that decide a pass in `test/` | 20 wall-clock bounds | 0 (events, counted work, or hang detectors at ≥ 10× the measured time) |
+
+The five holes the catalogue found at the start are still holes at the end (an empty model list accepted as a catalog; `gemini_research` with a `cwd` in accept-edits mode; the lost no-git prefix; two `doctor` lines), plus the guard's `unquote` mutant the gate's own catalogue extension found: six backlog items, none fixed on this branch by rule. Five clean-context reviews of the five packages found 23 wrong or missing drops, every one accepted — each package had at least one "repeats" drop whose twin was weaker, at another level, or absent; the reviews of the judge itself (T0, T0b) found 13 more, among them a `GIT_DIR` reaching the operator's repository, a kill that read the process table before the group had stopped, and the runner's own tests catching every mutant once they validated the real catalogue inside a mutated copy. Nine orphaned test processes at 80-90 % CPU for eight hours were what started the runner's second round.
 
 ## Security audit: plain, brief and plugin over one revision
 
