@@ -54,7 +54,7 @@ import { visible } from '../core/log.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
 import { changedSince, checkPointers, parseCommit, parsePointers, readBoundedFile } from '../core/check.mjs';
-import { PLAN_NAME, openLedger, sweepLedgers } from '../core/ledger.mjs';
+import { PLAN_NAME, openLedger, registerStats, sweepLedgers } from '../core/ledger.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResultHeader } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
 import { HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, RETIRED_HOOK_EVENTS, agentSettings, contractFor, hookSettingsSnippet, parseHookHandoff, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets, shellWord } from '../core/rules.mjs';
@@ -166,7 +166,12 @@ const COMMANDS = {
       'them a `handoff` line says whether the INSTALLED guard stamps the',
       'ledger on PreCompact and prints its tail on SessionStart',
       '(`handoff.enabled`), and how many ledgers there are — read back out',
-      'of the script itself. A',
+      'of the script itself.',
+      'With an .omelette/ here, doctor runs the ledger sweep (see `ledger`)',
+      'and prints a `ledgers` row — open ledgers with their branches,',
+      'untracked, archived — with the sweep\'s lines under it, and a',
+      '`decisions` row: the register, its lines, the struck ones and the',
+      'pointers `check` does not find ok. A',
       '`contract` line under it says how much of the fleet contract a unit',
       'server started HERE would send at initialize: short when this',
       'project (or the global scope) already carries the rendered rules',
@@ -2315,6 +2320,65 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
 }
 
 /**
+ * doctor's `ledgers` and `decisions` rows. With an `.omelette/` in `cwd` it
+ * RUNS the sweep (doctor writes, as `ledger sweep` does), then counts what is
+ * left by state, prints the sweep's lines under the row, and reads the
+ * register: its lines, the struck ones, and the pointers of the unstruck ones
+ * `check` does not find ok. No `.omelette/`, no rows.
+ * @returns {string[]} the rows, in print order
+ */
+function ledgerReport({ cwd = process.cwd(), env = process.env } = {}) {
+  try {
+    const st = lstatSync(join(cwd, '.omelette'));
+    if (st.isSymbolicLink() || !st.isDirectory()) return ['ledgers       .omelette is not a directory of this project — nothing read'];
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return [];
+    return ['ledgers       .omelette is not a directory of this project — nothing read'];
+  }
+  const r = sweepLedgers(cwd, { env });
+  const by = (state) => r.ledgers.filter((l) => l.state === state);
+  const [open, standing, closed, unknown, untracked] = ['open', 'standing', 'closed', 'unknown', 'untracked'].map(by);
+  const names = (ls) => ls.map((l) => visible(l.name)).join(', ');
+  const rows = [
+    `ledgers       ${open.length} open${open.length ? ` (${open.map((l) => `${visible(l.name)} → ${visible(l.branch)}`).join(', ')})` : ''}`
+      + (standing.length ? `, ${standing.length} standing (${names(standing)})` : '')
+      + (closed.length ? `, ${closed.length} closed (${names(closed)})` : '')
+      + (unknown.length ? `, ${unknown.length} unclassified (${names(unknown)})` : '')
+      + `, ${untracked.length} untracked, ${r.archived} archived`,
+  ];
+  // The sweep has already passed every name it prints through visible().
+  for (const line of r.lines) rows.push(`              ${line}`);
+  if (open.length > 1) rows.push(`              warning: ${open.length} open ledgers — one plan, one open ledger: merge and delete the finished branch`);
+
+  const reg = r.register;
+  if (!reg) return rows;
+  // The refusal is printed here as well: the sweep stops on its FIRST failed
+  // precondition, so with git gone the register line above never appears.
+  if (reg.error) { rows.push(`decisions     ${reg.error}`); return rows; }
+  const head = `decisions     ${visible(reg.rel)}${reg.via ? ` (via ${visible(reg.via)})` : ''}`;
+  try {
+    lstatSync(reg.path);
+  } catch (e) {
+    rows.push(e && e.code === 'ENOENT' ? `${head} — none yet` : `${head} — unreadable`);
+    return rows;
+  }
+  const text = readBoundedFile(reg.path, 1024 * 1024);
+  if (text === null) { rows.push(`${head} — unreadable`); return rows; }
+  const { entries, struck, unstruck } = registerStats(text);
+  let pointers;
+  try {
+    const { counts } = checkPointers({ text: unstruck.join('\n'), root: cwd });
+    const stale = counts.total - counts.ok;
+    pointers = `${stale} stale pointer${stale === 1 ? '' : 's'}`;
+  } catch {
+    pointers = 'stale pointers not checked';
+  }
+  rows.push(`${head} — ${entries} line${entries === 1 ? '' : 's'}, ${struck} struck, ${pointers}`);
+  if (unstruck.length > 30) rows.push(`              warning: ${unstruck.length} unstruck lines — over 30: strike what no longer binds (append "superseded by …")`);
+  return rows;
+}
+
+/**
  * The ONE thing to do next, or null when nothing is missing — the first-run
  * path in the order it has to happen: register the servers, write the project
  * files, wire the guard up. It is INFORMATIONAL and never a fault: a machine
@@ -2753,6 +2817,9 @@ async function cmdDoctor(argv) {
   // the value that is actually in force.
   const handoff = handoffReport();
   if (handoff) out(`handoff       ${handoff.line}`);
+  // The ledger sweep runs here too (doctor writes what `ledger sweep` writes),
+  // then the ledgers it left and the decisions register are counted.
+  for (const line of ledgerReport()) out(line);
   // WHICH CONTRACT a unit server started in this directory would send at
   // `initialize` — resolved exactly the way the server resolves it, from this
   // process's cwd and environment. It is not a fault in any direction: a

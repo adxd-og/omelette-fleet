@@ -519,3 +519,14 @@ export function sweepLedgers(projectDir, { dryRun = false, now = new Date(), env
     register,
   };
 }
+
+/**
+ * What doctor says about a register: `entries` are its `- ` lines, `struck`
+ * those that say "superseded by" (any case), `unstruck` the others, in order.
+ * @returns {{entries:number, struck:number, unstruck:string[]}}
+ */
+export function registerStats(text) {
+  const entries = String(text).split(/\r?\n/).filter((l) => l.startsWith('- '));
+  const unstruck = entries.filter((l) => !/superseded by/i.test(l));
+  return { entries: entries.length, struck: entries.length - unstruck.length, unstruck };
+}
