@@ -252,7 +252,7 @@ The date is the ledger line's own leading date, else the sweep's. A line that no
 | `doctor` prints | When |
 |---|---|
 | `ledgers       1 open (ledger-1.7.3.md → feat/1.7.3), 0 untracked, 22 archived` | `.omelette/` exists; counted after doctor's own sweep, whose lines follow it (`closed: …`, `untracked: …`, `register: … refused (…) — nothing swept`). No `ledgers` or `decisions` row for the fleet home |
-| `decisions     docs/DECISIONS.md (via .omelette/decisions.md) — 14 lines, 0 struck, 0 stale pointers` | the register: its entry lines, the struck ones, and the pointers of the live ones `check` does not find `ok` |
+| `decisions     docs/DECISIONS.md (via .omelette/decisions.md) — 25 lines, 0 struck, 0 stale pointers` | the register: its entry lines, the struck ones, and the pointers of the live ones `check` does not find `ok` |
 | `warning: 2 open ledgers — …` | more than one open ledger; a standing one is not counted |
 | `warning: 31 unstruck lines — …` | more than 30 live lines; no cap is enforced |
 

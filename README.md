@@ -65,16 +65,16 @@ Three peers inside Claude Code, each on a subscription you already pay for, none
 
 ```console
 $ omelette-fleet doctor      # example output — all three units; config tables trimmed
-FLEET DOCTOR · omelette-fleet 1.6.0 · node v20.19.5 · darwin
-version       1.6.0 · latest 1.6.0
+FLEET DOCTOR · omelette-fleet 1.7.3 · node v20.19.5 · darwin
+version       1.7.3 · latest 1.7.3
 fleet home    ~/.omelette
 fleet config  ~/.omelette/fleet.config.json
 claude CLI    ~/.local/bin/claude
 claude config ~/.claude.json
-rules         project: v1.6.0 · global: absent
-agents        project: v1.6.0 (4) · global: absent
-skills        project: v1.6.0 (1) · global: absent
-hooks         project: v1.6.0 (wired: PreToolUse, PreCompact, SessionStart) · global: absent
+rules         project: v1.7.3 · global: absent
+agents        project: v1.7.3 (4) · global: absent
+skills        project: v1.7.3 (1) · global: absent
+hooks         project: v1.7.3 (wired: PreToolUse, PreCompact, SessionStart) · global: absent
 handoff       stamp and print on · ledgers: 1
 ledgers       1 open (ledger-1.7.3.md → feat/1.7.3), 0 untracked, 22 archived
 decisions     docs/DECISIONS.md (via .omelette/decisions.md) — 25 lines, 0 struck, 0 stale pointers
@@ -199,7 +199,7 @@ A registration counts as ours by **where it points**, not by what it is called: 
 |---|---|---|
 | `version` | The fleet's own version, and the latest release (`version … · latest …`) | No: an unreachable GitHub is never a finding |
 | `rules`, `agents`, `skills`, `hooks` | Each managed kind at both scopes, with its marker version; `hooks` also says whether the guard is wired ([every NOT-wired reason](docs/ORCHESTRATION.md#what-doctor-says-about-the-wiring)) | No: a missing file is never counted |
-| `handoff` | What the installed guard will do, read back out of the script itself: `stamp and print on · ledgers: 1`; `off (handoff.enabled=false)` when the switch is off; `ledgers: none (hook silent — start .omelette/ledger-<plan>.md)` when the project keeps no ledger, which is the state in which the guard deliberately stamps and prints nothing | No |
+| `handoff` | What the installed guard will do, read back out of the script itself: `stamp and print on · ledgers: 1`; `off (handoff.enabled=false)` when the switch is off; `ledgers: none (nothing to stamp — omelette-fleet ledger open <plan> starts one)` when the project keeps no ledger, which is the state in which the guard deliberately stamps and prints nothing | No |
 | `contract` | Which contract the unit servers send this project — `short (rules installed here)`, or the full one ([CONFIG](docs/CONFIG.md#the-contract-and-why-auto-is-the-default)) | No |
 | `merge policy` | The configured policy, and whether the rendered rules file carries its sentence yet ([CONFIG](docs/CONFIG.md#workflow-settings)) | No: its PR-gated hint is a hint |
 | `mcp timeout` | The client's own two timeout walls — the wall-clock `MCP_TOOL_TIMEOUT` against the longest call the enabled units can make, and the 30-minute stdio idle abort — with the snippet to merge when the first one is short ([CONFIG](docs/CONFIG.md#client-timeouts)) | No: informational |
