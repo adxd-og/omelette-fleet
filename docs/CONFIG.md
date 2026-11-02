@@ -11,6 +11,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |
 | How do I switch the handoff hooks off? | [Handoff settings](#handoff-settings) |
 | What do the handoff hooks do to my ledger, and when? | [The handoff hooks](#the-handoff-hooks) |
+| How do I open a ledger, close one, and where do binding rulings go? | [Ledgers and the decisions register](#ledgers-and-the-decisions-register) |
 | How do I install the fleet pane mod, and which two options does it have? | [The fleet pane mod](#the-fleet-pane-mod) |
 | How do I set whether the session merges or opens a PR? | [Workflow settings](#workflow-settings) |
 | What config keys exist and what do they default to? | [Keys](#keys) |
@@ -146,9 +147,9 @@ The `handoff` block configures the other managed file that is rendered rather th
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `handoff.enabled` | boolean | `true` | `false` renders a guard that neither stamps the ledgers on `PreCompact` nor prints their tails on `SessionStart`; the git guard is unaffected |
+| `handoff.enabled` | boolean | `true` | `false` renders a guard that neither sweeps nor stamps the ledgers on `PreCompact` and `SessionStart` nor prints on `SessionStart`; the git guard is unaffected, and `ledger sweep` and `doctor` still sweep |
 
-The guard imports nothing from this package — it is one file copied into a project — so the value is **substituted into the script** at `rules --hooks` time, exactly the way the agent definitions get theirs, and it reaches a session on the next `rules --hooks`, not before:
+The guard is one file copied into a project, and it loads nothing from this package but the ledger sweep (`core/ledger.mjs`, from the package root rendered into it) — so the value is **substituted into the script** at `rules --hooks` time, exactly the way the agent definitions get theirs, and it reaches a session on the next `rules --hooks`, not before:
 
 ```bash
 omelette-fleet show handoff                 # the value and where it came from
@@ -208,16 +209,50 @@ Validation is the same as everywhere else: an invalid value is a warning (`omele
 
 ## The handoff hooks
 
-What `omelette-fleet rules --hooks` does for the ledger, event by event. The rules file keeps only the obligations; the mechanism is here. Both handlers read `<session cwd>/.omelette/ledger-*.md` — the directory the session runs in, not the repository the plan is about — so **a ledger kept in another repository gets neither the stamp nor the print**. None of it happens unless `.omelette/` holds a `ledger-*.md`: that file is the opt-in.
+What `omelette-fleet rules --hooks` does for the ledger, event by event. The rules file keeps only the obligations; the mechanism is here. Both handlers read `<session cwd>/.omelette/ledger-*.md` — the directory the session runs in, not the repository the plan is about — so **a ledger kept in another repository gets neither the stamp nor the print**. Nothing happens unless `.omelette/` exists: a ledger, the register or the backlog in it is the opt-in.
 
 | Event | What the guard does | Bounds and switch |
 |---|---|---|
-| `PreCompact` | Appends `## Compaction <ISO> (trigger: …) — re-read this ledger before continuing` to every ledger, announced compaction or not | Regular files only: a symlink or a FIFO named like a ledger is skipped. Silent when no ledger exists (nothing stamped, nothing announced); `handoff.enabled=false` turns it off |
-| `SessionStart`, matcher `compact` | Prints each ledger's **last handoff block** into the context that opens after the compaction, so the re-read is a paste rather than a search | Only for the source `compact`; 40 lines / 4 KB per ledger, 12 KB in all; `handoff.enabled=false` turns it off |
+| `PreCompact` | Runs the [sweep](#ledgers-and-the-decisions-register), then appends `## Compaction <ISO> (trigger: …) — re-read this ledger before continuing` to every ledger left open or untracked, announced compaction or not | Regular files only: a symlink or a FIFO named like a ledger is skipped. Silent when no ledger exists (nothing stamped, nothing announced); `handoff.enabled=false` turns it off |
+| `SessionStart`, every source | Runs the sweep on every source (`startup`, `resume`, `clear`, `compact`, `fork`). On `compact` and `clear` only, prints three sections in order, each under a one-line heading naming its file: the **last handoff block** of each open ledger, then of each untracked one (`--- <ledger name> · last handoff ---`); the decisions register (`--- <register path> · decisions register ---`); the first table of `.omelette/backlog.md` (`--- .omelette/backlog.md · first table ---`). Control characters in a file name are shown escaped in its heading | Sweep: 2 s per git call, fail-soft (an error is one stderr line); the guard loads the sweep under a 2 s clock, so an import that hangs or fails is one stderr line and the stamp and print still happen. Print: 40 lines / 4 KB per ledger, 12 KB in all (the register 6 KB from its tail and the backlog table 2 KB inside it), a section past the cap dropped whole; `handoff.enabled=false` turns it off |
 
 **What the hooks do not do.** They stamp and they print the block you wrote. Nothing measures the context and nothing holds a turn: over five compactions the nudge, the gate and the summary rescued nothing the session had not written itself ([MEASUREMENTS](MEASUREMENTS.md#the-handoff-hooks-over-five-compactions)); an operator whose `settings.json` still wires `PostToolUse`, `Stop` or `PostCompact` to the guard gets exit 0 and a `doctor` line naming the entries to remove.
 
 A changed value reaches a session only through a re-render — `omelette-fleet set handoff.enabled=false && omelette-fleet rules --hooks` — because the value is substituted into the script ([Handoff settings](#handoff-settings)).
+
+## Ledgers and the decisions register
+
+A ledger belongs to a branch. Its first lines carry `branch: <name>`: it is **open** while that branch exists as a local branch, **closed** once the branch is gone, and **untracked** without the line — every ledger written before 1.7.3. `branch: main` is a standing ledger and never closes. Only `.omelette/ledger-*.md` in the root is read; nothing reads `.omelette/archive/`.
+
+| Command | What it does |
+|---|---|
+| `omelette-fleet ledger open <plan>` | Writes `.omelette/ledger-<plan>.md` headed `branch: <the current branch>`. Refuses a detached HEAD and a file that exists |
+| `omelette-fleet ledger sweep [--dry-run]` | For each closed ledger, in name order: copies every `Ruling(binding):` line (fenced code and an inline-quoted `` `Ruling(binding):` `` excluded) to the register, appends `closed <ISO> by sweep — <n> binding rulings → <register>` to the ledger, and moves it to `.omelette/archive/` — never over a file of the same name, which is reported and left in place. Lists each untracked ledger and leaves it alone. One line per action, and always exit 0, even when it refuses (the refusal is the line, not the exit code); without git, outside a repository or with a refused `register:` line it says so once and writes nothing; `--dry-run` prints the same lines and writes nothing. A `.omelette/` that is the fleet home itself (`~/.omelette`, or `OMELETTE_HOME`) is not a project: the sweep reports nothing there |
+
+**Nobody has to call the sweep.** The guard runs it at every `SessionStart` and before the `PreCompact` stamp; `doctor` runs it and prints its lines. The command is there for the operator and for the rules file.
+
+**The register** is `.omelette/decisions.md`. One line per binding ruling:
+
+- ``- <path>:<line> · `<fragment>` · <date> · <plan> · Ruling(binding): …`` when the ruling ends in a pointer — moved to the front, so `omelette-fleet check <register>` verifies it;
+- `- <date> · <plan> · Ruling(binding): …` without one.
+
+The date is the ledger line's own leading date, else the sweep's. A line that no longer binds gets `superseded by …` appended; nothing deletes one. A line counts as struck when it contains `superseded by` anywhere in it, case-insensitive, not only at the end; `doctor`'s `struck` count uses the same rule.
+
+**Moving the register.** No key in `fleet.config.json` moves it: that file is yours, global to every project. The register's **first line** may: `register: docs/DECISIONS.md` sends the sweep, the print and `doctor` to that file instead. A refusal is one line, `register: <value> refused (<reason>)`, and the sweep writes nothing. What is refused:
+
+| Value | Reason |
+|---|---|
+| empty; control characters in the value | not a path |
+| an absolute path; a path with `..`; a path outside the project | must be a relative path inside the project |
+| a symlink | never followed |
+| a target inside `.git/`, inside `.omelette/`, or the register file itself | judged by inode, so a symlinked directory or a different letter case does not slip past |
+
+| `doctor` prints | When |
+|---|---|
+| `ledgers       1 open (ledger-1.7.3.md → feat/1.7.3), 0 untracked, 22 archived` | `.omelette/` exists; counted after doctor's own sweep, whose lines follow it (`closed: …`, `untracked: …`, `register: … refused (…) — nothing swept`). No `ledgers` or `decisions` row for the fleet home |
+| `decisions     docs/DECISIONS.md (via .omelette/decisions.md) — 14 lines, 0 struck, 0 stale pointers` | the register: its entry lines, the struck ones, and the pointers of the live ones `check` does not find `ok` |
+| `warning: 2 open ledgers — …` | more than one open ledger; a standing one is not counted |
+| `warning: 31 unstruck lines — …` | more than 30 live lines; no cap is enforced |
 
 ## Keys
 

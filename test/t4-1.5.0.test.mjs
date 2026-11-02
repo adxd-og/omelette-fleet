@@ -42,7 +42,7 @@ test('SECURITY: the guard section names no transcript read, no state file and no
   // Re-pinned in 1.6.1 Task 5a (plan Task 5, F1): the per-event bullets became
   // the rows of one event table; the same facts, one row each.
   assert.match(guard, /^\| `PreCompact` \|/m);
-  assert.match(guard, /^\| `SessionStart` \(`compact`\) \|[^\n]*1 MiB[^\n]*40 lines \/ 4 KB per ledger and 12 KB in all/m);
+  assert.match(guard, /^\| `SessionStart` \(every source\) \|[^\n]*1 MiB[^\n]*40 lines \/ 4 KB per ledger, the register 6 KB from its tail, the backlog table 2 KB, 12 KB in all/m);
   assert.match(guard, /It reads no transcript, keeps no state file/);
 });
 
