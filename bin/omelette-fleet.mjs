@@ -54,6 +54,7 @@ import { visible } from '../core/log.mjs';
 import { callUnitServer } from '../core/client.mjs';
 import { AGENT_SETTINGS_SCHEMA, HANDOFF_SCHEMA, KEY_SCHEMA, SETTINGS_SCHEMA, WORKFLOW_SCHEMA, coerce, configPath, fleetHome, fleetSettings, handoffSettings, unitConfig, workflowSettings, writeFleetConfig } from '../core/config.mjs';
 import { changedSince, checkPointers, parseCommit, parsePointers, readBoundedFile } from '../core/check.mjs';
+import { PLAN_NAME, openLedger, sweepLedgers } from '../core/ledger.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResultHeader } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
 import { HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, RETIRED_HOOK_EVENTS, agentSettings, contractFor, hookSettingsSnippet, parseHookHandoff, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets, shellWord } from '../core/rules.mjs';
@@ -267,6 +268,22 @@ const COMMANDS = {
       'unreadable one, over 1 MiB, over 2000 pointer lines, a bad flag, a',
       'root that is not a directory. A target over 2 MiB is too-large.',
       'Reads; writes nothing.',
+    ],
+  },
+  ledger: {
+    args: 'open <plan> | sweep [--dry-run]',
+    body: [
+      'open writes .omelette/ledger-<plan>.md headed `branch: <the current',
+      'branch>` — refused on a detached HEAD or when the file exists. A ledger',
+      'is open while its branch exists, closed once it is deleted; `branch:',
+      'main` never closes. sweep takes every closed ledger in .omelette/: its',
+      '`Ruling(binding):` lines go to the decisions register',
+      '(.omelette/decisions.md, or the file its first line `register: <path>`',
+      'names), a `closed` line goes to the ledger, and the ledger moves to',
+      '.omelette/archive/ — never over a file of the same name. A ledger',
+      'without a `branch:` line is listed and left alone. One line per',
+      'action, exit 0; --dry-run prints the same lines and writes nothing.',
+      'The guard runs the sweep at every session start, and doctor runs it too.',
     ],
   },
 };
@@ -3557,6 +3574,43 @@ function cmdCheck(argv) {
   return broken || short || (flags.strict && (counts.stale || unchecked)) ? 1 : 0;
 }
 
+/**
+ * `ledger open <plan>` / `ledger sweep [--dry-run]`: thin over core/ledger.mjs.
+ * Exit 0 on success, 1 when open is refused, 2 on a usage error; the sweep
+ * always exits 0 and says what it did, one line per action.
+ */
+function cmdLedger(argv) {
+  const [sub, ...rest] = argv;
+  const usage = (e) => { err(`omelette-fleet ledger: ${e}`); return 2; };
+  if (sub === undefined) return usage(`usage: omelette-fleet ledger ${COMMANDS.ledger.args}`);
+  if (sub === 'open') {
+    const { positional, errors } = parseArgv(rest);
+    if (errors.length) { errors.forEach((e) => err(`omelette-fleet ledger: ${e}`)); return 2; }
+    const [plan, extra] = positional;
+    if (plan === undefined) return usage('usage: omelette-fleet ledger open <plan>');
+    if (positional.length > 1) return usage(`unexpected argument: ${visible(extra)}`);
+    if (!PLAN_NAME.test(plan)) {
+      err(`omelette-fleet ledger open: plan name "${visible(plan)}" must start with a letter or digit and hold only letters, digits, ".", "_" or "-"`);
+      return 2;
+    }
+    const r = openLedger(process.cwd(), plan);
+    if (r.error) { err(`omelette-fleet ledger open: ${r.error}`); return 1; }
+    out(`opened ${r.rel} (branch: ${visible(r.branch)})`);
+    return 0;
+  }
+  if (sub === 'sweep') {
+    const { flags, positional, errors } = parseArgv(rest, { booleans: ['dry-run'] });
+    if (errors.length) { errors.forEach((e) => err(`omelette-fleet ledger: ${e}`)); return 2; }
+    if (positional.length) return usage(`unexpected argument: ${visible(positional[0])}`);
+    const r = sweepLedgers(process.cwd(), { dryRun: !!flags.dryRun });
+    if (r.lines.length) r.lines.forEach((line) => out(line));
+    else out('sweep: nothing to do');
+    if (flags.dryRun) out('dry run — nothing written');
+    return 0;
+  }
+  return usage(`unknown subcommand "${visible(sub)}"`);
+}
+
 // ─── dispatch ────────────────────────────────────────────────────────────────
 
 async function main(argv) {
@@ -3577,9 +3631,10 @@ async function main(argv) {
     case 'call': return cmdCall(rest);
     case 'results': return cmdResults(rest);
     case 'check': return cmdCheck(rest);
+    case 'ledger': return cmdLedger(rest);
     default:
       err(`omelette-fleet: unknown command "${cmd}"`);
-      err('commands: install, uninstall, update, rules, doctor, show, set, call, results, check — `omelette-fleet --help` for the full usage.');
+      err('commands: install, uninstall, update, rules, doctor, show, set, call, results, check, ledger — `omelette-fleet --help` for the full usage.');
       return 1;
   }
 }
