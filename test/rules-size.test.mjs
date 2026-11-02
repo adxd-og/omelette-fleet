@@ -71,14 +71,13 @@ const HEADINGS = [
 /** The two bullets test/evidence-pointers.test.mjs pins, byte for byte as 1.1.0 shipped them. */
 const EVIDENCE = '- **Evidence travels with pointers.** Coder and tester reports come as `TASK / FINDINGS / DIFF / TEST RESULTS / OPEN QUESTIONS`, each finding a pointer line — `path:line` (relative to the project root, one line) · a verbatim fragment in backticks · the claim. `omelette-fleet check <file>` verifies the pointers: check before you trust.';
 
-/**
- * The five obligations the three hook bullets carried, each by its full
- * sentence as the 1.1.0 text words it (a sentence that opened mid-bullet
- * gains its capital letter, nothing else), and each a bullet of its own.
- */
+/** The ledger obligations, each by its full sentence (1.7.3 rewrote three and added two). */
 const DUTIES = [
-  "**After a compaction or a `/clear`, re-read the ledger before doing anything else.** At a goal's boundary — a release out, a new plan next — write the handoff and suggest `/clear` to the operator.",
-  "The hooks reach only this repository's ledger and miss some compactions and every `/clear`: the handoff blocks are yours to write; the hook is a net, not a replacement.",
+  "**Keep a ledger from the first step of a plan**, one line per event: `omelette-fleet ledger open <plan>` writes `<project>/.omelette/ledger-<plan>.md` headed `branch: <the current branch>` (or write that line by hand; add `.omelette/` to `.gitignore`). A ledger is open while its branch exists and closed once the branch is deleted; `branch: main` never closes.",
+  "**Mark a binding ruling when you write it:** `Ruling(binding): <what> — <why> — <cost if wrong>` for a decision that outlives its plan, constrains later work and names the cost of being wrong; one line of about 200 characters, ending in a pointer (`path:line` · `fragment`) where one exists. Plain `Ruling:` stays in its ledger.",
+  "**After a compaction or a `/clear`, read in order before doing anything else:** the open ledger's last handoff, the decisions register, the backlog's map — the hook prints all three. At a goal's boundary — a release out, a new plan next — write the handoff, delete the merged branch, and suggest `/clear` to the operator.",
+  "**A plan closes when its branch is merged and deleted.** `omelette-fleet ledger sweep` does the rest, and the hook runs it at every session start: the binding rulings go to the register (`.omelette/decisions.md`, or the file its `register:` line names), the ledger is marked closed and moves to `.omelette/archive/`. A register line that stops binding gets `superseded by …` appended, never deleted.",
+  "The hooks reach only this repository's `.omelette/` and miss some compactions: the handoff blocks are yours to write; the hook is a net, not a replacement.",
 ];
 
 // 1.3.0 P1: 13 100 -> 13 510 — the measured render with the reviewer's rules
@@ -97,10 +96,11 @@ const DUTIES = [
 // 1.7.1: 14 590 -> 14 700 — the tie-breaker row (+33) and the /clear duty at a
 // goal's boundary (operator, 2026-10-16; +82 net after the hooks line was
 // tightened; the review fixes' tester line +36): 14 643 / 14 611, plus headroom.
-test('the rendered rules file is at most 14 700 characters under either merge policy', () => {
+// 1.7.3: 14 700 -> 15 750 — the ledger lifecycle: `ledger open`, the binding mark, the read order after a /clear, the close by sweep (+1 004: 15 647 / 15 615), plus headroom.
+test('the rendered rules file is at most 15 750 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 14700, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 15750, `${merge}: ${text.length} characters`);
   }
 });
 

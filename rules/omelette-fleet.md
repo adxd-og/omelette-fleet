@@ -23,14 +23,16 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 
 ## Ledger and handoff
 
-- **Keep a ledger from the first step of a plan**, one line per event: `<project>/.omelette/ledger-<plan>.md` (add `.omelette/` to `.gitignore`), or wherever this project already keeps one — the rule is the file, not the path.
+- **Keep a ledger from the first step of a plan**, one line per event: `omelette-fleet ledger open <plan>` writes `<project>/.omelette/ledger-<plan>.md` headed `branch: <the current branch>` (or write that line by hand; add `.omelette/` to `.gitignore`). A ledger is open while its branch exists and closed once the branch is deleted; `branch: main` never closes.
 - Write every decision as `Ruling: <what> — <why> — <cost if wrong>`, and mark each task complete with its commit.
+- **Mark a binding ruling when you write it:** `Ruling(binding): <what> — <why> — <cost if wrong>` for a decision that outlives its plan, constrains later work and names the cost of being wrong; one line of about 200 characters, ending in a pointer (`path:line` · `fragment`) where one exists. Plain `Ruling:` stays in its ledger.
 - **Tag what a line is, and never edit a wrong one.** A claim by a unit, a coder or a tester is `candidate` until the orchestrator verified it; then `verified` or `rejected`. A ruling that turned out wrong stays in place and gets a `Superseded by:` line — the reader after a compaction sees what was decided, why it changed, and what it cost.
 - **Close a plan with its review yield.** One line, `review yield: <findings> found / <accepted> accepted / <rejected> rejected — <the two or three that mattered>`. It is the cheap measure of what the reviews were worth; keep it honest.
 - **Before a compaction** — announced or suspected — **and at every natural pause, append a handoff block**: where the work stands, open findings, agents in flight, next action.
-- **After a compaction or a `/clear`, re-read the ledger before doing anything else.** At a goal's boundary — a release out, a new plan next — write the handoff and suggest `/clear` to the operator.
-- `omelette-fleet rules --hooks` wires the ledger hooks, which say nothing unless `.omelette/` holds a `ledger-*.md`; how each one works: `docs/CONFIG.md`, "The handoff hooks".
-- The hooks reach only this repository's ledger and miss some compactions and every `/clear`: the handoff blocks are yours to write; the hook is a net, not a replacement.
+- **After a compaction or a `/clear`, read in order before doing anything else:** the open ledger's last handoff, the decisions register, the backlog's map — the hook prints all three. At a goal's boundary — a release out, a new plan next — write the handoff, delete the merged branch, and suggest `/clear` to the operator.
+- **A plan closes when its branch is merged and deleted.** `omelette-fleet ledger sweep` does the rest, and the hook runs it at every session start: the binding rulings go to the register (`.omelette/decisions.md`, or the file its `register:` line names), the ledger is marked closed and moves to `.omelette/archive/`. A register line that stops binding gets `superseded by …` appended, never deleted.
+- `omelette-fleet rules --hooks` wires the ledger hooks, which say nothing unless `.omelette/` holds a ledger, the register or the backlog; how each one works: `docs/CONFIG.md`, "The handoff hooks".
+- The hooks reach only this repository's `.omelette/` and miss some compactions: the handoff blocks are yours to write; the hook is a net, not a replacement.
 
 ## Tester flow
 
