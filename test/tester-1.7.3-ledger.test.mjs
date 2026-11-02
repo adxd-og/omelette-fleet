@@ -290,3 +290,23 @@ test('readRegisterPath: a redirect into .git is refused, whether the file exists
     assert.deepEqual(readRegisterPath(p.dir), { error: `register: ${v} refused (inside .git)` }, v);
   }
 });
+
+test('a register redirect into .omelette/ is refused, a ledger or a not-yet-made archive/ alike; the default register without a redirect still reads', { skip: POSIX || GIT_SKIP }, () => {
+  const p = project();
+  for (const v of ['.omelette/ledger-x.md', '.omelette/archive/x.md', './.omelette/sub/y.md']) {
+    p.write('.omelette/decisions.md', `register: ${v}\n`);
+    assert.deepEqual(readRegisterPath(p.dir), { error: `register: ${v} refused (inside .omelette)` }, v);
+  }
+  mkdirSync(join(p.dir, '.omelette', 'archive'), { recursive: true });
+  p.write('.omelette/decisions.md', 'register: .omelette/archive/x.md\n');
+  assert.deepEqual(readRegisterPath(p.dir), { error: 'register: .omelette/archive/x.md refused (inside .omelette)' });
+  // No redirect: the default path, with and without the file present.
+  p.write('.omelette/decisions.md', '- 2026-10-02 · plan · a ruling\n');
+  assert.deepEqual(readRegisterPath(p.dir), { path: join(p.dir, '.omelette', 'decisions.md'), rel: '.omelette/decisions.md', via: null });
+  const q = project();
+  assert.deepEqual(readRegisterPath(q.dir), { path: join(q.dir, '.omelette', 'decisions.md'), rel: '.omelette/decisions.md', via: null });
+  // A redirect elsewhere in the project is still followed.
+  q.write('.omelette/decisions.md', 'register: docs/DECISIONS.md\n');
+  q.write('docs/DECISIONS.md', '');
+  assert.equal(readRegisterPath(q.dir).rel, 'docs/DECISIONS.md');
+});

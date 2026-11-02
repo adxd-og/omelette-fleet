@@ -7,7 +7,11 @@
  * and to the decisions register.
  */
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, realpathSync, writeSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync,
+  unlinkSync, writeFileSync, writeSync,
+} from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { gitChildEnv, readBoundedFile } from './check.mjs';
 import { visible } from './log.mjs';
@@ -281,6 +285,7 @@ export function readRegisterPath(projectDir) {
   const rel = relative(projectDir, target).split(sep).join('/');
   if (rel === REGISTER_DEFAULT) return refuse('points at itself');
   if (rel === '.git' || rel.startsWith('.git/')) return refuse('inside .git');
+  if (rel === '.omelette' || rel.startsWith('.omelette/')) return refuse('inside .omelette');
   let realDir;
   try {
     realDir = realpathSync(dirname(target));
@@ -319,4 +324,197 @@ export function readRegisterPath(projectDir) {
     }
   }
   return { path: target, rel, via: REGISTER_DEFAULT };
+}
+
+const REGISTER_READ_MAX = 4 * 1024 * 1024;
+const NOFOLLOW = constants.O_NOFOLLOW || 0;
+const NONBLOCK = constants.O_NONBLOCK || 0;
+const READ_FLAGS = constants.O_RDONLY | NOFOLLOW | NONBLOCK;
+const APPEND_FLAGS = constants.O_WRONLY | constants.O_APPEND | NOFOLLOW | NONBLOCK;
+
+/** An Error whose code goes into the line's parenthesis. */
+const coded = (code) => Object.assign(new Error(code), { code });
+
+/**
+ * A file read whole through its own fd: lstat, an O_NOFOLLOW | O_NONBLOCK open,
+ * fstat on the fd. `single` also asks for one name (nlink 1). Throws.
+ */
+function readRegular(path, { maxBytes = Infinity, single = false } = {}) {
+  if (!lstatSync(path).isFile()) throw coded('EINVAL');
+  const fd = openSync(path, READ_FLAGS);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || (single && st.nlink !== 1)) throw coded('EINVAL');
+    if (st.size > maxBytes) throw coded('EFBIG');
+    return { text: readFileSync(fd, 'utf8'), mode: st.mode & 0o777 };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The register's text and mode; a register not written yet is empty, 0644. Throws. */
+function readRegister(path) {
+  try {
+    return readRegular(path, { maxBytes: REGISTER_READ_MAX });
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { text: '', mode: 0o644 };
+    throw e;
+  }
+}
+
+/** `data` through `<target>.<pid>.<12 hex>.tmp`, opened `wx`, renamed over the target. Throws. */
+function replaceFile(target, data, mode) {
+  const tmp = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  const fd = openSync(tmp, 'wx', mode); // a failed open: the tmp is not ours, nothing to clean
+  let open = true;
+  try {
+    writeFileSync(fd, data);
+    closeSync(fd);
+    open = false;
+    renameSync(tmp, target);
+  } catch (e) {
+    if (open) { try { closeSync(fd); } catch { /* gone */ } }
+    try { unlinkSync(tmp); } catch { /* gone */ }
+    throw e;
+  }
+}
+
+/** One O_APPEND write to a ledger that is a single regular file. Throws. */
+function appendToLedger(path, text) {
+  const fd = openSync(path, APPEND_FLAGS);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.nlink !== 1) throw coded('EINVAL');
+    writeFileSync(fd, text);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Whether `path` is taken: anything lstat can see, or a name lstat cannot vouch for. */
+function taken(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (e) {
+    return !e || e.code !== 'ENOENT';
+  }
+}
+
+function gitLine(error, timeoutMs) {
+  if (error === 'no-git') return 'sweep: git not found on PATH — nothing swept';
+  if (error === 'not-a-repo') return 'sweep: not inside a git repository — nothing swept';
+  if (error === 'timeout') return `sweep: git show-ref did not answer within ${timeoutMs / 1000} s — nothing swept`;
+  return 'sweep: git show-ref failed — nothing swept';
+}
+
+/**
+ * `ledger sweep`: every closed root ledger's binding rulings go to the
+ * register (dated, with the plan), the ledger gets a `closed` line and moves
+ * to `.omelette/archive/`. Every precondition is settled before the first
+ * write; the register never gains a line it already holds, so a second run, or
+ * one cut short, adds nothing; a move never overwrites. `dryRun` returns the
+ * same lines and writes nothing.
+ * @returns {{lines:string[], error:string|null, ledgers:object[], archived:number,
+ *   register:{path:string, rel:string, via:string|null}|{error:string}|null}}
+ */
+export function sweepLedgers(projectDir, { dryRun = false, now = new Date(), env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+  const listed = listLedgers(projectDir, { env, timeoutMs });
+  if (listed.absent) return { lines: [], error: null, ledgers: [], archived: 0, register: readRegisterPath(projectDir) };
+  if (listed.error === 'not-a-directory') {
+    const L = 'sweep: .omelette is not a directory of this project — nothing swept';
+    return { lines: [L], error: L, ledgers: [], archived: 0, register: null };
+  }
+  const register = readRegisterPath(projectDir);
+  const stop = (L) => ({ lines: [L], error: L, ledgers: listed.ledgers, archived: listed.archived, register });
+  if (listed.error) return stop(gitLine(listed.error, timeoutMs));
+  if (register.error) return stop(`${register.error} — nothing swept`);
+  const dir = join(projectDir, '.omelette');
+  const archive = join(dir, 'archive');
+  if (listed.ledgers.some((l) => l.state === 'closed')) {
+    let ok = true;
+    try {
+      ok = lstatSync(archive).isDirectory();
+    } catch (e) {
+      ok = !!e && e.code === 'ENOENT';
+    }
+    if (!ok) return stop('sweep: .omelette/archive is not a directory — nothing swept');
+  }
+
+  // Phase B, read only: one slot per ledger, in name order.
+  const slots = [];
+  const pending = [];
+  const collision = (name) => `collision: ${visible(name)} — .omelette/archive/${visible(name)} exists; left in place`;
+  listed.ledgers.forEach((l, i) => {
+    if (l.state === 'untracked') {
+      slots[i] = `untracked: ${visible(l.name)} (no branch: header — add one, or move it to archive/ by hand)`;
+      return;
+    }
+    if (l.state !== 'closed') return;
+    if (taken(join(archive, l.name))) {
+      slots[i] = collision(l.name);
+      return;
+    }
+    const src = join(dir, l.name);
+    let text;
+    try {
+      ({ text } = readRegular(src, { single: true }));
+    } catch {
+      slots[i] = `skipped: ${visible(l.name)} (closed, but not a single regular file — move it by hand)`;
+      return;
+    }
+    pending.push({ i, name: l.name, plan: l.plan, branch: l.branch, src, text, rulings: harvestBindings(text) });
+  });
+
+  // Phase C, the writes: the register first, then each ledger's closed line and move.
+  if (!dryRun && pending.length) {
+    const day = now.toISOString().slice(0, 10);
+    const candidates = pending.flatMap((p) => p.rulings.map(({ ruling, date }) => registerLine({ ruling, date: date ?? day, plan: p.plan })));
+    if (candidates.length) {
+      try {
+        const { text, mode } = readRegister(register.path);
+        // A line the register already holds, or one earlier in this batch, is not appended again.
+        const held = new Set(text.split(/\r?\n/));
+        const fresh = [];
+        for (const line of candidates) {
+          if (held.has(line)) continue;
+          held.add(line);
+          fresh.push(line);
+        }
+        if (fresh.length) replaceFile(register.path, `${text}${text && !text.endsWith('\n') ? '\n' : ''}${fresh.join('\n')}\n`, mode);
+      } catch (e) {
+        return stop(`register: cannot write ${visible(register.rel)} (${(e && e.code) || 'error'}) — nothing swept`);
+      }
+    }
+  }
+  const moved = new Set();
+  for (const p of pending) {
+    const n = p.rulings.length;
+    const s = n === 1 ? '' : 's';
+    const head = `closed: ${visible(p.name)} (${visible(p.branch)} gone) — ${n} binding ruling${s} → ${visible(register.rel)}`;
+    if (!dryRun) {
+      try {
+        // A retry after a failed move finds the closed line already there: the append is done once.
+        const last = p.text.trimEnd().split(/\r?\n/).pop() || '';
+        if (!/^closed \S+ by sweep — /.test(last)) {
+          appendToLedger(p.src, `${p.text.endsWith('\n') ? '' : '\n'}closed ${now.toISOString()} by sweep — ${n} binding ruling${s} → ${register.rel}\n`);
+        }
+        try { mkdirSync(archive); } catch (e) { if (!e || e.code !== 'EEXIST') throw e; }
+        linkSync(p.src, join(archive, p.name));
+        unlinkSync(p.src);
+      } catch (e) {
+        slots[p.i] = e && e.code === 'EEXIST' ? collision(p.name) : `${head}; not moved (${(e && e.code) || 'error'})`;
+        continue;
+      }
+    }
+    slots[p.i] = `${head}, moved to .omelette/archive/`;
+    moved.add(p.name);
+  }
+  return {
+    lines: slots.filter(Boolean),
+    error: null,
+    ledgers: listed.ledgers.filter((l) => !moved.has(l.name)),
+    archived: listed.archived + moved.size,
+    register,
+  };
 }
