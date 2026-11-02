@@ -23,7 +23,7 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 
 ## Ledger and handoff
 
-- **Keep a ledger from the first step of a plan**, one line per event: `omelette-fleet ledger open <plan>` writes `<project>/.omelette/ledger-<plan>.md` headed `branch: <the current branch>` (or write that line by hand; add `.omelette/` to `.gitignore`). A ledger is open while its branch exists and closed once the branch is deleted; `branch: main` never closes.
+- **Keep a ledger from the first step of a plan**, one line per event: `omelette-fleet ledger open <plan>` writes `<project>/.omelette/ledger-<plan>.md` headed `branch: <the current branch>` (add `.omelette/` to `.gitignore`). A ledger is open while its branch exists and closed once the branch is deleted; `branch: main` (or `master`, `trunk`) never closes.
 - Write every decision as `Ruling: <what> — <why> — <cost if wrong>`, and mark each task complete with its commit.
 - **Mark a binding ruling when you write it:** `Ruling(binding): <what> — <why> — <cost if wrong>` for a decision that outlives its plan, constrains later work and names the cost of being wrong; one line of about 200 characters, with a pointer (`path:line` · `fragment`, before the marker or at the end) where one exists. Plain `Ruling:` stays in its ledger.
 - **Tag what a line is, and never edit a wrong one.** A claim by a unit, a coder or a tester is `candidate` until the orchestrator verified it; then `verified` or `rejected`. A ruling that turned out wrong stays in place and gets a `Superseded by:` line — the reader after a compaction sees what was decided, why it changed, and what it cost.
