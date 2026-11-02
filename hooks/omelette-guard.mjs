@@ -1339,9 +1339,12 @@ function backlogSection(dir) {
  * A tail read says so, above the block, because it is not the whole file.
  *
  * Each block is bounded by lastHandoffBlock, and the print as a whole stops at
- * 12 KB: a section that does not fit is dropped WHOLE with everything after it,
- * and one truncation line says so, because half a handoff read as a whole one
- * is worse than a line saying it was left out.
+ * 12 KB. The register and the backlog are RESERVED first — each at its own cap,
+ * heading included — and the handoffs get only what is left, so a long list of
+ * ledgers never crowds out what was decided and what comes next: the first
+ * handoff that does not fit is dropped WHOLE with every handoff after it, and
+ * one truncation line says so where they stop, because half a handoff read as
+ * a whole one is worse than a line saying it was left out.
  *
  * Nothing to print is printed as nothing: no header, no blank line, exit 0 —
  * and nothing at all is read while `handoff.enabled` is false.
@@ -1364,21 +1367,33 @@ async function sessionStart(event) {
     try { register = (swept && swept.register) || mod.readRegisterPath(cwd); } catch { register = null; }
     if (!isObject(register)) register = { error: 'register: unreadable' };
   }
-  const sections = [
-    ...ledgerSections(found.dir, ledgerNames(found.dir), swept),
-    registerSection(register),
-    backlogSection(found.dir),
-  ].filter(Boolean);
-
+  const bytes = (s) => Buffer.byteLength(s, 'utf8');
+  const marker = `${TRUNCATED}\n`;
   const parts = [];
   let total = 0;
-  for (const section of sections) {
-    const part = `${parts.length ? '\n' : ''}${section}`;
-    const size = Buffer.byteLength(part, 'utf8');
-    if (total + size > HANDOFF_TOTAL_MAX) { parts.push(`${TRUNCATED}\n`); break; }
-    parts.push(part);
-    total += size;
-  }
+  let marked = false;
+  // Sections in order while they fit `limit`; the first that does not goes
+  // with the rest of `sections`, and ONE marker line says so — room made for
+  // it, if need be, by dropping the last section this call admitted.
+  const fill = (sections, limit) => {
+    const from = parts.length;
+    for (const section of sections) {
+      const part = `${parts.length ? '\n' : ''}${section}`;
+      if (total + bytes(part) <= limit) { parts.push(part); total += bytes(part); continue; }
+      if (!marked) {
+        while (parts.length > from && total + bytes(marker) > limit) total -= bytes(parts.pop());
+        parts.push(marker);
+        total += bytes(marker);
+        marked = true;
+      }
+      return;
+    }
+  };
+  // The register and the backlog first, each at its own cap with the blank
+  // line before it: the handoffs get what they leave, so both always fit.
+  const reserved = [registerSection(register), backlogSection(found.dir)].filter(Boolean);
+  fill(ledgerSections(found.dir, ledgerNames(found.dir), swept), HANDOFF_TOTAL_MAX - reserved.reduce((n, s) => n + bytes(s) + 1, 0));
+  fill(reserved, HANDOFF_TOTAL_MAX);
   if (parts.length) say(process.stdout, parts.join(''));
 }
 

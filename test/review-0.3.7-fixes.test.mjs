@@ -457,7 +457,9 @@ test('M: the README doctor sample shows the lines doctor actually prints, and OR
   const sample = doc('README.md').split('\n');
   const at = (prefix) => sample.findIndex((l) => l.startsWith(prefix));
   assert.ok(at('handoff  ') > 0, 'the sample block is still there');
-  assert.ok(at('contract  ') === at('handoff  ') + 1, 'contract follows handoff');
+  assert.ok(at('ledgers  ') === at('handoff  ') + 1, 'ledgers follows handoff (1.7.3)');
+  assert.ok(at('decisions  ') === at('ledgers  ') + 1, 'decisions follows ledgers');
+  assert.ok(at('contract  ') === at('decisions  ') + 1, 'contract follows decisions');
   assert.ok(at('merge policy  ') === at('contract  ') + 1, 'merge policy follows contract');
 });
 

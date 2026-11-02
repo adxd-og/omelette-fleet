@@ -242,7 +242,7 @@ test('the backlog table is kept to exactly 2 KB by whole lines: 2048 bytes fit, 
   assert.ok(!fire(g, start('clear'), p.dir).out.includes('later'), 'only the first table');
 });
 
-test('the 12 KB cap is exact: 12288 bytes print whole, one more byte drops the last section whole', () => {
+test('the 12 KB cap is exact: 12288 bytes print whole, one more byte drops the last handoff whole and keeps the register', () => {
   const g = guard();
   const p = project({ git: false });
   const block = ['## Handoff', ...Array.from({ length: 39 }, (_, i) => `${'h'.repeat(99)}${i % 10}`)].join('\n');
@@ -260,9 +260,10 @@ test('the 12 KB cap is exact: 12288 bytes print whole, one more byte drops the l
   assert.ok(exact.endsWith(`z${'z'.repeat(pad)}\n`), 'the register is whole at 12288');
   setRegister(pad + 1);
   const over = fire(g, start('compact'), p.dir).out;
-  assert.ok(!over.includes('decisions register'), 'the section that no longer fits is dropped whole');
-  assert.ok(over.endsWith('\n[… truncated]\n'));
-  assert.ok(over.includes('--- ledger-b.md · last handoff ---'));
+  assert.ok(bytes(over) <= 12288, `${bytes(over)}`);
+  assert.ok(!over.includes('--- ledger-b.md · last handoff ---'), 'the handoff that no longer fits is dropped whole');
+  assert.ok(over.includes(`${block}\n[… truncated]\n\n--- .omelette/decisions.md · decisions register ---\n`), 'ledger-a whole, then the marker, then the register');
+  assert.ok(over.endsWith(`z${'z'.repeat(pad + 1)}\n`), 'the register is whole');
 });
 
 test('a symlinked .omelette, decisions.md, backlog.md or register: target is not followed out of the project', () => {

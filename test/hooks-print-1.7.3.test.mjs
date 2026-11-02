@@ -96,7 +96,7 @@ test('the backlog\'s first table is bounded at 2 KB by whole lines; no backlog, 
   assert.equal(fire(g, start('clear'), p.dir).out, '', 'nothing to print is printed as nothing');
 });
 
-test('the 12 KB cap drops a whole section, never half of one', () => {
+test('the 12 KB cap drops a whole handoff section, never half of one, and never the register or the backlog', () => {
   const p = project({ git: false });
   const big = ['## Handoff', ...Array.from({ length: 39 }, (_, i) => `${'h'.repeat(99)}${i % 10}`)].join('\n');
   p.write('.omelette/ledger-a.md', big);
@@ -104,11 +104,10 @@ test('the 12 KB cap drops a whole section, never half of one', () => {
   p.write('.omelette/decisions.md', Array.from({ length: 80 }, (_, i) => `- 2026-11-01 · p · Ruling(binding): ${i} ${'r'.repeat(90)}`).join('\n'));
   p.write('.omelette/backlog.md', '| # | What |\n|---|---|\n| 1 | next |\n');
   const r = fire(guard(), start('compact'), p.dir);
-  assert.ok(Buffer.byteLength(r.out, 'utf8') <= 12 * 1024 + 32, `${Buffer.byteLength(r.out, 'utf8')} bytes`);
-  assert.ok(r.out.includes('--- ledger-a.md · last handoff ---') && r.out.includes('--- ledger-b.md · last handoff ---'));
-  assert.equal(r.out.includes('decisions register'), false, 'the register past the cap is dropped whole');
-  assert.equal(r.out.includes('first table'), false);
-  assert.equal(r.out.split('\n').filter(Boolean).pop(), '[… truncated]');
+  assert.ok(Buffer.byteLength(r.out, 'utf8') <= 12 * 1024, `${Buffer.byteLength(r.out, 'utf8')} bytes`);
+  assert.ok(r.out.includes(`--- ledger-a.md · last handoff ---\n${big}\n[… truncated]\n\n--- .omelette/decisions.md · decisions register ---\n`), 'ledger-a whole, then the marker');
+  assert.equal(r.out.includes('--- ledger-b.md · last handoff ---'), false, 'the handoff past what the register and the backlog leave is dropped whole');
+  assert.ok(r.out.endsWith('--- .omelette/backlog.md · first table ---\n| # | What |\n|---|---|\n| 1 | next |\n'));
 });
 
 test('a register that cannot be printed says so in one heading: a refused register: line, a guard that cannot load the sweep', () => {

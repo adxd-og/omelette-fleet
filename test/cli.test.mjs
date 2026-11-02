@@ -2844,9 +2844,9 @@ test('doctor prints the handoff line from the RENDERED guard, not from the confi
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);
   assert.equal(rulesIn(proj, dir, ['--hooks']).status, 0);
-  // No ledger yet: the hook is installed and deliberately silent.
+  // No ledger yet: the hook is installed and has nothing to stamp.
   assert.match(doctorIn2(proj, dir),
-    /^handoff {7}stamp and print on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m,
+    /^handoff {7}stamp and print on · ledgers: none \(nothing to stamp — omelette-fleet ledger open <plan> starts one\)$/m,
     doctorIn2(proj, dir));
   // One ledger, and it is counted.
   mkdirSync(join(proj, '.omelette'));
@@ -2906,7 +2906,7 @@ test('doctor says so when the handoff line came from the GLOBAL guard rather tha
   assert.equal(rulesIn(proj, dir, ['--global', '--hooks']).status, 0);
   assert.match(
     doctorIn2(proj, dir),
-    /^handoff {7}stamp and print on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\) · the project guard carries no handoff block — showing the global guard's values$/m,
+    /^handoff {7}stamp and print on · ledgers: none \(nothing to stamp — omelette-fleet ledger open <plan> starts one\) · the project guard carries no handoff block — showing the global guard's values$/m,
     doctorIn2(proj, dir),
   );
 
@@ -2914,7 +2914,7 @@ test('doctor says so when the handoff line came from the GLOBAL guard rather tha
   // project's and the suffix goes away.
   assert.equal(rulesIn(proj, dir, ['--hooks', '--force']).status, 0);
   const own = doctorIn2(proj, dir);
-  assert.match(own, /^handoff {7}stamp and print on · ledgers: none \(hook silent — start \.omelette\/ledger-<plan>\.md\)$/m, own);
+  assert.match(own, /^handoff {7}stamp and print on · ledgers: none \(nothing to stamp — omelette-fleet ledger open <plan> starts one\)$/m, own);
   assert.doesNotMatch(own, /showing the global guard/, own);
 });
 

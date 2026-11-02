@@ -2309,15 +2309,16 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
   // line that did not say so would send the operator to re-render the project.
   const scope = fromGlobal ? ' · the project guard carries no handoff block — showing the global guard\'s values' : '';
 
-  // The ledger is the opt-in: with none, the hook stamps nothing and prints
-  // nothing, and an operator reading "stamp and print on" would expect otherwise.
+  // With no ledger the hook has nothing to stamp (it still prints the register
+  // and the backlog after a clear or a compaction), and an operator reading
+  // "stamp and print on" would expect otherwise.
   let ledgers = 0;
   try {
     const dir = join(cwd, '.omelette');
     const st = lstatSync(dir);
     if (st.isDirectory() && !st.isSymbolicLink()) ledgers = readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).length;
   } catch { /* absent is the normal case */ }
-  const found = ledgers ? `ledgers: ${ledgers}` : 'ledgers: none (hook silent — start .omelette/ledger-<plan>.md)';
+  const found = ledgers ? `ledgers: ${ledgers}` : 'ledgers: none (nothing to stamp — omelette-fleet ledger open <plan> starts one)';
   // A guard rendered before 1.5.0 still nudges, gates and summarises: its
   // `enabled` is not the 1.5.0 switch, and reading it as one would say "off"
   // about a script that is doing all three.

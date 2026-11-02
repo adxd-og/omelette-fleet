@@ -22,6 +22,8 @@ export const HEADER_LINES = 20;
 export const HEADER_READ_BYTES = 8192;
 export const GIT_TIMEOUT_MS = 2000;
 export const PLAN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** A ledger whose header names one of these is standing: never asked of git, never closed. */
+export const STANDING_BRANCHES = Object.freeze(['main', 'master', 'trunk']);
 
 const HEADER = /^branch:[ \t]*(\S+)[ \t]*$/;
 const BRANCH = /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*\.lock$)[A-Za-z0-9._\/-]+(?<![\/.])$/;
@@ -97,17 +99,17 @@ function classify(projectDir, name, opts, knownError) {
   const plan = m[1];
   const branch = parseLedgerHeader(text);
   if (branch === null) return { name, plan, state: 'untracked' };
-  if (branch === 'main') return { name, plan, state: 'standing', branch };
+  if (STANDING_BRANCHES.includes(branch)) return { name, plan, state: 'standing', branch };
   const found = knownError ? { error: knownError } : branchExists(projectDir, branch, opts);
   if (found.error) return { name, plan, state: 'unknown', branch, error: found.error };
   return { name, plan, state: found.exists ? 'open' : 'closed', branch };
 }
 
 /**
- * A ledger's state: `untracked` without a header, `standing` on main, `open`
- * while its branch exists, `closed` once it is gone, `unknown` (with the git
- * error) when git cannot say. null for a name that is not a ledger file or a
- * path that is not a regular file.
+ * A ledger's state: `untracked` without a header, `standing` on one of
+ * STANDING_BRANCHES, `open` while its branch exists, `closed` once it is gone,
+ * `unknown` (with the git error) when git cannot say. null for a name that is
+ * not a ledger file or a path that is not a regular file.
  */
 export function classifyLedger(projectDir, name, { env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
   return classify(projectDir, name, { env, timeoutMs }, null);
@@ -158,21 +160,27 @@ export function listLedgers(projectDir, { env = process.env, timeoutMs = GIT_TIM
 
 /**
  * `ledger open <plan>`: create `.omelette/ledger-<plan>.md` with the header of
- * the current branch. Never overwrites; refuses a detached HEAD.
+ * the current branch. Never overwrites; refuses a detached HEAD, and a plan
+ * whose ledger is already in `.omelette/archive/` (the sweep could never move
+ * this one there).
  * @returns {{rel:string, branch:string}|{error:string}}
  */
 export function openLedger(projectDir, plan, { env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
   if (typeof plan !== 'string' || !PLAN_NAME.test(plan)) {
     return { error: `plan name "${visible(plan)}" must start with a letter or digit and hold only letters, digits, ".", "_" or "-"` };
   }
-  const r = runGit(projectDir, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { env, timeoutMs, stdout: 'pipe' });
+  // The full ref, not `--short`: with a tag of the same name, `--short` prints
+  // `heads/<branch>`, a name no branch has, and the ledger would read as closed.
+  const r = runGit(projectDir, ['symbolic-ref', '--quiet', 'HEAD'], { env, timeoutMs, stdout: 'pipe' });
   const failure = gitFailure(r);
   if (failure === 'no-git') return { error: 'git not found on PATH' };
   if (failure === 'timeout') return { error: `git symbolic-ref did not answer within ${timeoutMs / 1000} s` };
   if (r.status === 1) return { error: "HEAD is detached — check out the plan's branch first" };
   if (r.status === 128 && /not a git repository/i.test(r.stderr || '')) return { error: 'not inside a git repository' };
   if (r.status !== 0) return { error: 'git symbolic-ref failed' };
-  const branch = String(r.stdout || '').trim();
+  const ref = String(r.stdout || '').trim();
+  if (!ref.startsWith('refs/heads/')) return { error: 'HEAD is not on a branch under refs/heads/' };
+  const branch = ref.slice('refs/heads/'.length);
   if (!BRANCH.test(branch)) return { error: `branch "${visible(branch)}" cannot be written as a ledger header` };
 
   const dir = join(projectDir, '.omelette');
@@ -186,6 +194,10 @@ export function openLedger(projectDir, plan, { env = process.env, timeoutMs = GI
   }
 
   const rel = `.omelette/ledger-${plan}.md`;
+  try {
+    lstatSync(join(dir, 'archive', `ledger-${plan}.md`)); // any type: the sweep's link() would collide with it
+    return { error: `${rel} would collide with .omelette/archive/ledger-${plan}.md once closed — pick another plan name` };
+  } catch { /* nothing archived under this name */ }
   let fd;
   try {
     fd = openSync(join(dir, `ledger-${plan}.md`), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
@@ -207,12 +219,15 @@ export const REGISTER_DEFAULT = '.omelette/decisions.md';
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
 const LINE_DATE = /^[ \t]*(?:[-*+][ \t]+)?(\d{4}-\d{2}-\d{2})\b/;
 const TRAILING_POINTER = /[ \t]+·[ \t]+(`?)([^\s`:]+):(\d+)\1[ \t]+·[ \t]+`([^`]+)`[ \t]*$/;
+/** The same pointer written BEFORE the marker: `<path>:<line> · `<fragment>` · ` right up to it, opening a word. */
+const LEADING_POINTER = /(?<![^ \t])(`?)([^\s`:]+):(\d+)\1[ \t]+·[ \t]+`([^`]+)`[ \t]+·[ \t]+$/;
 
 /**
  * The binding rulings of a ledger: every line outside fenced code that holds
  * the marker not quoted inline, from the marker to the end of the line, with
- * the date the line opens with (or null).
- * @returns {Array<{ruling:string, date:string|null}>}
+ * the date the line opens with (or null) and, only when the text right before
+ * the marker ends in one, the pointer written there.
+ * @returns {Array<{ruling:string, date:string|null, pointer?:{path:string, line:string, fragment:string}}>}
  */
 export function harvestBindings(text) {
   const out = [];
@@ -229,20 +244,35 @@ export function harvestBindings(text) {
     while (at > 0 && line[at - 1] === '`') at = line.indexOf(BINDING, at + 1);
     if (at < 0) continue;
     const d = LINE_DATE.exec(line);
-    out.push({ ruling: line.slice(at).trimEnd(), date: d ? d[1] : null });
+    const binding = { ruling: line.slice(at).trimEnd(), date: d ? d[1] : null };
+    const lead = LEADING_POINTER.exec(line.slice(0, at));
+    if (lead) binding.pointer = { path: lead[2], line: lead[3], fragment: lead[4] };
+    out.push(binding);
   }
   return out;
 }
 
 /**
  * The register line of one binding ruling. A trailing pointer moves to the
- * front in check's grammar; the text is written to a file, never escaped.
+ * front in check's grammar, and so does a leading one (harvestBindings'
+ * `pointer`) when there is no trailing one; the text is written to a file,
+ * never escaped.
  */
-export function registerLine({ ruling, date, plan }) {
+export function registerLine({ ruling, date, plan, pointer }) {
   const m = TRAILING_POINTER.exec(ruling);
-  if (!m) return `- ${date} · ${plan} · ${ruling}`;
-  return `- ${m[2]}:${m[3]} · \`${m[4]}\` · ${date} · ${plan} · ${ruling.slice(0, m.index)}`;
+  if (m) return `- ${m[2]}:${m[3]} · \`${m[4]}\` · ${date} · ${plan} · ${ruling.slice(0, m.index)}`;
+  if (pointer) return `- ${pointer.path}:${pointer.line} · \`${pointer.fragment}\` · ${date} · ${plan} · ${ruling}`;
+  return `- ${date} · ${plan} · ${ruling}`;
 }
+
+/**
+ * A register line without its date — the sweep's dedupe key, so a ruling
+ * restated undated (it takes the sweep's day) or swept again on another day is
+ * held once. The date is the one right before ` · <plan> · `, after the pointer
+ * when the line opens with one; any other line is its own key.
+ */
+const DATE_SEGMENT = /^(- (?:[^\s`:]+:\d+ · `[^`]+` · )?)\d{4}-\d{2}-\d{2} · /;
+const withoutDate = (line) => line.replace(DATE_SEGMENT, '$1');
 
 /** Whether `dir`, or an ancestor of it below `root`, is the project's `<name>` directory (dev+ino, not spelling). */
 function underProjectDir(projectDir, root, dir, name) {
@@ -431,9 +461,10 @@ function gitLine(error, timeoutMs) {
  * `ledger sweep`: every closed root ledger's binding rulings go to the
  * register (dated, with the plan), the ledger gets a `closed` line and moves
  * to `.omelette/archive/`. Every precondition is settled before the first
- * write; the register never gains a line it already holds, so a second run, or
- * one cut short, adds nothing; a move never overwrites. `dryRun` returns the
- * same lines and writes nothing.
+ * write; the register never gains a line it already holds, whatever that
+ * line's date, so a second run, or one cut short and retried on another day,
+ * adds nothing; a move never overwrites. `dryRun` returns the same lines and
+ * writes nothing.
  * @returns {{lines:string[], error:string|null, ledgers:object[], archived:number,
  *   register:{path:string, rel:string, via:string|null}|{error:string}|null}}
  */
@@ -488,16 +519,18 @@ export function sweepLedgers(projectDir, { dryRun = false, now = new Date(), env
   // Phase C, the writes: the register first, then each ledger's closed line and move.
   if (!dryRun && pending.length) {
     const day = now.toISOString().slice(0, 10);
-    const candidates = pending.flatMap((p) => p.rulings.map(({ ruling, date }) => registerLine({ ruling, date: date ?? day, plan: p.plan })));
+    const candidates = pending.flatMap((p) => p.rulings.map((b) => registerLine({ ...b, date: b.date ?? day, plan: p.plan })));
     if (candidates.length) {
       try {
         const { text, mode } = readRegister(register.path);
-        // A line the register already holds, or one earlier in this batch, is not appended again.
-        const held = new Set(text.split(/\r?\n/));
+        // A line the register already holds, or one earlier in this batch, is
+        // not appended again — compared without its date (withoutDate).
+        const held = new Set(text.split(/\r?\n/).map(withoutDate));
         const fresh = [];
         for (const line of candidates) {
-          if (held.has(line)) continue;
-          held.add(line);
+          const key = withoutDate(line);
+          if (held.has(key)) continue;
+          held.add(key);
           fresh.push(line);
         }
         if (fresh.length) replaceFile(register.path, `${text}${text && !text.endsWith('\n') ? '\n' : ''}${fresh.join('\n')}\n`, mode);

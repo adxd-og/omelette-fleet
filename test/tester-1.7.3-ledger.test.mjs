@@ -116,7 +116,7 @@ test('git is asked exactly two things, read-only, and every failure maps to its 
   assert.deepEqual(openLedger(p.dir, 'x', { env: g.env }), { error: 'not inside a git repository' });
   assert.deepEqual(g.calls(), [
     ['--no-optional-locks', 'show-ref', '--verify', '--quiet', 'refs/heads/feat/x'],
-    ['--no-optional-locks', 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+    ['--no-optional-locks', 'symbolic-ref', '--quiet', 'HEAD'],
   ]);
   g.mode('fail');
   assert.deepEqual(branchExists(p.dir, 'feat/x', { env: g.env }), { error: 'git-failed' });
