@@ -72,19 +72,18 @@ test('a pointer-first ledger line with no date takes the sweep\'s day and is ded
   assert.equal(p.read('.omelette/decisions.md'), `${line}\n`);
 });
 
-test('the date-free dedupe still keeps apart another plan, another pointer and another ruling', { skip: GIT_SKIP }, () => {
+test('the date-free dedupe still keeps apart another plan and another ruling — a moved pointer is the same ruling (session ruling on the re-review, N2)', { skip: GIT_SKIP }, () => {
   const p = project();
   p.write('.omelette/decisions.md', '- 2026-10-01 · alpha · Ruling(binding): same — cost: none\n- core/a.mjs:1 · `f` · 2026-10-01 · alpha · Ruling(binding): pinned — cost: none\n');
   p.write('.omelette/ledger-alpha.md', ledger('feat/alpha',
     '- 2026-11-01 Ruling(binding): same — cost: none',          // held: same plan, older date
-    '- 2026-11-01 Ruling(binding): pinned — cost: none · core/a.mjs:2 · `f`', // another line number: new
+    '- 2026-11-01 Ruling(binding): pinned — cost: none · core/a.mjs:2 · `f`', // another line number: the same ruling, held
     '- 2026-11-01 Ruling(binding): other — cost: none'));         // new
   p.write('.omelette/ledger-beta.md', ledger('feat/beta', '- 2026-11-01 Ruling(binding): same — cost: none')); // another plan: new
   sweepLedgers(p.dir, { now: DAY_1 });
   assert.equal(p.read('.omelette/decisions.md'), [
     '- 2026-10-01 · alpha · Ruling(binding): same — cost: none',
     '- core/a.mjs:1 · `f` · 2026-10-01 · alpha · Ruling(binding): pinned — cost: none',
-    '- core/a.mjs:2 · `f` · 2026-11-01 · alpha · Ruling(binding): pinned — cost: none',
     '- 2026-11-01 · alpha · Ruling(binding): other — cost: none',
     '- 2026-11-01 · beta · Ruling(binding): same — cost: none',
     '',

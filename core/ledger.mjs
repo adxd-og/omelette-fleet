@@ -266,13 +266,14 @@ export function registerLine({ ruling, date, plan, pointer }) {
 }
 
 /**
- * A register line without its date — the sweep's dedupe key, so a ruling
- * restated undated (it takes the sweep's day) or swept again on another day is
- * held once. The date is the one right before ` · <plan> · `, after the pointer
+ * A register line without its date and its pointer — the sweep's dedupe key,
+ * so a ruling restated undated (it takes the sweep's day), restated without
+ * its pointer in a handoff block, or swept again on another day is held once;
+ * the first copy harvested, the dated log line, keeps the pointer. The date is the one right before ` · <plan> · `, after the pointer
  * when the line opens with one; any other line is its own key.
  */
 const DATE_SEGMENT = /^(- (?:[^\s`:]+:\d+ · `[^`]+` · )?)\d{4}-\d{2}-\d{2} · /;
-const withoutDate = (line) => line.replace(DATE_SEGMENT, '$1');
+const withoutDate = (line) => line.replace(DATE_SEGMENT, '- ');
 
 /** Whether `dir`, or an ancestor of it below `root`, is the project's `<name>` directory (dev+ino, not spelling). */
 function underProjectDir(projectDir, root, dir, name) {

@@ -155,6 +155,17 @@ test('the sweep dedupes on the line without its date: a ruling restated undated 
   ].join('\n'));
 });
 
+test('the dedupe ignores the pointer too: a pointer-first log line restated without its pointer in a handoff block is one register line, the pointed one', { skip: GIT_SKIP }, () => {
+  const p = project();
+  p.write('.omelette/ledger-gone.md', ledger('feat/gone',
+    '- 2026-10-02 core/a.mjs:3 · `const a` · Ruling(binding): X — Y — cost: Z',
+    '## Handoff',
+    'Ruling(binding): X — Y — cost: Z',
+  ));
+  sweepLedgers(p.dir, { now: DAY_1 });
+  assert.equal(p.read('.omelette/decisions.md'), '- core/a.mjs:3 · `const a` · 2026-10-02 · gone · Ruling(binding): X — Y — cost: Z\n');
+});
+
 test('a retry of the same ledger on a later day appends nothing: its undated rulings took the first sweep\'s day', { skip: GIT_SKIP }, () => {
   const p = project();
   p.write('.omelette/ledger-gone.md', ledger('feat/gone',
