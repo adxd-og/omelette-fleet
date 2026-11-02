@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -229,4 +229,51 @@ test('doctor: a refused register: line is reported even when git is also the fai
   const rows = doctor(bare).rows.join('\n');
   // The refusal rides the `decisions` row itself (the sweep stopped on git first, so no line above).
   assert.match(rows, /^decisions {5}register: \/etc\/passwd refused \(absolute path\)$/m, rows);
+});
+
+// ── second pass: mutants the first fifteen tests left alive ──────────────────
+
+test('doctor: ESC in the name of an open, a standing, a closed-collision and an unclassified ledger is escaped in the ledgers row', { skip: GIT_SKIP }, () => {
+  const p = project();
+  p.git(['branch', 'feat/o']);
+  p.write(`.omelette/ledger-o${ESC}[31m.md`, ledger('feat/o'));
+  p.write(`.omelette/ledger-s${ESC}[31m.md`, ledger('main'));
+  p.write(`.omelette/ledger-c${ESC}[31m.md`, ledger('feat/gone'));
+  p.write(`.omelette/archive/ledger-c${ESC}[31m.md`, '# earlier\n');
+  const d = doctor(p);
+  assert.match(d.rows[0], /^ledgers {7}1 open \(ledger-o.*\.md → feat\/o\), 1 standing \(ledger-s.*\.md\), 1 closed \(ledger-c.*\.md\), 0 untracked, 1 archived$/, d.rows[0]);
+  assert.ok(!d.out.includes(ESC), JSON.stringify(d.rows));
+
+  const bare = project({ git: false });
+  bare.write(`.omelette/ledger-u${ESC}[31m.md`, ledger('feat/x'));
+  const b = doctor(bare);
+  assert.match(b.rows[0], /1 unclassified \(ledger-u.*\.md\)/);
+  assert.ok(!b.out.includes(ESC), JSON.stringify(b.rows));
+});
+
+test('doctor: the ledgers row comes after the handoff row (the order the plan fixes)', { skip: GIT_SKIP }, () => {
+  const p = project();
+  const hooks = run(p, ['rules', '--hooks']);
+  assert.equal(hooks.code, 0, hooks.err);
+  p.write('.omelette/ledger-a.md', '# no header\n');
+  const out = run(p, ['doctor']).out;
+  const handoff = out.indexOf('\nhandoff ');
+  const ledgers = out.indexOf('\nledgers ');
+  assert.ok(handoff >= 0, `no handoff row:\n${out}`);
+  assert.ok(ledgers > handoff, 'ledgers row before the handoff row');
+});
+
+test('doctor and sweep in $HOME: a .omelette that is the fleet home is not a project — no rows, nothing swept (second-pass finding 1)', { skip: GIT_SKIP }, () => {
+  // The project IS the home: its .omelette/ is OMELETTE_HOME, with a closed ledger planted in it.
+  const p = project();
+  p.git(['branch', 'feat/gone']);
+  p.write('.omelette/ledger-gone.md', ledger('feat/gone', '- 2026-10-02 Ruling(binding): planted — in the fleet home — cost: none'));
+  p.git(['branch', '-D', 'feat/gone']);
+  const env = { PATH: process.env.PATH, HOME: p.dir, OMELETTE_HOME: join(p.dir, '.omelette'), OMELETTE_UPDATE_CHECK: '0' };
+  const d = spawnSync(process.execPath, [BIN, 'doctor'], { cwd: p.dir, encoding: 'utf8', env });
+  assert.doesNotMatch(d.stdout, /^(ledgers|decisions) /m, d.stdout);
+  const s = spawnSync(process.execPath, [BIN, 'ledger', 'sweep'], { cwd: p.dir, encoding: 'utf8', env });
+  assert.equal(s.status, 0);
+  assert.equal(s.stdout, 'sweep: nothing to do\n');
+  assert.ok(existsSync(join(p.dir, '.omelette', 'ledger-gone.md')), 'the planted ledger stays');
 });

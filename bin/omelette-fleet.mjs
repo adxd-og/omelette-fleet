@@ -2336,6 +2336,7 @@ function ledgerReport({ cwd = process.cwd(), env = process.env } = {}) {
     return ['ledgers       .omelette is not a directory of this project — nothing read'];
   }
   const r = sweepLedgers(cwd, { env });
+  if (r.absent) return []; // the fleet home under a project's name — not a project
   const by = (state) => r.ledgers.filter((l) => l.state === state);
   const [open, standing, closed, unknown, untracked] = ['open', 'standing', 'closed', 'unknown', 'untracked'].map(by);
   const names = (ls) => ls.map((l) => visible(l.name)).join(', ');

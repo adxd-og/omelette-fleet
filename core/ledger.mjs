@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { gitChildEnv, readBoundedFile } from './check.mjs';
+import { fleetHome } from './config.mjs';
 import { visible } from './log.mjs';
 
 export const LEDGER_FILE = /^ledger-(.+)\.md$/;
@@ -72,6 +73,15 @@ export function branchExists(projectDir, branch, { env = process.env, timeoutMs 
   return { error: 'git-failed' };
 }
 
+/** Whether `dir` is the fleet home itself (by real path; an unresolvable path is not). */
+function isFleetHome(dir, env) {
+  try {
+    return realpathSync(dir) === realpathSync(fleetHome(env));
+  } catch {
+    return false;
+  }
+}
+
 /** classifyLedger, with the git error an earlier ledger hit standing in for git. */
 function classify(projectDir, name, opts, knownError) {
   const m = LEDGER_FILE.exec(String(name));
@@ -119,6 +129,10 @@ export function listLedgers(projectDir, { env = process.env, timeoutMs = GIT_TIM
     return notDir;
   }
   if (st.isSymbolicLink() || !st.isDirectory()) return notDir;
+  // The fleet home (`~/.omelette` by default) is the operator's config
+  // directory, not a project's: a doctor or a session started in $HOME finds
+  // it under the same name and must not read or sweep it.
+  if (isFleetHome(dir, env)) return { ledgers: [], archived: 0, error: null, absent: true };
   let names;
   try {
     names = readdirSync(dir).filter((n) => LEDGER_FILE.test(n)).sort();
@@ -421,7 +435,7 @@ function gitLine(error, timeoutMs) {
  */
 export function sweepLedgers(projectDir, { dryRun = false, now = new Date(), env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
   const listed = listLedgers(projectDir, { env, timeoutMs });
-  if (listed.absent) return { lines: [], error: null, ledgers: [], archived: 0, register: readRegisterPath(projectDir) };
+  if (listed.absent) return { lines: [], error: null, ledgers: [], archived: 0, register: readRegisterPath(projectDir), absent: true };
   if (listed.error === 'not-a-directory') {
     const L = 'sweep: .omelette is not a directory of this project — nothing swept';
     return { lines: [L], error: L, ledgers: [], archived: 0, register: null };
