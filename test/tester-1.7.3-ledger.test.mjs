@@ -300,6 +300,14 @@ test('a register redirect into .omelette/ is refused, a ledger or a not-yet-made
   mkdirSync(join(p.dir, '.omelette', 'archive'), { recursive: true });
   p.write('.omelette/decisions.md', 'register: .omelette/archive/x.md\n');
   assert.deepEqual(readRegisterPath(p.dir), { error: 'register: .omelette/archive/x.md refused (inside .omelette)' });
+  // The same directory under another name — a symlink to .omelette, and one to
+  // a directory inside it — is refused by inode, not by spelling.
+  symlinkSync('.omelette', join(p.dir, 'om'));
+  symlinkSync(join('.omelette', 'archive'), join(p.dir, 'oa'));
+  for (const v of ['om/ledger-x.md', 'oa/x.md']) {
+    p.write('.omelette/decisions.md', `register: ${v}\n`);
+    assert.deepEqual(readRegisterPath(p.dir), { error: `register: ${v} refused (inside .omelette)` }, v);
+  }
   // No redirect: the default path, with and without the file present.
   p.write('.omelette/decisions.md', '- 2026-10-02 · plan · a ruling\n');
   assert.deepEqual(readRegisterPath(p.dir), { path: join(p.dir, '.omelette', 'decisions.md'), rel: '.omelette/decisions.md', via: null });

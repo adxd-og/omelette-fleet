@@ -230,11 +230,11 @@ export function registerLine({ ruling, date, plan }) {
   return `- ${m[2]}:${m[3]} · \`${m[4]}\` · ${date} · ${plan} · ${ruling.slice(0, m.index)}`;
 }
 
-/** Whether `dir`, or an ancestor of it below `root`, is the project's `.git` (dev+ino). */
-function sameAsGitDir(projectDir, root, dir) {
+/** Whether `dir`, or an ancestor of it below `root`, is the project's `<name>` directory (dev+ino, not spelling). */
+function underProjectDir(projectDir, root, dir, name) {
   let git;
   try {
-    git = lstatSync(join(projectDir, '.git'));
+    git = lstatSync(join(projectDir, name));
   } catch {
     return false;
   }
@@ -304,7 +304,8 @@ export function readRegisterPath(projectDir) {
   // ancestors up to the project root are compared with the repository's own
   // `.git` — a symlinked directory or another case on a case-insensitive
   // filesystem reaches the same inode under another name.
-  if (sameAsGitDir(projectDir, realRoot, realDir)) return refuse('inside .git');
+  if (underProjectDir(projectDir, realRoot, realDir, '.git')) return refuse('inside .git');
+  if (underProjectDir(projectDir, realRoot, realDir, '.omelette')) return refuse('inside .omelette');
   let st = null;
   try {
     st = lstatSync(target);
