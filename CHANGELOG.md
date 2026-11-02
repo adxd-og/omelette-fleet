@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.7.3 — unreleased
+## 1.7.3 — 2026-11-02
 
 A ledger belongs to a branch and closes when the branch is gone; the rulings that outlive a plan move into a decisions register by script; after a compaction or a `/clear` the session is handed the open ledger's last handoff, the register and the backlog's map, in that order. Map: [CONFIG, "Ledgers and the decisions register"](docs/CONFIG.md#ledgers-and-the-decisions-register).
 
