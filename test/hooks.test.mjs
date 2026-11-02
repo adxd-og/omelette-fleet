@@ -542,11 +542,11 @@ test('SessionStart(compact): a ledger with no handoff block prints nothing at al
   assert.equal(r.err, '');
 });
 
-test('SessionStart: only `compact` prints — a startup, a resume, a clear and a fork lost no context', () => {
+test('SessionStart: only `compact` and `clear` print — a startup, a resume and a fork lost no context', () => {
   const g = guard();
   const proj = ledgerProject(g, 'sources');
   writeFileSync(join(proj, '.omelette', 'ledger-x.md'), '## Handoff\nnext action: run npm test\n');
-  for (const source of ['startup', 'resume', 'clear', 'fork', '', 'Compact', 42, undefined]) {
+  for (const source of ['startup', 'resume', 'fork', '', 'Compact', 42, undefined]) {
     const r = fire(g.path, sessionStart({ source, cwd: proj }));
     assert.equal(r.code, 0, r.err);
     assert.equal(r.out, '', `source ${JSON.stringify(source)} must print nothing`);
@@ -554,6 +554,7 @@ test('SessionStart: only `compact` prints — a startup, a resume, a clear and a
   }
   const compacted = fire(g.path, sessionStart({ cwd: proj }));
   assert.equal(compacted.out, '--- ledger-x.md · last handoff ---\n## Handoff\nnext action: run npm test\n');
+  assert.equal(fire(g.path, sessionStart({ source: 'clear', cwd: proj })).out, compacted.out);
 });
 
 test('SessionStart(compact): one ledger is capped at 40 lines and at 4 KB, and says the rest was dropped', () => {

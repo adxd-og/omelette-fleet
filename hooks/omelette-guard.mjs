@@ -25,14 +25,15 @@
  * in place by a collision — and nobody re-reads it.
  *
  * SessionStart — runs the ledger sweep on every source, so a ledger whose
- * branch is gone is archived before a session reads it. Then, on source
- * `compact`, the other half, and the half that is PROMISED: Claude Code's hooks
+ * branch is gone is archived before a session reads it. Then, on `compact` and
+ * `clear`, the other half, and the half that is PROMISED: Claude Code's hooks
  * reference says a SessionStart hook's stdout is added to the session's
- * context, where PreCompact's is documented nowhere. So the session that opens
- * after a compaction is handed the last handoff block of every ledger in the
- * project, bounded, and nothing at all on a startup, a resume, a `/clear` or a
- * fork. A `/clear` does lose the context; the rules file covers it (re-read the
- * ledger), and printing here is a 1.8.0 candidate.
+ * context, where PreCompact's is documented nowhere. Those two sources lost the
+ * context; a startup, a resume and a fork did not, and print nothing. The print
+ * is three sections, bounded, in the order of the three questions a fresh
+ * context asks: where the work stands (the last handoff block of each open
+ * ledger, then of each untracked one), what was decided (the decisions
+ * register), and what comes next (the first table of `.omelette/backlog.md`).
  *
  * THE SWEEP IS THE ONE THING THIS GUARD LOADS FROM OUTSIDE ITSELF:
  * `core/ledger.mjs`, imported from the package root `rules --hooks` rendered
@@ -878,6 +879,10 @@ const AUTO_HANDOFF = {
  */
 const PACKAGE_ROOT = {{package}};
 const LEDGER_MODULE = join(String(PACKAGE_ROOT), 'core', 'ledger.mjs');
+const IMPORT_CLOCK_MS = 2000;
+
+/** A file name in a heading of the print: C0 and C1 controls, DEL and the line separators shown as `\xNN` / `\uNNNN`, never raw. */
+const clean = (name) => String(name).replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (c) => c.charCodeAt(0) < 0x100 ? `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}` : `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
 /** The whole event, or null: stdin that never arrives, never parses, never ends or never stops is not an error here. */
 async function readEvent() {
@@ -962,11 +967,20 @@ let ledgerModule; // undefined until the first load; the module, or null, after 
  */
 async function loadLedgerModule() {
   if (ledgerModule !== undefined) return ledgerModule;
+  // Under a wall clock: a module whose own top-level await never settles would
+  // otherwise leave this guard's await unsettled too, and Node exits 13 with the
+  // print lost. The timer is cleared the moment the import settles; it holds
+  // the process open only in that broken case, and for 2 s at most.
+  let timer;
+  const clock = new Promise((resolve) => { timer = setTimeout(() => resolve(null), IMPORT_CLOCK_MS); });
   try {
-    ledgerModule = await import(pathToFileURL(LEDGER_MODULE).href);
+    ledgerModule = await Promise.race([import(pathToFileURL(LEDGER_MODULE).href), clock]);
+    if (ledgerModule === null) say(process.stderr, `omelette-guard: ${LEDGER_MODULE} did not load within ${IMPORT_CLOCK_MS / 1000} s — ledger sweep skipped\n`);
   } catch {
     ledgerModule = null;
     say(process.stderr, `omelette-guard: cannot load ${LEDGER_MODULE} — ledger sweep skipped; run omelette-fleet rules --hooks\n`);
+  } finally {
+    clearTimeout(timer);
   }
   return ledgerModule;
 }
@@ -1149,86 +1163,217 @@ const HANDOFF_TOTAL_MAX = 12 * 1024;
  */
 const TAIL_NOTE = '[… ledger larger than 1 MiB — read from its tail; a fenced block cut by the read may hide or fake a heading]';
 
+/** The two sources that lost a context, and the only two the print runs on. */
+const PRINT_SOURCES = new Set(['compact', 'clear']);
+/** The register prints whole up to this, and its last this-many bytes past it. */
+const REGISTER_PRINT_MAX = 6 * 1024;
+/** The backlog is read this far from its head; its first table prints up to BACKLOG_PRINT_MAX. */
+const BACKLOG_READ_MAX = 64 * 1024;
+const BACKLOG_PRINT_MAX = 2 * 1024;
+const REGISTER_TAIL_NOTE = '[… register larger than 6 KB — its last 6 KB]';
+/** Why the register is not printed when the module that knows where it is did not load. */
+const MODULE_MISSING = 'the guard could not load core/ledger.mjs — run omelette-fleet rules --hooks';
+
 /**
- * The handoff, back into the context that just lost it. Only `source ===
- * 'compact'`: a startup, a resume and a fork have a context nobody lost, and
- * printing a handoff into each of them is noise on every session. A `/clear`
- * lost one; the rules file has the orchestrator re-read the ledger there.
+ * The last `max` bytes of a regular file, opening on a whole line — or null
+ * when the path is not a regular file or cannot be read. `tailed` says the
+ * file was longer than `max`, so what came back is its end and not all of it.
+ *
+ * lstat (never stat) so a symlink is seen and refused rather than followed,
+ * O_NOFOLLOW on the open against the race between those two syscalls, and
+ * O_NONBLOCK so a FIFO planted under the name cannot hold the open.
+ */
+function readTail(path, max) {
+  try {
+    if (!lstatSync(path).isFile()) return null;
+    const fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+    try {
+      // fstat, on the descriptor actually opened: it is the size the read is
+      // about to use, and it settles what lstat only said a moment ago.
+      const st = fstatSync(fd);
+      if (!st.isFile()) return null;
+      const offset = Math.max(0, st.size - max);
+      // THE READ STARTS ONE BYTE EARLY: `^` is a line start only where a
+      // line ended, and a tail that opens in the middle of a line would make
+      // `## Handoff` out of the rest of one — an escaped `\## Handoff`, as the
+      // compaction summaries of 0.3.7–1.4.0 left them in a ledger, is exactly
+      // that shape. A newline in that byte means the tail opens a line of its
+      // own; anything else means the first line is the tail of an older one
+      // and goes, the newline itself kept so the next line still starts one.
+      const from = offset > 0 ? offset - 1 : 0;
+      const length = st.size - from;
+      if (!length) return { text: '', tailed: false };
+      const buf = Buffer.alloc(length);
+      let text = buf.subarray(0, readSync(fd, buf, 0, length, from)).toString('utf8');
+      if (offset > 0 && text[0] !== '\n') {
+        const nl = text.indexOf('\n');
+        text = nl < 0 ? '' : text.slice(nl);
+      }
+      return { text, tailed: offset > 0 };
+    } finally { closeSync(fd); }
+  } catch { return null; } // a file we may not read is not a reason to fail a session start
+}
+
+/** The first `max` bytes of a regular file as UTF-8, under readTail's checks — or null. */
+function readHead(path, max) {
+  try {
+    if (!lstatSync(path).isFile()) return null;
+    const fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile()) return null;
+      const length = Math.min(max, st.size);
+      if (!length) return '';
+      const buf = Buffer.alloc(length);
+      return buf.subarray(0, readSync(fd, buf, 0, length, 0)).toString('utf8');
+    } finally { closeSync(fd); }
+  } catch { return null; }
+}
+
+/**
+ * THE FIRST TABLE of a Markdown text: from the first line that opens with `|`
+ * to the line before the next blank one, or the end. Kept by whole lines while
+ * they fit BACKLOG_PRINT_MAX, with a `[… truncated]` line where the next one
+ * does not. '' when there is no table.
+ */
+function firstTable(text) {
+  const lines = String(text || '').split(HANDOFF_LINE_BREAK);
+  const start = lines.findIndex((l) => /^\|/.test(l));
+  if (start < 0) return '';
+  const kept = [];
+  let bytes = 0;
+  for (let i = start; i < lines.length && !/^\s*$/.test(lines[i]); i++) {
+    const size = Buffer.byteLength(lines[i], 'utf8') + 1;
+    if (bytes + size > BACKLOG_PRINT_MAX) { kept.push(TRUNCATED); break; }
+    kept.push(lines[i]);
+    bytes += size;
+  }
+  return kept.join('\n');
+}
+
+/**
+ * WHERE THE WORK STANDS: one section per ledger in the root that has a handoff
+ * block. With a sweep result, a ledger it found closed (held in place by a
+ * collision) is left out, and the order is the open, standing and unknown ones
+ * — and any the sweep did not list — by name, then the untracked ones by name:
+ * the ledger of the plan in flight before the notes nobody tied to a branch.
+ * Without one, every ledger by name, as before 1.7.3.
+ */
+function ledgerSections(dir, names, swept) {
+  const states = new Map();
+  if (swept && Array.isArray(swept.ledgers)) {
+    for (const l of swept.ledgers) if (isObject(l)) states.set(l.name, l.state);
+  }
+  const order = swept
+    ? [
+      ...names.filter((n) => states.get(n) !== 'closed' && states.get(n) !== 'untracked'),
+      ...names.filter((n) => states.get(n) === 'untracked'),
+    ]
+    : names;
+  const sections = [];
+  for (const name of order) {
+    const read = readTail(join(dir, name), LEDGER_READ_MAX);
+    if (!read) continue;
+    const block = lastHandoffBlock(read.text);
+    if (!block) continue;
+    sections.push(`--- ${clean(name)} · last handoff ---\n${read.tailed ? `${TAIL_NOTE}\n` : ''}${block}\n`);
+  }
+  return sections;
+}
+
+/**
+ * WHAT WAS DECIDED: the decisions register, under a heading naming the file it
+ * is (`register:` redirect included). Whole up to REGISTER_PRINT_MAX, past it
+ * the tail under REGISTER_TAIL_NOTE — the newest rulings are at the end. A
+ * register the module refused, or a module that never loaded, is one heading
+ * saying why; an absent or empty register is no section.
+ */
+function registerSection(register) {
+  if (register === null) return `--- decisions register not printed: ${MODULE_MISSING} ---\n`;
+  if (register.error) return `--- decisions register not printed: ${register.error} ---\n`;
+  const read = readTail(register.path, REGISTER_PRINT_MAX);
+  if (!read || !read.text.trim()) return '';
+  const lines = read.text.split(HANDOFF_LINE_BREAK);
+  // A tail opens on the newline the one-byte-early read kept: not a line of the register.
+  if (read.tailed && lines[0] === '') lines.shift();
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  return `--- ${clean(register.rel)} · decisions register ---\n${read.tailed ? `${REGISTER_TAIL_NOTE}\n` : ''}${lines.join('\n')}\n`;
+}
+
+/** WHAT COMES NEXT: the first table of `.omelette/backlog.md`, or no section. */
+function backlogSection(dir) {
+  const table = firstTable(readHead(join(dir, 'backlog.md'), BACKLOG_READ_MAX) || '');
+  return table ? `--- .omelette/backlog.md · first table ---\n${table}\n` : '';
+}
+
+/**
+ * The handoff, back into a context that just lost it: on `compact` and `clear`
+ * only. A startup, a resume and a fork have a context nobody lost, and printing
+ * into each of them is noise on every session. `.omelette/` existing is the
+ * opt-in: without it nothing is swept, read or printed.
+ *
+ * The sweep runs FIRST, on every source — a branch merged and deleted since the
+ * last session has its ledger archived at the next start, whatever kind of
+ * start it is — and the print takes its ledger order and its register path
+ * from the sweep's result. With no ledger left to sweep, the register path
+ * comes from the module directly, so a `/clear` after the sweep has emptied the
+ * root still hands over the register and the backlog.
+ *
+ * THREE SECTIONS, in the order of the three questions a fresh context asks:
+ *   1. where the work stands — the last handoff block of each ledger left in
+ *      the root, open ones before untracked ones (ledgerSections);
+ *   2. what was decided — the decisions register, 6 KB from its tail
+ *      (registerSection);
+ *   3. what comes next — the first table of `.omelette/backlog.md`, 2 KB by
+ *      whole lines (backlogSection).
+ * Each opens on a one-line heading naming the file it came from.
  *
  * Same ledgers as PreCompact and the same rule about them — `<cwd>/.omelette/
- * ledger-*.md`, sorted, a directory that is not a symlink (ledgerDir), lstat
- * (never stat) so a symlink under that name is seen and skipped rather than
- * followed out of the directory, O_NOFOLLOW on the open against the race
- * between those two syscalls, and a FIFO skipped rather than blocking the read.
+ * ledger-*.md`, sorted, a directory that is not a symlink (ledgerDir), and
+ * every file read through readTail: a symlink seen and skipped rather than
+ * followed out of the directory, a FIFO skipped rather than blocking the read.
  *
- * Each file is read at most 1 MiB FROM ITS TAIL — a ledger grows by appending,
+ * Each ledger is read at most 1 MiB FROM ITS TAIL — a ledger grows by appending,
  * so the last handoff is at the END, and a head-first read of a long-running
  * plan's ledger hands the next context a block that was superseded weeks ago.
  * A tail read says so, above the block, because it is not the whole file.
  *
  * Each block is bounded by lastHandoffBlock, and the print as a whole stops at
- * 12 KB: a ledger that does not fit is dropped WHOLE, with one truncation line,
- * because half a handoff read as a whole one is worse than a line saying it was
- * left out.
+ * 12 KB: a section that does not fit is dropped WHOLE with everything after it,
+ * and one truncation line says so, because half a handoff read as a whole one
+ * is worse than a line saying it was left out.
  *
  * Nothing to print is printed as nothing: no header, no blank line, exit 0 —
  * and nothing at all is read while `handoff.enabled` is false.
- *
- * The sweep runs BEFORE the source is looked at, on every source: a branch
- * merged and deleted since the last session has its ledger archived at the
- * next start, whatever kind of start it is. The print then reads the root
- * again, and leaves out a ledger the sweep found closed but could not move.
  */
 async function sessionStart(event) {
   if (!AUTO_HANDOFF.enabled) return;
   const found = ledgerDir(event);
   if (!found || !found.exists) return;
-  let swept = null;
-  if (ledgerNames(found.dir).length) {
-    const mod = await loadLedgerModule();
-    if (mod) swept = runSweep(mod, str(event.cwd, process.cwd()));
-  }
-  if (str(event.source) !== 'compact') return;
-  const closed = closedNames(swept);
-  const ledgers = ledgerNames(found.dir).filter((n) => !closed.has(n));
-  if (!ledgers.length) return;
+  const cwd = str(event.cwd, process.cwd());
+  const printing = PRINT_SOURCES.has(str(event.source));
+  const names = ledgerNames(found.dir);
+  if (!names.length && !printing) return;
+  const mod = await loadLedgerModule();
+  const swept = mod && names.length ? runSweep(mod, cwd) : null;
+  if (!printing) return;
 
-  // One byte wider than the tail, because the read starts one byte EARLY.
-  const buf = Buffer.alloc(LEDGER_READ_MAX + 1);
+  // null means one thing only: the module did not load.
+  let register = null;
+  if (mod) {
+    try { register = (swept && swept.register) || mod.readRegisterPath(cwd); } catch { register = null; }
+    if (!isObject(register)) register = { error: 'register: unreadable' };
+  }
+  const sections = [
+    ...ledgerSections(found.dir, ledgerNames(found.dir), swept),
+    registerSection(register),
+    backlogSection(found.dir),
+  ].filter(Boolean);
+
   const parts = [];
   let total = 0;
-  for (const name of ledgers) {
-    const path = join(found.dir, name);
-    let text = '';
-    let tailed = false;
-    try {
-      if (!lstatSync(path).isFile()) continue;
-      const fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
-      try {
-        // fstat, on the descriptor actually opened: it is the size the read is
-        // about to use, and it settles what lstat only said a moment ago.
-        const st = fstatSync(fd);
-        if (!st.isFile()) continue;
-        const offset = Math.max(0, st.size - LEDGER_READ_MAX);
-        tailed = offset > 0;
-        // THE READ STARTS ONE BYTE EARLY: `^` is a line start only where a
-        // line ended, and a tail that opens in the middle of a line would make
-        // `## Handoff` out of the rest of one — an escaped `\## Handoff`, as the
-        // compaction summaries of 0.3.7–1.4.0 left them in a ledger, is exactly
-        // that shape. A newline in that byte means the tail opens a line of its
-        // own; anything else means the first line is the tail of an older one
-        // and goes, the newline itself kept so the next line still starts one.
-        const from = offset > 0 ? offset - 1 : 0;
-        text = buf.subarray(0, readSync(fd, buf, 0, Math.min(buf.length, st.size - from), from)).toString('utf8');
-        if (offset > 0 && text[0] !== '\n') {
-          const nl = text.indexOf('\n');
-          text = nl < 0 ? '' : text.slice(nl);
-        }
-      } finally { closeSync(fd); }
-    } catch { continue; } // a ledger we may not read is not a reason to fail a session start
-    const block = lastHandoffBlock(text);
-    if (!block) continue;
-    const part = `${parts.length ? '\n' : ''}--- ${name} · last handoff ---\n${tailed ? `${TAIL_NOTE}\n` : ''}${block}\n`;
+  for (const section of sections) {
+    const part = `${parts.length ? '\n' : ''}${section}`;
     const size = Buffer.byteLength(part, 'utf8');
     if (total + size > HANDOFF_TOTAL_MAX) { parts.push(`${TRUNCATED}\n`); break; }
     parts.push(part);
