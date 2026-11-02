@@ -485,17 +485,21 @@ export const HOOK_TEMPLATE_DIR = join(ROOT, 'hooks');
 /**
  * One hook script's full text for this package version AND the operator's
  * handoff settings. The script is self-contained by design — it is copied into
- * a project and run as one file — so the `handoff` block cannot be imported
- * into it and is substituted instead, as a JSON literal on a line of its own
- * (`parseHookHandoff` below is the inverse, and `doctor` uses it to report what
- * the INSTALLED script will actually do).
+ * a project and run as one file — so it carries two RENDERED values, each a
+ * JSON literal on a line of its own: the `handoff` block (`parseHookHandoff`
+ * below is the inverse, and `doctor` uses it to report what the INSTALLED
+ * script will actually do), and the package root it loads the ledger sweep
+ * from (`parseHookPackage` is that one's inverse, and `doctor` names a root
+ * that no longer holds the module).
  *
- * The settings default to the live fleet config, so every caller that just
- * wants "the guard as it should be right now" gets it; a partial object is
- * filled in from the schema and an invalid value falls back to its default, so
- * no rendering can produce a script that will not run.
+ * The settings default to the live fleet config, and the root to this
+ * package, so every caller that just wants "the guard as it should be right
+ * now" gets it; a partial object is filled in from the schema and an invalid
+ * value falls back to its default, so no rendering can produce a script that
+ * will not run. The root goes in through a replacer function, so a `$` in a
+ * path is never read as a replacement pattern.
  */
-export function renderHookFile(name, version, handoff = handoffSettings()) {
+export function renderHookFile(name, version, handoff = handoffSettings(), pkg = ROOT) {
   if (!HOOK_FILES.includes(name)) throw new Error(`unknown hook template: ${name}`);
   const given = isObj(handoff) ? handoff : {};
   const values = {};
@@ -506,7 +510,8 @@ export function renderHookFile(name, version, handoff = handoffSettings()) {
   const body = readFileSync(join(HOOK_TEMPLATE_DIR, ...name.split('/')), 'utf8')
     .replaceAll('{{marker}}', HOOK_MARKER(String(version)))
     .replaceAll('{{version}}', String(version))
-    .replaceAll('{{handoff}}', JSON.stringify(values));
+    .replaceAll('{{handoff}}', JSON.stringify(values))
+    .replaceAll('{{package}}', () => JSON.stringify(String(pkg)));
   return body.endsWith('\n') ? body : body + '\n';
 }
 
@@ -514,6 +519,25 @@ export function renderHookFile(name, version, handoff = handoffSettings()) {
 export function parseHookMarker(text) {
   const m = HOOK_MARKER_RE.exec(String(text || ''));
   return m ? m[1] : null;
+}
+
+/** The rendered package root's line: one JSON string literal, escapes and all. */
+const PACKAGE_LITERAL = /^const PACKAGE_ROOT = ("(?:[^"\\\r\n]|\\.)*");$/m;
+
+/**
+ * The package root rendered into an installed guard — where it imports
+ * `core/ledger.mjs` from — or null when the line is absent (a guard rendered
+ * before 1.7.3, or a file that is not a guard) or does not hold a string.
+ */
+export function parseHookPackage(text) {
+  const m = PACKAGE_LITERAL.exec(String(text || ''));
+  if (!m) return null;
+  try {
+    const value = JSON.parse(m[1]);
+    return typeof value === 'string' ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

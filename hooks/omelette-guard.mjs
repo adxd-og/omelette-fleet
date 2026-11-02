@@ -18,21 +18,31 @@
  * it caught.
  *
  * PreCompact — the ledger's re-read stamp. A compaction is where a plan loses
- * its context, so every `.omelette/ledger-*.md` gets a line saying it must be
+ * its context, so the guard runs the ledger sweep, then stamps every
+ * `.omelette/ledger-*.md` left open or untracked with a line saying it must be
  * re-read, and the handoff reminder goes to stdout for the harness to pass on if
- * it does.
+ * it does. A ledger the sweep found closed is finished work — archived, or held
+ * in place by a collision — and nobody re-reads it.
  *
- * SessionStart (source `compact`) — the other half, and the half that is
- * PROMISED: Claude Code's hooks reference says a SessionStart hook's stdout is
- * added to the session's context, where PreCompact's is documented nowhere. So
- * the session that opens after a compaction is handed the last handoff block of
- * every ledger in the project, bounded, and nothing at all on a startup, a
- * resume, a `/clear` or a fork. A `/clear` does lose the context; the rules
- * file covers it (re-read the ledger), and printing here is a 1.8.0 candidate.
+ * SessionStart — runs the ledger sweep on every source, so a ledger whose
+ * branch is gone is archived before a session reads it. Then, on source
+ * `compact`, the other half, and the half that is PROMISED: Claude Code's hooks
+ * reference says a SessionStart hook's stdout is added to the session's
+ * context, where PreCompact's is documented nowhere. So the session that opens
+ * after a compaction is handed the last handoff block of every ledger in the
+ * project, bounded, and nothing at all on a startup, a resume, a `/clear` or a
+ * fork. A `/clear` does lose the context; the rules file covers it (re-read the
+ * ledger), and printing here is a 1.8.0 candidate.
+ *
+ * THE SWEEP IS THE ONE THING THIS GUARD LOADS FROM OUTSIDE ITSELF:
+ * `core/ledger.mjs`, imported from the package root `rules --hooks` rendered
+ * into PACKAGE_ROOT below. A failed import is one stderr line, and the stamp and
+ * the print go on without the sweep; what this guard refuses and what it prints
+ * stay in this file, and PreToolUse never loads anything.
  *
  * The two ledger hooks answer to one switch, `handoff.enabled`, rendered into
- * this script as a literal (HANDOFF_CONFIG below): false turns the stamp and
- * the print off, and the git guard runs whatever it says.
+ * this script as a literal (HANDOFF_CONFIG below): false turns the sweep, the
+ * stamp and the print off, and the git guard runs whatever it says.
  *
  * PostToolUse, Stop and PostCompact — RETIRED in 1.5.0. From 0.3.4 to 1.4.0
  * this script also measured the context and nudged, held one turn until a
@@ -52,6 +62,7 @@
  */
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // A write to a pipe the harness has stopped reading fails ASYNCHRONOUSLY: the
 // EPIPE arrives as an 'error' event after the write() call has already
@@ -833,7 +844,8 @@ const isObject = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
 
 /**
  * WHAT `rules --hooks` RENDERED HERE. This script imports nothing from the
- * package — it is copied into a project as one file — so the operator's
+ * package for what it refuses or prints — it is copied into a project as one
+ * file — so the operator's
  * `handoff` block arrives as a JSON literal substituted at render time, exactly
  * the way the version marker is. `doctor` reads THIS LINE back out of the installed
  * script, which is how a switch changed in the config and never re-rendered is
@@ -850,6 +862,22 @@ const HANDOFF_CONFIG = {{handoff}};
 const AUTO_HANDOFF = {
   enabled: !isObject(HANDOFF_CONFIG) || HANDOFF_CONFIG.enabled !== false,
 };
+
+/**
+ * THE OTHER RENDERED VALUE: the package root `rules --hooks` ran from, as a
+ * JSON string literal, and the one module this guard loads from it — the
+ * ledger sweep, `core/ledger.mjs`, which archives a ledger whose branch is gone
+ * before it is stamped or printed. It is loaded by one dynamic import inside
+ * try/catch (loadLedgerModule), only by the two ledger events and never by
+ * PreToolUse: a package moved or removed since the render costs the sweep and
+ * one stderr line, never a refusal, a stamp or a print. `doctor` reads this
+ * line back and names a root that no longer holds the module.
+ *
+ * `String()`, because the literal is a line somebody can edit by hand, and a
+ * `join` that throws up here would take the git guard down with it.
+ */
+const PACKAGE_ROOT = {{package}};
+const LEDGER_MODULE = join(String(PACKAGE_ROOT), 'core', 'ledger.mjs');
 
 /** The whole event, or null: stdin that never arrives, never parses, never ends or never stops is not an error here. */
 async function readEvent() {
@@ -922,6 +950,50 @@ function ledgerNames(dir) {
   try { return readdirSync(dir).filter((f) => /^ledger-.*\.md$/.test(f)).sort(); } catch { return []; }
 }
 
+/** The first line of an error message, for a stderr line that stays one line. */
+const firstLine = (s) => String(s || '').split(HANDOFF_LINE_BREAK, 1)[0];
+
+let ledgerModule; // undefined until the first load; the module, or null, after it
+
+/**
+ * The sweep's module, imported from PACKAGE_ROOT — or null, said ONCE on
+ * stderr: a guard whose package has moved still stamps and prints, and the
+ * line tells the operator what brings the sweep back.
+ */
+async function loadLedgerModule() {
+  if (ledgerModule !== undefined) return ledgerModule;
+  try {
+    ledgerModule = await import(pathToFileURL(LEDGER_MODULE).href);
+  } catch {
+    ledgerModule = null;
+    say(process.stderr, `omelette-guard: cannot load ${LEDGER_MODULE} — ledger sweep skipped; run omelette-fleet rules --hooks\n`);
+  }
+  return ledgerModule;
+}
+
+/**
+ * One sweep of the project at `cwd`: its result, with the line that says why
+ * nothing was swept on stderr when there is one — or null, and one stderr
+ * line, when the sweep threw. Either way the caller goes on.
+ */
+function runSweep(mod, cwd) {
+  try {
+    const r = mod.sweepLedgers(cwd);
+    if (!isObject(r)) return null;
+    if (r.error) say(process.stderr, `omelette-guard: ${r.error}\n`);
+    return r;
+  } catch (e) {
+    say(process.stderr, `omelette-guard: ledger sweep failed — ${firstLine(e && e.message)}\n`);
+    return null;
+  }
+}
+
+/** The ledgers a sweep found closed and left in the root (a collision, a file it could not move). */
+function closedNames(swept) {
+  const ledgers = swept && Array.isArray(swept.ledgers) ? swept.ledgers : [];
+  return new Set(ledgers.filter((l) => isObject(l) && l.state === 'closed').map((l) => l.name));
+}
+
 /**
  * ONE BLOCK, APPENDED TO EVERY LEDGER of a project that is ours to write —
  * PreCompact's re-read stamp, and the one place that says what may be written
@@ -935,9 +1007,13 @@ function ledgerNames(dir) {
  *
  * Then O_NOFOLLOW on the open itself, because the lstat and the append are two
  * syscalls: a link planted between them is what the flag answers.
+ *
+ * A name in `skip` is passed over: a ledger the sweep found closed is not one
+ * anybody has to re-read.
  */
-function appendToLedgers(found, text) {
+function appendToLedgers(found, text, skip = new Set()) {
   for (const name of (found.exists ? ledgerNames(found.dir) : [])) {
+    if (skip.has(name)) continue;
     const path = join(found.dir, name);
     let fd = null;
     try {
@@ -962,15 +1038,25 @@ function appendToLedgers(found, text) {
 const TRIGGERS = new Set(['manual', 'auto']);
 const triggerOf = (event) => (TRIGGERS.has(event.trigger) ? event.trigger : 'unknown');
 
-/** Mark every ledger in this project, then say so on stdout — unless `handoff.enabled` is false. */
-function preCompact(event) {
+/**
+ * Sweep, then mark every ledger left open or untracked, then say so on stdout —
+ * unless `handoff.enabled` is false. The sweep comes FIRST: a ledger it
+ * archives is not stamped, and one it found closed but could not move is
+ * skipped. Without the module every ledger in the root is stamped, as before
+ * 1.7.3.
+ */
+async function preCompact(event) {
   if (!AUTO_HANDOFF.enabled) return;
   const found = ledgerDir(event);
   if (!found) return; // a `.omelette` that is not ours to write: no marker, and nothing to announce
-  appendToLedgers(found, `\n## Compaction ${new Date().toISOString()} (trigger: ${triggerOf(event)}) — re-read this ledger before continuing\n`);
   // No ledger — no `.omelette`, or one without a `ledger-*.md` — means nothing
-  // was stamped, so nothing is announced: the ledger is the opt-in.
-  if (!found.exists || ledgerNames(found.dir).length === 0) return;
+  // to sweep or stamp, so nothing is announced: the ledger is the opt-in.
+  if (!found.exists || !ledgerNames(found.dir).length) return;
+  const mod = await loadLedgerModule();
+  const swept = mod ? runSweep(mod, str(event.cwd, process.cwd())) : null;
+  const skip = closedNames(swept);
+  appendToLedgers(found, `\n## Compaction ${new Date().toISOString()} (trigger: ${triggerOf(event)}) — re-read this ledger before continuing\n`, skip);
+  if (!ledgerNames(found.dir).some((n) => !skip.has(n))) return;
   say(process.stdout, `${HANDOFF}\n`);
 }
 
@@ -1087,13 +1173,24 @@ const TAIL_NOTE = '[… ledger larger than 1 MiB — read from its tail; a fence
  *
  * Nothing to print is printed as nothing: no header, no blank line, exit 0 —
  * and nothing at all is read while `handoff.enabled` is false.
+ *
+ * The sweep runs BEFORE the source is looked at, on every source: a branch
+ * merged and deleted since the last session has its ledger archived at the
+ * next start, whatever kind of start it is. The print then reads the root
+ * again, and leaves out a ledger the sweep found closed but could not move.
  */
-function sessionStart(event) {
+async function sessionStart(event) {
   if (!AUTO_HANDOFF.enabled) return;
-  if (str(event.source) !== 'compact') return;
   const found = ledgerDir(event);
   if (!found || !found.exists) return;
-  const ledgers = ledgerNames(found.dir);
+  let swept = null;
+  if (ledgerNames(found.dir).length) {
+    const mod = await loadLedgerModule();
+    if (mod) swept = runSweep(mod, str(event.cwd, process.cwd()));
+  }
+  if (str(event.source) !== 'compact') return;
+  const closed = closedNames(swept);
+  const ledgers = ledgerNames(found.dir).filter((n) => !closed.has(n));
   if (!ledgers.length) return;
 
   // One byte wider than the tail, because the read starts one byte EARLY.
@@ -1149,8 +1246,8 @@ try {
   if (event) {
     const name = str(event.hook_event_name);
     if (name === 'PreToolUse') preToolUse(event);
-    else if (name === 'PreCompact') preCompact(event);
-    else if (name === 'SessionStart') sessionStart(event);
+    else if (name === 'PreCompact') await preCompact(event);
+    else if (name === 'SessionStart') await sessionStart(event);
     // Anything else: this guard has no opinion about it.
   }
 } catch { /* a guard that crashes is a session that stops working */ }

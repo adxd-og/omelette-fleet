@@ -57,7 +57,7 @@ import { changedSince, checkPointers, parseCommit, parsePointers, readBoundedFil
 import { PLAN_NAME, openLedger, registerStats, sweepLedgers } from '../core/ledger.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResultHeader } from '../core/results.mjs';
 import { cachedCheck, compareSemver, currentVersion, detectInstall, packageRoot, updateCheckEnabled } from '../core/update.mjs';
-import { HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, RETIRED_HOOK_EVENTS, agentSettings, contractFor, hookSettingsSnippet, parseHookHandoff, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets, shellWord } from '../core/rules.mjs';
+import { HOOK_EVENTS, HOOK_FILES, KINDS, MERGE_SENTENCES, RETIRED_HOOK_EVENTS, agentSettings, contractFor, hookSettingsSnippet, parseHookHandoff, parseHookPackage, parseRulesMarker, readRulesFile, rulesTarget, settingsTarget, settingsTargets, shellWord } from '../core/rules.mjs';
 import { createUnitRuntime, resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -2320,6 +2320,29 @@ function handoffReport({ cwd = process.cwd(), env = process.env } = {}) {
 }
 
 /**
+ * The installed guards whose rendered package root no longer holds
+ * `core/ledger.mjs` — a checkout moved or removed since `rules --hooks`. Such a
+ * guard still refuses, stamps and prints, and skips the sweep with a stderr
+ * line nobody reads, so doctor names the path and the command that re-renders
+ * it. A guard that carries no root (rendered before 1.7.3) says nothing here:
+ * the `hooks` row already asks for its refresh.
+ * @returns {string[]} one line per scope that needs it, indented under the `hooks` row
+ */
+function hookImportLines({ cwd = process.cwd(), env = process.env } = {}) {
+  const lines = [];
+  for (const global of [false, true]) {
+    const { dir } = KINDS.hooks.dir({ global, cwd, env });
+    const text = readSettingsFile(join(dir, HOOK_FILES[0]));
+    if (text === null || text === UNREADABLE || !KINDS.hooks.parse(text)) continue;
+    const root = parseHookPackage(text);
+    if (root === null) continue;
+    const modulePath = join(root, 'core', 'ledger.mjs');
+    if (!existsSync(modulePath)) lines.push(`              hook imports ${visible(modulePath)} — not found: run ${refreshCommand('hooks', global ? 'global' : 'project')}`);
+  }
+  return lines;
+}
+
+/**
  * doctor's `ledgers` and `decisions` rows. With an `.omelette/` in `cwd` it
  * RUNS the sweep (doctor writes, as `ledger sweep` does), then counts what is
  * left by state, prints the sweep's lines under the row, and reads the
@@ -2813,6 +2836,7 @@ async function cmdDoctor(argv) {
   // settings line below names the files this reader could not parse either.
   const wiring = { project: hookWiringAt({}), global: hookWiringAt({ global: true }) };
   out(`hooks         ${dirReport('hooks', PKG.version).map((r) => `${r.scope}: ${hooksLabel(r, r.scope === 'global' ? wiring.global : wiring.project)}`).join(' · ')}`);
+  for (const line of hookImportLines()) out(line);
   // What the installed guard will do about the handoff — read out of the script
   // itself, so a switch changed in the config and never re-rendered reads as
   // the value that is actually in force.
