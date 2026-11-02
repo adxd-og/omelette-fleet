@@ -293,6 +293,7 @@ export function readRegisterPath(projectDir) {
   const value = m[1];
   const refuse = (reason) => ({ error: `register: ${visible(value) || '(nothing)'} refused (${reason})` });
   if (value === '') return refuse('empty');
+  if (/[\x00-\x1f\x7f]/.test(value)) return refuse('control characters');
   if (isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')) return refuse('absolute path');
   if (value.split(/[\\/]/).includes('..')) return refuse('contains ..');
   const target = resolve(projectDir, value);

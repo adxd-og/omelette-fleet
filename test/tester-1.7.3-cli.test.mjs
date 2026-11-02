@@ -126,7 +126,8 @@ test('doctor: ESC in a ledger name, and in a valid register: path, never reaches
   const d = doctor(p);
   assert.ok(d.rows.length >= 3, d.out);
   assert.ok(!d.out.includes(ESC), JSON.stringify(d.rows));
-  assert.match(d.rows.at(-1), /^decisions {5}docs\/r.*x\.md \(via \.omelette\/decisions\.md\) — none yet$/);
+  // A control character in the redirect is refused outright (session ruling, T7–8 round), the value escaped.
+  assert.match(d.rows.at(-1), /^decisions {5}register: docs\/r\\u001b\[31mx\.md refused \(control characters\)$/);
 });
 
 test('doctor: a closed ledger is moved by a doctor run, its closed: line printed, the register written; --dry-run is not doctor\'s', { skip: GIT_SKIP }, () => {
