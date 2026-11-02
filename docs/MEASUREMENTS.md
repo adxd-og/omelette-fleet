@@ -39,6 +39,7 @@ What has actually been measured on this project, how each number was taken, and 
 |---|---|
 | Did the guard's context estimate (removed in 1.5.0) match the engine's? | [The guard's estimate against the engine](#the-guards-estimate-against-the-engine) |
 | What did the handoff hooks do across every compaction the project has had? | [The handoff hooks over five compactions](#the-handoff-hooks-over-five-compactions) |
+| What did the print after a compaction carry before and after the ledger lifecycle (1.7.3)? | [The compaction print before and after the ledger lifecycle](#the-compaction-print-before-and-after-the-ledger-lifecycle) |
 | Which web mode does a Codex research run get when none is set? | [The Codex web default mode](#the-codex-web-default-mode) |
 | What outlives a killed unit server, per vendor CLI? | [Unit processes after the server is gone](#unit-processes-after-the-server-is-gone) |
 | Which MCP protocol version does Claude Code ask for, and which does the server claim? | [What Claude Code sends at `initialize`](#what-claude-code-sends-at-initialize) |
@@ -102,8 +103,9 @@ Every release closes its ledger with one line: findings found, accepted, rejecte
 | 1.1.0 | 37 | 29 | 6 / 2 | `check` writing git's index; a one-character fragment passing; staleness blind to the working tree; an unusable `commit:` value switching staleness off in silence |
 | 1.2.0 | 24 | 17 | 7 | the measuring script printing this checkout's absolute path through an uncaught throw; the release's rules-size claim being P1's figure, not the shipped file's |
 | 1.3.0 | 34 | 30 | 4 | the guard's invocation cut handing `-b new` to a nested `$(git tag -l)` (a missed write, found by the shipped reviewer and by Codex); `xargs git tag < file`; PATH still reaching an env-shebang vendor; a false "three runs" line in SECURITY; three re-review rounds found process substitutions dropped unread, `reset --hard` passing for every role, and `>>(…)` under zsh |
+| 1.7.3 | 53 | 39 | 14 | a register redirect matched by string (a symlinked directory reached it); an import that never settles exiting the guard with 13; a `register:` line naming `.env`; the harvester dropping a pointer written before the marker; the print's three budgets summing past 12 KB |
 
-Across eight releases, 221 findings and 192 accepted: the reviewers are rarely wrong, and the rejected ones are mostly stricter readings of a brief than of the spec. A docs-only release (1.0.0) still produced eight real defects.
+Across nine releases, 274 findings and 231 accepted: the reviewers are rarely wrong, and the rejected ones are mostly stricter readings of a brief than of the spec. A docs-only release (1.0.0) still produced eight real defects.
 
 ## The test suite before and after the clean-up gate
 
@@ -394,6 +396,19 @@ Reading: over five compactions the hook-authored parts — the nudge, the gate a
 
 **Acted on in 1.5.0.** The nudge, the gate and the summary were removed; the stamp and the print stay. `hooks/omelette-guard.mjs` went from 1 929 lines / 95 871 bytes to 1 152 lines / 57 184 bytes (the rendered guard, `renderHookFile`, has the same line count: the marker replaces the placeholder line).
 
+## The compaction print before and after the ledger lifecycle
+
+Measured on this repository on 2026-11-02, the rendered guard fed a `SessionStart` event with source `compact` (1.7.3's spec, "Tests and done-when").
+
+| | Before (1.7.2 guard, 12 root ledgers) | After (1.7.3, migrated) |
+|---|---:|---:|
+| Print size | 11 686 B | 10 626 B |
+| What it carried | the last handoffs of six closed plans (1.2.0 … 1.7.0); the open ledger absent (its block fell past the 12 KB cap) | the open ledger's last handoff (7 lines), all 25 entries of the decisions register, the first table of the backlog (2 KB, cut at its row 4) |
+| Files stamped per compaction | 12 | 1 |
+| Orientation after a `/clear` (2026-10-30, before) | 4 tool calls, ~40 KB of ledger read before the first working action | to be measured at the first `/clear` after the release (the print is now the orientation) |
+
+Reading: the byte count barely moved; what the bytes are did. Before, the print was six closed plans' last words and not the open one's; after, it is the three things the rules say to read, in order. The register's tail of 6 KB holds the whole file at 25 entries of about 250 bytes (6 337 B): the spec's "30 lines of about 200 characters" is the budget, and `doctor` warns past 30 live lines.
+
 ## The Codex web default mode
 
 Taken 2026-09-25 on codex-cli 0.156.1 with `gpt-6-astra`, one run per setting, over a prompt that needs a page fetched (quote the `<title>` of https://example.com/ and name the tool used). The question: which of `cached`, `indexed` and `live` a research run gets when the adapter sets no mode, as it has since 1.3.0.
@@ -464,6 +479,7 @@ The versions the live gate ran on, from the ledgers' live-gate lines and the CHA
 | 1.7.0 (2026-10-09) | 1.3.2 | 1.0.50 | 0.160.0 |
 | 1.7.1 (2026-10-16) | 1.4.0 | 1.0.60 | 0.162.1 |
 | 1.7.2 (2026-10-21) | 1.4.4 | 1.0.62 | 0.162.1 |
+| 1.7.3 (2026-11-02) | 1.4.12 | 1.0.62 | 0.166.0 |
 
 Each release adds its row at the live gate (a step of the release procedure the ledger records; this repository's own checklist is the operator's, not a published file).
 
