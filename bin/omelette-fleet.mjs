@@ -2148,10 +2148,13 @@ const matcherProblemFor = (m, event, name) => {
  * is deliberately absent: it is matched on nothing, because every compaction is
  * one the ledger has to be stamped for, so any entry that calls the guard counts.
  * `SessionStart` is matched on the session's SOURCE (`startup`, `resume`,
- * `clear`, `compact`, `fork`), and `compact` is the only one the guard has
- * anything to print into.
+ * `clear`, `compact`, `fork`). The printed snippet gives it no matcher, because
+ * the guard sweeps on every source and prints on `compact` and `clear` only; an
+ * entry still matching `compact` alone counts as wired, and doctor names the
+ * sources it misses (SESSION_SOURCES) on a line of its own.
  */
 const MATCHED_ON = { PreToolUse: 'Bash', SessionStart: 'compact' };
+const SESSION_SOURCES = ['startup', 'resume', 'clear', 'compact'];
 
 /**
  * Which of the guard's events one settings file calls it from. The test is the
@@ -2191,7 +2194,9 @@ function hookWiring(config) {
   // A retired event is matched on nothing either: any entry that calls the
   // guard on one is an entry to remove.
   const retired = RETIRED_HOOK_EVENTS.filter((event) => callingOn(event).length);
-  return { wired, retired, matcherProblem };
+  // The sources some calling SessionStart entry covers: the sweep runs on each.
+  const sessionSources = SESSION_SOURCES.filter((s) => callingOn('SessionStart').some((g) => matcherProblemFor(g.matcher, 'SessionStart', s) === null));
+  return { wired, retired, matcherProblem, sessionSources };
 }
 
 /**
@@ -2210,6 +2215,7 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
   const unreadablePaths = [];  // the absolute paths doctor's settings line prints
   const wired = new Set();
   const retired = new Set();
+  const sessionSources = new Set();
   let matcherProblem = null;
   for (const { name, path } of settingsTargets({ global, cwd, env })) {
     const raw = readSettingsFile(path);
@@ -2222,6 +2228,7 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
     matcherProblem = matcherProblem || here.matcherProblem;
     for (const event of here.wired) wired.add(event);
     for (const event of here.retired) retired.add(event);
+    for (const source of here.sessionSources) sessionSources.add(source);
   }
   // A matcher that covers nothing is only a finding while something is still
   // missing: once the files together wire every event, the guard does see the
@@ -2233,6 +2240,7 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
     wired: HOOK_EVENTS.filter((e) => wired.has(e)),
     retired: RETIRED_HOOK_EVENTS.filter((e) => retired.has(e)),
     unreadable, unreadablePaths, matcherProblem,
+    sessionSources: SESSION_SOURCES.filter((s) => sessionSources.has(s)),
   };
 }
 
@@ -2835,7 +2843,17 @@ async function cmdDoctor(argv) {
   // Both scopes' wiring, read ONCE: the hooks line names the events, and the
   // settings line below names the files this reader could not parse either.
   const wiring = { project: hookWiringAt({}), global: hookWiringAt({ global: true }) };
-  out(`hooks         ${dirReport('hooks', PKG.version).map((r) => `${r.scope}: ${hooksLabel(r, r.scope === 'global' ? wiring.global : wiring.project)}`).join(' · ')}`);
+  const hooksReport = dirReport('hooks', PKG.version);
+  out(`hooks         ${hooksReport.map((r) => `${r.scope}: ${hooksLabel(r, r.scope === 'global' ? wiring.global : wiring.project)}`).join(' · ')}`);
+  // A SessionStart still matched on `compact` alone (the snippet before 1.7.3)
+  // is wired, but the sweep misses the other sources: a line of its own.
+  for (const scope of ['project', 'global']) {
+    const w = wiring[scope];
+    const r = hooksReport.find((entry) => entry.scope === scope);
+    if (r.state === 'absent' || r.state === 'foreign' || !w.wired.includes('SessionStart')) continue;
+    const missing = SESSION_SOURCES.filter((s) => !w.sessionSources.includes(s));
+    if (missing.length) out(`              ${scope} SessionStart misses ${missing.join(', ')} — replace the SessionStart group with the snippet from ${refreshCommand('hooks', scope)}`);
+  }
   for (const line of hookImportLines()) out(line);
   // What the installed guard will do about the handoff — read out of the script
   // itself, so a switch changed in the config and never re-rendered reads as

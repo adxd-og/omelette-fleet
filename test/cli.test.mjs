@@ -1888,7 +1888,7 @@ const SNIPPET = (script) => [
   '{ "hooks": {',
   `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
   `  "PreCompact": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
-  `  "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
+  `  "SessionStart": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
 ].join('\n');
 
 /** The pasteable snippet out of a `rules --hooks` run's stdout: the opener line plus one per event. */
@@ -2186,8 +2186,7 @@ test('doctor: a SessionStart matcher is read like any other — `compact` wires 
     writeFileSync(settings, withMatcher(matcher));
     assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, `matcher ${JSON.stringify(matcher)} covers compact`);
   }
-  // An ABSENT matcher fires on every source, which is wired: the guard's own
-  // `source === 'compact'` check is what keeps a startup silent.
+  // An ABSENT matcher fires on every source — what the snippet prints since 1.7.3: the guard sweeps on every source and prints on compact and clear only.
   writeFileSync(settings, JSON.stringify({
     hooks: { ...snippet.hooks, SessionStart: [{ hooks: snippet.hooks.SessionStart[0].hooks }] },
   }, null, 2));

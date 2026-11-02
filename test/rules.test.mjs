@@ -553,7 +553,7 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
   assert.deepEqual(hookSettingsSnippet(spaced), hookSettingsSnippet(spaced, process.platform));
 });
 
-test('the snippet wires the three events: SessionStart on `compact`, and PreCompact on nothing', () => {
+test('the snippet wires the three events: PreToolUse on Bash, PreCompact and SessionStart on everything', () => {
   const script = '/Users/me/app/.claude/hooks/omelette-guard.mjs';
   assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart']);
   for (const platform of ['darwin', 'win32']) {
@@ -565,7 +565,7 @@ test('the snippet wires the three events: SessionStart on `compact`, and PreComp
     // is matched on nothing at all: every compaction is one the ledger has to be
     // stamped for.
     assert.equal(parsed.hooks.PreToolUse[0].matcher, 'Bash');
-    assert.equal(parsed.hooks.SessionStart[0].matcher, 'compact');
+    assert.equal('matcher' in parsed.hooks.SessionStart[0], false, 'SessionStart fires on every source: the sweep runs on each');
     assert.equal('matcher' in parsed.hooks.PreCompact[0], false, 'PreCompact is matched on nothing');
     for (const event of HOOK_EVENTS) {
       assert.equal(parsed.hooks[event].length, 1);

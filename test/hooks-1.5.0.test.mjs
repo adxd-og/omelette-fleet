@@ -139,7 +139,7 @@ test('HOOK_EVENTS is three, RETIRED_HOOK_EVENTS is the other three, and the snip
   const snippet = JSON.parse(hookSettingsSnippet('/x/omelette-guard.mjs', 'linux').join('\n'));
   assert.deepEqual(Object.keys(snippet.hooks), ['PreToolUse', 'PreCompact', 'SessionStart']);
   assert.equal(snippet.hooks.PreToolUse[0].matcher, 'Bash');
-  assert.equal(snippet.hooks.SessionStart[0].matcher, 'compact');
+  assert.equal(snippet.hooks.SessionStart[0].matcher, undefined);
   assert.equal(snippet.hooks.PreCompact[0].matcher, undefined);
 });
 
