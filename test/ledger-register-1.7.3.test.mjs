@@ -73,6 +73,8 @@ test('readRegisterPath: anything but a relative path to a file inside the projec
     ['/etc/passwd', '/etc/passwd', 'absolute path'],
     ['../x.md', '../x.md', 'contains ..'],
     ['docs/../../x.md', 'docs/../../x.md', 'contains ..'],
+    ['.env', '.env', 'not a .md file'],
+    ['docs/notes.txt', 'docs/notes.txt', 'not a .md file'],
     ['.omelette/decisions.md', '.omelette/decisions.md', 'points at itself'],
     ['nowhere/x.md', 'nowhere/x.md', 'its directory does not exist'],
     ['away/x.md', 'away/x.md', 'outside the project'],

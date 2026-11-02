@@ -244,6 +244,7 @@ The date is the ledger line's own leading date, else the sweep's. A line that no
 |---|---|
 | empty; control characters in the value | not a path |
 | an absolute path; a path with `..`; a path outside the project | must be a relative path inside the project |
+| a name not ending in `.md` (`register: .env`) | a register is a markdown file — the print would carry any other file's tail into the session |
 | a symlink | never followed |
 | a target inside `.git/`, inside `.omelette/`, or the register file itself | judged by inode, so a symlinked directory or a different letter case does not slip past |
 

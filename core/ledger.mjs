@@ -321,6 +321,9 @@ export function readRegisterPath(projectDir) {
   // filesystem reaches the same inode under another name.
   if (underProjectDir(projectDir, realRoot, realDir, '.git')) return refuse('inside .git');
   if (underProjectDir(projectDir, realRoot, realDir, '.omelette')) return refuse('inside .omelette');
+  // A register is a markdown file: a redirect at `.env` or any other file the
+  // project holds would print its tail into the session after a /clear.
+  if (!/\.md$/i.test(value)) return refuse('not a .md file');
   let st = null;
   try {
     st = lstatSync(target);
