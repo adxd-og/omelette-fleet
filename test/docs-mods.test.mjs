@@ -18,7 +18,7 @@ test('docs/MODS.md opens with a map table', () => {
 });
 
 test('docs/MODS.md names the tested Claude Code build', () => {
-  assert.match(md, /Claude Code \*\*2\.1\.294\*\*/);
+  assert.match(md, /Claude Code \*\*2\.1\.317\*\*/);
 });
 
 test('docs/MODS.md carries no absolute home path', () => {

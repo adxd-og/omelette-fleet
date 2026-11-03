@@ -1,10 +1,13 @@
 # Mods
 
-The fleet pane: an optional Claude Code mod, shipped in this package, that draws the orchestrator, its sub-agents and the three units, and who is calling whom. It only reads.
+The fleet pane: an optional Claude Code mod, shipped in this package, that draws the orchestrator, its sub-agents and the three units, and who is calling whom. Since 1.8.0 it also delivers the guard's answer (the same rendered script the settings hook runs), pins a guarded role's model to its definition, hands the handoff back as a context block and, if you switch it on, skips a compaction that has no fresh handoff. The pane itself still only reads.
 
 | Question | Where |
 |---|---|
 | What does the pane show? | [What the pane shows](#what-the-pane-shows) |
+| What do the pane's notes say about a pin, an effort flag, a refusal or a touched record? | [Pins, effort flags and refusals](#pins-effort-flags-and-refusals) |
+| How does the mod refuse a call, and which script does it run? | [The guard delivery](#the-guard-delivery) |
+| How does the handoff reach the session, and what does the compaction skip do? | [The handoff block and the compaction skip](#the-handoff-block-and-the-compaction-skip) |
 | How do I install it, update it, remove it? | [Install, update and removal](#install-update-and-removal) |
 | How do I open and close it, and what can I switch off? | [Commands and options](#commands-and-options) |
 | What does it look like on a narrow terminal, with `NO_COLOR`, and what moves? | [Terminals](#terminals) |
@@ -64,6 +67,31 @@ State glyphs:
 
 With `animate` off the running glyph is a still `▶` and the frame keeps its accent colour. With the pane closed, one status-line entry says the same in short while anything runs (`fleet: coder-medium, grok 2:17`) and nothing when all is idle.
 
+### Pins, effort flags and refusals
+
+Four things the mod does draw as one dim line each under the graph (the newest six, with a `+K more notes` line above them), or under the agent's name in the narrow tree:
+
+| Note | What it says |
+|---|---|
+| `coder: pinned opus → claude-opus-5-5` | The spawn asked for a model the role's definition does not name, and the mod set the definition's. A toast `pinned <role> to <id>` came with it. |
+| `coder: effort max (definition says xhigh)` | A guarded role's step reported an effort other than its definition's, once per agent. Nothing was changed; a toast `effort <x> on <role> (definition says <y>)` came with it. |
+| `touched: <file> — <n> files` | The touched record the guard wrote when the agent stopped ([CONFIG](CONFIG.md#the-touched-reports)); shown on a reported agent, and cut to its file name and count when the line is too long. |
+| `refused` | Not a note: the activity of a loop whose call the guard refused, for one tick. |
+
+The pane keeps two counts per day in its own state, for the measurement and not drawn: refusals by delivery (the mod's), and pins. A spawn the engine answered with another model (a session that forces one sub-agent model outranks the hook) is not counted as a pin; it gets one toast saying so.
+
+### The guard delivery
+
+The mod hooks `tool.call` for `Bash`, `Write`, `Edit` and `NotebookEdit` and asks the rendered guard script about the call, before the engine runs it. It finds the script at `.claude/hooks/omelette-guard.mjs` in the session's directory, else in the user's `$HOME`, runs it with `node` (looked up in the absolute entries of `PATH` only) with the call as a `PreToolUse` event on stdin, and waits at most 2 s. Exit 2 refuses the call, the script's stderr — stripped of ANSI escapes and control characters, 2 KB at most — being the reason the model reads. **Any other outcome lets the call go on**: another exit code, a timeout, no rendered script (said once, `guard v2: no rendered script — omelette-fleet rules --hooks`), no `node` (said once). The mod has no rule of its own and refuses nothing the script does not.
+
+The call goes to the script for the main thread too, with `agent_type` only when the pane knows the loop's role (the script's curated-file rules apply to every caller, its git and fence rules to the four roles). When the settings hook is wired as well, the mod answers first and a refusal reaches the hook never, so a call both would refuse is refused once, with the same text. What the script refuses: [ORCHESTRATION, "Guard v2: the rules"](ORCHESTRATION.md#guard-v2-the-rules); why running a project's script is the designed answer: [SECURITY, "Wiring, and what the guard is not"](SECURITY.md#wiring-and-what-the-guard-is-not). The guard is containment for the sub-agent roles, not a security boundary.
+
+### The handoff block and the compaction skip
+
+- **The block.** `prompt.context` fires for a session's first request and again when a compaction or a `/clear` has the context read anew. At each fire the mod runs the same script as a `SessionStart` on `clear` (5 s) and adds its text as a context block named `omeletteHandoff`: the open ledgers' last handoffs, the decisions register's tail and the backlog's first table, under the guard's 12 KB. Empty output adds nothing. A fresh start gets it too; the settings hook stays silent there.
+- **One copy.** On `compact` and `clear`, the settings hook's own print would arrive beside the block. The mod hooks `SessionStart` for those two sources and removes from its context the one entry that starts with the print's marker line, `--- omelette-fleet · read before continuing ---`, keeping every other hook's. It does so only while a rendered script is there to print the block from. A script rendered before 1.8.0 prints plain text, which the mod cannot remove: re-render with `omelette-fleet rules --hooks`.
+- **The skip, off by default.** With the `handoffGate` option on, a manual or automatic compaction of the main conversation is skipped once, with the notice `no handoff in the last 30 minutes: write one, then compact again`, when the newest open ledger has no fresh handoff; the next attempt within 10 minutes goes through. What fresh means and the fenced-heading caveat: [CONFIG, "Handoff settings"](CONFIG.md#handoff-settings). A sub-agent's own compaction, a plugin's and a precompute pass are never skipped.
+
 ## Install, update and removal
 
 The package root (the folder with `package.json`) is a folder marketplace. The terminal reads the mod from it in place; the desktop app runs its own Claude Code and loads the copy cached at install. `omelette-fleet rules --mods` prints these commands and writes nothing. The CLI never writes Claude Code's settings.
@@ -95,8 +123,9 @@ At session start the mod asks for the pane unasked. Claude Code seats it on its 
 |---|---|---|
 | `autoOpen` | `true` | `false` stops the pane opening at session start. The command and the status-line entry stay. |
 | `animate` | `true` | `false` turns all motion off: no spinner, no fast tick, no moving lines on the desktop. The accent frames stay. |
+| `handoffGate` | `false` | `true` skips a manual or automatic compaction once while the newest open ledger has no handoff block of the last 30 minutes; the next attempt within 10 minutes passes. |
 
-Both are rows in Claude Code's plugin config menu. Defaults are also listed in [CONFIG](CONFIG.md#the-fleet-pane-mod).
+All three are rows in Claude Code's plugin config menu. Defaults are also listed in [CONFIG](CONFIG.md#the-fleet-pane-mod).
 
 ## Terminals
 
@@ -123,33 +152,38 @@ Live lines run as a dashed stroke from caller to callee, and a running box's fra
 | Agents it never saw spawn (after a reload or a resume), and each agent's status (a held agent or an idle teammate reads as waiting) | `$.agent.list()`, at open and with the status feed, at most every 2 s |
 | Context fill and the rate-limit windows | `$.session.usage()` and the engine's measure event |
 | A unit's model, start time, and calls made by other sessions (shown as `← other`) | The units' status snapshots, `status-<unit>-<pid>.json` under `$OMELETTE_HOME` (default `~/.omelette`), schema 2. See [STATUS-FEED](STATUS-FEED.md). |
+| The rendered guard script, to run it | `.claude/hooks/omelette-guard.mjs` in the session's directory, else the user's `$HOME` copy |
+| Each guarded role's `model:` and `effort:` | `.claude/agents/<role>.md` in the project, else the user's `$HOME`, read once per session, for the pin and the effort flag |
+| The open ledgers, for the gate | `.omelette/ledger-*.md`: the `branch:` header and the last `## Handoff` heading; one `git show-ref` per ledger that names a branch (2 s) |
+| A stopped agent's touched record | `.omelette/reports/touched-<role>-<id8>.md`, read for the pane's note, never written by the mod |
+| `CLAUDE_CODE_EFFORT_LEVEL` | The environment, at session start, for one notice when it is set |
 
 Snapshots that cannot be read are handled quietly. No fleet home, a malformed file or a schema other than 2 makes the unit's box say `no feed`; this session's own calls still show. A snapshot with a call in `active[]` and an `updatedAt` older than 2 hours reads as idle: the mod spawns nothing, so it cannot ask whether the process is alive.
 
-It writes only its own pane state (`$.state`, so a reload redraws from it). It writes no file, spawns no process and sends nothing over the network.
+It writes only its own pane state (`$.state`, so a reload redraws from it, and the time of the gate's last skip). It writes no file and sends nothing over the network. It spawns two kinds of process and no others: `node` on the rendered guard, and `git show-ref` for the gate, each with a clock and an environment of absolute `PATH` entries.
 
 ## What it never does
 
-- **It refuses, rewrites and blocks nothing.** Every hook hands the engine's event on unchanged. A hook that fails is skipped by the engine and the session goes on.
+- **It refuses nothing of its own.** The only refusal it answers is the guard script's exit 2 ([The guard delivery](#the-guard-delivery)); every failure of its own, and every other outcome of the script, lets the call go on. A hook that fails is skipped by the engine and the session goes on.
+- **It rewrites two things and no more.** A guarded role's `model` at spawn, to its definition's, and the `SessionStart` context of `compact` and `clear`, where it takes out one entry. The rest of an event goes on unchanged.
 - **It draws no raw text.** Every state string is cleaned of terminal control characters (C0 and C1 controls, DEL, bidi controls) before it is drawn, and XML-escaped in the SVG.
 - **A command line stays off the pane.** A Bash command shows its program, and for a short list of programs (`git`, `npm`, `node`, `docker` and a few more) one plain next word — the subcommand or the script's name. Flags, paths, environment assignments and everything after those one or two words are never shown. Whatever stands in those one or two places does show, quotes removed: a secret typed as the program's name or as that next word (`python3 'hunter2'`) would reach the pane; nothing else in a command line does.
-- **It touches no setting.** It does not edit `settings.json`, the rules file or the guard.
+- **It touches no setting.** It does not edit `settings.json`, the rules file or the guard. It runs the guard and never writes it.
 
-The history records call attempts. A call that a guard or another hook refuses further down the chain still appears, because the pane sees the attempt, not the result.
+The history records call attempts. A call that another hook refuses further down the chain still appears, because the pane sees the attempt, not the result; a call the mod's own guard refused shows `refused` for one tick.
 
 ## The tested build, and other builds
 
-Tested on Claude Code **2.1.294**. The plugin API is early access: its declaration file grew from 13 186 to 20 422 lines between 2.1.277 and 2.1.289.
+Tested on Claude Code **2.1.317**. The plugin API is early access: its declaration file grew from 13 186 to 20 422 lines between 2.1.277 and 2.1.289.
 
 On another build the event shapes may differ. The hooks then fail and the engine skips them: the pane may be empty or not open, and nothing else changes. If the pane misbehaves after a Claude Code update, update the package and `/reload-plugins`. The release gate re-tests on the build of the day.
 
 ## The road after
 
-Not in 1.7.0: anything that refuses, rewrites or blocks. The slices that follow, each with its own spec:
+1.7.0 refused, rewrote and blocked nothing; 1.8.0 added the guard delivery, the pins and the handoff block. The slices that follow, each with its own spec:
 
 | Slice | What |
 |---|---|
-| Guard v2 and the handoff delivery | The mod asks the existing guard script; after a compaction the last ledger handoff is handed back to the session. |
 | The gates | Tester after coder, the release commit's checks, reports checked as they are written. |
 | Rules by event | Judgement rules handed to the model when they apply, and a smaller rules file. |
 | Cost per task and role | Ledger lines from the session's measure. |
