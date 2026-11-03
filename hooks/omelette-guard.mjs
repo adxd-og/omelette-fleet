@@ -195,6 +195,119 @@ function substitutionEnd(command, start) {
 }
 
 /**
+ * The delimiter word of a `<<` or `<<-` whose operator ends just before `from`:
+ * `{ raw, word, quoted, end }` — the word as written, the word with its quotes
+ * and backslashes off, whether any were there (a quoted delimiter makes the body
+ * literal), and the index just past it — or null when no word follows on the line.
+ */
+function heredocDelimiter(command, from) {
+  let i = from;
+  while (command[i] === ' ' || command[i] === '\t') i++;
+  const start = i;
+  let word = '';
+  let quoted = false;
+  let quote = '';
+  for (; i < command.length; i++) {
+    const c = command[i];
+    if (quote) { if (c === quote) quote = ''; else word += c; continue; }
+    if (c === '"' || c === "'") { quote = c; quoted = true; continue; }
+    if (c === '\\' && i + 1 < command.length) { quoted = true; word += command[++i]; continue; }
+    if (/\s/.test(c) || ';&|<>()'.includes(c)) break;
+    word += c;
+  }
+  return i > start ? { raw: command.slice(start, i), word, quoted, end: i } : null;
+}
+
+/**
+ * HEREDOC BODIES ARE TEXT. From `pos` — just past the newline that ends the
+ * operator's line — each pending heredoc, in order, takes the lines up to the
+ * one that IS its word (after leading tabs for `<<-`): `EOF text` or `  EOF` is
+ * body, and a body that never terminates runs to the end. An unquoted body still
+ * expands `$(…)` and backquotes, so what those run is handed back in `spans`.
+ *
+ * @returns {number} the index just past the last terminator line
+ */
+function skipHeredocBodies(command, pos, heredocs, spans) {
+  for (const { word, quoted, stripTabs } of heredocs) {
+    let body = '';
+    while (pos < command.length) {
+      // In an unquoted body, a line ending in an odd run of backslashes goes on
+      // into the next one, the backslash and newline dropped: `EO\` + `F` is `EOF`.
+      // The run is counted within each physical line: what is kept of the line
+      // before is an even run, pairs that are already complete.
+      let line = '';
+      for (;;) {
+        const newline = command.indexOf('\n', pos);
+        const lineEnd = newline < 0 ? command.length : newline;
+        let run = 0;
+        while (lineEnd - run > pos && command[lineEnd - run - 1] === '\\') run++;
+        line += command.slice(pos, lineEnd);
+        pos = Math.min(lineEnd + 1, command.length);
+        if (quoted || newline < 0 || run % 2 === 0) break;
+        line = line.slice(0, -1);
+      }
+      if ((stripTabs ? line.replace(/^\t+/, '') : line) === word) break;
+      if (!quoted) body += `${line}\n`;
+    }
+    if (quoted) continue;
+    for (let k = 0; k < body.length; k++) {
+      if (body[k] === '\\') { k++; continue; } // `\$(` and `` \` `` are literal in a body
+      if (!((body[k] === '$' && body[k + 1] === '(') || body[k] === '`')) continue;
+      const end = substitutionEnd(body, k);
+      spans.push(body.slice(k + (body[k] === '`' ? 1 : 2), end));
+      k = end;
+    }
+  }
+  return pos;
+}
+
+/**
+ * WHERE THE SHELL READS NO REDIRECTION. The index of the last character of the
+ * region opened at `start`, or -1 when it is not one: `((` — arithmetic, only
+ * when its matching close is `))`, else nested subshells (`((git commit); x)`);
+ * `{` — a `${…}`, to its matching `}`; `[` — a subscript inside a word, to its
+ * `]`, and not one when an unquoted blank or separator comes first. A region
+ * that never closes is not one, so the rest of the command is read as before.
+ * Quotes, backslashes and substitutions are skipped, so a `)` or `}` inside them
+ * closes nothing.
+ *
+ * ONE BUDGET PER COMMAND. Every call made for one tokenize shares `budget`, the
+ * characters left to examine: `a[a[a[…` unclosed would otherwise scan to the end
+ * from every opener — quadratic, 120 KB took 73.5 s against the hook's 150 s
+ * timeout. A closed region scans only to its close, so a real command never
+ * spends it; one that does is refused whole (`exhausted`, TOO_DEEP), because
+ * any reading past that point would be a second parser to prove against bash.
+ */
+const OPAQUE_SCAN_BUDGET = 1 << 20;
+
+function opaqueEnd(command, start, kind, budget) {
+  const [open, close] = kind === '{' ? '{}' : kind === '[' ? '[]' : '()';
+  let depth = 0;
+  let quote = '';
+  for (let j = start; j < command.length; j++) {
+    if (--budget.left < 0) return -1;
+    const c = command[j];
+    if (quote) { if (c === quote) quote = ''; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === '\\') { j++; continue; }
+    if ((c === '$' && command[j + 1] === '(') || c === '`') {
+      const end = substitutionEnd(command, j);
+      budget.left -= end - j;
+      j = end;
+      continue;
+    }
+    if (kind === '[' && (/\s/.test(c) || SEPARATORS.has(c))) return -1;
+    if (c === open) depth++;
+    else if (c === close) {
+      depth--;
+      if (kind === '((' && depth === 1) return command[j + 1] === ')' ? j + 1 : -1;
+      if (depth === 0) return j;
+    }
+  }
+  return -1;
+}
+
+/**
  * The whole command as WORDS and SEPARATORS, in one left-to-right pass. A quoted
  * span is opaque — the whitespace, the `;` and the `>` inside it belong to the
  * value, and a word that OPENS with a quote is a value rather than a flag, so
@@ -226,7 +339,8 @@ function substitutionEnd(command, start) {
  *
  * @returns {object} `{ tokens, spans }`: each token `{ text, quoted, separator }`,
  *   each span a text to read again as a command — a quoted word with its quotes
- *   off, or what a command or process substitution runs
+ *   off, or what a command or process substitution runs — plus `exhausted: true`,
+ *   and nothing read past that point, when the brackets spent OPAQUE_SCAN_BUDGET
  */
 function tokenize(command) {
   const tokens = [];
@@ -235,6 +349,8 @@ function tokenize(command) {
   let quoted = false;
   let quote = '';
   let redirect = false; // the next word is a redirection's target
+  const pendingHeredocs = []; // `<<`/`<<-` read on this line, their bodies start at the next newline
+  const budget = { left: OPAQUE_SCAN_BUDGET }; // shared by every opaqueEnd this command makes
   const push = () => {
     if (!text) return;
     if (!redirect) tokens.push({ text, quoted, separator: false });
@@ -253,6 +369,31 @@ function tokenize(command) {
     }
     if (c === '"' || c === "'") { quoted = quoted || !text; text += c; quote = c; continue; }
     const next = command[i + 1] ?? '';
+    let opaque = -1;
+    if (c === '(' && next === '(' && !text) opaque = opaqueEnd(command, i, '((', budget);
+    else if (c === '$' && next === '{') opaque = opaqueEnd(command, i + 1, '{', budget);
+    else if (c === '[' && text) opaque = opaqueEnd(command, i, '[', budget);
+    if (budget.left < 0) return { tokens, spans, exhausted: true }; // no partial reading: refused whole
+    if (opaque >= 0) {
+      // Part of the word, `<<` and all; only its substitutions are commands.
+      let inner = '';
+      for (let k = i; k <= opaque; k++) {
+        const ch = command[k];
+        if (inner) { if (ch === inner) inner = ''; text += ch; continue; }
+        if (ch === '"' || ch === "'") { inner = ch; text += ch; continue; }
+        if (ch === '\\') { text += command.slice(k, k + 2); k++; continue; }
+        if ((ch === '$' && command[k + 1] === '(') || ch === '`') {
+          const end = substitutionEnd(command, k);
+          spans.push(command.slice(k + (ch === '`' ? 1 : 2), end));
+          text += ch === '`' ? '``' : '$()';
+          k = end;
+          continue;
+        }
+        text += ch;
+      }
+      i = opaque;
+      continue;
+    }
     if (((c === '$' || c === '<' || c === '>') && next === '(') || c === '`') {
       const end = substitutionEnd(command, i);
       const open = c === '`' ? '`' : `${c}(`;
@@ -267,10 +408,24 @@ function tokenize(command) {
       if (/^\d+$/.test(text)) text = ''; else push(); // `2>`: the fd number is part of the operator
       if (c === '&') i++; //                             `&>`, `&>>`: the `>` comes next
       const follows = (chars) => i + 1 < command.length && chars.includes(command[i + 1]);
+      let heredoc = false;
       if (command[i] === '>' && follows('>|&')) i++; //                     `>>`, `>|`, `>&`
-      else if (command[i] === '<' && follows('<')) { i++; if (follows('<-')) i++; } // `<<`, `<<<`, `<<-`
-      else if (command[i] === '<' && follows('>&')) i++; //                 `<>`, `<&`
+      else if (command[i] === '<' && follows('<')) { // `<<`, `<<<`, `<<-`
+        i++;
+        heredoc = !follows('<(');
+        if (follows('<-')) i++;
+      } else if (command[i] === '<' && follows('>&')) i++; //               `<>`, `<&`
       redirect = true;
+      if (heredoc) {
+        const delimiter = heredocDelimiter(command, i + 1);
+        if (delimiter) {
+          pendingHeredocs.push({ word: delimiter.word, quoted: delimiter.quoted, stripTabs: command[i] === '-' });
+          text = delimiter.raw;
+          push();
+          i = delimiter.end - 1;
+        }
+        continue;
+      }
       if (follows('(')) {
         // A `(` right behind the operator — `>>(…)`, `2>>(…)`, `<<(…)`, `&>>(…)`,
         // `>|(…)` — is a process substitution as the target: zsh runs what is
@@ -287,6 +442,9 @@ function tokenize(command) {
       push();
       redirect = false;
       tokens.push({ text: c, quoted: false, separator: true });
+      if (c === '\n' && pendingHeredocs.length) {
+        i = skipHeredocBodies(command, i + 1, pendingHeredocs.splice(0), spans) - 1;
+      }
       continue;
     }
     if (/\s/.test(c)) { push(); continue; }
@@ -778,6 +936,9 @@ const FED_BY_XARGS_WRITES = new Set(['branch', 'checkout', 'switch', 'symbolic-r
  */
 const QUOTE_DEPTH = 4;
 
+/** A command whose brackets spent OPAQUE_SCAN_BUDGET, at any level: refused unread, by TOO_DEEP. */
+class TooDeep extends Error {}
+
 /**
  * Everything a guarded role may not run, in one question: the comments come off,
  * the command is tokenized once, and each invocation is answered — a history
@@ -788,7 +949,8 @@ const QUOTE_DEPTH = 4;
  * levels, so a 10 KB command costs milliseconds and is never tiled.
  */
 const forbidden = (raw, depth = 0) => {
-  const { tokens, spans } = tokenize(withoutComments(raw));
+  const { tokens, spans, exhausted } = tokenize(withoutComments(raw));
+  if (exhausted) throw new TooDeep();
   return invocations(tokens).some(({ name, args, xargs }) => WRITES_HISTORY.has(name)
     || (xargs && FED_BY_XARGS_WRITES.has(name)) || WRITES_BY_ARGUMENTS.get(name)(args))
     || spans.some((span) => (depth < QUOTE_DEPTH ? forbidden(span, depth + 1) : /\bgit\b/.test(span)));
@@ -820,6 +982,7 @@ const forbidden = (raw, depth = 0) => {
  */
 const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer']);
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
+const TOO_DEEP = (agent) => `${agent}: command too deep to read (over 1 MiB of bracket scanning) — split it, or write the file with Write`;
 const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
 
 /**
@@ -922,11 +1085,17 @@ function preToolUse(event) {
   const input = event.tool_input && typeof event.tool_input === 'object' ? event.tool_input : {};
   const agent = str(event.agent_type);
   if (!GUARDED_AGENTS.has(agent) || event.tool_name !== 'Bash') return;
-  if (!forbidden(str(input.command))) return;
+  let reason = REFUSAL(agent);
+  try {
+    if (!forbidden(str(input.command))) return;
+  } catch (e) {
+    if (!(e instanceof TooDeep)) throw e;
+    reason = TOO_DEEP(agent);
+  }
   // exitCode, not exit(): the process leaves on its own once stderr is flushed.
   // Set first, so a stderr that cannot be written to still refuses the call.
   process.exitCode = 2;
-  say(process.stderr, `${REFUSAL(agent)}\n`);
+  say(process.stderr, `${reason}\n`);
 }
 
 /**

@@ -1302,3 +1302,65 @@ test('PreToolUse: a `(` right behind any redirection operator opens a process su
     assert.equal(r.err, '');
   }
 });
+
+test('PreToolUse: a heredoc body is text — only its unquoted substitutions run, and the command line after the operator is still read', () => {
+  const g = guard();
+  for (const [command, code] of [
+    ['cat > a.mjs <<\'EOF\'\nconst x = "git commit";\nEOF\n', 0],
+    ['cat > a.mjs <<EOF\nconst x = "git commit";\nEOF\n', 0],
+    ['cat > a.mjs <<EOF\n$(git commit -m x)\nEOF\n', 2],
+    ['cat > a.mjs <<\'EOF\'\n$(git commit -m x)\nEOF\n', 0],
+    ['cat <<EOF\n`git push`\nEOF\n', 2],
+    // `<<-` strips leading tabs, so the tab-indented terminator ends the body.
+    ['cat <<-EOF\n\tgit commit\n\tEOF\n', 0],
+    // A line that only starts with the word is body, not the end.
+    ['cat <<EOF\nEOF text\ngit commit\nEOF\n', 0],
+    // A body that never terminates runs to the end of the command.
+    ['cat <<EOF\ngit commit\n', 0],
+    // Two heredocs on one line: their bodies follow in order.
+    ['cat <<A <<B\ngit commit\nA\ngit push\nB\n', 0],
+    // What follows the operator on its own line is a command line.
+    ['cat <<EOF; git commit\nbody\nEOF\n', 2],
+    // A `((`, `${` or subscript is opaque to `<<`, never to what its substitutions run.
+    ['(( $(git commit -m x) ))', 2],
+    ['echo ${x:-$(git push)}', 2],
+    ['a[$(git push)]=x', 2],
+    // `((` that does not close with `))` is two subshells, and a blank ends a subscript.
+    ['((git commit -m x); echo y)', 2],
+    ['echo a[ ; git commit -m x ]', 2],
+    // An unquoted body joins a line ending in an odd run of backslashes to the
+    // next one: `EO\` + `F` is the terminator. A quoted body joins nothing.
+    ['cat <<EOF\nfoo\nEO\\\nF\ngit commit -m x\n', 2],
+    ['cat <<\'EOF\'\nfoo\nEO\\\nF\ngit commit -m x\n', 0],
+    ['cat <<EOF\nfoo\\\\\nEOF\ngit commit\n', 2],
+    ['cat <<EOF\n$(git \\\npush)\nEOF\n', 2],
+  ]) {
+    const r = fire(g.path, preToolUse({ agent_type: 'omelette-coder', tool_name: 'Bash', tool_input: { command } }));
+    assert.equal(r.code, code, `${JSON.stringify(command)} should exit ${code}: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), code === 2 ? REFUSAL('omelette-coder') : '');
+  }
+});
+
+test('PreToolUse: brackets that spend the scan budget are refused whole, fast, as too deep to read', () => {
+  const g = guard();
+  const spend = 'a['.repeat(100000);
+  for (const command of [
+    spend, // no git word at all: the refusal is for the depth, not for git
+    `${spend}; x=\${y:-1<<2}\ngit commit -m x\n`,
+    `${'${'.repeat(100000)}; git commit -m x`,
+    `${'(( '.repeat(60000)}; git commit -m x`,
+  ]) {
+    const started = Date.now();
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    const ms = Date.now() - started;
+    const name = `${command.slice(0, 6)}…${command.slice(-30)}`;
+    assert.equal(r.code, 2, `${name} should be blocked: ${r.out}${r.err}`);
+    assert.match(r.err, /^omelette-coder: command too deep to read/, name);
+    assert.ok(ms < 2000, `${name} took ${ms} ms`);
+  }
+  // Closed regions scan only to their close: hundreds of them never spend it.
+  const command = `echo ${'${x:-a} b[1] '.repeat(300)}`;
+  const r = fire(g.path, preToolUse({ tool_input: { command } }));
+  assert.equal(r.code, 0, `closed regions should pass: ${r.out}${r.err}`);
+  assert.equal(r.err, '');
+});
