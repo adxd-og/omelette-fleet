@@ -28,6 +28,7 @@
 | How is read-only actually enforced? | [Security](#security) |
 | How do I see what a unit is doing right now? | [Status feed](#status-feed) |
 | How do the rules reach my session? | [Orchestration](#orchestration) |
+| How does this differ from codex-plugin-cc or pal? | [FAQ, "How does this compare…"](#faq) |
 | Why CLIs instead of API keys, and other common questions? | [FAQ](#faq) |
 
 ## Documentation
@@ -386,6 +387,14 @@ The Codex catalog lists what exists in the current generation, not what one acco
 - The default `gpt-6.1-sol` needs a codex-cli that carries its metadata, which older ones lack: an older CLI refuses it with that same message, not because of the plan — update Codex. Which versions, probed when: [ORCHESTRATION, "Model and effort escalation"](docs/ORCHESTRATION.md#model-and-effort-escalation).
 - `gpt-6-astra-pro`, `gpt-6-pro` and `gpt-6` are rejected on a ChatGPT plan and are not in the catalog ([when last probed](docs/ORCHESTRATION.md#model-and-effort-escalation)).
 - `omelette-fleet doctor --probe-models` tells you exactly which ids your account accepts. Plain `doctor` prints your installed CLI's bundled default beside the model the fleet pins — since 0.159.1 the CLI's is `gpt-6.1-sol`, the same catalog head the fleet pins when no `codex.model` is configured, and the fleet pins its model explicitly regardless, because it runs with `--ignore-user-config`.
+
+**How does this compare to codex-plugin-cc or pal?**
+Both drive vendor CLIs from inside Claude Code; the difference is in what they let the CLI do and what survives a timeout. [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) is OpenAI's own plugin: Codex only, reviews run read-only with approvals off, one command (`/codex:rescue`) writes to the workspace, and a Stop hook can run a review and hold the session until it passes. [pal](https://github.com/BeehiveInnovations/pal-mcp-server) is one MCP server over several CLIs and starts Codex with `--dangerously-bypass-approvals-and-sandbox`, Gemini with `--yolo` and Claude with `--permission-mode acceptEdits`; a client timeout loses the answer and its docs say to raise `MCP_TOOL_TIMEOUT`. What this package does differently, on purpose:
+
+- **Read-only by the vendor's own enforcement**, kernel-scoped for Codex, and never a `--dangerously-*` flag in any mode ([Security](#security)).
+- **A client timeout loses nothing**: every answer is spooled before it is sent, and `<unit>_result` returns it ([CONFIG, What the result spool keeps](docs/CONFIG.md#what-the-result-spool-keeps)).
+- **No hook holds the session**: the guard refuses, stamps and prints, and never blocks a stop or a compaction ([DECISIONS](docs/DECISIONS.md)).
+- **One child environment**, built from an allowlist with the billing keys scrubbed, and a [status feed](#status-feed) that shows what each unit is doing.
 
 **How do I add a unit?**
 Three files and a test: `units/<unit>/models.js` (the model allowlist and cheat-sheet), `units/<unit>/adapter.mjs` (a `defineUnit({...})` call), `servers/<unit>.mjs` (a two-line entrypoint). The runtime gives you config, the ceiling, catalog validation, the mutate gate, the status feed, bounded spawn with the env allowlist and billing scrub, and JSON-RPC. Step by step, with a skeleton and the fake-binary test pattern: [docs/ADAPTERS.md](docs/ADAPTERS.md).
