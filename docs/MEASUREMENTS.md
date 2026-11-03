@@ -44,6 +44,7 @@ What has actually been measured on this project, how each number was taken, and 
 | What outlives a killed unit server, per vendor CLI? | [Unit processes after the server is gone](#unit-processes-after-the-server-is-gone) |
 | Which MCP protocol version does Claude Code ask for, and which does the server claim? | [What Claude Code sends at `initialize`](#what-claude-code-sends-at-initialize) |
 | What does the fleet pane add to each tool call? | [The fleet pane's cost per tool call](#the-fleet-panes-cost-per-tool-call) |
+| What does the mod's guard delivery (1.8.0) add to each tool call? | [The mod's guard per tool call](#the-mods-guard-per-tool-call) |
 | Which vendor CLI versions was each release live-gated on? | [Vendor CLI versions per release](#vendor-cli-versions-per-release) |
 
 **Unit quality** — the evals:
@@ -460,6 +461,19 @@ No measurable cost: the medians differ by half a millisecond the other way, the 
 
 **How it was taken.** `claude -p` on `claude-haiku-5-5` in an empty folder, asked to call Bash with `true` twenty times, one call per turn, with `--output-format stream-json --verbose` and `--allowedTools 'Bash(true)'`. Each call is timed from the arrival of the assistant line carrying the `tool_use` to the line carrying its `tool_result`. Two series with the mod enabled, two after `claude plugin disable omelette-fleet@omelette-fleet`; the first, cold call of each series is dropped. A headless run never opens the pane, so the tick and the drawing are not in these numbers, only the hooks every tool call passes through.
 
+## The mod's guard per tool call
+
+Measured 2026-11-04 at the 1.8.0 live gate on Claude Code 2.1.317, the same method, in an empty folder holding a rendered guard (`rules --hooks` there) and no settings hook, so only the mod's delivery answers. The mod runs the rendered script with `node` on every `Bash`, `Write`, `Edit` and `NotebookEdit` call; the stop line stays 150 ms. Two runs, each two series per arm, 38 warm calls per arm:
+
+| Run | Mod | Median | Mean | Added, median |
+|---|---|---:|---:|---:|
+| 1 (the mod installed, the terminal reads it from its folder) | enabled | 684.7 ms | 697.3 ms | +21.7 ms |
+| | disabled (`--settings` enabledPlugins false) | 663.0 ms | 680.3 ms | |
+| 2 (the mod loaded with `--plugin-dir`, the installed one off in both arms) | enabled | 667.7 ms | 673.5 ms | +39.6 ms |
+| | disabled | 628.1 ms | 641.5 ms | |
+
+One node start of the rendered script per call, 22–40 ms at the median — the plugin kit's own clock on the same path reads 31 ms — a fifth of the stop line. Series medians within an arm agree to 1 ms in run 1 (684.8 / 684.6) and 2.4 ms in run 2 (668.6 / 666.2); the disabled arm's two runs differ by 35 ms between them, so the figure is the delta within a run, not the level. The disabled arm here is `--settings '{"enabledPlugins":{"omelette-fleet@omelette-fleet":false}}'` on the headless call, which touches no settings file.
+
 ## Vendor CLI versions per release
 
 The versions the live gate ran on, from the ledgers' live-gate lines and the CHANGELOG; "—" means the ledger did not record it (the CLIs auto-update, so a release without a recorded version was gated on whatever was installed that day).
@@ -480,6 +494,7 @@ The versions the live gate ran on, from the ledgers' live-gate lines and the CHA
 | 1.7.1 (2026-10-16) | 1.4.0 | 1.0.60 | 0.162.1 |
 | 1.7.2 (2026-10-21) | 1.4.4 | 1.0.62 | 0.162.1 |
 | 1.7.3 (2026-11-02) | 1.4.12 | 1.0.62 | 0.166.0 |
+| 1.8.0 (unreleased) | 1.4.12 | 1.0.62 | 0.166.0 |
 
 Each release adds its row at the live gate (a step of the release procedure the ledger records; this repository's own checklist is the operator's, not a published file).
 
