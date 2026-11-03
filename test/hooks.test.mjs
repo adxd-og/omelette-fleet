@@ -1860,3 +1860,49 @@ test('fence: a project reached through a symlinked path writes its report, befor
   const later = fenceFire(g, via, { path: `${via}/.omelette/reports/x-review.md` });
   assert.equal(later.code, 0, `reports/ present: ${later.err}`);
 });
+
+test('PreToolUse: heredoc (1b) — a continued operator line, a `#` delimiter and `$\'…\'` delimiters end where bash ends them', () => {
+  const g = guard();
+  for (const [command, code] of [
+    // A backslash-newline joins the operator's line: the body starts after the joined line.
+    ['cat <<EOF \\\n; git commit -m x\nbody\nEOF\n', 2],
+    ['echo a \\\nb', 0],
+    ['cat <<\'EOF\' \\\n; git push\nbody\nEOF\n', 2],
+    // An escaped backslash before the newline is no continuation.
+    ['echo a\\\\\ngit commit -m x', 2],
+    // Comments are read where the heredocs are known: a `#` terminator ends its body,
+    // and an apostrophe in a body leaves a later comment a comment.
+    ['cat <<\'#\'\nbody\n#\ngit commit -m x\n', 2],
+    ['cat <<EOF\nit\'s\nEOF\necho x # git commit\n', 0],
+    ['# git commit', 0],
+    ['echo x #git commit', 0],
+    ['echo "x#y" ; git commit', 2],
+    // `$'EOF'` and `$"EOF"` are the quoted word `EOF`.
+    ['cat <<$\'EOF\'\nbody\nEOF\ngit commit -m x\n', 2],
+    ['cat <<$"EOF"\nbody\nEOF\ngit commit -m x\n', 2],
+    ['cat <<$\'EOF\'\n$(git push)\nEOF\n', 0],
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, code, `${JSON.stringify(command)} should exit ${code}: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), code === 2 ? REFUSAL('omelette-coder') : '');
+  }
+});
+
+// The 1b tester's two defects (session fix): a CRLF terminator is bash's word, and a
+// continued body is joined once, not sliced per piece.
+test('PreToolUse: heredoc (1b) — a CRLF terminator ends its body, and a long continued body is read in linear time', () => {
+  const g = guard();
+  for (const [command, code] of [
+    ['cat <<EOF\r\nx\r\nEOF\r\ngit commit -m x\r\n', 2],
+    ['cat <<EOF\r\ngit commit -m x\r\nEOF\r\n', 0],
+    ['cat <<-EOF\r\n\tx\r\n\tEOF\r\ngit commit -m x\r\n', 2],
+    ['cat <<EOF\na\\\nb\\\nc\nEOF\ngit commit -m x\n', 2],
+  ]) {
+    const r = fire(g.path, preToolUse({ tool_input: { command } }));
+    assert.equal(r.code, code, `${JSON.stringify(command)} should exit ${code}: ${r.out}${r.err}`);
+  }
+  const started = Date.now();
+  const r = fire(g.path, preToolUse({ tool_input: { command: `cat <<EOF\n${'x\\\n'.repeat(600_000)}y\nEOF\ngit commit -m x\n` } }));
+  assert.equal(r.code, 2);
+  assert.ok(Date.now() - started < 5000, `${Date.now() - started} ms for a 1.2 MB continued body (was 17.9 s)`);
+});

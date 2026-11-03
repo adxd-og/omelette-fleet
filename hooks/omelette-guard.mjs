@@ -104,10 +104,10 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  * What a guarded role is never allowed to run, whatever it was asked to do: a
  * `git` invocation that writes history, a ref, a stash or a worktree. Matched
  * against real git syntax rather than its tidiest form, and read the way the
- * shell reads the command — the comments come off (withoutComments), the rest
- * becomes words, separators, redirections and command and process substitutions
- * in one pass (tokenize), and every `git … <subcommand>` in those words is found
- * with its own arguments (invocations). Then:
+ * shell reads the command — words, separators, comments, heredocs,
+ * redirections and command and process substitutions in one pass (tokenize),
+ * and every `git … <subcommand>` in those words is found with its own
+ * arguments (invocations). Then:
  *   - a subcommand in WRITES_HISTORY writes, whatever follows it;
  *   - `branch`, `checkout`, `switch`, `tag`, `rebase`, `reset` and
  *     `symbolic-ref` are read by their ARGUMENTS, because a flag or a name
@@ -150,33 +150,6 @@ const GLOBAL_NO_VALUE = new Set([
   '--no-replace-objects', '--noglob-pathspecs', '--paginate',
 ]);
 
-/**
- * The command with every shell COMMENT removed: from a `#` that starts a line or
- * follows whitespace, outside quotes, to the end of THAT LINE. Per line, because
- * that is where a comment ends — `echo hi # a note` says nothing about the
- * `git tag v1` on the line below it, and reading one as arguments gets the
- * answer backwards in both directions: `git tag v1 # --list` creates a tag, and
- * the `git commit` inside `echo x # git commit` is text. One left-to-right pass,
- * skipped entirely when the command holds no `#` at all.
- */
-function withoutComments(command) {
-  if (!command.includes('#')) return command;
-  let out = '';
-  let quote = '';
-  let comment = false;
-  for (let i = 0; i < command.length; i++) {
-    const c = command[i];
-    // A comment runs to the end of its line; the newline itself is kept,
-    // because it is what separates the next command from this one.
-    if (comment) { if (c === '\n' || c === '\r') { comment = false; out += c; } continue; }
-    if (quote) { out += c; if (c === quote) quote = ''; continue; }
-    if (c === '"' || c === "'") { quote = c; out += c; continue; }
-    if (c === '#' && (i === 0 || /\s/.test(command[i - 1]))) { comment = true; continue; }
-    out += c;
-  }
-  return out;
-}
-
 /** What ends one command and starts the next — outside quotes, and never inside them. */
 const SEPARATORS = new Set([';', '&', '|', '\n', '\r']);
 
@@ -218,6 +191,11 @@ function substitutionEnd(command, start) {
  * `{ raw, word, quoted, end }` — the word as written, the word with its quotes
  * and backslashes off, whether any were there (a quoted delimiter makes the body
  * literal), and the index just past it — or null when no word follows on the line.
+ *
+ * `$'EOF'` and `$"EOF"` are the quoted word `EOF`, as bash reads them: the `$`
+ * goes. ANSI-C escapes inside `$'…'` stay literal here — a delimiter written
+ * with escapes is not a case worth modelling. A backslash-newline inside the
+ * word is a continuation: both go and the word goes on.
  */
 function heredocDelimiter(command, from) {
   let i = from;
@@ -229,7 +207,9 @@ function heredocDelimiter(command, from) {
   for (; i < command.length; i++) {
     const c = command[i];
     if (quote) { if (c === quote) quote = ''; else word += c; continue; }
+    if (c === '$' && (command[i + 1] === "'" || command[i + 1] === '"')) continue;
     if (c === '"' || c === "'") { quote = c; quoted = true; continue; }
+    if (c === '\\' && command[i + 1] === '\n') { i++; continue; }
     if (c === '\\' && i + 1 < command.length) { quoted = true; word += command[++i]; continue; }
     if (/\s/.test(c) || ';&|<>()'.includes(c)) break;
     word += c;
@@ -253,19 +233,25 @@ function skipHeredocBodies(command, pos, heredocs, spans) {
       // In an unquoted body, a line ending in an odd run of backslashes goes on
       // into the next one, the backslash and newline dropped: `EO\` + `F` is `EOF`.
       // The run is counted within each physical line: what is kept of the line
-      // before is an even run, pairs that are already complete.
-      let line = '';
+      // before is an even run, pairs that are already complete. The pieces are
+      // joined once: a slice per piece made a long continued body quadratic.
+      const pieces = [];
       for (;;) {
         const newline = command.indexOf('\n', pos);
         const lineEnd = newline < 0 ? command.length : newline;
         let run = 0;
         while (lineEnd - run > pos && command[lineEnd - run - 1] === '\\') run++;
-        line += command.slice(pos, lineEnd);
+        const continues = !quoted && newline >= 0 && run % 2 === 1;
+        pieces.push(command.slice(pos, continues ? lineEnd - 1 : lineEnd));
         pos = Math.min(lineEnd + 1, command.length);
-        if (quoted || newline < 0 || run % 2 === 0) break;
-        line = line.slice(0, -1);
+        if (!continues) break;
       }
-      if ((stripTabs ? line.replace(/^\t+/, '') : line) === word) break;
+      const line = pieces.length === 1 ? pieces[0] : pieces.join('');
+      // On a CRLF line bash keeps the `\r` in the word and in the terminator; the
+      // word here ends before it, so the terminator is read with or without one —
+      // the guard never closes a body later than bash does.
+      const bare = line.endsWith('\r') ? line.slice(0, -1) : line;
+      if ((stripTabs ? bare.replace(/^\t+/, '') : bare) === word) break;
       if (!quoted) body += `${line}\n`;
     }
     if (quoted) continue;
@@ -356,6 +342,12 @@ function opaqueEnd(command, start, kind, budget) {
  * (`> $(git tag v1)`, `< <(git commit)`, and a `(` right behind the operator,
  * `>>(git push)`): the word goes, what it runs does not.
  *
+ * A COMMENT IS NO WORD: from a `#` that starts a word, outside quotes and
+ * heredoc bodies, to the end of THAT LINE — `echo hi # a note` says nothing about
+ * the `git tag v1` on the line below it, `git tag v1 # --list` creates a tag, and
+ * the `git commit` inside `echo x # git commit` is text. Until 1.8.0 a pre-pass
+ * stripped comments without knowing heredocs, and took a `<<'#'` terminator line.
+ *
  * A TARGET THAT IS A FILE is handed back too, in `targets`, for the curated
  * rule (bashWrites): its path with the quotes off, its operator without the fd
  * number (`2>` is `>`), and `at`, the number of words before it — which is how
@@ -404,6 +396,22 @@ function tokenize(command) {
     }
     if (c === '"' || c === "'") { quoted = quoted || !text; text += c; quote = c; continue; }
     const next = command[i + 1] ?? '';
+    if (c === '#' && !text) {
+      // A comment, from a `#` that starts a word to the end of its line; the
+      // newline stays, it separates the next command. Read here, where quotes
+      // and heredoc bodies are known: `<<'#'` ends at a `#` line, and an
+      // apostrophe in a body opens no quote that would hide a later comment.
+      while (i + 1 < command.length && command[i + 1] !== '\n' && command[i + 1] !== '\r') i++;
+      continue;
+    }
+    if (c === '\\' && next === '\n') {
+      // An unescaped backslash-newline (an odd run of backslashes) continues the
+      // line: both go, no separator, and pending heredoc bodies start at the next
+      // REAL newline — after the joined line, as bash reads `cat <<EOF \` + `; x`.
+      let run = 1;
+      while (i - run >= 0 && command[i - run] === '\\') run++;
+      if (run % 2 === 1) { i++; continue; }
+    }
     let opaque = -1;
     if (c === '(' && next === '(' && !text) opaque = opaqueEnd(command, i, '((', budget);
     else if (c === '$' && next === '{') opaque = opaqueEnd(command, i + 1, '{', budget);
@@ -993,8 +1001,8 @@ const QUOTE_DEPTH = 4;
 class TooDeep extends Error {}
 
 /**
- * Everything a guarded role may not run, in one question: the comments come off,
- * the command is tokenized once, and each invocation is answered — a history
+ * Everything a guarded role may not run, in one question: the command is
+ * tokenized once, its comments with it, and each invocation is answered — a history
  * writer always, one fed by xargs when FED_BY_XARGS_WRITES names it, the others
  * by their arguments (WRITES_BY_ARGUMENTS). Then every quoted word and every
  * command or process substitution is asked the same question, because `sh -c
@@ -1002,7 +1010,7 @@ class TooDeep extends Error {}
  * levels, so a 10 KB command costs milliseconds and is never tiled.
  */
 const forbidden = (raw, depth = 0) => {
-  const { tokens, spans, exhausted } = tokenize(withoutComments(raw));
+  const { tokens, spans, exhausted } = tokenize(raw);
   if (exhausted) throw new TooDeep();
   return invocations(tokens).some(({ name, args, xargs }) => WRITES_HISTORY.has(name)
     || (xargs && FED_BY_XARGS_WRITES.has(name)) || WRITES_BY_ARGUMENTS.get(name)(args))
@@ -1405,7 +1413,7 @@ function intoDirectory(word, cwd, afterCd) {
  * TooDeep is thrown, as `forbidden` throws it, and the caller refuses it.
  */
 function bashWrites(command, cwd) {
-  const { tokens, targets, exhausted } = tokenize(withoutComments(String(command)));
+  const { tokens, targets, exhausted } = tokenize(String(command));
   if (exhausted) throw new TooDeep();
   const commands = simpleCommands(tokens);
   const cd = commands.find(({ name }) => name === 'cd' || name === 'pushd');

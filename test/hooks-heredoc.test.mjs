@@ -151,3 +151,23 @@ test('heredoc: under `<<-` the tabs are stripped from the joined line, not from 
     [`cat <<-EOF\n\tEO\\\nF\n${G}\n`, 2],
   ]);
 });
+
+// A `#` is a comment only where a word starts (1b): inside a word, after `$`, or as `${#x}` it is
+// text, and the command after the `;` is still a command.
+test('heredoc (1b): a `#` inside a word is not a comment', () => {
+  const G = 'git ' + 'commit -m x';
+  check([
+    [`echo a#b; ${G}\n`, 2],
+    [`echo $#; ${G}\n`, 2],
+    [`echo \${#x}; ${G}\n`, 2],
+  ]);
+});
+
+// A backslash-newline inside the delimiter word joins it (bash 3.2 and zsh: `<<EO\` + `F` is `<<EOF`).
+test('heredoc (1b): a continuation inside the delimiter word joins it', () => {
+  const G = 'git ' + 'commit -m x';
+  check([
+    [`cat <<EO\\\nF\nbody\nEOF\n${G}\n`, 2],
+    [`cat <<EO\\\nF\n${G}\nEOF\n`, 0],
+  ]);
+});
