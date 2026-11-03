@@ -272,9 +272,9 @@ test('doctor: the guard line reads settings.local.json before settings.json, hon
 
   // Two PreToolUse groups, each named; a group without a matcher is `*`.
   settings({ PreToolUse: [group('Bash'), group('Write')] });
-  assert.equal(guardLine(), 'guard         settings hook wired (PreToolUse Bash, PreToolUse Write)');
+  assert.equal(guardLine(), 'guard         settings hook wired (PreToolUse Bash, PreToolUse Write, SubagentStop)');
   settings({ PreToolUse: [group()] });
-  assert.equal(guardLine(), 'guard         settings hook wired (PreToolUse *)');
+  assert.equal(guardLine(), 'guard         settings hook wired (PreToolUse *, SubagentStop)');
   settings({ PreToolUse: [group('Bash|Write|Edit|NotebookEdit')], SubagentStop: [group()] });
   assert.equal(guardLine(), 'guard         settings hook wired (PreToolUse Bash|Write|Edit|NotebookEdit, SubagentStop)');
 

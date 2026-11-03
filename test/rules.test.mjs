@@ -532,7 +532,8 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
   assert.ok(posix[1].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
   assert.ok(posix[2].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
   assert.ok(posix[3].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
-  assert.equal(posix.length, 4, 'the opener and one line per event');
+  assert.ok(posix[4].includes(`"command": "node '${spaced}'"`), posix.join('\n'));
+  assert.equal(posix.length, 5, 'the opener and one line per event');
   assert.equal(hookSettingsSnippet(spaced, 'linux').join('\n'), posix.join('\n'));
 
   // cmd.exe knows nothing about POSIX single quotes, and the JSON layer is what
@@ -553,9 +554,9 @@ test('hookSettingsSnippet quotes the script for the platform it is told about: P
   assert.deepEqual(hookSettingsSnippet(spaced), hookSettingsSnippet(spaced, process.platform));
 });
 
-test('the snippet wires the three events: PreToolUse on Bash and the file tools, PreCompact and SessionStart on everything', () => {
+test('the snippet wires the four events: PreToolUse on Bash and the file tools, PreCompact, SessionStart and SubagentStop on everything', () => {
   const script = '/Users/me/app/.claude/hooks/omelette-guard.mjs';
-  assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart']);
+  assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart', 'SubagentStop']);
   for (const platform of ['darwin', 'win32']) {
     const snippet = hookSettingsSnippet(script, platform);
     assert.equal(snippet.length, HOOK_EVENTS.length + 1, 'the opener line plus one line per event');
@@ -567,6 +568,7 @@ test('the snippet wires the three events: PreToolUse on Bash and the file tools,
     assert.equal(parsed.hooks.PreToolUse[0].matcher, 'Bash|Write|Edit|NotebookEdit');
     assert.equal('matcher' in parsed.hooks.SessionStart[0], false, 'SessionStart fires on every source: the sweep runs on each');
     assert.equal('matcher' in parsed.hooks.PreCompact[0], false, 'PreCompact is matched on nothing');
+    assert.equal('matcher' in parsed.hooks.SubagentStop[0], false, 'SubagentStop is matched on nothing: the guard picks the roles');
     for (const event of HOOK_EVENTS) {
       assert.equal(parsed.hooks[event].length, 1);
       assert.equal(parsed.hooks[event][0].hooks.length, 1);

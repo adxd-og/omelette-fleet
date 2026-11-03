@@ -1888,7 +1888,8 @@ const SNIPPET = (script) => [
   '{ "hooks": {',
   `  "PreToolUse": [ { "matcher": "Bash|Write|Edit|NotebookEdit", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
   `  "PreCompact": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
-  `  "SessionStart": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
+  `  "SessionStart": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
+  `  "SubagentStop": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
 ].join('\n');
 
 /** The pasteable snippet out of a `rules --hooks` run's stdout: the opener line plus one per event. */
@@ -1964,7 +1965,7 @@ test('the snippet is absolute and shell-quoted: a path with spaces, and a RELATI
   const snippet = JSON.parse(snippetFrom(spaced.stdout));
   writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify(snippet, null, 2));
   const doc = spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
-  assert.match(doc, /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, doc);
+  assert.match(doc, /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m, doc);
 
   // A relative CLAUDE_CONFIG_DIR still has to yield an absolute hook command: a
   // hook runs from wherever the session is, not from where this command ran.
@@ -1988,11 +1989,11 @@ test('doctor sees the guard wired in settings.local.json too, and names a settin
   // project that gitignores it keeps this wiring. It counts.
   const local = join(proj, '.claude', 'settings.local.json');
   writeFileSync(local, JSON.stringify(snippet, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\) · global: absent$/m);
 
   // A broken settings.json beside a working local one does not un-wire it.
   writeFileSync(join(proj, '.claude', 'settings.json'), '{ not json');
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m);
 
   // With nothing wired anywhere, both unreadable files are named — "not wired"
   // about a file nobody could parse would send the operator to re-paste it.
@@ -2054,7 +2055,7 @@ test('doctor reports the guard hook and whether settings.json wires it — readi
   // and doctor names WHICH event nobody calls, since that is what the operator
   // has to paste.
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: snippet.hooks.PreToolUse } }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PreCompact, SessionStart\) — paste the snippet from rules --hooks\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PreCompact, SessionStart, SubagentStop\) — paste the snippet from rules --hooks\)/m, doctor());
   writeFileSync(settings, JSON.stringify({ hooks: { ...snippet.hooks, PreCompact: [{ hooks: [{ type: 'command', command: 'node /elsewhere/other-hook.mjs' }] }] } }, null, 2));
   assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing PreCompact\) — paste the snippet from rules --hooks\)/m, doctor());
 
@@ -2068,20 +2069,20 @@ test('doctor reports the guard hook and whether settings.json wires it — readi
   assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(PreToolUse matcher is not Bash\) — paste the snippet from rules --hooks\)/m, doctor());
   // `*` and an absent matcher cover Bash as surely as "Bash" does.
   writeFileSync(settings, withMatcher('*'));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m);
   writeFileSync(settings, JSON.stringify({
     hooks: { ...snippet.hooks, PreToolUse: [{ hooks: snippet.hooks.PreToolUse[0].hooks }] },
   }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m);
 
   const pasted = JSON.stringify(snippet, null, 2);
   writeFileSync(settings, pasted);
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m);
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\) · global: absent$/m);
   assert.equal(readFileSync(settings, 'utf8'), pasted, 'settings.json is READ, never written');
 
   // A stale guard beside a working wiring still asks to be refreshed…
   writeFileSync(guard, MARKED_HOOK('0.0.1'));
-  assert.match(doctor(), /^hooks {9}project: v0\.0\.1 \(wired: PreToolUse, PreCompact, SessionStart\) \[run: omelette-fleet rules --hooks\]/m);
+  assert.match(doctor(), /^hooks {9}project: v0\.0\.1 \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\) \[run: omelette-fleet rules --hooks\]/m);
   // …and a script that is not ours is reported, never claimed.
   writeFileSync(guard, '// my own hook\n');
   assert.match(doctor(), /^hooks {9}project: foreign \(no marker\) · global: absent$/m);
@@ -2113,11 +2114,11 @@ test('doctor: a PreToolUse matcher is a REGEX — "Bash|Edit" and ".*" wire the 
   // but not Write is wired and says what it misses.
   for (const matcher of ['Bash, Write', '.*', 'Bash|Write|Edit|NotebookEdit']) {
     writeFileSync(settings, withMatcher(matcher));
-    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, `matcher ${matcher} covers Bash and Write`);
+    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m, `matcher ${matcher} covers Bash and Write`);
   }
   for (const matcher of ['Bash', 'Bash|Edit', 'Edit|Bash', 'Bash.*', '(Bash|Task)', 'Ba(sh)', 'Ba.', '^Ba', 'ash$']) {
     writeFileSync(settings, withMatcher(matcher));
-    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse \(Bash only — re-merge the PreToolUse group for Write\/Edit\), PreCompact, SessionStart\)/m, `matcher ${matcher} covers Bash alone`);
+    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse \(Bash only — re-merge the PreToolUse group for Write\/Edit\), PreCompact, SessionStart, SubagentStop\)/m, `matcher ${matcher} covers Bash alone`);
   }
   // …and one that cannot match "Bash" is still named rather than counted. In an
   // exact list a name is a whole name: "Bas" and "ash" are items of their own,
@@ -2179,7 +2180,7 @@ test('doctor: the guard line names both deliveries — the settings hook by its 
   const wired = readFileSync(settings, 'utf8');
   writeFileSync(settings, JSON.stringify({ hooks: { ...snippet.hooks, PreToolUse: [{ ...snippet.hooks.PreToolUse[0], matcher: 'Write' }] } }));
   assert.match(doctor(), /^hooks {9}project: v\S+ \(NOT wired \(PreToolUse matcher is not Bash\)/m);
-  assert.equal(guardLine(), 'guard         settings hook not wired (PreToolUse Write — Bash not matched, re-merge the PreToolUse group)');
+  assert.equal(guardLine(), 'guard         settings hook not wired (PreToolUse Write — Bash not matched, re-merge the PreToolUse group, SubagentStop)');
   writeFileSync(settings, wired);
 
   const user = join(dir, '.claude');
@@ -2209,11 +2210,11 @@ test('doctor: a guard wired at 0.3.2 — PreToolUse and PreCompact only — is N
 
   const { PreToolUse, PreCompact } = snippet.hooks;
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse, PreCompact } }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing SessionStart\) — paste the snippet from rules --hooks\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(NOT wired \(missing SessionStart, SubagentStop\) — paste the snippet from rules --hooks\)/m, doctor());
 
-  // The third group is what finishes it — and the label lists all three.
+  // The other two groups finish it — and the label lists all four.
   writeFileSync(settings, JSON.stringify(snippet, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\) · global: absent$/m, doctor());
 });
 
 test('doctor: a SessionStart matcher is read like any other — `compact` wires the handoff print, `startup` does not', () => {
@@ -2233,13 +2234,13 @@ test('doctor: a SessionStart matcher is read like any other — `compact` wires 
   // an unanchored regex, and `""` / `"*"` everything.
   for (const matcher of ['compact', 'startup|compact', 'compact, resume', '*', '', '.*', 'com.', '^comp', 'act$']) {
     writeFileSync(settings, withMatcher(matcher));
-    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, `matcher ${JSON.stringify(matcher)} covers compact`);
+    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m, `matcher ${JSON.stringify(matcher)} covers compact`);
   }
   // An ABSENT matcher fires on every source — what the snippet prints since 1.7.3: the guard sweeps on every source and prints on compact and clear only.
   writeFileSync(settings, JSON.stringify({
     hooks: { ...snippet.hooks, SessionStart: [{ hooks: snippet.hooks.SessionStart[0].hooks }] },
   }, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m, doctor());
 
   for (const matcher of ['startup', 'resume|clear', 'compac', 'compaction']) {
     writeFileSync(settings, withMatcher(matcher));
@@ -2266,13 +2267,13 @@ test('doctor: a 0.3.6 settings.json (the five events that existed then) reads as
   writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ hooks: { ...snippet.hooks, PostToolUse: retired, Stop: retired } }, null, 2));
   assert.match(
     doctor(),
-    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart · PostToolUse, Stop wired but no longer used — remove them from your settings files\) · global: absent$/m,
+    /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop · PostToolUse, Stop wired but no longer used — remove them from your settings files\) · global: absent$/m,
     doctor(),
   );
 
   // Pasting the three-event snippet over it closes it.
   writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify(snippet, null, 2));
-  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m, doctor());
+  assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\) · global: absent$/m, doctor());
 });
 
 test('doctor reports the skill on its own line: absent, ours with a count, foreign', () => {

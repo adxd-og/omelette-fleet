@@ -27,7 +27,7 @@ function world() {
     assert.equal(w.status, 0, w.stderr);
     const lines = w.stdout.split('\n');
     const at = lines.indexOf('{ "hooks": {');
-    return JSON.parse(lines.slice(at, at + 4).join('\n'));
+    return JSON.parse(lines.slice(at, at + 5).join('\n'));
   };
   return { dir, proj, claude, run, snip };
 }
@@ -63,7 +63,7 @@ test('doctor: the misses line is judged on the union of the scope\'s two setting
     writeFileSync(join(claude, 'settings.json'), withSession(snippet, { matcher: 'compact' }));
     writeFileSync(join(claude, 'settings.local.json'), JSON.stringify({ hooks: { SessionStart: [{ matcher: 'startup|resume|clear', hooks: snippet.hooks.SessionStart[0].hooks }] } }));
     const both = w.run(['doctor']).stdout;
-    assert.match(both, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart\)/m, both);
+    assert.match(both, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m, both);
     assert.doesNotMatch(both, MISSES, both);
     // the second file narrower: only `resume` — the union still misses startup and clear
     writeFileSync(join(claude, 'settings.local.json'), JSON.stringify({ hooks: { SessionStart: [{ matcher: 'resume', hooks: snippet.hooks.SessionStart[0].hooks }] } }));
@@ -126,7 +126,7 @@ test('doctor: two SessionStart groups in ONE file cover the union of their sourc
     const settings = join(w.proj, '.claude', 'settings.json');
     writeFileSync(settings, JSON.stringify({ hooks: { ...snippet.hooks, SessionStart: [{ matcher: 'compact', hooks }, { matcher: 'startup|resume|clear', hooks }] } }));
     const out = w.run(['doctor']).stdout;
-    assert.match(out, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart\)/m, out);
+    assert.match(out, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m, out);
     assert.doesNotMatch(out, MISSES, out);
   } finally { rmSync(w.dir, { recursive: true, force: true }); }
 });

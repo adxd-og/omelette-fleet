@@ -2144,9 +2144,11 @@ const matcherProblemFor = (m, event, name) => {
 };
 
 /**
- * What each MATCHED event's entry has to cover — two of the three. `PreCompact`
+ * What each MATCHED event's entry has to cover — two of the four. `PreCompact`
  * is deliberately absent: it is matched on nothing, because every compaction is
  * one the ledger has to be stamped for, so any entry that calls the guard counts.
+ * `SubagentStop` too: the guard decides which roles leave a touched record, so
+ * an entry that calls it is wired.
  * `SessionStart` is matched on the session's SOURCE (`startup`, `resume`,
  * `clear`, `compact`, `fork`). The printed snippet gives it no matcher, because
  * the guard sweeps on every source and prints on `compact` and `clear` only; an
@@ -2196,9 +2198,10 @@ function hookWiring(config) {
   for (const event of HOOK_EVENTS) {
     const calling = callingOn(event);
     if (!calling.length) continue;
-    // Two of the three events are matched against something; PreCompact is
-    // matched on nothing at all. ONE entry covering the matcher is enough; when
-    // none does, the first entry's reason is the one worth printing.
+    // Two of the four events are matched against something; PreCompact and
+    // SubagentStop are matched on nothing at all. ONE entry covering the
+    // matcher is enough; when none does, the first entry's reason is the one
+    // worth printing.
     const target = MATCHED_ON[event];
     if (target) {
       const problems = calling.map((group) => matcherProblemFor(group.matcher, event, target));

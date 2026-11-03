@@ -24,7 +24,7 @@ test('doctor: a SessionStart matched on compact alone is still wired, and a line
   assert.equal(written.status, 0, written.stderr);
   const lines = written.stdout.split('\n');
   const at = lines.indexOf('{ "hooks": {');
-  const snippet = JSON.parse(lines.slice(at, at + 4).join('\n'));
+  const snippet = JSON.parse(lines.slice(at, at + 5).join('\n'));
   assert.equal('matcher' in snippet.hooks.SessionStart[0], false, 'the printed snippet fires SessionStart on every source');
   const settings = join(proj, '.claude', 'settings.json');
   for (const [matcher, missing] of [
@@ -37,7 +37,7 @@ test('doctor: a SessionStart matched on compact alone is still wired, and a line
     const group = { ...(matcher === undefined ? {} : { matcher }), hooks: snippet.hooks.SessionStart[0].hooks };
     writeFileSync(settings, JSON.stringify({ hooks: { ...snippet.hooks, SessionStart: [group] } }));
     const out = run(['doctor']).stdout;
-    assert.match(out, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart\)/m, `${matcher}: still wired`);
+    assert.match(out, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\)/m, `${matcher}: still wired`);
     if (missing) assert.match(out, new RegExp(`^ {14}project SessionStart misses ${missing} — replace the SessionStart group with the snippet from omelette-fleet rules --hooks$`, 'm'), `${matcher}`);
     else assert.doesNotMatch(out, /SessionStart misses/, `${matcher}`);
   }

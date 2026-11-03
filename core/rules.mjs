@@ -581,16 +581,17 @@ export function parseHookHandoff(text) {
 export const hooksTarget = scopeDir('hooks');
 
 /**
- * The three events the guard serves, in the order doctor reports them wired:
- * the git guard, the ledger's re-read stamp, and the print of its last handoff
- * block after a compaction.
+ * The four events the guard serves, in the order doctor reports them wired:
+ * the git guard, the ledger's re-read stamp, the print of its last handoff
+ * block after a compaction, and the touched record a guarded role leaves when
+ * it stops (1.8.0).
  *
  * ORDER IS APPEND-ONLY. An event added by a release goes at the END, because
  * this list is the order `doctor` prints `wired:` and `missing …` in: an
  * operator upgrading reads the new name at the end of a list they recognise,
  * rather than hunting for it in the middle of one they already pasted.
  */
-export const HOOK_EVENTS = ['PreToolUse', 'PreCompact', 'SessionStart'];
+export const HOOK_EVENTS = ['PreToolUse', 'PreCompact', 'SessionStart', 'SubagentStop'];
 
 /**
  * The events 0.3.4–1.4.0 also wired: the nudge, the Stop gate and the
@@ -646,7 +647,8 @@ export const shellWord = (s, platform = process.platform) => (/^[\w@%+=:,./-]+$/
  * sweeps on every source and prints on `compact` and `clear` only. A settings
  * file still matching `compact` keeps working there; `doctor` names it.
  * `PreCompact` is matched on nothing: every compaction is one the ledger has to
- * be stamped for.
+ * be stamped for. `SubagentStop` neither: the guard itself decides which
+ * roles leave a touched record.
  *
  * @returns {string[]} the snippet's lines, together a parseable JSON object.
  */
@@ -656,7 +658,8 @@ export function hookSettingsSnippet(scriptPath, platform = process.platform) {
     '{ "hooks": {',
     `  "PreToolUse": [ { "matcher": "Bash|Write|Edit|NotebookEdit", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
     `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
-    `  "SessionStart": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
+    `  "SessionStart": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
+    `  "SubagentStop": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
   ];
 }
 

@@ -1,6 +1,6 @@
 {{marker}}
 /**
- * omelette-fleet :: the guard hook, one script for three events.
+ * omelette-fleet :: the guard hook, one script for four events.
  *
  * WIRED BY THE OPERATOR, NEVER BY US. `omelette-fleet rules --hooks` writes this
  * file and PRINTS the settings.json snippet that calls it; Claude Code's
@@ -40,6 +40,11 @@
  * ledger, then of each untracked one), what was decided (the decisions
  * register), and what comes next (the first table of `.omelette/backlog.md`).
  *
+ * SubagentStop (1.8.0) — the touched record: when a guarded role stops, the
+ * paths it wrote, read out of its own transcript, go to
+ * `.omelette/reports/touched-<role>-<id>.md`; see subagentStop below. Nothing
+ * is refused and nothing is printed.
+ *
  * THE SWEEP IS THE ONE THING THIS GUARD LOADS FROM OUTSIDE ITSELF:
  * `core/ledger.mjs`, imported from the package root `rules --hooks` rendered
  * into PACKAGE_ROOT below. A failed import is one stderr line, and the stamp and
@@ -67,7 +72,7 @@
  *
  * Zero dependencies, Node >= 20, ESM — it is spawned as `node <this file>`.
  */
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync, writeSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -177,6 +182,8 @@ const SEPARATORS = new Set([';', '&', '|', '\n', '\r']);
 /** The redirections that write their target, and the two of them that only append to it. */
 const WRITE_REDIRECTS = new Set(['>', '>|', '>>', '<>', '&>', '&>>']);
 const APPEND_REDIRECTS = new Set(['>>', '&>>']);
+/** The word after `>&` that duplicates or closes a descriptor rather than naming a file: digits or `-`, and the `)` of a subshell the word ends in. */
+const FD_DUPLICATE = /^(?:\d+|-)\)*$/;
 
 /**
  * Where the substitution opened at `start` — `$(`, `<(`, `>(` or a backquote —
@@ -352,7 +359,9 @@ function opaqueEnd(command, start, kind, budget) {
  * rule (bashWrites): its path with the quotes off, its operator without the fd
  * number (`2>` is `>`), and `at`, the number of words before it — which is how
  * a `cd` word is known to come first. `>&` with a word that is not an fd number
- * or `-` sends both streams to that file, and is handed back as the `&>` it is.
+ * or `-` sends both streams to that file, and is handed back as the `&>` it is;
+ * an fd number or `-` with a subshell's closing `)` glued on (`(ls > a 2>&1)`)
+ * duplicates a descriptor and is no target (FD_DUPLICATE).
  *
  * @returns {object} `{ tokens, spans, targets }`: each token `{ text, quoted,
  *   separator }`, each span a text to read again as a command — a quoted word
@@ -377,7 +386,7 @@ function tokenize(command) {
     const plain = unquote(text); // only a word that held a quote loses a character here
     if (!redirect) tokens.push({ text, quoted, separator: false });
     else {
-      const op = redirectOp === '>&' && !/^(?:\d+|-)$/.test(plain) ? '&>' : redirectOp;
+      const op = redirectOp === '>&' && !FD_DUPLICATE.test(plain) ? '&>' : redirectOp;
       if (WRITE_REDIRECTS.has(op)) targets.push({ path: plain, op, at: tokens.length });
     }
     if (plain !== text) spans.push(plain);
@@ -1382,11 +1391,13 @@ function intoDirectory(word, cwd, afterCd) {
 /**
  * EVERY PATH A BASH COMMAND WRITES, as far as its words say: each redirection
  * that writes a file (`>`, `>|`, `<>`, `&>` rewrite it; `>>`, `&>>` append),
- * and the commands in WORD_RULES. Each entry `{ path, kind }` — `kind` `write`
- * or `append` — in the order the words come, the path resolved against `cwd`.
- * After a `cd` or `pushd` at command position, in a project holding
- * `.omelette/`, a relative path's directory is unknown and its entry is the
- * bare name. A word the guard cannot know as a path (knownPath) is left out.
+ * and the commands in WORD_RULES. Each entry `{ path, name, kind }` — `kind`
+ * `write` or `append` — in the order the words come, `path` always resolved
+ * against `cwd`. After a `cd` or `pushd` at command position, in a project
+ * holding `.omelette/`, a relative path's directory is unknown: `name` carries
+ * its bare name, which the curated rule compares (bashTruncates), and is
+ * undefined otherwise. A word the guard cannot know as a path (knownPath) is
+ * left out.
  *
  * Top-level words only: what a quoted `sh -c` or a substitution runs is not
  * read here. A command whose brackets spent the scan budget is not read at all:
@@ -1403,20 +1414,24 @@ function bashWrites(command, cwd) {
   const add = (word, kind, at) => {
     const path = knownPath(closed(word));
     if (path === null) return;
-    found.push({ path: afterCd(at) && !isAbsolute(path) ? basename(path) : resolve(cwd, path), kind, at });
+    found.push({ path: resolve(cwd, path), name: afterCd(at) && !isAbsolute(path) ? basename(path) : undefined, kind, at });
   };
   for (const { path, op, at } of targets) add(path, APPEND_REDIRECTS.has(op) ? 'append' : 'write', at);
   for (const { name, args, at } of commands) {
     const rule = WORD_RULES.get(name);
     if (rule) for (const { word, kind } of rule(args, (dest) => intoDirectory(dest, cwd, afterCd(at)))) add(word, kind, at);
   }
-  return found.sort((a, b) => a.at - b.at).map(({ path, kind }) => ({ path, kind }));
+  return found.sort((a, b) => a.at - b.at).map(({ path, name, kind }) => ({ path, name, kind }));
 }
 
-/** The first curated file the command REWRITES (rewritesCurated), or null. `found` is bashWrites' answer, when the caller has it. */
+/**
+ * The first curated file the command REWRITES (rewritesCurated), or null —
+ * compared, and named, by its bare `name` after a `cd`. `found` is bashWrites'
+ * answer, when the caller has it.
+ */
 function bashTruncates(command, cwd, found = bashWrites(command, cwd)) {
-  const hit = found.find(({ path, kind }) => kind === 'write' && rewritesCurated(cwd, path));
-  return hit ? hit.path : null;
+  const hit = found.find(({ path, name, kind }) => kind === 'write' && rewritesCurated(cwd, name ?? path));
+  return hit ? hit.name ?? hit.path : null;
 }
 
 /**
@@ -2108,6 +2123,223 @@ async function sessionStart(event) {
   if (parts.length) say(process.stdout, parts.join(''));
 }
 
+/**
+ * THE TRANSCRIPT'S BOUNDS. It is read from its start up to TRANSCRIPT_MAX
+ * bytes whatever its size, in TRANSCRIPT_CHUNK reads; a line longer than
+ * TRANSCRIPT_LINE_MAX is dropped unread; the clock is checked after every
+ * chunk, from the moment subagentStop starts.
+ */
+const TRANSCRIPT_MAX = 16 * 1024 * 1024;
+const TRANSCRIPT_LINE_MAX = 1024 * 1024;
+const TRANSCRIPT_CHUNK = 64 * 1024;
+const TRANSCRIPT_CLOCK_MS = 2000;
+/** An agent id as the record's name and heading carry it: what the harness writes (`a03580c80d5192a6d`), nothing that walks a path. */
+const AGENT_ID = /^[\w-]{1,64}$/;
+/** The tools whose path input is a file they write, and the input that names it. */
+const PATH_TOOLS = { Write: 'file_path', Edit: 'file_path', NotebookEdit: 'notebook_path' };
+/** A Bash write under `/dev/` (`2>/dev/null`, `>/dev/stderr`) touches no file: counted, never listed. The curated rules do not use this. */
+const writesNoFile = (path) => path.startsWith('/dev/');
+
+/**
+ * Where a transcript may lie: under `~/.claude/projects` or
+ * `$CLAUDE_CONFIG_DIR/projects`. Compared after `resolve` — `..` folded as
+ * text, no symlink followed — and the open behind it is O_NOFOLLOW.
+ */
+function transcriptAllowed(path) {
+  const roots = [resolve(homedir(), '.claude', 'projects')];
+  const config = str(process.env.CLAUDE_CONFIG_DIR).trim();
+  if (config) roots.push(resolve(config, 'projects'));
+  return roots.some((root) => {
+    const rel = relative(root, path);
+    return !!rel && !isAbsolute(rel) && rel.split(sep)[0] !== '..';
+  });
+}
+
+/**
+ * Every line of the transcript open on `fd`, handed to `onLine` as a string,
+ * within the bounds above. Returns what was not read: `overlong` lines, and
+ * whether the read stopped at the cap with bytes behind it (`pastCap`) or at
+ * the clock (`timedOut`). A line cut by either is not read.
+ */
+function readTranscriptLines(fd, started, onLine) {
+  const left = { overlong: 0, pastCap: false, timedOut: false };
+  let pending = [];
+  let bytes = 0;
+  let tooLong = false;
+  const endLine = () => {
+    if (tooLong) left.overlong++;
+    else if (bytes) onLine(Buffer.concat(pending, bytes).toString('utf8'));
+    pending = [];
+    bytes = 0;
+    tooLong = false;
+  };
+  let offset = 0;
+  while (offset < TRANSCRIPT_MAX) {
+    // Before every read but the first: a chunk read is always handed on, and
+    // past the clock the next read is not made — even one that would have found
+    // the end, so a file read whole can still say it stopped at 2 s.
+    if (offset && Date.now() - started > TRANSCRIPT_CLOCK_MS) { left.timedOut = true; return left; }
+    const chunk = Buffer.allocUnsafe(Math.min(TRANSCRIPT_CHUNK, TRANSCRIPT_MAX - offset));
+    const n = readSync(fd, chunk, 0, chunk.length, offset);
+    if (!n) { endLine(); return left; }
+    offset += n;
+    const data = chunk.subarray(0, n);
+    for (let from = 0; ;) {
+      const nl = data.indexOf(0x0a, from);
+      const piece = data.subarray(from, nl < 0 ? n : nl);
+      if (!tooLong && bytes + piece.length > TRANSCRIPT_LINE_MAX) { tooLong = true; pending = []; bytes = 0; }
+      if (!tooLong && piece.length) { pending.push(piece); bytes += piece.length; }
+      if (nl < 0) break;
+      endLine();
+      from = nl + 1;
+    }
+  }
+  // At the cap: one byte more says whether the file goes on past it.
+  if (readSync(fd, Buffer.alloc(1), 0, 1, offset)) left.pastCap = true;
+  else endLine();
+  return left;
+}
+
+/**
+ * `.omelette/reports/<name>`, written whole: a new temp file beside it through
+ * O_EXCL | O_NOFOLLOW | O_NONBLOCK, then renamed over the name. `reports/` is
+ * made when absent and refused when it is a symlink or not a directory.
+ * Returns null, or why nothing was written.
+ */
+function writeReport(dir, name, text) {
+  const reports = join(dir, 'reports');
+  let st;
+  try { st = lstatSync(reports); } catch (e) {
+    if (!e || e.code !== 'ENOENT') return `.omelette/reports cannot be read (${(e && e.code) || 'error'})`;
+    try { mkdirSync(reports); st = lstatSync(reports); } catch (e2) { return `.omelette/reports cannot be made (${(e2 && e2.code) || 'error'})`; }
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) return '.omelette/reports is not a directory (a symlink is refused)';
+  const tmp = join(reports, `.${name}.${process.pid}.${Date.now()}.tmp`);
+  let fd = null;
+  try {
+    fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW | NONBLOCK, 0o644);
+    const buf = Buffer.from(text, 'utf8');
+    for (let at = 0; at < buf.length;) at += writeSync(fd, buf, at, buf.length - at);
+    closeSync(fd);
+    fd = null;
+    renameSync(tmp, join(reports, name));
+    return null;
+  } catch (e) {
+    if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
+    try { unlinkSync(tmp); } catch { /* never made */ }
+    return `.omelette/reports/${name} cannot be written (${(e && e.code) || 'error'})`;
+  }
+}
+
+/**
+ * THE TOUCHED RECORD (1.8.0): SubagentStop for a guarded role reads the
+ * agent's own transcript (`agent_transcript_path`, under the bounds above)
+ * and writes `.omelette/reports/touched-<role>-<id first 8>.md` — every path a
+ * `Write`, `Edit` or `NotebookEdit` named and every path bashWrites reads a
+ * Bash command as writing, once each in first-seen order with the kind it was
+ * first seen as, and the tool calls by name. A Bash path written after a `cd`
+ * is listed as written, resolved against the cwd, its kind marked `after cd`;
+ * one under `/dev/` is not listed. A tool use is counted once by its
+ * `id`: the harness also writes `api-request-blob` records that repeat the
+ * assistant's tool uses. The session opens the file beside the role's report
+ * and compares it with the `## DIFF`.
+ *
+ * Nothing is refused and nothing goes to stdout: an `additionalContext` would
+ * land in the stopped agent's own transcript, which nobody reads (probe P6).
+ * A record that cannot be written — a transcript outside the projects
+ * directories, one that cannot be opened, no `.omelette/` of ours — is one
+ * stderr line. A role nobody guards is not ours: nothing at all.
+ */
+function subagentStop(event) {
+  const started = Date.now();
+  const agent = str(event.agent_type);
+  if (!GUARDED_AGENTS.has(agent)) return;
+  const fail = (why) => say(process.stderr, `omelette-guard: ${why} — no touched record for ${agent}\n`);
+  const id = str(event.agent_id);
+  if (!AGENT_ID.test(id)) return fail('agent_id is missing or not a plain id');
+  const found = ledgerDir(event);
+  if (!found || !found.exists) return fail('no .omelette/ directory of ours in the cwd');
+  const cwd = resolve(str(event.cwd, process.cwd()));
+  const given = str(event.agent_transcript_path);
+  const path = given ? resolve(given) : '';
+  if (!path || !transcriptAllowed(path)) return fail(`transcript ${clean(given || '(none)')} is not under ~/.claude/projects or $CLAUDE_CONFIG_DIR/projects`);
+
+  const touched = new Map(); // path → the kind it was first seen as
+  const counts = new Map(); //  tool name → calls, in first-seen order
+  const ids = new Set();
+  let malformed = 0;
+  let tooDeep = 0;
+  const note = (p, kind) => { if (!touched.has(p)) touched.set(p, kind); };
+  const onLine = (line) => {
+    if (!line.trim()) return;
+    let record;
+    try { record = JSON.parse(line); } catch { malformed++; return; }
+    const content = isObject(record) && isObject(record.message) && Array.isArray(record.message.content) ? record.message.content : [];
+    for (const use of content) {
+      if (!isObject(use) || use.type !== 'tool_use') continue;
+      if (typeof use.id === 'string' && use.id) {
+        if (ids.has(use.id)) continue;
+        ids.add(use.id);
+      }
+      const name = str(use.name, 'unknown');
+      counts.set(name, (counts.get(name) || 0) + 1);
+      const input = isObject(use.input) ? use.input : {};
+      if (Object.hasOwn(PATH_TOOLS, name)) {
+        const p = str(input[PATH_TOOLS[name]]);
+        if (p) note(resolve(cwd, p), name);
+      } else if (name === 'Bash') {
+        try {
+          for (const w of bashWrites(str(input.command), cwd)) {
+            // After a cd the path is as written, resolved here: the record says so.
+            if (!writesNoFile(w.path)) note(w.path, `bash ${w.kind}${w.name === undefined ? '' : ', after cd'}`);
+          }
+        } catch (e) {
+          if (!(e instanceof TooDeep)) throw e;
+          tooDeep++;
+        }
+      }
+    }
+  };
+
+  let fd;
+  try { fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK); } catch (e) {
+    return fail(`transcript ${clean(path)} cannot be opened (${(e && e.code) || 'error'})`);
+  }
+  let left;
+  try {
+    if (!fstatSync(fd).isFile()) return fail(`transcript ${clean(path)} is not a regular file`);
+    left = readTranscriptLines(fd, started, onLine);
+  } catch (e) {
+    return fail(`transcript ${clean(path)} could not be read — ${clean(firstLine(e && e.message))}`);
+  } finally {
+    try { closeSync(fd); } catch { /* already gone */ }
+  }
+
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const skipped = [
+    ...(malformed + left.overlong ? [`${plural(malformed + left.overlong, 'line')} (malformed, over 1 MB)`] : []),
+    ...(tooDeep ? [`${plural(tooDeep, 'command')} too deep to read`] : []),
+    ...(left.pastCap ? ["the file's bytes past 16 MB"] : []),
+    ...(left.timedOut ? [`reading stopped at ${TRANSCRIPT_CLOCK_MS / 1000} s`] : []),
+  ];
+  // Most calls first; a stable sort keeps first-seen order among equals.
+  const tally = [...counts].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${clean(name)}: ${n}`);
+  const total = [...counts.values()].reduce((sum, n) => sum + n, 0);
+  const text = [
+    `# touched — ${agent} ${id}`,
+    '',
+    `transcript: ${clean(path)}`,
+    ...(skipped.length ? [`skipped: ${skipped.join('; ')}`] : []),
+    '',
+    ...[...touched].map(([p, kind]) => `- ${shown(cwd, p)} (${kind})`),
+    ...(touched.size ? [''] : []),
+    `tool calls: ${total}${tally.length ? ` (${tally.join(', ')})` : ''}`,
+    '',
+  ].join('\n');
+  const why = writeReport(found.dir, `touched-${agent}-${id.slice(0, 8)}.md`, text);
+  if (why) fail(why);
+}
+
 const event = await readEvent();
 // Wrapped whole: nothing this guard reads — a cwd that is not a directory, a
 // ledger that changed under it, a stream that went away — may reach the harness
@@ -2119,6 +2351,7 @@ try {
     if (name === 'PreToolUse') await preToolUse(event);
     else if (name === 'PreCompact') await preCompact(event);
     else if (name === 'SessionStart') await sessionStart(event);
+    else if (name === 'SubagentStop') subagentStop(event);
     // Anything else: this guard has no opinion about it.
   }
 } catch { /* a guard that crashes is a session that stops working */ }

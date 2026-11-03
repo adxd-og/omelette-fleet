@@ -133,14 +133,15 @@ test('the guard file carries none of the estimator', () => {
   assert.match(text, /^const HANDOFF_CONFIG = \{\{handoff\}\};$/m);
 });
 
-test('HOOK_EVENTS is three, RETIRED_HOOK_EVENTS is the other three, and the snippet lists exactly the first three', () => {
-  assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart']);
+test('HOOK_EVENTS is four (SubagentStop since 1.8.0), RETIRED_HOOK_EVENTS is three, and the snippet lists exactly the four', () => {
+  assert.deepEqual(HOOK_EVENTS, ['PreToolUse', 'PreCompact', 'SessionStart', 'SubagentStop']);
   assert.deepEqual(RETIRED_HOOK_EVENTS, ['PostToolUse', 'Stop', 'PostCompact']);
   const snippet = JSON.parse(hookSettingsSnippet('/x/omelette-guard.mjs', 'linux').join('\n'));
-  assert.deepEqual(Object.keys(snippet.hooks), ['PreToolUse', 'PreCompact', 'SessionStart']);
+  assert.deepEqual(Object.keys(snippet.hooks), ['PreToolUse', 'PreCompact', 'SessionStart', 'SubagentStop']);
   assert.equal(snippet.hooks.PreToolUse[0].matcher, 'Bash|Write|Edit|NotebookEdit');
   assert.equal(snippet.hooks.SessionStart[0].matcher, undefined);
   assert.equal(snippet.hooks.PreCompact[0].matcher, undefined);
+  assert.equal(snippet.hooks.SubagentStop[0].matcher, undefined);
 });
 
 test('HANDOFF_SCHEMA is one key; the rendered literal is {"enabled":true}; retired keys warn and are ignored', () => {
@@ -199,7 +200,7 @@ function finishedProject() {
   return { dir, proj, env, guard: join(proj, '.claude', 'hooks', HOOK_FILES[0]) };
 }
 
-test('doctor: a settings.json that still wires the six events reads as wired, and names the three stale entries', () => {
+test('doctor: a settings.json that still wires the six events misses SubagentStop (1.8.0), and names the three stale entries', () => {
   const { dir, proj, env, guard } = finishedProject();
   const command = `node '${guard}'`;
   const entry = (matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command }] }];
@@ -211,19 +212,19 @@ test('doctor: a settings.json that still wires the six events reads as wired, an
   const settings = join(proj, '.claude', 'settings.json');
   writeFileSync(settings, JSON.stringify(six, null, 2));
   const r = cli(['doctor'], { dir, cwd: proj, env });
-  assert.match(r.out, /^hooks {9}project: v\S+ \(wired: PreToolUse \(Bash only — re-merge the PreToolUse group for Write\/Edit\), PreCompact, SessionStart · PostToolUse, Stop, PostCompact wired but no longer used — remove them from your settings files\)/m, r.out);
-  assert.doesNotMatch(r.out, /^next /m, r.out);
+  assert.match(r.out, /^hooks {9}project: v\S+ \(NOT wired \(missing SubagentStop\) — paste the snippet from rules --hooks · PostToolUse, Stop, PostCompact wired but no longer used — remove them from your settings files\)/m, r.out);
+  assert.match(r.out, /^next {10}merge the hooks snippet/m, r.out);
   assert.equal(readFileSync(settings, 'utf8'), JSON.stringify(six, null, 2), 'settings.json is READ, never written');
 
-  // The three it printed until 1.7.3 read as wired — Bash only — with nothing stale to name.
+  // The three it printed until 1.7.3 miss SubagentStop, with nothing stale to name.
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: six.hooks.PreToolUse, PreCompact: six.hooks.PreCompact, SessionStart: six.hooks.SessionStart } }));
   const clean = cli(['doctor'], { dir, cwd: proj, env });
-  assert.match(clean.out, /^hooks {9}project: v\S+ \(wired: PreToolUse \(Bash only — re-merge the PreToolUse group for Write\/Edit\), PreCompact, SessionStart\) · global: absent$/m, clean.out);
+  assert.match(clean.out, /^hooks {9}project: v\S+ \(NOT wired \(missing SubagentStop\) — paste the snippet from rules --hooks\) · global: absent$/m, clean.out);
 
   // A stale entry on a guard that is NOT fully wired rides inside the same parentheses.
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: six.hooks.PreToolUse, Stop: six.hooks.Stop } }));
   const half = cli(['doctor'], { dir, cwd: proj, env });
-  assert.match(half.out, /^hooks {9}project: v\S+ \(NOT wired \(missing PreCompact, SessionStart\) — paste the snippet from rules --hooks · Stop wired but no longer used — remove them from your settings files\)/m, half.out);
+  assert.match(half.out, /^hooks {9}project: v\S+ \(NOT wired \(missing PreCompact, SessionStart, SubagentStop\) — paste the snippet from rules --hooks · Stop wired but no longer used — remove them from your settings files\)/m, half.out);
 });
 
 test('doctor: the handoff line says stamp and print, and counts ledgers', () => {

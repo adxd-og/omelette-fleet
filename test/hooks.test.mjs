@@ -1631,7 +1631,34 @@ test('curated (round 2): an absent target passes for Bash as it does for Write â
   assert.equal(run('rm .omelette/ledger-*.md').code, 2);
 });
 
-const FENCE = 'omelette-reviewer writes nothing but .omelette/reports/<name>-review.md';
+// bashWrites cannot be imported (the template opens on `{{marker}}`) and a file
+// named `1` is never curated, so the touched record is where a redirection
+// target shows: one SubagentStop over a transcript of the rows.
+test('redirection targets (1.8.0 round 3): `>&1` before a `)` duplicates a descriptor and writes no file `1`; `>&file` still writes', () => {
+  const g = guard();
+  const root = mkdtempSync(join(tmpdir(), 'omelette-fd-dup-'));
+  const proj = join(root, 'proj');
+  mkdirSync(join(proj, '.omelette'), { recursive: true });
+  const projects = join(root, 'home', '.claude', 'projects', '-p', 's');
+  mkdirSync(projects, { recursive: true });
+  const transcript = join(projects, 'agent-fd.jsonl');
+  const bash = (id, command) => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } });
+  writeFileSync(transcript, `${[
+    bash('d1', 'ls 2>&1)'),
+    bash('d2', '(ls > a 2>&1)'),
+    bash('d3', '(time node --test x > ../full.tap 2>&1) 2>&1 | tail -3'),
+    bash('d4', 'echo x >&-)'),
+    bash('d5', 'echo x >&backlog.md'),
+  ].join('\n')}\n`);
+  const r = fireIn(g.path, { hook_event_name: 'SubagentStop', agent_type: 'omelette-coder', agent_id: 'fd000000', agent_transcript_path: transcript, cwd: proj }, proj, { PATH: process.env.PATH, HOME: join(root, 'home') });
+  assert.equal(r.code, 0, r.err);
+  const record = readFileSync(join(proj, '.omelette', 'reports', 'touched-omelette-coder-fd000000.md'), 'utf8');
+  assert.deepEqual(record.split('\n').filter((l) => l.startsWith('- ')), [
+    '- a (bash write)', `- ${join(root, 'full.tap')} (bash write)`, '- backlog.md (bash write)',
+  ], record);
+});
+
+const FENCE ='omelette-reviewer writes nothing but .omelette/reports/<name>-review.md';
 
 /** A project holding .omelette/reports/, and a directory outside it. */
 function fenceProject() {
