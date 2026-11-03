@@ -405,9 +405,9 @@ Measured on this repository on 2026-11-02, the rendered guard fed a `SessionStar
 | Print size | 11 686 B | 10 626 B |
 | What it carried | the last handoffs of six closed plans (1.2.0 … 1.7.0); the open ledger absent (its block fell past the 12 KB cap) | the open ledger's last handoff (7 lines), all 25 entries of the decisions register, the first table of the backlog (2 KB, cut at its row 4) |
 | Files stamped per compaction | 12 | 1 |
-| Orientation after a `/clear` (2026-10-30, before) | 4 tool calls, ~40 KB of ledger read before the first working action | to be measured at the first `/clear` after the release (the print is now the orientation) |
+| Orientation after a `/clear` (2026-10-30 before, 2026-11-03 after) | 4 tool calls, ~40 KB of ledger read before the first working action | 1 tool call, 10 896 B: the print carried all three sections, but Claude Code shows a hook output above about 10 KB as a 2 KB preview and saves the rest to a file, so the one call read that file |
 
-Reading: the byte count barely moved; what the bytes are did. Before, the print was six closed plans' last words and not the open one's; after, it is the three things the rules say to read, in order. The register's tail of 6 KB holds the whole file at 25 entries of about 250 bytes (6 337 B): the spec's "30 lines of about 200 characters" is the budget, and `doctor` warns past 30 live lines.
+Reading: the byte count barely moved; what the bytes are did. Before, the print was six closed plans' last words and not the open one's; after, it is the three things the rules say to read, in order. The register's tail of 6 KB held the whole file at 25 entries of about 250 bytes (6 337 B); at 31 entries after 1.7.3's sweep (8 813 B) it holds the 21 newest, and the ten oldest — the `--dangerously-*` and env-allowlist rulings among them — fall out of the print. The spec's "30 lines of about 200 characters" is the budget, `doctor` warns past 30 live lines, and the budget is the tail, not the file: a line struck is still a line printed.
 
 ## The Codex web default mode
 
