@@ -1886,7 +1886,7 @@ test('rules --print --agents prints the skill too, with its own separator, and w
  */
 const SNIPPET = (script) => [
   '{ "hooks": {',
-  `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
+  `  "PreToolUse": [ { "matcher": "Bash|Write|Edit|NotebookEdit", "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
   `  "PreCompact": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ],`,
   `  "SessionStart": [ { "hooks": [ { "type": "command", "command": "node '${script}'" } ] } ] } }`,
 ].join('\n');
@@ -2108,10 +2108,16 @@ test('doctor: a PreToolUse matcher is a REGEX — "Bash|Edit" and ".*" wire the 
   // — so a guard wired under "Bash|Edit" DOES fire on every Bash call.
   // A matcher of nothing but names, separators and spaces is an exact LIST, as
   // Claude Code reads it; anything else is a regex, tested UNANCHORED — which
-  // is what makes "Ba.", "^Ba" and "ash$" cover a Bash call.
-  for (const matcher of ['Bash|Edit', 'Edit|Bash', 'Bash, Write', '.*', 'Bash.*', '(Bash|Task)', 'Ba(sh)', 'Ba.', '^Ba', 'ash$']) {
+  // is what makes "Ba.", "^Ba" and "ash$" cover a Bash call. Since 1.8.0 the
+  // guard also answers Write (a curated file), and a matcher that sees Bash
+  // but not Write is wired and says what it misses.
+  for (const matcher of ['Bash, Write', '.*', 'Bash|Write|Edit|NotebookEdit']) {
     writeFileSync(settings, withMatcher(matcher));
-    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, `matcher ${matcher} covers Bash`);
+    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse, PreCompact, SessionStart\)/m, `matcher ${matcher} covers Bash and Write`);
+  }
+  for (const matcher of ['Bash', 'Bash|Edit', 'Edit|Bash', 'Bash.*', '(Bash|Task)', 'Ba(sh)', 'Ba.', '^Ba', 'ash$']) {
+    writeFileSync(settings, withMatcher(matcher));
+    assert.match(doctor(), /^hooks {9}project: v\d+\.\d+\.\d+\S* \(wired: PreToolUse \(Bash only — re-merge the PreToolUse group for Write\/Edit\), PreCompact, SessionStart\)/m, `matcher ${matcher} covers Bash alone`);
   }
   // …and one that cannot match "Bash" is still named rather than counted. In an
   // exact list a name is a whole name: "Bas" and "ash" are items of their own,
@@ -2147,6 +2153,49 @@ test('doctor: a PreToolUse matcher is a REGEX — "Bash|Edit" and ".*" wire the 
       `matcher ${JSON.stringify(matcher)} is not a string:\n${doctor()}`,
     );
   }
+});
+
+test('doctor: the guard line names both deliveries — the settings hook by its groups, the mod by what the plugin files say', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const doctor = () => spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
+  const guardLine = () => doctor().split('\n').find((line) => line.startsWith('guard ')) || '';
+  const written = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(written.status, 0, written.stderr);
+  const snippet = JSON.parse(snippetFrom(written.stdout));
+  const command = snippet.hooks.PreToolUse[0].hooks[0].command;
+  writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({
+    hooks: { ...snippet.hooks, SubagentStop: [{ hooks: [{ type: 'command', command }] }] },
+  }, null, 2));
+  const settingsHalf = 'settings hook wired (PreToolUse Bash|Write|Edit|NotebookEdit, SubagentStop)';
+  const version = pkgVersion(ROOT);
+
+  // No plugin: the settings half alone.
+  assert.equal(guardLine(), `guard         ${settingsHalf}`);
+
+  // A PreToolUse group that sees Write and not Bash is not wired — the hooks
+  // line's rule — and the guard line says what it misses.
+  const settings = join(proj, '.claude', 'settings.json');
+  const wired = readFileSync(settings, 'utf8');
+  writeFileSync(settings, JSON.stringify({ hooks: { ...snippet.hooks, PreToolUse: [{ ...snippet.hooks.PreToolUse[0], matcher: 'Write' }] } }));
+  assert.match(doctor(), /^hooks {9}project: v\S+ \(NOT wired \(PreToolUse matcher is not Bash\)/m);
+  assert.equal(guardLine(), 'guard         settings hook not wired (PreToolUse Write — Bash not matched, re-merge the PreToolUse group)');
+  writeFileSync(settings, wired);
+
+  const user = join(dir, '.claude');
+  mkdirSync(join(user, 'plugins'), { recursive: true });
+  writeFileSync(join(user, 'settings.json'), JSON.stringify({ enabledPlugins: { 'omelette-fleet@omelette-fleet': true } }));
+  const install = (v) => writeFileSync(join(user, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    version: 2,
+    plugins: { 'omelette-fleet@omelette-fleet': [{ scope: 'user', installPath: join(user, 'plugins', 'cache', 'omelette-fleet', 'omelette-fleet', v), version: v }] },
+  }));
+  install(version);
+  assert.equal(guardLine(), `guard         ${settingsHalf} · mod omelette-fleet enabled, installed ${version} — the mod answers first`);
+  // An installed copy behind the package is a cache the desktop app loads by version: it carries no guard.
+  install('1.0.0');
+  const stale = guardLine();
+  assert.equal(stale, `guard         ${settingsHalf} · mod omelette-fleet enabled, installed 1.0.0 (package ${version}): stale — reinstall, or the second delivery is absent`);
+  assert.doesNotMatch(stale, /loaded/, 'the CLI cannot see what a session loaded, and never says so');
 });
 
 test('doctor: a guard wired at 0.3.2 — PreToolUse and PreCompact only — is NOT wired, and the missing event is named', () => {

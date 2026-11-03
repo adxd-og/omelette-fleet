@@ -2157,6 +2157,18 @@ const MATCHED_ON = { PreToolUse: 'Bash', SessionStart: 'compact' };
 const SESSION_SOURCES = ['startup', 'resume', 'clear', 'compact'];
 
 /**
+ * …and the tool a PreToolUse entry should ALSO see since 1.8.0: Write, which the
+ * curated rule answers. An entry that sees Bash and not Write is wired — the git
+ * rule and the Bash half of the curated rule run — and the hooks line says what
+ * it misses, beside the event.
+ */
+const ALSO_MATCHED_ON = { PreToolUse: 'Write' };
+const BASH_ONLY = '(Bash only — re-merge the PreToolUse group for Write/Edit)';
+
+/** A matcher as the guard line prints it: the "everything" forms as `*`, anything else escaped. */
+const shownMatcher = (m) => (m === undefined || m === '' ? '*' : visible(String(m)));
+
+/**
  * Which of the guard's events one settings file calls it from. The test is the
  * script's NAME inside the command string, not an exact path: an operator may
  * quote it (the printed snippet does), wrap it, point at their own node or keep
@@ -2169,7 +2181,10 @@ const SESSION_SOURCES = ['startup', 'resume', 'clear', 'compact'];
  *   them for removal rather than as a fault; and why an entry that calls the
  *   guard will never fire on the thing its event is matched on — which looks
  *   installed from every angle and guards nothing, so it is reported instead of
- *   being counted either way.
+ *   being counted either way. Plus, for the guard line and BASH_ONLY: whether a
+ *   calling PreToolUse entry sees Write (`seesWrite`), the matchers of those that
+ *   see Bash or Write, each with whether it sees Bash (`guardMatchers`), and
+ *   whether a SubagentStop entry calls the guard (`subagentStop`).
  */
 function hookWiring(config) {
   const hooks = isObj(config) && isObj(config.hooks) ? config.hooks : {};
@@ -2196,7 +2211,15 @@ function hookWiring(config) {
   const retired = RETIRED_HOOK_EVENTS.filter((event) => callingOn(event).length);
   // The sources some calling SessionStart entry covers: the sweep runs on each.
   const sessionSources = SESSION_SOURCES.filter((s) => callingOn('SessionStart').some((g) => matcherProblemFor(g.matcher, 'SessionStart', s) === null));
-  return { wired, retired, matcherProblem, sessionSources };
+  const sees = (group, tool) => matcherProblemFor(group.matcher, 'PreToolUse', tool) === null;
+  const toolEntries = callingOn('PreToolUse');
+  return {
+    wired, retired, matcherProblem, sessionSources,
+    seesWrite: toolEntries.some((g) => sees(g, ALSO_MATCHED_ON.PreToolUse)),
+    guardMatchers: toolEntries.filter((g) => sees(g, MATCHED_ON.PreToolUse) || sees(g, ALSO_MATCHED_ON.PreToolUse))
+      .map((g) => ({ matcher: shownMatcher(g.matcher), bash: sees(g, MATCHED_ON.PreToolUse) })),
+    subagentStop: callingOn('SubagentStop').length > 0,
+  };
 }
 
 /**
@@ -2216,7 +2239,10 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
   const wired = new Set();
   const retired = new Set();
   const sessionSources = new Set();
+  const guardMatchers = [];
   let matcherProblem = null;
+  let seesWrite = false;
+  let subagentStop = false;
   for (const { name, path } of settingsTargets({ global, cwd, env })) {
     const raw = readSettingsFile(path);
     if (raw === null) continue; // absent is the normal case
@@ -2229,6 +2255,9 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
     for (const event of here.wired) wired.add(event);
     for (const event of here.retired) retired.add(event);
     for (const source of here.sessionSources) sessionSources.add(source);
+    guardMatchers.push(...here.guardMatchers);
+    seesWrite = seesWrite || here.seesWrite;
+    subagentStop = subagentStop || here.subagentStop;
   }
   // A matcher that covers nothing is only a finding while something is still
   // missing: once the files together wire every event, the guard does see the
@@ -2241,7 +2270,72 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
     retired: RETIRED_HOOK_EVENTS.filter((e) => retired.has(e)),
     unreadable, unreadablePaths, matcherProblem,
     sessionSources: SESSION_SOURCES.filter((s) => sessionSources.has(s)),
+    bashOnly: wired.has('PreToolUse') && !seesWrite,
+    guardMatchers, subagentStop,
   };
+}
+
+/**
+ * The omelette-fleet mod as the USER scope's files describe it: ENABLED when
+ * `enabledPlugins` holds `omelette-fleet@<marketplace>: true` (settings.local.json
+ * read before settings.json, as the client reads them), and the version
+ * INSTALLED from `plugins/installed_plugins.json` — both under $CLAUDE_CONFIG_DIR
+ * or `<home>/.claude`, both through readSettingsFile (one O_NONBLOCK descriptor
+ * that must fstat as a regular file, bounded, never written). What a session
+ * has LOADED is not visible from here, and nothing says it is.
+ *
+ * @returns {{enabled: boolean, installed: string|null}|undefined} undefined
+ *   when neither file names the plugin.
+ */
+function modInstall({ home = homedir(), env = process.env } = {}) {
+  const root = String(env.CLAUDE_CONFIG_DIR || '').trim() || join(home, '.claude');
+  const read = (path) => {
+    const raw = readSettingsFile(path);
+    if (raw === null || raw === UNREADABLE) return null;
+    try { const parsed = JSON.parse(raw); return isObj(parsed) ? parsed : null; } catch { return null; }
+  };
+  const ours = (key) => key.split('@')[0] === MOD_REF.split('@')[0];
+  let enabled;
+  for (const name of ['settings.local.json', 'settings.json']) {
+    const config = read(join(root, name));
+    const plugins = config && isObj(config.enabledPlugins) ? config.enabledPlugins : {};
+    const key = Object.keys(plugins).find(ours);
+    if (key !== undefined) { enabled = plugins[key] === true; break; }
+  }
+  const index = read(join(root, 'plugins', 'installed_plugins.json'));
+  const installs = index && isObj(index.plugins)
+    ? Object.entries(index.plugins).filter(([key]) => ours(key)).flatMap(([, list]) => (Array.isArray(list) ? list : [list]))
+    : [];
+  if (enabled === undefined && !installs.length) return undefined;
+  const entry = installs.find((e) => isObj(e) && typeof e.version === 'string' && e.version);
+  return { enabled: enabled === true, installed: entry ? entry.version : null };
+}
+
+/**
+ * THE GUARD LINE: the two deliveries of the guard's answer. The settings hook —
+ * every PreToolUse entry, either scope, that calls the guard and sees Bash or
+ * Write, by its matcher, and a SubagentStop entry — and the mod (modInstall),
+ * whose installed copy behind the package is a cache that carries no guard.
+ * PreToolUse counts as wired by the hooks line's rule, an entry that sees Bash;
+ * entries that see only Write are named as NOT wired, with what they miss. The
+ * half that holds is printed; with neither, no line: the hooks line already
+ * says what to paste.
+ */
+function guardLine(wiring, mod, version) {
+  const entries = new Map();
+  for (const g of [...wiring.project.guardMatchers, ...wiring.global.guardMatchers]) entries.set(g.matcher, g.bash);
+  const bash = [...entries.values()].some(Boolean);
+  const groups = [...entries.keys()].map((m) => (bash ? `PreToolUse ${m}` : `PreToolUse ${m} — Bash not matched, re-merge the PreToolUse group`));
+  if (wiring.project.subagentStop || wiring.global.subagentStop) groups.push('SubagentStop');
+  const halves = groups.length ? [`settings hook ${bash || !entries.size ? 'wired' : 'not wired'} (${groups.join(', ')})`] : [];
+  if (mod) {
+    const installed = mod.installed === null ? null : visible(mod.installed);
+    if (!mod.enabled) halves.push(`mod omelette-fleet ${installed ? `installed ${installed}, ` : ''}not enabled — the second delivery is absent`);
+    else if (!installed) halves.push('mod omelette-fleet enabled, not installed — the second delivery is absent');
+    else if (compareSemver(mod.installed, version) < 0) halves.push(`mod omelette-fleet enabled, installed ${installed} (package ${version}): stale — reinstall, or the second delivery is absent`);
+    else halves.push(`mod omelette-fleet enabled, installed ${installed} — the mod answers first`);
+  }
+  return halves.join(' · ');
 }
 
 /**
@@ -2262,12 +2356,14 @@ function hookWiringAt({ global = false, cwd = process.cwd(), env = process.env }
  * with no guard of its own names it too: its settings may call another scope's
  * guard, and the entry is just as dead.
  */
-const hooksLabel = (r, { wired, retired = [], unreadable, matcherProblem }) => {
+const hooksLabel = (r, { wired, retired = [], unreadable, matcherProblem, bashOnly = false }) => {
   if (r.state === 'absent') return retired.length ? `absent (${retired.join(', ')} wired but no longer used — remove them from your settings files)` : 'absent';
   if (r.state === 'foreign') return 'foreign (no marker)';
   const stale = r.behind ? ` [run: ${refreshCommand('hooks', r.scope)}]` : '';
   const leftover = retired.length ? ` · ${retired.join(', ')} wired but no longer used — remove them from your settings files` : '';
-  if (wired.length === HOOK_EVENTS.length) return `v${r.version} (wired: ${wired.join(', ')}${leftover})${stale}`;
+  // A PreToolUse entry that sees Bash and not Write is wired, and says what it misses.
+  const events = wired.map((e) => (e === 'PreToolUse' && bashOnly ? `${e} ${BASH_ONLY}` : e));
+  if (wired.length === HOOK_EVENTS.length) return `v${r.version} (wired: ${events.join(', ')}${leftover})${stale}`;
   const reasons = [];
   if (unreadable.length) reasons.push(`${unreadable.join(' and ')} unreadable`);
   if (matcherProblem) reasons.push(matcherProblem);
@@ -2855,6 +2951,9 @@ async function cmdDoctor(argv) {
     const missing = SESSION_SOURCES.filter((s) => !w.sessionSources.includes(s));
     if (missing.length) out(`              ${scope} SessionStart misses ${missing.join(', ')} — replace the SessionStart group with the snippet from ${refreshCommand('hooks', scope)}`);
   }
+  // Both deliveries of the guard's answer: the settings hook and the mod.
+  const guard = guardLine(wiring, modInstall({ home: homedir(), env: process.env }), PKG.version);
+  if (guard) out(`guard         ${guard}`);
   for (const line of hookImportLines()) out(line);
   // What the installed guard will do about the handoff — read out of the script
   // itself, so a switch changed in the config and never re-rendered reads as

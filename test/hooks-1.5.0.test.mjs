@@ -138,7 +138,7 @@ test('HOOK_EVENTS is three, RETIRED_HOOK_EVENTS is the other three, and the snip
   assert.deepEqual(RETIRED_HOOK_EVENTS, ['PostToolUse', 'Stop', 'PostCompact']);
   const snippet = JSON.parse(hookSettingsSnippet('/x/omelette-guard.mjs', 'linux').join('\n'));
   assert.deepEqual(Object.keys(snippet.hooks), ['PreToolUse', 'PreCompact', 'SessionStart']);
-  assert.equal(snippet.hooks.PreToolUse[0].matcher, 'Bash');
+  assert.equal(snippet.hooks.PreToolUse[0].matcher, 'Bash|Write|Edit|NotebookEdit');
   assert.equal(snippet.hooks.SessionStart[0].matcher, undefined);
   assert.equal(snippet.hooks.PreCompact[0].matcher, undefined);
 });
@@ -211,14 +211,14 @@ test('doctor: a settings.json that still wires the six events reads as wired, an
   const settings = join(proj, '.claude', 'settings.json');
   writeFileSync(settings, JSON.stringify(six, null, 2));
   const r = cli(['doctor'], { dir, cwd: proj, env });
-  assert.match(r.out, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart · PostToolUse, Stop, PostCompact wired but no longer used — remove them from your settings files\)/m, r.out);
+  assert.match(r.out, /^hooks {9}project: v\S+ \(wired: PreToolUse \(Bash only — re-merge the PreToolUse group for Write\/Edit\), PreCompact, SessionStart · PostToolUse, Stop, PostCompact wired but no longer used — remove them from your settings files\)/m, r.out);
   assert.doesNotMatch(r.out, /^next /m, r.out);
   assert.equal(readFileSync(settings, 'utf8'), JSON.stringify(six, null, 2), 'settings.json is READ, never written');
 
-  // The three it prints today read as wired with nothing stale to name.
+  // The three it printed until 1.7.3 read as wired — Bash only — with nothing stale to name.
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: six.hooks.PreToolUse, PreCompact: six.hooks.PreCompact, SessionStart: six.hooks.SessionStart } }));
   const clean = cli(['doctor'], { dir, cwd: proj, env });
-  assert.match(clean.out, /^hooks {9}project: v\S+ \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m, clean.out);
+  assert.match(clean.out, /^hooks {9}project: v\S+ \(wired: PreToolUse \(Bash only — re-merge the PreToolUse group for Write\/Edit\), PreCompact, SessionStart\) · global: absent$/m, clean.out);
 
   // A stale entry on a guard that is NOT fully wired rides inside the same parentheses.
   writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: six.hooks.PreToolUse, Stop: six.hooks.Stop } }));
