@@ -75,7 +75,8 @@ claude config ~/.claude.json
 rules         project: v1.7.3 · global: absent
 agents        project: v1.7.3 (4) · global: absent
 skills        project: v1.7.3 (1) · global: absent
-hooks         project: v1.7.3 (wired: PreToolUse, PreCompact, SessionStart) · global: absent
+hooks         project: v1.7.3 (wired: PreToolUse, PreCompact, SessionStart, SubagentStop) · global: absent
+guard         settings hook wired (PreToolUse Bash|Write|Edit|NotebookEdit, SubagentStop) · mod omelette-fleet enabled, installed 1.7.3 — the mod answers first
 handoff       stamp and print on · ledgers: 1
 ledgers       1 open (ledger-1.7.3.md → feat/1.7.3), 0 untracked, 22 archived
 decisions     docs/DECISIONS.md (via .omelette/decisions.md) — 25 lines, 0 struck, 0 stale pointers
@@ -117,6 +118,11 @@ mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1800000 nee
 
 No faults in units that are both enabled and registered.
 ```
+
+Two more things ship with the operating model, both optional:
+
+- **The guard answers from two places.** The guard script refuses a sub-agent's `git` write, a rewrite of a ledger and a reviewer's write outside its report, wired as a settings hook; the fleet pane mod runs the same rendered script on `tool.call` and answers first ([ORCHESTRATION, "The two deliveries"](docs/ORCHESTRATION.md#the-two-deliveries)). The guard is containment for the sub-agent roles, not a security boundary.
+- **The handoff comes back as a context block.** At a session's start and again after a compaction or a `/clear`, the mod hands the session the open ledger's last handoff, the decisions register and the backlog's map as one context block ([ORCHESTRATION, "Ledger and handoff"](docs/ORCHESTRATION.md#ledger-and-handoff)).
 
 ## How it fits together
 
@@ -176,11 +182,11 @@ Optionally, install the guard hook — the "never commits" rule of the four guar
 ./bin/omelette-fleet.mjs rules --hooks  # writes .claude/hooks/omelette-guard.mjs
 ```
 
-**Merge the snippet.** It prints a settings snippet wiring three events — `PreToolUse`, `PreCompact` and `SessionStart` — and you merge it in yourself, into `.claude/settings.json` or `.claude/settings.local.json`: a hook script does nothing until your settings call it, and omelette-fleet reads those files but never writes them. The snippet is a whole `hooks` object, so — as the printed line says — *"Merge this into your settings file (it is a whole `hooks` object — add the events it lists to an existing `hooks` block rather than replacing the file)"*. How the script path in it is quoted per platform: [ORCHESTRATION, "Layer 3: the guard"](docs/ORCHESTRATION.md#layer-3-the-guard).
+**Merge the snippet.** It prints a settings snippet wiring four events — `PreToolUse`, `PreCompact`, `SessionStart` and `SubagentStop` — and you merge it in yourself, into `.claude/settings.json` or `.claude/settings.local.json`: a hook script does nothing until your settings call it, and omelette-fleet reads those files but never writes them. The snippet is a whole `hooks` object, so — as the printed line says — *"Merge this into your settings file (it is a whole `hooks` object — add the events it lists to an existing `hooks` block rather than replacing the file)"*. How the script path in it is quoted per platform: [ORCHESTRATION, "Layer 3: the guard"](docs/ORCHESTRATION.md#layer-3-the-guard).
 
-**Check it.** `doctor` reads both settings files and reports `hooks         project: v1.6.0 (wired: PreToolUse, PreCompact, SessionStart)` — or `NOT wired` with the reason; every line it can print there, and how a matcher is read: [ORCHESTRATION, "What doctor says about the wiring"](docs/ORCHESTRATION.md#what-doctor-says-about-the-wiring).
+**Check it.** `doctor` reads both settings files and reports `hooks         project: v1.8.0 (wired: PreToolUse, PreCompact, SessionStart, SubagentStop)` — or `NOT wired` with the reason — and a `guard` line for the two deliveries; every line it can print there, and how a matcher is read: [ORCHESTRATION, "What doctor says about the wiring"](docs/ORCHESTRATION.md#what-doctor-says-about-the-wiring).
 
-Optionally, see the fleet at work: `./bin/omelette-fleet.mjs rules --mods` prints how to install the fleet pane, a Claude Code mod that draws the orchestrator, its sub-agents and the three units and who is calling whom, and only reads ([docs/MODS.md](docs/MODS.md)).
+Optionally, see the fleet at work: `./bin/omelette-fleet.mjs rules --mods` prints how to install the fleet pane, a Claude Code mod that draws the orchestrator, its sub-agents and the three units and who is calling whom, and also runs the guard, pins a guarded role's model and hands back the handoff ([docs/MODS.md](docs/MODS.md)).
 
 Then check the install:
 

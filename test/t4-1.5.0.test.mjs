@@ -19,9 +19,9 @@ const section = (md, heading) => {
   return md.slice(from, to === -1 ? undefined : to);
 };
 
-test('README: the doctor sample names the three events and the stamp-and-print handoff line', () => {
+test('README: the doctor sample names the four events and the stamp-and-print handoff line', () => {
   const md = read('README.md');
-  assert.match(md, /^hooks {9}project: v\d+\.\d+\.\d+ \(wired: PreToolUse, PreCompact, SessionStart\) · global: absent$/m);
+  assert.match(md, /^hooks {9}project: v\d+\.\d+\.\d+ \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\) · global: absent$/m);
   assert.match(md, /^handoff {7}stamp and print on · ledgers: 1$/m);
   assert.doesNotMatch(md, /wired: PreToolUse, PreCompact, SessionStart, PostToolUse/);
   assert.doesNotMatch(md, /nudge at 90%|Stop gate on|summary on/);
@@ -43,7 +43,7 @@ test('SECURITY: the guard section names no transcript read, no state file and no
   // the rows of one event table; the same facts, one row each.
   assert.match(guard, /^\| `PreCompact` \|/m);
   assert.match(guard, /^\| `SessionStart` \(every source\) \|[^\n]*1 MiB[^\n]*40 lines \/ 4 KB per ledger, the register 6 KB from its tail, the backlog table 2 KB, 12 KB in all/m);
-  assert.match(guard, /It reads no transcript, keeps no state file/);
+  assert.match(guard, /it reads no other transcript, keeps no state file/);
 });
 
 test('SECURITY: the body of a spooled answer is named as best-effort', () => {
