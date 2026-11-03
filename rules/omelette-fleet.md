@@ -20,6 +20,7 @@ Gemini, Grok and Codex are wired into this session as **read-only units**. They 
 - A planner gets its spec section and the pointers the session hands it, and the plan header lists what it read.
 - A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates); a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.
 - Pay for judgement, not for repetition: planners do not dry-run plans.
+- **Where superpowers is installed, this file wins** — its own skill says CLAUDE.md and rules do, and its sub-agents are told to ignore it. Five of its habits conflict with the rules above and are resolved this way: the coder never commits, the session does; the reviewer gets the spec and the diff, never the coder's report; a tester exists and runs the real runner before any review; a review reports findings only, no praise; fix rounds stop at 2–3 and go to the operator, not to five rounds and self-adjudication.
 
 ## Ledger and handoff
 

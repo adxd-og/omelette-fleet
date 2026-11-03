@@ -97,10 +97,11 @@ const DUTIES = [
 // goal's boundary (operator, 2026-10-16; +82 net after the hooks line was
 // tightened; the review fixes' tester line +36): 14 643 / 14 611, plus headroom.
 // 1.7.3: 14 700 -> 15 750 — the ledger lifecycle: `ledger open`, the binding mark, the read order after a /clear, the close by sweep (+1 004: 15 647 / 15 615), plus headroom.
-test('the rendered rules file is at most 15 750 characters under either merge policy', () => {
+// docs-2c p21: 15 750 -> 16 400 — the superpowers paragraph in the operating model: this file wins, five conflicts resolved (+518: 16 188 / 16 156), plus headroom.
+test('the rendered rules file is at most 16 400 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 15750, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 16400, `${merge}: ${text.length} characters`);
   }
 });
 
