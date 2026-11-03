@@ -175,7 +175,7 @@ test('rules --mods prints the install commands, the one-session form and the rem
   assert.ok(lines.includes('claude plugin uninstall omelette-fleet@omelette-fleet'), runs[0].out);
   assert.match(runs[0].out, /optional/i);
   assert.match(runs[0].out, /early access/i);
-  assert.match(runs[0].out, /only reads/i);
+  assert.match(runs[0].out, /refuses what the rendered guard refuses/i);
   assert.match(runs[0].out, /Tested on Claude Code \d+\.\d+\.\d+/);
   assert.deepEqual(snapshot(box.home), before.home, 'rules --mods wrote under HOME');
   assert.deepEqual(snapshot(box.cwd), before.cwd, 'rules --mods wrote under the cwd');

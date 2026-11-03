@@ -1883,12 +1883,12 @@ const LOADED_BY_A_SESSION = new Set(['rules', 'agents', 'skills']);
  * plugin API is early access and moves between releases.
  */
 const MOD_REF = 'omelette-fleet@omelette-fleet';
-const MOD_TESTED_BUILD = '2.1.294';
+const MOD_TESTED_BUILD = '2.1.317';
 const MOD_UNINSTALL = ['claude', 'plugin', 'uninstall', MOD_REF];
 
 function printModInstructions() {
   out("The fleet pane is an optional Claude Code mod shipped in this package, on Claude Code's early access plugin API.");
-  out("It only reads (the engine's own events and the units' status feed) and refuses, rewrites or blocks nothing.");
+  out("It draws the fleet from the engine's own events and the units' status feed, and delivers the guard: it refuses what the rendered guard refuses, pins a guarded role's model to its definition and hands back the handoff block; it writes no file of its own.");
   out(`Tested on Claude Code ${MOD_TESTED_BUILD}.`);
   out();
   out('Install (this package folder is the marketplace):');
