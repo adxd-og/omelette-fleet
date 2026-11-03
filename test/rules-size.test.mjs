@@ -71,10 +71,11 @@ const HEADINGS = [
 /** The two bullets test/evidence-pointers.test.mjs pins, byte for byte as 1.1.0 shipped them. */
 const EVIDENCE = '- **Evidence travels with pointers.** Coder and tester reports come as `TASK / FINDINGS / DIFF / TEST RESULTS / OPEN QUESTIONS`, each finding a pointer line — `path:line` (relative to the project root, one line) · a verbatim fragment in backticks · the claim. `omelette-fleet check <file>` verifies the pointers: check before you trust.';
 
-/** The ledger obligations, each by its full sentence (1.7.3 rewrote three and added two). */
+/** The ledger obligations, each by its full sentence (1.7.3 rewrote three and added two; 1.8.0 Task 10 pins the handoff line, rewritten with its six fields). */
 const DUTIES = [
   "**Keep a ledger from the first step of a plan**, one line per event: `omelette-fleet ledger open <plan>` writes `<project>/.omelette/ledger-<plan>.md` headed `branch: <the current branch>` (add `.omelette/` to `.gitignore`). A ledger is open while its branch exists and closed once the branch is deleted; `branch: main` (or `master`, `trunk`) never closes.",
   "**Mark a binding ruling when you write it:** `Ruling(binding): <what> — <why> — <cost if wrong>` for a decision that outlives its plan, constrains later work and names the cost of being wrong; one line of about 200 characters, with a pointer (`path:line` · `fragment`, before the marker or at the end) where one exists. Plain `Ruling:` stays in its ledger.",
+  "**Before a compaction** — announced or suspected — **and at every natural pause, append a handoff block**, `## Handoff (<date> — <title>)`, its six fields in this order, each a line that opens with its label in bold: `State` (branch, HEAD, tree, what is done) · `Open findings` (unruled, by pointer) · `Agents in flight` (their ids and what each holds) · `Gotchas` (what will bite the next reader, three lines at most) · `Tried` (the `tried:` lines still worth knowing) · `Next action` (one sentence, then the step after it).",
   "**After a compaction or a `/clear`, read in order before doing anything else:** the open ledger's last handoff, the decisions register, the backlog's map — the hook prints all three. At a goal's boundary — a release out, a new plan next — write the handoff, delete the merged branch, and suggest `/clear` to the operator.",
   "**A plan closes when its branch is merged and deleted.** `omelette-fleet ledger sweep` does the rest, and the hook runs it at every session start: the binding rulings go to the register (`.omelette/decisions.md`, or the file its `register:` line names), the ledger is marked closed and moves to `.omelette/archive/`. A register line that stops binding gets `superseded by …` appended, never deleted.",
   "The hooks reach only this repository's `.omelette/` and miss some compactions: the handoff blocks are yours to write; the hook is a net, not a replacement.",
@@ -98,10 +99,11 @@ const DUTIES = [
 // tightened; the review fixes' tester line +36): 14 643 / 14 611, plus headroom.
 // 1.7.3: 14 700 -> 15 750 — the ledger lifecycle: `ledger open`, the binding mark, the read order after a /clear, the close by sweep (+1 004: 15 647 / 15 615), plus headroom.
 // docs-2c p21: 15 750 -> 16 400 — the superpowers paragraph in the operating model: this file wins, five conflicts resolved (+518: 16 188 / 16 156), plus headroom.
-test('the rendered rules file is at most 16 400 characters under either merge policy', () => {
+// 1.8.0: 16 400 -> 18 850 — the review brief (the plan header, the touched record, BASE and base..HEAD, no pre-judging, what a coder fixes, the yield split), the handoff's six fields, tried:, the gate's HH:MM, the curated files and the guard's two deliveries (+2 512: 18 700 / 18 668), plus headroom.
+test('the rendered rules file is at most 18 850 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 16400, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 18850, `${merge}: ${text.length} characters`);
   }
 });
 
@@ -111,7 +113,7 @@ test('the rules keep every heading and the two evidence bullets byte for byte', 
   assert.ok(lines.includes(EVIDENCE), 'the evidence bullet is unchanged');
 });
 
-test('"Ledger and handoff" states the five hook obligations in full, one line each, and points at CONFIG for the rest', () => {
+test('"Ledger and handoff" states the six hook obligations in full, one line each, and points at CONFIG for the rest', () => {
   const text = rules();
   const lines = section(text, '## Ledger and handoff').split('\n');
   for (const duty of DUTIES) assert.ok(lines.includes(`- ${duty}`), `a line of its own: ${duty}`);
@@ -331,3 +333,50 @@ test('the coder line carries the bucket clause after its 1.2.0 words, whole, und
     assert.ok(lines.includes(CODER_LINE), `${merge}: "Opus-class, xhigh — the shipped omelette-coder" stays byte for byte`);
   }
 });
+
+// ── 1.8.0 Task 10: the review brief, the handoff's fields, tried:, curated files, the touched record ──
+
+/**
+ * The lines 1.8.0 writes into the rules (spec "The handoff", "The review brief",
+ * "Rules and docs"), by the section each belongs to, each pinned whole: the
+ * `tried:` vocabulary and the review-yield split are the spec's exact words. The
+ * handoff line with its six fields is the sixth of `DUTIES` above.
+ */
+const LINES_1_8_0 = {
+  '## Operating model for the session': [
+    "- A plan's header carries `Global constraints` (the spec's values, verbatim) and `Review focus` (the input classes no task's tests cover, each pointing at the task that should), and each task lists `Consumes` / `Produces` (the names it reads and the ones it defines).",
+  ],
+  '## Ledger and handoff': [
+    "- **Write a dead end as a `tried:` line** when an approach is abandoned or confirmed — `- <date> tried: <approach> — failed | succeeded — <why, one clause>` — so a session after a compaction does not walk the same path; it stays in its ledger.",
+    "- **Close a plan with its review yield.** One line, `review yield: <findings> found / <accepted> accepted / <rejected> rejected (wrong <n> / intentional <n> / didn't matter <n>) — <the two or three that mattered>`. It is the cheap measure of what the reviews were worth; keep it honest.",
+    "- **Under the compaction gate** (the mod's `handoffGate`, off by default), a handoff heading carries its time, `## Handoff (<date> HH:MM — <title>)`, so the gate can tell a block of the last 30 minutes from an older one.",
+    "- **The curated files are appended to, never rewritten:** `.omelette/ledger-*.md`, `.omelette/backlog.md`, `.omelette/decisions.md` and the file its `register:` line names — the guard refuses a Bash write that truncates one and a Write that is not an append, for the session and every role; use Edit for a change in place, and move one first to replace it on purpose.",
+  ],
+  '## Reviews': [
+    "- **When a coder or tester reports, open `.omelette/reports/touched-<role>-<id>.md`** — the files its loop wrote, recorded by the guard from its transcript when it stops — and compare it with the report's `## DIFF` by eye.",
+    "- **Write BASE in the dispatch's ledger line before a coder starts** (the commit it builds on), and give a re-review the diff `base..HEAD`, never `HEAD~1`: a fix round can span several commits.",
+    "- **A review brief never pre-judges:** no \"do not flag X\", no \"nothing above minor\" — the reviewer finds, the session rules.",
+    "- **A coder fixes `important` + `introduced` findings only:** a `nit` or a `pre-existing` one goes to the ledger as one line and to the release's whole-branch review, and a release's final review gets one fix dispatch for all its findings, not one per finding.",
+  ],
+  '## Briefing a unit': [
+    "The guard has two deliveries, the settings hook and the `omelette-fleet` mod: the mod answers first, a stale installed mod carries no guard, and `omelette-fleet doctor`'s guard line says which one is wired.",
+  ],
+};
+
+for (const merge of ['session', 'pr']) {
+  test(`1.8.0: each new rules line is present once, whole, in its section (${merge})`, () => {
+    const text = renderRulesFile('1.2.0', { merge });
+    const all = text.split('\n');
+    for (const [heading, lines] of Object.entries(LINES_1_8_0)) {
+      const own = section(text, heading).split('\n');
+      for (const line of lines) {
+        assert.equal(all.filter((l) => l === line).length, 1, `once in the file: ${line.slice(0, 70)}`);
+        assert.ok(own.includes(line), `in ${heading}: ${line.slice(0, 70)}`);
+      }
+    }
+    assert.ok(!text.includes('where the work stands, open findings, agents in flight, next action'), 'the four-item handoff is gone');
+    for (const line of Object.values(LINES_1_8_0).flat()) {
+      for (const mechanism of MECHANICS) assert.ok(!line.includes(mechanism), `${mechanism} stays out of: ${line.slice(0, 50)}`);
+    }
+  });
+}

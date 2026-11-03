@@ -281,3 +281,16 @@ test('SECURITY: the PreToolUse row names the four guarded roles, and rules --age
   const writes = lines.find((l) => l.includes('The one command that writes into a project is'));
   assert.ok(writes && writes.includes('`.claude/agents/omelette-coder.md`, `.claude/agents/omelette-coder-medium.md`, '), 'the medium coder is among the files --agents writes');
 });
+
+// ── 1.8.0 Task 10: every red test is a finding, FINDINGS about ten lines ─────
+
+/** p29, a rule of its own in the coder's list. */
+const RED_TESTS = '- Report every red test you saw in the full run, yours or not, as a pointer line in `## FINDINGS`.';
+
+test('1.8.0: both coders report every red test of the full run as a pointer line and keep FINDINGS to about ten lines', () => {
+  for (const name of ['omelette-coder.md', 'omelette-coder-medium.md']) {
+    const text = renderAgentFile(name, '1.8.0');
+    assert.ok(text.split('\n').includes(RED_TESTS), `${name}: the red-test rule, a line of its own`);
+    assert.match(text, /`## FINDINGS` \(about ten lines — the pointers that matter, the rest listed under `## DIFF`;/, `${name}: FINDINGS bounded`);
+  }
+});

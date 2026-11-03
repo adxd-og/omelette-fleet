@@ -166,3 +166,26 @@ test('update --check hints rules --agents for a scope missing the reviewer, even
   assert.match(r.out, /^agent files under .*\.claude(\/|\\)agents are v0\.2\.0 \(this install is v0\.2\.0\) — refresh: omelette-fleet rules --agents \(2 of 4 missing\)$/m, r.out);
   assert.equal(existsSync(join(agents, 'omelette-reviewer.md')), false, 'a hint is never a write');
 });
+
+// ── 1.8.0 Task 10: the review brief in the reviewer's definition ─────────────
+
+/** The labels a finding carries after its four parts (spec "The review brief"), each as the definition writes it. */
+const LABELS = ['`confidence: 0–1`', '`important | nit`', '`introduced | pre-existing`', '`seen: <n>`'];
+/** p1's stance and p24's rule, each sentence whole. */
+const STANCE = [
+  'Read to break confidence in the change, not to confirm it.',
+  'A finding earns its place when it answers four questions — what input or state, what happens, who is hurt, how to confirm — and one strong finding is worth more than three weak ones.',
+  'Mark an inference as an inference.',
+  'The spec\'s silence is not permission: judge a finding by its effect on the operator, not by whether the spec names its trigger.',
+];
+
+test('1.8.0: the reviewer reads to break confidence, labels every finding, and lists what it declined to judge before the verdict', () => {
+  const text = reviewer();
+  for (const sentence of STANCE) assert.ok(text.includes(sentence), `the definition says: ${sentence}`);
+  for (const label of LABELS) assert.ok(text.includes(label), `a finding's label: ${label}`);
+  const report = text.slice(text.indexOf('Report: write the full report'));
+  const open = report.indexOf('`## OPEN QUESTIONS`');
+  const declined = report.indexOf('`## DECLINED TO JUDGE`');
+  const verdict = report.indexOf('then the verdict line');
+  assert.ok(open !== -1 && open < declined && declined < verdict, 'the report has `## DECLINED TO JUDGE` after the open questions and before the verdict');
+});
