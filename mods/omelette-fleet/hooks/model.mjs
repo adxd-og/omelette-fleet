@@ -18,20 +18,25 @@
  *   activity?: string, activityCallId?: string, since: number, callerId?: string,
  *   feed?: 'ok'|'none', lastEndedAt?: number, order: number,
  *   openCalls?: { callId: string, callerId: string, tool: string, since: number }[],
- *   loopCalls?: { callId: string, subject: string, since: number }[] }} FleetNode
+ *   loopCalls?: { callId: string, subject: string, since: number }[],
+ *   refusedAt?: number, touched?: string }} FleetNode
  *   `openCalls`: a unit's calls of this session still out; the unit shows the newest.
  *   `loopCalls`: a loop's own calls still out (the main loop's or an agent's); the loop shows the newest.
+ *   `refusedAt`: when the guard refused the loop's call, while its row shows `refused` (until a tick has drawn it).
+ *   `touched`: a stopped agent's touched record, `touched: <path> — <n> files` (guard v2).
  */
 /** @typedef {{ at: number, from: string, to: string, label: string, fromRole?: string, toRole?: string }} FleetLink  node ids, or a SendMessage's raw target; a forgotten agent's end keeps its role */
 /** @typedef {{ contextPercent?: number, fiveHour?: number, sevenDay?: number }} FleetUsage */
-/** @typedef {{ nodes: FleetNode[], history: FleetLink[], usage: FleetUsage, now: number, isOpen: boolean, forgotten?: ({ id: string, role: string } | string)[] }} FleetState  `forgotten`: the agents dropped after their report, newest last (a bare id from an older build) */
+/** @typedef {{ day: string, refusals: { mod?: number, hook?: number } }} FleetCounts  the day's counts (UTC `YYYY-MM-DD`), started again on a new day; refusals by delivery */
+/** @typedef {{ nodes: FleetNode[], history: FleetLink[], usage: FleetUsage, now: number, isOpen: boolean, forgotten?: ({ id: string, role: string } | string)[], counts?: FleetCounts }} FleetState  `forgotten`: the agents dropped after their report, newest last (a bare id from an older build) */
 /**
  * @typedef {{ type: 'spawn', at: number, agentId: string, role: string, parentId?: string, model?: string }
  *   | { type: 'step', at: number, agentId: string, model?: string, effort?: string }
  *   | { type: 'call', at: number, agentId: string, callId: string, tool: string, subject?: string, target?: string }
  *   | { type: 'return', at: number, agentId: string, callId: string }
+ *   | { type: 'refused', at: number, agentId: string, callId?: string, by: 'mod' | 'hook' }
  *   | { type: 'settle', at: number, agentId: string }
- *   | { type: 'stop', at: number, agentId: string }
+ *   | { type: 'stop', at: number, agentId: string, touched?: string }
  *   | { type: 'agents', at: number, list: { id: string, type: string, status: string, parentId?: string }[] }
  *   | { type: 'feed', at: number, snapshots: FleetSnapshot[] }
  *   | { type: 'usage', at: number, usage: FleetUsage }
@@ -134,8 +139,26 @@ const find = (state, id) => state.nodes.find((n) => n.id === id);
 const findAgent = (state, id) => state.nodes.find((n) => n.id === id && n.kind === 'agent');
 const nextOrder = (state) => Math.max(...state.nodes.map((n) => n.order)) + 1;
 
+/**
+ * The role of the agent `id`, as the pane learnt it (a spawn, the agent
+ * list), a forgotten one's included; undefined for the main loop and for an
+ * agent the pane never saw.
+ * @param {FleetState} state
+ * @param {string} id
+ * @returns {string | undefined}
+ */
+export function roleOf(state, id) {
+  return findAgent(state, id)?.role ?? forgottenRole(state, id);
+}
+
+/** `at`'s day in UTC, `YYYY-MM-DD`: the day the counts are kept for. */
+function dayOf(at) {
+  const date = new Date(at);
+  return Number.isNaN(date.getTime()) ? 'unknown' : date.toISOString().slice(0, 10);
+}
+
 /** What a node shows once its calls are over. */
-const NO_ACTIVITY = Object.freeze({ activity: undefined, activityCallId: undefined, loopCalls: undefined });
+const NO_ACTIVITY = Object.freeze({ activity: undefined, activityCallId: undefined, loopCalls: undefined, refusedAt: undefined });
 /** A unit with no call running. */
 const UNIT_IDLE = Object.freeze({ ...NO_ACTIVITY, status: 'idle', callerId: undefined, openCalls: undefined });
 
@@ -169,7 +192,7 @@ function withUnitCalls(state, keep, idlePatch = {}) {
 function loopHolding(open) {
   if (open.length === 0) return NO_ACTIVITY;
   const newest = open.reduce((a, b) => (b.since >= a.since ? b : a));
-  return { loopCalls: open, activity: newest.subject, activityCallId: newest.callId, since: newest.since };
+  return { loopCalls: open, activity: newest.subject, activityCallId: newest.callId, since: newest.since, refusedAt: undefined };
 }
 
 /** `state` with the open calls of `loop` narrowed to those `keep` accepts; a loop that lost one is shown anew. */
@@ -208,7 +231,7 @@ const ON = {
       const subject = e.subject || e.tool;
       // Held open until its return, like a unit's; a call with no id could never be matched by its return, so it only shows.
       const open = e.callId ? { loopCalls: [...(loop.loopCalls ?? []), { callId: e.callId, subject, since: e.at }].slice(-OPEN_CALLS_CAP) } : {};
-      next = withNode(next, loop.id, { ...open, activity: subject, activityCallId: e.callId, status: 'running', since: e.at });
+      next = withNode(next, loop.id, { ...open, activity: subject, activityCallId: e.callId, refusedAt: undefined, status: 'running', since: e.at });
     }
     if (unit) {
       const to = unitId(unit.unit);
@@ -233,6 +256,17 @@ const ON = {
     return withUnitCalls(next, (c) => c.callId !== e.callId, { lastEndedAt: e.at });
   },
 
+  // The guard refused a call before it ran (guard v2): counted for the day by delivery; the loop's row shows `refused`.
+  refused(state, e) {
+    if (e.by !== 'mod' && e.by !== 'hook') return state;
+    const day = dayOf(e.at);
+    const today = state.counts?.day === day ? state.counts : { day, refusals: {} };
+    let next = { ...state, counts: { ...today, refusals: { ...today.refusals, [e.by]: (today.refusals?.[e.by] ?? 0) + 1 } } };
+    const loop = find(next, e.agentId);
+    if (loop && loop.kind !== 'unit') next = withNode(next, loop.id, { activity: 'refused', activityCallId: e.callId, refusedAt: e.at, status: 'running', since: e.at });
+    return next;
+  },
+
   // A loop asks the model again only once its tool results are back: a call still open in it is one whose return never came.
   settle(state, e) {
     const loop = find(state, e.agentId);
@@ -245,7 +279,9 @@ const ON = {
   stop(state, e) {
     const agent = findAgent(state, e.agentId);
     if (!agent) return state;
-    let next = withNode(state, agent.id, { ...NO_ACTIVITY, status: 'reported', since: e.at });
+    // The touched record's line when the mod read one; a stop without one leaves none from an earlier stop.
+    const touched = typeof e.touched === 'string' && e.touched ? e.touched : undefined;
+    let next = withNode(state, agent.id, { ...NO_ACTIVITY, status: 'reported', since: e.at, touched });
     // A unit call of the stopped agent that never returned is over with it.
     next = withUnitCalls(next, (c) => c.callerId !== agent.id);
     return withLink(next, { at: e.at, from: agent.id, to: agent.parentId || MAIN, label: 'report' });
@@ -316,10 +352,12 @@ const ON = {
     const keep = (c) => !isOld(c.since);
     // A unit or a loop with open calls loses only the old ones; an activity with none (another session's call, a call with no id) goes by its since.
     const stale = (n) => n.activity !== undefined && !n.openCalls && !n.loopCalls && isOld(n.since);
+    // A refusal shows for one tick: one made before the last tick has been drawn by it, and its row falls back to its open calls.
+    const drawn = (n) => n.refusedAt !== undefined && n.refusedAt <= state.now;
     const next = {
       ...state,
       now: e.at,
-      nodes: state.nodes.map((n) => (stale(n) ? patched(n, n.kind === 'unit' ? UNIT_IDLE : NO_ACTIVITY) : n)),
+      nodes: state.nodes.map((n) => (stale(n) ? patched(n, n.kind === 'unit' ? UNIT_IDLE : NO_ACTIVITY) : drawn(n) ? patched(n, loopHolding(n.loopCalls ?? [])) : n)),
     };
     const loops = next.nodes.filter((n) => n.kind !== 'unit');
     return forget(withUnitCalls(loops.reduce((acc, loop) => withLoopCalls(acc, loop, keep), next), keep), e.at);

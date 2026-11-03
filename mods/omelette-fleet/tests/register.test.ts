@@ -1227,3 +1227,359 @@ describe('the mod observes and never changes what it sees', () => {
     expect(await $.tool.call({ tool: 'mcp__orion-codex__codex_code_review', prompt: 'p', cwd: '/home/op/work' } as never)).toMatchObject(UNIT_RESULT)
   })
 })
+
+describe('guard v2: the mod runs the rendered guard (1.8.0)', () => {
+  const CWD = '/home/op/work'
+  const SCRIPT = `${CWD}/.claude/hooks/omelette-guard.mjs`
+  const NODE_DIR = '/opt/node/bin'
+  const REFUSAL = 'omelette-coder never commits: the orchestrator commits reviewed work'
+
+  type Run = { argv: readonly string[]; init?: { stdin?: string; timeoutMs?: number; env?: Record<string, string> } }
+  type Answer = { exitCode: number; stderr?: string } | { reject: string }
+  type Guard = { runs: Run[]; logs: string[]; tools: string[] }
+
+  /**
+   * The engine beneath the guard hook: the loop's directory, which files exist
+   * (the rendered scripts, `node` in a PATH entry), what `node <script>` answers,
+   * the transcript lines the plugin logs, and the tools that ran beneath it.
+   */
+  function guardOf(on: On, { scripts = [SCRIPT], nodes = [`${NODE_DIR}/node`], answer = { exitCode: 0 } }: { scripts?: string[]; nodes?: string[]; answer?: Answer } = {}): Guard {
+    const guard: Guard = { runs: [], logs: [], tools: [] }
+
+    on('session.cwd', () => ({ value: CWD }))
+    on('fs.exists', ($, e) => ({ value: scripts.includes(e.path) || nodes.includes(e.path) }))
+    on('process.run', ($, e) => {
+      guard.runs.push(e as Run)
+
+      return 'reject' in answer ? ({ deny: answer.reject } as never) : { value: { exitCode: answer.exitCode, stdout: '', stderr: answer.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
+    })
+    on('ui.log', ($, e) => {
+      guard.logs.push(e.text)
+
+      return { value: undefined }
+    })
+    on('tool.call', ($, e) => {
+      guard.tools.push(String(e.tool))
+
+      return BASH_RESULT
+    })
+
+    return guard
+  }
+
+  const eventOf = (run: Run | undefined) => JSON.parse(run?.init?.stdin ?? 'null')
+
+  async function coderLoop($: any, on: On) {
+    on('agent.spawn', () => SPAWNED)
+    await $.session.start(SESSION)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+  }
+
+  test('(a) a Bash call in an omelette-coder loop: node runs the project\'s rendered script with the PreToolUse event, and exit 2 refuses the call with its stderr', async ($, on) => {
+    const world = worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: `${NODE_DIR}:node_modules/.bin:/usr/bin` })
+    const guard = guardOf(on, { scripts: [SCRIPT, `${HOME}/.claude/hooks/omelette-guard.mjs`], answer: { exitCode: 2, stderr: `${REFUSAL}\n` } })
+    await coderLoop($, on)
+
+    const result = await $.tool.call({ tool: 'Bash', command: 'git commit -m wip', agentId: 'agent-c1', tool_use_id: 'toolu_c1' } as never)
+
+    expect(guard.runs.map(run => run.argv)).toEqual([['node', SCRIPT]])
+    expect(guard.runs[0]?.init?.timeoutMs).toBe(2000)
+    expect(guard.runs[0]?.init?.env, 'node from PATH, its absolute entries only').toEqual({ PATH: `${NODE_DIR}:/usr/bin` })
+    expect(eventOf(guard.runs[0])).toEqual({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git commit -m wip' }, agent_type: 'omelette-coder', cwd: CWD })
+    expect(result).toMatchObject({ deny: REFUSAL })
+    expect(guard.tools, 'the tool never ran').toEqual([])
+    expect(nodeOf(world, 'agent-c1')?.activity, 'the row shows the refusal').toBe('refused')
+    expect(world.fleet?.counts?.refusals).toEqual({ mod: 1 })
+  })
+
+  test('(b) exit 0: the call goes through, the guard asked once', async ($, on) => {
+    worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: NODE_DIR })
+    const guard = guardOf(on, { answer: { exitCode: 0 } })
+    await coderLoop($, on)
+
+    expect(await $.tool.call({ tool: 'Bash', command: 'npm test', agentId: 'agent-c1', tool_use_id: 'toolu_c2' } as never)).toMatchObject(BASH_RESULT)
+    expect(guard.runs).toHaveLength(1)
+    expect(guard.tools).toEqual(['Bash'])
+    expect(guard.logs).toEqual([])
+  })
+
+  for (const [name, answer] of [['exit 1', { exitCode: 1, stderr: 'SyntaxError: Unexpected token' }], ['a rejection (timeout)', { reject: 'still running after 2000 ms' }]] as const) {
+    test(`(c) ${name}: the call goes through, and the mod denies nothing of its own`, async ($, on) => {
+      const world = worldOf(on)
+      mock.clock(on, { now: NOW })
+      mock.env(on, { HOME, PATH: NODE_DIR })
+      const guard = guardOf(on, { answer })
+      await coderLoop($, on)
+
+      expect(await $.tool.call({ tool: 'Edit', file_path: `${CWD}/a.mjs`, old_string: 'a', new_string: 'b', agentId: 'agent-c1', tool_use_id: 'toolu_c3' } as never)).toMatchObject(BASH_RESULT)
+      expect(guard.runs).toHaveLength(1)
+      expect(guard.tools).toEqual(['Edit'])
+      expect(guard.logs, 'node is on PATH: nothing to say').toEqual([])
+      expect(world.fleet?.counts).toBeUndefined()
+    })
+  }
+
+  test('(d) no rendered script, in the project or under HOME: every call goes through, node never runs, and the mod says so once', async ($, on) => {
+    worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: NODE_DIR })
+    const guard = guardOf(on, { scripts: [] })
+    await coderLoop($, on)
+
+    expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m wip', agentId: 'agent-c1', tool_use_id: 'toolu_d1' } as never)).toMatchObject(BASH_RESULT)
+    expect(await $.tool.call({ tool: 'Write', file_path: `${CWD}/b.md`, content: 'b', tool_use_id: 'toolu_d2' } as never)).toMatchObject(BASH_RESULT)
+    expect(guard.runs).toEqual([])
+    expect(guard.tools).toEqual(['Bash', 'Write'])
+    expect(guard.logs).toEqual(['guard v2: no rendered script — omelette-fleet rules --hooks'])
+  })
+
+  test('(d) the script under HOME when the project has none; no node on PATH: every call goes through and the mod says so once', async ($, on) => {
+    worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: `${NODE_DIR}:/usr/bin` })
+    const home = `${HOME}/.claude/hooks/omelette-guard.mjs`
+    const guard = guardOf(on, { scripts: [home], nodes: [], answer: { reject: 'spawn node ENOENT' } })
+    await coderLoop($, on)
+
+    expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m wip', agentId: 'agent-c1', tool_use_id: 'toolu_d3' } as never)).toMatchObject(BASH_RESULT)
+    expect(await $.tool.call({ tool: 'Bash', command: 'git push', agentId: 'agent-c1', tool_use_id: 'toolu_d4' } as never)).toMatchObject(BASH_RESULT)
+    expect(guard.runs.map(run => run.argv[1]), 'the HOME copy is the one asked').toEqual([home, home])
+    expect(guard.tools).toEqual(['Bash', 'Bash'])
+    expect(guard.logs).toEqual(['guard v2: node not found on PATH'])
+  })
+
+  test('(e) the main thread\'s Write: the script is asked with no agent_type', async ($, on) => {
+    worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: NODE_DIR })
+    const guard = guardOf(on)
+    await $.session.start(SESSION)
+
+    await $.tool.call({ tool: 'Write', file_path: `${CWD}/.omelette/ledger-x.md`, content: '# ledger\n', tool_use_id: 'toolu_e1' } as never)
+
+    expect(eventOf(guard.runs[0])).toEqual({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: `${CWD}/.omelette/ledger-x.md`, content: '# ledger\n' }, cwd: CWD })
+  })
+
+  test('(f) a SubagentStop for a coder: the row notes its touched record and how many files it lists', async ($, on) => {
+    const record = `${CWD}/.omelette/reports/touched-omelette-coder-a1b2c3d4.md`
+    const world = worldOf(on, { files: { [record]: '# touched — omelette-coder a1b2c3d4e5f6\n\ntranscript: /home/op/.claude/projects/x/a.jsonl\n\n- a.mjs (Write)\n- b.md (bash >, after cd)\n\ntool calls: 3 (Write: 1, Bash: 1, Read: 1)\n' } })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a1b2c3d4e5f6' }))
+    on('classic.SubagentStop', () => ({}))
+    await $.session.start(SESSION)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+
+    await $.classic.SubagentStop({ ...STOP, agent_id: 'a1b2c3d4e5f6', agent_type: 'omelette-coder', cwd: CWD } as never)
+
+    expect(nodeOf(world, 'a1b2c3d4e5f6')).toMatchObject({ status: 'reported', touched: 'touched: .omelette/reports/touched-omelette-coder-a1b2c3d4.md — 2 files' })
+  })
+})
+
+// tester 1.8.0 Task 7
+describe('tester 1.8.0 Task 7: the guard hook at the engine edge', () => {
+  const CWD = '/home/op/work'
+  const SCRIPT = `${CWD}/.claude/hooks/omelette-guard.mjs`
+  const NODE = '/opt/node/bin/node'
+  const OUT = '/home/op/work/.omelette/reports'
+
+  type Answer = { exitCode: number; stdout?: string; stderr?: string } | { reject: string }
+  type Spy = { calls: number; stdin: string[]; envs: (Record<string, string> | undefined)[]; logs: string[]; ran: string[]; reads: string[] }
+
+  /** The engine beneath: the rendered script and a `node` that exist, `node <script>` answering `answer`, and the tools that got through. */
+  function engine(on: On, { answer = () => ({ exitCode: 0 }) as Answer, exists = [SCRIPT, NODE] }: { answer?: () => Answer; exists?: string[] } = {}): Spy {
+    const spy: Spy = { calls: 0, stdin: [], envs: [], logs: [], ran: [], reads: [] }
+
+    on('session.cwd', () => ({ value: CWD }))
+    on('fs.exists', ($, e) => ({ value: exists.includes(e.path) }))
+    on('process.run', ($, e) => {
+      spy.stdin.push(e.init?.stdin ?? '')
+      spy.envs.push(e.init?.env)
+
+      spy.calls += 1
+
+      const given = answer()
+
+      return 'reject' in given ? ({ deny: given.reject } as never) : { value: { exitCode: given.exitCode, stdout: given.stdout ?? '', stderr: given.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
+    })
+    on('ui.log', ($, e) => {
+      spy.logs.push(e.text)
+
+      return { value: undefined }
+    })
+    on('tool.call', ($, e) => {
+      spy.ran.push(String(e.tool))
+
+      return BASH_RESULT
+    })
+
+    return spy
+  }
+
+  async function coder($: any, on: On) {
+    on('agent.spawn', () => SPAWNED)
+    await $.session.start(SESSION)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+  }
+
+  test('all four tools reach the script with their own fields and the PreToolUse name; Read and Grep never do; the engine\'s keys stay out of tool_input', async ($, on) => {
+    worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const spy = engine(on)
+    await coder($, on)
+    const rider = { agentId: 'agent-c1', tool_use_id: 'toolu_t1', consent: 'The user pressed "1: Yes"', requestMeta: { k: 'v' } }
+
+    await $.tool.call({ tool: 'Bash', command: 'ls', description: 'list', ...rider } as never)
+    await $.tool.call({ tool: 'Write', file_path: `${CWD}/a.md`, content: 'hello', ...rider } as never)
+    await $.tool.call({ tool: 'Edit', file_path: `${CWD}/a.md`, old_string: 'a', new_string: 'b', ...rider } as never)
+    await $.tool.call({ tool: 'NotebookEdit', notebook_path: `${CWD}/n.ipynb`, new_source: 'x', ...rider } as never)
+    await $.tool.call({ tool: 'Read', file_path: `${CWD}/a.md`, ...rider } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'x', ...rider } as never)
+
+    const events = spy.stdin.map(text => JSON.parse(text))
+
+    expect(events.map(event => event.tool_name), 'four runs, none for Read or Grep').toEqual(['Bash', 'Write', 'Edit', 'NotebookEdit'])
+    expect(events.every(event => event.hook_event_name === 'PreToolUse' && event.agent_type === 'omelette-coder' && event.cwd === CWD)).toBe(true)
+    expect(events.map(event => event.tool_input)).toEqual([
+      { command: 'ls', description: 'list' },
+      { file_path: `${CWD}/a.md`, content: 'hello' },
+      { file_path: `${CWD}/a.md`, old_string: 'a', new_string: 'b' },
+      { notebook_path: `${CWD}/n.ipynb`, new_source: 'x' },
+    ])
+    expect(spy.ran, 'every call, guarded or not, went through').toEqual(['Bash', 'Write', 'Edit', 'NotebookEdit', 'Read', 'Grep'])
+  })
+
+  test('a call by an agent the pane never saw sends no agent_type; one by a forgotten agent still sends its role', async ($, on) => {
+    const world = worldOf(on)
+    const clock = mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const spy = engine(on)
+    on('classic.SubagentStop', () => ({}))
+    await coder($, on)
+
+    await $.tool.call({ tool: 'Bash', command: 'a', agentId: 'agent-never-seen', tool_use_id: 'toolu_u1' } as never)
+    expect(JSON.parse(spy.stdin[0] ?? 'null')).not.toHaveProperty('agent_type')
+
+    await $.classic.SubagentStop({ ...STOP, agent_id: 'agent-c1', agent_type: 'omelette-coder' } as never)
+    await clock.advance(11 * 60 * 1000)
+    expect(nodeOf(world, 'agent-c1'), 'the pane forgot it').toBeUndefined()
+
+    await $.tool.call({ tool: 'Bash', command: 'b', agentId: 'agent-c1', tool_use_id: 'toolu_u2' } as never)
+    expect(JSON.parse(spy.stdin[1] ?? 'null').agent_type).toBe('omelette-coder')
+  })
+
+  test('exit 2 with no stderr denies with a fallback text; multi-line stderr is trimmed whole; stdout is not the reason', async ($, on) => {
+    worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    let answer: Answer = { exitCode: 2, stdout: 'SAID ON STDOUT' }
+    const spy = engine(on, { answer: () => answer })
+    await coder($, on)
+    const call = (id: string) => $.tool.call({ tool: 'Bash', command: 'git push', agentId: 'agent-c1', tool_use_id: id } as never)
+
+    const empty = await call('toolu_x1')
+
+    expect(typeof empty.deny, 'a refusal is still a refusal').toBe('string')
+    expect(empty.deny).not.toContain('SAID ON STDOUT')
+    expect((empty.deny as string).trim().length).toBeGreaterThan(0)
+
+    answer = { exitCode: 2, stderr: '\n  line one\nline two  \n\n' }
+    expect((await call('toolu_x2')).deny).toBe('line one\nline two')
+
+    answer = { exitCode: 0, stderr: 'noise that is not a refusal' }
+    expect(await call('toolu_x3')).toMatchObject(BASH_RESULT)
+    expect(spy.ran, 'only the exit-0 call ran').toEqual(['Bash'])
+  })
+
+  for (const path of ['node_modules/.bin:bin', undefined]) {
+    test(`PATH ${String(path)}: the call goes through, node is never run, and the notice is said once`, async ($, on) => {
+      worldOf(on)
+      mock.clock(on, { now: NOW })
+      mock.env(on, path === undefined ? { HOME } : { HOME, PATH: path })
+      const spy = engine(on, { answer: () => ({ exitCode: 2, stderr: 'would refuse' }) })
+      await coder($, on)
+
+      expect(await $.tool.call({ tool: 'Bash', command: 'git push', agentId: 'agent-c1', tool_use_id: 'toolu_p1' } as never)).toMatchObject(BASH_RESULT)
+      expect(await $.tool.call({ tool: 'Bash', command: 'git push', agentId: 'agent-c1', tool_use_id: 'toolu_p2' } as never)).toMatchObject(BASH_RESULT)
+      expect(spy.calls, 'node never run').toBe(0)
+      expect(spy.ran).toEqual(['Bash', 'Bash'])
+      expect(spy.logs.filter(line => line.includes('node not found')), 'said once across two calls').toHaveLength(1)
+    })
+  }
+
+  test('a refusal reaches the pane as `refused` and never as a call; the next call replaces it; two refusals count two; the tick clears it', async ($, on) => {
+    const world = worldOf(on)
+    const clock = mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    let exitCode = 2
+    engine(on, { answer: () => ({ exitCode, stderr: 'no' }) })
+    await coder($, on)
+
+    await $.tool.call({ tool: 'Bash', command: 'git push', agentId: 'agent-c1', tool_use_id: 'toolu_r1' } as never)
+    expect(nodeOf(world, 'agent-c1')).toMatchObject({ activity: 'refused' })
+    expect(nodeOf(world, 'agent-c1')?.loopCalls, 'a refused call is not an open call').toBeUndefined()
+    expect(world.fleet?.history.some(link => link.label.includes('Bash'))).toBe(false)
+
+    await $.tool.call({ tool: 'Bash', command: 'git commit', agentId: 'agent-c1', tool_use_id: 'toolu_r2' } as never)
+    expect(world.fleet?.counts?.refusals).toEqual({ mod: 2 })
+
+    await clock.advance(2_600)
+    expect(nodeOf(world, 'agent-c1')?.activity, 'drawn by a tick, then gone').not.toBe('refused')
+    expect(nodeOf(world, 'agent-c1')?.refusedAt).toBeUndefined()
+
+    await $.tool.call({ tool: 'Bash', command: 'git push', agentId: 'agent-c1', tool_use_id: 'toolu_r3' } as never)
+    exitCode = 0
+    await $.tool.call({ tool: 'Bash', command: 'npm test', agentId: 'agent-c1', tool_use_id: 'toolu_r4' } as never)
+    expect(nodeOf(world, 'agent-c1')?.activity, 'a new call takes the row from the refusal').not.toBe('refused')
+    expect(nodeOf(world, 'agent-c1')?.refusedAt).toBeUndefined()
+  })
+
+  test('a SubagentStop: no record, a role that is not a file name, a stop a hook beneath blocks, and a stop without a cwd note no touched line and read nothing they should not', async ($, on) => {
+    const reads: string[] = []
+    const record = `${OUT}/touched-omelette-coder-a1b2c3d4.md`
+    const files = new Proxy({ [record]: '# touched\n\n- a (Write)\n- b (Edit)\n- c (Write)\n\ntool calls: 3\n' } as Record<string, string>, {
+      get(target, key) {
+        if (typeof key === 'string') reads.push(key)
+
+        return target[key as string]
+      },
+    })
+    const world = worldOf(on, { files })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    let beneath: { block?: string } = {}
+    on('agent.spawn', ($, e) => ({ model: 'claude-opus-5-5', agentId: e.tool_use_id === 'toolu_s2' ? 'bbbb2222cccc' : 'a1b2c3d4e5f6' }))
+    on('classic.SubagentStop', () => beneath)
+    await $.session.start(SESSION)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+    await $.agent.spawn({ ...SPAWN, tool_use_id: 'toolu_s2', subagentType: 'omelette-coder' } as never)
+    reads.length = 0
+
+    // A blocked stop: the agent runs on, nothing noted, and the record is not even read.
+    beneath = { block: 'not yet' }
+    await $.classic.SubagentStop({ ...STOP, agent_id: 'a1b2c3d4e5f6', agent_type: 'omelette-coder', cwd: CWD } as never)
+    expect(nodeOf(world, 'a1b2c3d4e5f6')).toMatchObject({ status: 'running' })
+    expect(nodeOf(world, 'a1b2c3d4e5f6')?.touched).toBeUndefined()
+
+    // A role that is a path: nothing under it is read.
+    beneath = {}
+    await $.classic.SubagentStop({ ...STOP, agent_id: 'bbbb2222cccc', agent_type: '../../x', cwd: CWD } as never)
+    expect(nodeOf(world, 'bbbb2222cccc')).toMatchObject({ status: 'reported' })
+    expect(nodeOf(world, 'bbbb2222cccc')?.touched).toBeUndefined()
+    expect(reads.filter(path => path.includes('..')), 'no read outside the reports').toEqual([])
+
+    // No record on disk: the stop is noted, no line.
+    await $.classic.SubagentStop({ ...STOP, agent_id: 'a1b2c3d4e5f6', agent_type: 'omelette-coder', cwd: '/home/op/elsewhere' } as never)
+    expect(nodeOf(world, 'a1b2c3d4e5f6')).toMatchObject({ status: 'reported' })
+    expect(nodeOf(world, 'a1b2c3d4e5f6')?.touched).toBeUndefined()
+
+    // The record there: three files, read at the agent's own cwd.
+    await $.classic.SubagentStop({ ...STOP, agent_id: 'a1b2c3d4e5f6', agent_type: 'omelette-coder', cwd: `${CWD}/` } as never)
+    expect(nodeOf(world, 'a1b2c3d4e5f6')?.touched).toBe('touched: .omelette/reports/touched-omelette-coder-a1b2c3d4.md — 3 files')
+  })
+})

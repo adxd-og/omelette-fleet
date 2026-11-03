@@ -33,6 +33,8 @@ const ROW_MAX = 6;
 const STATUS_CELLS = 60;
 /** A unit call by another session, as the model writes `callerId`. */
 const OTHER = 'other';
+/** The touched lines under the graph or the Svg at most: the newest, under a `+K more touched` line. */
+const TOUCHED_MAX = 6;
 /** A running box's glyph when motion is on: one frame per 250 ms of the model's clock. */
 const SPINNER = Object.freeze({ unicode: [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'], ascii: [...'|/-\\'] });
 const SPIN_MS = 250;
@@ -55,9 +57,10 @@ const JUNCTION = Object.freeze({
 });
 
 /**
- * The pane as rows of segments: the header, a blank row, the graph or the
- * tree, then (when there is history and room) a blank row and the history,
- * newest first. Never more than `rows` rows, none wider than `columns` cells.
+ * The pane as rows of segments: the header, a blank row, the graph and the
+ * touched records under it, or the tree, then (when there is history and
+ * room) a blank row and the history, newest first. Never more than `rows`
+ * rows, none wider than `columns` cells.
  * `tzOffsetAt(at)` is `Date.prototype.getTimezoneOffset` at that instant, so
  * each history time is shown in the zone it fell in. With `animate`, a running
  * box's glyph is the spinner's frame for `state.now`, so the drawing stays a
@@ -77,6 +80,8 @@ export function layout(state, { columns, rows, isAscii = false, tzOffsetAt = () 
   const graphHeight = graphRowsFor(state);
   if (width >= GRAPH_MIN && height >= 2 + graphHeight + 2) {
     out.push(...graph(state, width, sym, isAscii));
+    // The touched records under the graph, dim, before the history: in a tight pane they take the history's rows.
+    out.push(...touchedLines(state).map((line) => textRow(fitted(touchedText(line, width), width, sym), 'dim')));
   } else {
     out.push(...tree(state, width, height - 2, sym));
   }
@@ -117,6 +122,30 @@ export function historyRows(state, { columns, count, isAscii = false, tzOffsetAt
     Math.floor(columns),
     sym,
   )));
+}
+
+/**
+ * The touched records under the graph and the Svg (guard v2): each reported
+ * agent's line, in the agents' order, the newest TOUCHED_MAX under a
+ * `+K more touched` line; none when no agent has one.
+ * @param {FleetState} state
+ * @returns {string[]}
+ */
+export function touchedLines(state) {
+  const lines = agentsOf(state).map(touchedOf).filter(Boolean);
+  return lines.length > TOUCHED_MAX ? [`+${lines.length - TOUCHED_MAX} more touched`, ...lines.slice(-TOUCHED_MAX)] : lines;
+}
+
+/**
+ * A touched line for `width` cells: whole when it fits, else the record's
+ * file name and count, its directory and label dropped (the file is always
+ * under .omelette/reports/); the caller cuts what still does not fit.
+ * @param {string} line
+ * @param {number} width
+ * @returns {string}
+ */
+export function touchedText(line, width) {
+  return cells(clean(line)) <= width ? line : line.replace(/^touched: (?:[^ ]*\/)?/, '');
 }
 
 /**
@@ -205,6 +234,8 @@ const orchestratorOf = (state) => state.nodes.find((n) => n.id === MAIN) ?? { id
 const isActive = (n) => n.status === 'running' || n.status === 'waiting';
 /** A box that is idle or reported is dim. */
 const isDim = (n) => n.status === 'idle' || n.status === 'reported';
+/** A reported agent's touched record line, or ''; a running agent's is its last run's, not drawn. */
+const touchedOf = (n) => (n.status === 'reported' && typeof n.touched === 'string' ? n.touched : '');
 /** A unit with a call in flight from the orchestrator (any of its open calls): its link is drawn live. */
 const isLiveUnit = (n) => n.status === 'running' && (n.openCalls?.length ? n.openCalls.some((c) => c.callerId === MAIN) : n.callerId === MAIN);
 /** A running agent's or unit's frame is drawn live, like a live line. */
@@ -437,8 +468,8 @@ function asciiOf(ch) {
 /**
  * The same actors as an indented tree within `room` rows: the orchestrator,
  * then each agent and unit as `├ <glyph> <role>  <line two>` and, when it has
- * one, `│   <line three>`. A tree taller than `room` ends in `… +N`, N the
- * actors it left out.
+ * one, `│   <line three>`, then a reported agent's touched record, dim. A tree
+ * taller than `room` ends in `… +N`, N the actors it left out.
  */
 function tree(state, width, room, sym) {
   if (room <= 0) return [];
@@ -446,7 +477,7 @@ function tree(state, width, room, sym) {
   const orch = orchestratorOf(state);
   const orchKind = [orch.model ? shortModel(orch.model) : '', orch.effort ?? ''].filter(Boolean).join(sym.sep);
   const actors = [
-    ...agentsOf(state).map((a) => ({ lines: agentLines(a, now, sym), tone: isDim(a) ? 'dim' : 'plain', isLive: a.status === 'running' })),
+    ...agentsOf(state).map((a) => ({ lines: agentLines(a, now, sym), tone: isDim(a) ? 'dim' : 'plain', isLive: a.status === 'running', touched: touchedOf(a) })),
     ...unitsOf(state).map((u) => ({ lines: unitLines(state, u, now, sym), tone: isDim(u) ? 'dim' : 'plain', isLive: isLiveUnit(u) })),
   ];
   /** @type {Segment[][][]} one list of rows per actor, the orchestrator first */
@@ -457,6 +488,7 @@ function tree(state, width, room, sym) {
     const connector = { text: isLast ? sym.last : sym.branch, tone: /** @type {Tone} */ (actor.isLive ? 'live' : 'dim') };
     const rows = [branchRow(connector, ` ${head}${two ? `  ${two}` : ''}`, actor.tone, width, sym)];
     if (three) rows.push(branchRow({ text: isLast ? ' ' : sym.spine, tone: 'dim' }, `   ${three}`, actor.tone, width, sym));
+    if (actor.touched) rows.push(branchRow({ text: isLast ? ' ' : sym.spine, tone: 'dim' }, `   ${touchedText(actor.touched, width - 4)}`, 'dim', width, sym));
     drawn.push(rows);
   });
 

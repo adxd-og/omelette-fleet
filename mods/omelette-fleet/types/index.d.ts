@@ -20,6 +20,10 @@ export type FleetNode = {
   openCalls?: { callId: string; callerId: string; tool: string; since: number }[]
   /** A loop's own calls still out (the main loop's or an agent's); the loop shows the newest. */
   loopCalls?: { callId: string; subject: string; since: number }[]
+  /** When the guard refused the loop's call, while its row shows `refused` (until a tick has drawn it). */
+  refusedAt?: number
+  /** A stopped agent's touched record, `touched: <path> — <n> files` (guard v2). */
+  touched?: string
 }
 
 /** Node ids, or a SendMessage's raw target; a forgotten agent's end keeps its role. */
@@ -27,8 +31,11 @@ export type FleetLink = { at: number; from: string; to: string; label: string; f
 
 export type FleetUsage = { contextPercent?: number; fiveHour?: number; sevenDay?: number }
 
+/** The day's counts (UTC `YYYY-MM-DD`), started again on a new day: the guard's refusals by delivery. */
+export type FleetCounts = { day: string; refusals: { mod?: number; hook?: number } }
+
 /** `forgotten`: the agents dropped after their report, newest last (a bare id from an older build). */
-export type FleetState = { nodes: FleetNode[]; history: FleetLink[]; usage: FleetUsage; now: number; isOpen: boolean; forgotten?: ({ id: string; role: string } | string)[] }
+export type FleetState = { nodes: FleetNode[]; history: FleetLink[]; usage: FleetUsage; now: number; isOpen: boolean; forgotten?: ({ id: string; role: string } | string)[]; counts?: FleetCounts }
 
 declare module 'claude-code' {
   interface PluginState {

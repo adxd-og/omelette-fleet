@@ -4,9 +4,11 @@
  * `$` and draws. Each hook turns an engine event into a fleet-model event
  * (model.mjs), writes the state, and hands the engine's own result back as it
  * received it; the render hook draws layout.mjs's rows. The mod observes: it
- * never refuses, rewrites or blocks, and a failure of its own bookkeeping
- * never reaches an event (every state write goes through `apply`, which
- * cannot throw).
+ * never rewrites or blocks, and a failure of its own bookkeeping never reaches
+ * an event (every state write goes through `apply`, which cannot throw). The
+ * one refusal it answers is the rendered guard's (guard v2, 1.8.0, guard.mjs):
+ * exit 2 from the script is `{ deny }`; anything else, its own failures
+ * included, lets the call go on.
  *
  * `$` is always spelled `$.noun.method(...)` literally: the engine scans this
  * source and refuses a call it did not see.
@@ -16,8 +18,9 @@ import type { AgentInfo, EngineInterface, Frozen, FsEntry, PluginOptions, Regist
 
 import type { FleetState } from '../types'
 import { parseSnapshot, snapshotNames } from './feed.mjs'
+import { askGuard, findGuardScript, toPreToolUse, touchedLine, touchedPath } from './guard.mjs'
 import { headerRow, historyRows, layout, statusLine } from './layout.mjs'
-import { initialState, MAIN, reduce } from './model.mjs'
+import { initialState, MAIN, reduce, roleOf } from './model.mjs'
 import { svgOf } from './svg.mjs'
 import { subjectOf } from './text.mjs'
 
@@ -377,6 +380,39 @@ const noteStep = async ($: EngineInterface, agentId: string, model: string, effo
   }
 }
 
+/**
+ * The rendered guard's refusal of this call, or none: no script, no `node`,
+ * an exit other than 2 or a run past the clock let it go on. The directory
+ * is `$.session.cwd()`, "the directory the session runs in"; the 2.1.312 and
+ * 2.1.316 declarations add that a value read inside the hook is the hook's
+ * ("a subagent's own"), which no live run has confirmed yet. The role is the
+ * pane's (none on the main loop, or for an agent the pane never saw).
+ */
+const guardRefusal = async ($: EngineInterface, e: { tool: unknown; agentId?: string; [key: string]: unknown }): Promise<string | undefined> => {
+  const cwd = await $.session.cwd().catch(() => undefined)
+  const script = await findGuardScript($, cwd)
+
+  if (!script) {
+    return undefined
+  }
+
+  const state = e.agentId === undefined ? undefined : await read($, fleet).catch(() => undefined)
+  const role = state && e.agentId !== undefined ? roleOf(state, e.agentId) : undefined
+
+  return (await askGuard($, script, toPreToolUse(e, role, cwd))).deny
+}
+
+/** The line of the touched record the guard's SubagentStop wrote for this agent, or none when there is no record to read. */
+const touchedOf = async ($: EngineInterface, e: { agent_type: string; agent_id: string; cwd: string }): Promise<string | undefined> => {
+  const path = touchedPath(e.agent_type, e.agent_id)
+
+  if (!path || !e.cwd) {
+    return undefined
+  }
+
+  return touchedLine(path, await $.fs.read(`${e.cwd.replace(/\/+$/, '')}/${path}`))
+}
+
 /** The text style of a tone; none in the ASCII form, where liveness is the ▶ alone. */
 const styleOf = (tone: Tone, isAscii: boolean): { color?: string; bold?: boolean; dimColor?: boolean } => {
   if (isAscii || tone === 'plain') {
@@ -437,6 +473,20 @@ export const register: Register = (on, options) => {
     return yield* next(e)
   })
 
+  // Guard v2, on the tools the guard reads: registered before the bookkeeping hook, so it runs first; a refusal is
+  // drawn here, as the call never goes on.
+  on('tool.call', { tool: ['Bash', 'Write', 'Edit', 'NotebookEdit'] }, async ($, e, next) => {
+    const deny = await guardRefusal($, e).catch(() => undefined)
+
+    if (deny === undefined) {
+      return next(e)
+    }
+
+    await apply($, [{ type: 'refused', agentId: e.agentId ?? MAIN, callId: e.tool_use_id, by: 'mod' }])
+
+    return { deny }
+  }).catch(($, e, next) => next(e))
+
   on('tool.call', async ($, e, next) => {
     const agentId = e.agentId ?? MAIN
     const callId = e.tool_use_id
@@ -460,9 +510,11 @@ export const register: Register = (on, options) => {
   on('classic.SubagentStop', async ($, e, next) => {
     const result = await next(e)
 
-    // A hook beneath that blocks the stop keeps the agent running.
+    // A hook beneath that blocks the stop keeps the agent running. The settings hook beneath has written the touched record by now.
     if (!result?.block) {
-      await apply($, [{ type: 'stop', agentId: e.agent_id }])
+      const touched = await touchedOf($, e).catch(() => undefined)
+
+      await apply($, [{ type: 'stop', agentId: e.agent_id, ...(touched === undefined ? {} : { touched }) }])
     }
 
     return result
