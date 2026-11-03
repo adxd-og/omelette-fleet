@@ -13,6 +13,23 @@ const HAS_GIT = spawnSync('git', ['--version'], { encoding: 'utf8' }).status ===
 export const GIT_SKIP = HAS_GIT ? false : 'git is not on PATH — these tests need a real repository';
 const GIT_ID = ['-c', 'user.name=omelette test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false'];
 
+/** The SessionStart print's first line since 1.8.0: the marker the mod strips, counted inside the 12 KB cap. */
+export const PRINT_MARKER = '--- omelette-fleet · read before continuing ---\n';
+
+/**
+ * The SessionStart print's text as the tests read it: since 1.8.0 stdout is one
+ * JSON document, `hookSpecificOutput.additionalContext` the text, led by the
+ * marker line. Returns that text less the marker line, so the assertions on the
+ * sections read as before; '' when nothing was printed; throws on any other shape.
+ */
+export function printed(stdout) {
+  if (stdout === '') return '';
+  const output = JSON.parse(stdout).hookSpecificOutput;
+  const text = output.additionalContext;
+  if (output.hookEventName !== 'SessionStart' || typeof text !== 'string' || !text.startsWith(PRINT_MARKER)) throw new Error(`not the 1.8.0 print: ${stdout.slice(0, 120)}`);
+  return text.slice(PRINT_MARKER.length);
+}
+
 /** A ledger with the 1.7.3 header, then `lines`, ending in a newline. */
 export const ledger = (branch, ...lines) => ['# ledger', `branch: ${branch}`, '', ...lines, ''].join('\n');
 

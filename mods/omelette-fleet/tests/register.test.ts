@@ -1544,6 +1544,210 @@ describe('pins, the effort flag and the effort variable (1.8.0)', () => {
   })
 })
 
+describe('the handoff: a prompt.context block, one copy, the compaction skip (1.8.0)', () => {
+  const CWD = '/home/op/work'
+  const SCRIPT = `${CWD}/.claude/hooks/omelette-guard.mjs`
+  const NODE_DIR = '/opt/node/bin'
+  const OMELETTE = `${CWD}/.omelette`
+  const MARKER = '--- omelette-fleet · read before continuing ---'
+  const SECTIONS = '--- ledger-x.md · last handoff ---\n## Handoff (2026-10-08 — x)\nnext: run npm test\n'
+  const PRINT = `${MARKER}\n${SECTIONS}`
+  const DATE = { name: 'currentDate', text: "Today's date is 2026-10-08." }
+  const SKIP = 'no handoff in the last 30 minutes: write one, then compact again'
+  const MIN = 60_000
+
+  type Run = { argv: readonly string[]; init?: { cwd?: string; stdin?: string; timeoutMs?: number; env?: Record<string, string> } }
+  type Answer = { stdout: string; exitCode?: number } | { reject: string }
+  type Ledger = { text: string; mtimeMs: number }
+  type Seen = { runs: Run[]; gits: string[] }
+
+  /**
+   * The engine beneath: the loop's directory, the rendered scripts that exist,
+   * what `node <script>` answers, the ledgers under `.omelette/` (their text and
+   * mtime), and the branches `git show-ref` finds.
+   */
+  function handoffOf(on: On, { scripts = [SCRIPT], answer = { stdout: '' }, ledgers = {}, branches = [] }: { scripts?: string[]; answer?: Answer; ledgers?: Record<string, Ledger>; branches?: string[] } = {}): Seen {
+    const seen: Seen = { runs: [], gits: [] }
+
+    on('session.cwd', () => ({ value: CWD }))
+    on('fs.exists', ($, e) => ({ value: scripts.includes(e.path) }))
+    on('fs.list', ($, e) =>
+      e.path === OMELETTE
+        ? { value: Object.entries(ledgers).map(([name, one]) => ({ name, kind: 'file' as const, size: one.text.length, mtimeMs: one.mtimeMs, isLink: false })) }
+        : ({ deny: `ENOENT: ${e.path}` } as never),
+    )
+    on('fs.read', ($, e) => {
+      const one = e.path.startsWith(`${OMELETTE}/`) ? ledgers[e.path.slice(OMELETTE.length + 1)] : undefined
+
+      return one ? { value: one.text } : ({ deny: `ENOENT: ${e.path}` } as never)
+    })
+    on('process.run', ($, e) => {
+      const run = e as Run
+      const exited = (exitCode: number, stdout = '') => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+
+      if (run.argv[0] === 'git') {
+        const ref = String(run.argv[run.argv.length - 1])
+
+        seen.gits.push(ref)
+
+        return exited(branches.some(branch => ref === `refs/heads/${branch}`) ? 0 : 1)
+      }
+
+      seen.runs.push(run)
+
+      return 'reject' in answer ? ({ deny: answer.reject } as never) : exited(answer.exitCode ?? 0, answer.stdout)
+    })
+
+    return seen
+  }
+
+  const asJson = (text: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } })
+  const pad = (n: number) => String(n).padStart(2, '0')
+  /** The local date at `at`, as a handoff heading spells it. */
+  const dayOf = (at: number) => {
+    const d = new Date(at)
+
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  }
+  const ledgerText = (branch: string, heading: string) => ['# ledger x', `branch: ${branch}`, '', heading, 'next: run npm test', ''].join('\n')
+  const FRESH = `## Handoff (${dayOf(NOW)} — fresh)`
+  const STALE = '## Handoff (2026-09-01 — old)'
+  const MESSAGES = [{ role: 'user' as const, text: 'Implement Task 9', toolUses: [] }]
+  const COMPACTED = { messages: [{ role: 'user' as const, text: 'the summary', toolUses: [] }] }
+  const compact = (trigger: string, more: Record<string, unknown> = {}) => ({ trigger, messages: MESSAGES, ...more }) as never
+
+  test('(a) prompt.context adds omeletteHandoff with the text the rendered guard answered as JSON, at a fire with no compaction before it', async ($, on) => {
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: `${NODE_DIR}:node_modules/.bin` })
+    const seen = handoffOf(on, { answer: { stdout: asJson(PRINT) } })
+    on('prompt.context', () => ({ blocks: [DATE] }))
+
+    const result = await $.prompt.context({ blocks: [DATE] })
+
+    expect(result.blocks).toEqual([DATE, { name: 'omeletteHandoff', text: PRINT }])
+    expect(seen.runs.map(run => run.argv)).toEqual([['node', SCRIPT]])
+    expect(seen.runs[0]?.init?.timeoutMs).toBe(5000)
+    expect(seen.runs[0]?.init?.env, 'node from PATH, its absolute entries only').toEqual({ PATH: NODE_DIR })
+    expect(JSON.parse(seen.runs[0]?.init?.stdin ?? 'null')).toEqual({ hook_event_name: 'SessionStart', source: 'clear', cwd: CWD })
+  })
+
+  test('(a2) a pre-1.8.0 rendered script prints plain text: the block carries it, trimmed', async ($, on) => {
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, PATH: NODE_DIR })
+    handoffOf(on, { answer: { stdout: `${SECTIONS}\n` } })
+    on('prompt.context', () => ({ blocks: [DATE] }))
+
+    expect((await $.prompt.context({ blocks: [DATE] })).blocks).toEqual([DATE, { name: 'omeletteHandoff', text: SECTIONS.trim() }])
+  })
+
+  for (const [name, answer] of [['empty stdout', { stdout: '' }], ['a run that rejects (timeout)', { reject: 'still running after 5000 ms' }]] as const) {
+    test(`(b) ${name}: no block, next's blocks untouched`, async ($, on) => {
+      mock.clock(on, { now: NOW })
+      mock.env(on, { HOME, PATH: NODE_DIR })
+      const seen = handoffOf(on, { answer })
+      on('prompt.context', () => ({ blocks: [DATE] }))
+
+      expect((await $.prompt.context({ blocks: [DATE] })).blocks).toEqual([DATE])
+      expect(seen.runs).toHaveLength(1)
+    })
+  }
+
+  const SUPERPOWERS = 'superpowers: using-superpowers loaded'
+
+  test('(c) classic.SessionStart on clear: the guard\'s marked entry is stripped, every other entry kept', async ($, on) => {
+    mock.env(on, { HOME })
+    handoffOf(on)
+    on('classic.SessionStart', () => ({ additionalContext: [PRINT, SUPERPOWERS] }))
+
+    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never)).toEqual({ additionalContext: [SUPERPOWERS] })
+  })
+
+  test('(c) the marked entry alone on compact: the result carries no additionalContext key at all', async ($, on) => {
+    mock.env(on, { HOME })
+    handoffOf(on)
+    on('classic.SessionStart', () => ({ additionalContext: [PRINT], sessionTitle: 'x' }))
+
+    const result = await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)
+
+    expect(result).toEqual({ sessionTitle: 'x' })
+    expect('additionalContext' in result, 'left out, never undefined').toBe(false)
+  })
+
+  test('(c) startup keeps both entries', async ($, on) => {
+    mock.env(on, { HOME })
+    const beneath = { additionalContext: [PRINT, SUPERPOWERS] }
+    on('classic.SessionStart', () => beneath)
+    handoffOf(on)
+
+    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual(beneath)
+  })
+
+  test('(c) no rendered script (fs.exists false): clear keeps both entries', async ($, on) => {
+    mock.env(on, { HOME })
+    const beneath = { additionalContext: [PRINT, SUPERPOWERS] }
+    handoffOf(on, { scripts: [] })
+    on('classic.SessionStart', () => beneath)
+
+    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never)).toEqual(beneath)
+  })
+
+  test('(d) handoffGate on, a stale open ledger: the compaction is skipped once; a second one a minute later passes', { options: { handoffGate: true } }, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const seen = handoffOf(on, { ledgers: { 'ledger-x.md': { text: ledgerText('feat/x', STALE), mtimeMs: NOW - 5 * MIN } }, branches: ['feat/x'] })
+    on('session.compact', () => COMPACTED)
+
+    expect(await $.session.compact(compact('manual'))).toEqual({ skip: SKIP })
+    expect(seen.gits).toEqual(['refs/heads/feat/x'])
+
+    await clock.advance(MIN)
+
+    expect(await $.session.compact(compact('auto'))).toEqual(COMPACTED)
+  })
+
+  for (const [name, input] of [['trigger precompute', compact('precompute')], ['a sub-agent\'s own compaction (agentId)', compact('auto', { agentId: 'agent-c1' })]] as const) {
+    test(`(d) ${name}: passes`, { options: { handoffGate: true } }, async ($, on) => {
+      mock.clock(on, { now: NOW })
+      const seen = handoffOf(on, { ledgers: { 'ledger-x.md': { text: ledgerText('feat/x', STALE), mtimeMs: NOW } }, branches: ['feat/x'] })
+      on('session.compact', () => COMPACTED)
+
+      expect(await $.session.compact(input)).toEqual(COMPACTED)
+      expect(seen.gits).toEqual([])
+    })
+  }
+
+  test('(d) the option off (its default): a stale open ledger passes', async ($, on) => {
+    mock.clock(on, { now: NOW })
+    handoffOf(on, { ledgers: { 'ledger-x.md': { text: ledgerText('feat/x', STALE), mtimeMs: NOW } }, branches: ['feat/x'] })
+    on('session.compact', () => COMPACTED)
+
+    expect(await $.session.compact(compact('manual'))).toEqual(COMPACTED)
+  })
+
+  test('(d) a closed ledger (its branch gone) newer and fresh beside an open stale one: skipped, the closed one does not count', { options: { handoffGate: true } }, async ($, on) => {
+    mock.clock(on, { now: NOW })
+    const seen = handoffOf(on, {
+      ledgers: {
+        'ledger-done.md': { text: ledgerText('feat/done', FRESH), mtimeMs: NOW - MIN },
+        'ledger-x.md': { text: ledgerText('feat/x', STALE), mtimeMs: NOW - 60 * MIN },
+      },
+      branches: ['feat/x'],
+    })
+    on('session.compact', () => COMPACTED)
+
+    expect(await $.session.compact(compact('auto'))).toEqual({ skip: SKIP })
+    expect([...seen.gits].sort()).toEqual(['refs/heads/feat/done', 'refs/heads/feat/x'])
+  })
+
+  test('(d) a main ledger with a fresh heading: passes, and git never runs', { options: { handoffGate: true } }, async ($, on) => {
+    mock.clock(on, { now: NOW })
+    const seen = handoffOf(on, { ledgers: { 'ledger-lane.md': { text: ledgerText('main', FRESH), mtimeMs: NOW } } })
+    on('session.compact', () => COMPACTED)
+
+    expect(await $.session.compact(compact('manual'))).toEqual(COMPACTED)
+    expect(seen.gits).toEqual([])
+  })
+})
+
 // tester 1.8.0 Task 7
 describe('tester 1.8.0 Task 7: the guard hook at the engine edge', () => {
   const CWD = '/home/op/work'
@@ -2002,5 +2206,271 @@ describe('tester 1.8.0 Task 8: pins, the effort flag and the effort notice at th
     expect(seen.toasts.filter(text => text === NOTICE('low'))).toHaveLength(2)
     expect(seen.toasts.filter(text => text.startsWith('effort '))).toHaveLength(1)
     expect(nodeOf(world, 'agent-1')?.effortFlag).toEqual({ effort: 'low', expected: 'xhigh' })
+  })
+})
+
+// tester 1.8.0 Task 9
+describe('tester 1.8.0 Task 9: the handoff block, the one-copy strip and the compaction skip at the engine edge', () => {
+  const CWD = '/home/op/work'
+  const SCRIPT = `${CWD}/.claude/hooks/omelette-guard.mjs`
+  const HOME_SCRIPT = `${HOME}/.claude/hooks/omelette-guard.mjs`
+  const OMELETTE = `${CWD}/.omelette`
+  const MARKER = '--- omelette-fleet · read before continuing ---'
+  const PRINT = `${MARKER}\n--- ledger-x.md · last handoff ---\n## Handoff (2026-10-08 — x)\nnext: run npm test\n`
+  const SKIP = 'no handoff in the last 30 minutes: write one, then compact again'
+  const MIN = 60_000
+  const COMPACTED = { messages: [{ role: 'user' as const, text: 'the summary', toolUses: [] }] }
+  const MESSAGES = [{ role: 'user' as const, text: 'Implement Task 9', toolUses: [] }]
+  const compact = (trigger: string, more: Record<string, unknown> = {}) => ({ trigger, messages: MESSAGES, ...more }) as never
+  /** A local noon, so a heading 5 minutes old is never on another local day. */
+  const NOON = new Date(2026, 9, 8, 12, 0).getTime()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stamp = (at: number) => {
+    const d = new Date(at)
+
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+  const heading = (at: number) => `## Handoff (${stamp(at)} — written)`
+  const ledgerOf = (branch: string | undefined, head: string) => [...(branch === undefined ? ['# ledger'] : ['# ledger', `branch: ${branch}`]), '', head, 'next: run npm test', ''].join('\n')
+
+  type Entry = { text: string; mtimeMs: number; size?: number; isLink?: boolean; kind?: 'file' | 'directory' }
+  type Spy = { gits: string[]; runs: number; nodeArgv: (readonly string[])[]; reads: string[]; compactions: number }
+
+  function engine(on: On, { scripts = [SCRIPT], stdout = asJson(PRINT), exitCode = 0, ledgers = {}, branches = [], listFails = false }: { scripts?: string[]; stdout?: string; exitCode?: number; ledgers?: Record<string, Entry>; branches?: string[]; listFails?: boolean } = {}): Spy {
+    const spy: Spy = { gits: [], runs: 0, nodeArgv: [], reads: [], compactions: 0 }
+
+    on('session.cwd', () => ({ value: CWD }))
+    on('fs.exists', ($, e) => ({ value: scripts.includes(e.path) }))
+    on('fs.list', ($, e) =>
+      listFails || e.path !== OMELETTE
+        ? ({ deny: `ENOENT: ${e.path}` } as never)
+        : { value: Object.entries(ledgers).map(([name, one]) => ({ name, kind: one.kind ?? ('file' as const), size: one.size ?? one.text.length, mtimeMs: one.mtimeMs, isLink: one.isLink ?? false })) },
+    )
+    on('fs.read', ($, e) => {
+      spy.reads.push(e.path)
+      const one = e.path.startsWith(`${OMELETTE}/`) ? ledgers[e.path.slice(OMELETTE.length + 1)] : undefined
+
+      return one ? { value: one.text } : ({ deny: `ENOENT: ${e.path}` } as never)
+    })
+    on('process.run', ($, e) => {
+      const run = e as { argv: readonly string[] }
+      const exited = (code: number, out = '') => ({ value: { exitCode: code, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+
+      if (run.argv[0] === 'git') {
+        const ref = String(run.argv[run.argv.length - 1])
+
+        spy.gits.push(ref)
+
+        return exited(branches.some(branch => ref === `refs/heads/${branch}`) ? 0 : 1)
+      }
+
+      spy.runs += 1
+      spy.nodeArgv.push(run.argv)
+
+      return exited(exitCode, stdout)
+    })
+    on('session.compact', () => {
+      spy.compactions += 1
+
+      return COMPACTED
+    })
+
+    return spy
+  }
+
+  const asJson = (text: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } })
+
+  // ---- the block
+
+  test('a script that exits 1 with text on stdout adds no block', async ($, on) => {
+    mock.clock(on, { now: NOON })
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const spy = engine(on, { exitCode: 1, stdout: asJson(PRINT) })
+    on('prompt.context', () => ({ blocks: [] }))
+
+    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
+    expect(spy.runs).toBe(1)
+  })
+
+  test('no rendered script anywhere: no block and no node run; the copy under HOME is found when the project has none', async ($, on) => {
+    mock.clock(on, { now: NOON })
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const none = engine(on, { scripts: [] })
+    on('prompt.context', () => ({ blocks: [] }))
+
+    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
+    expect(none.runs).toBe(0)
+  })
+
+  test('the script under HOME is the one run when the project has none', async ($, on) => {
+    mock.clock(on, { now: NOON })
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const spy = engine(on, { scripts: [HOME_SCRIPT] })
+    on('prompt.context', () => ({ blocks: [] }))
+
+    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([{ name: 'omeletteHandoff', text: PRINT }])
+    expect(spy.nodeArgv).toEqual([['node', HOME_SCRIPT]])
+  })
+
+  test('a PATH with no absolute entry: the script is not run and no block is added', async ($, on) => {
+    mock.clock(on, { now: NOON })
+    mock.env(on, { HOME, PATH: 'node_modules/.bin:bin' })
+    const spy = engine(on)
+    on('prompt.context', () => ({ blocks: [] }))
+
+    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
+    expect(spy.runs).toBe(0)
+  })
+
+  test('a JSON document with no additionalContext string delivers the stdout as it is, trimmed (the brief\'s fallback)', async ($, on) => {
+    mock.clock(on, { now: NOON })
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    engine(on, { stdout: '{"hookSpecificOutput":{"hookEventName":"SessionStart"}}\n' })
+    on('prompt.context', () => ({ blocks: [] }))
+
+    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([{ name: 'omeletteHandoff', text: '{"hookSpecificOutput":{"hookEventName":"SessionStart"}}' }])
+  })
+
+  // ---- the strip
+
+  test('the strip keeps the entries in their order, removes every marker-led one, and keeps one that only MENTIONS the marker', async ($, on) => {
+    mock.env(on, { HOME })
+    engine(on)
+    const mentions = `a note quoting ${MARKER} in its middle`
+    on('classic.SessionStart', () => ({ additionalContext: ['first', PRINT, mentions, `${MARKER}\nanother`, 'last'], sessionTitle: 't' }))
+
+    expect(await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)).toEqual({ additionalContext: ['first', mentions, 'last'], sessionTitle: 't' })
+  })
+
+  test('resume and fork leave the engine\'s answer untouched, the marked entry included', async ($, on) => {
+    mock.env(on, { HOME })
+    engine(on)
+    const beneath = { additionalContext: [PRINT, 'other'] }
+    on('classic.SessionStart', () => beneath)
+
+    for (const source of ['resume', 'fork']) {
+      expect(await $.classic.SessionStart({ source, cwd: CWD } as never), source).toEqual(beneath)
+    }
+  })
+
+  test('a result with no additionalContext passes as it is; the script under HOME alone licenses the strip', async ($, on) => {
+    mock.env(on, { HOME })
+    engine(on, { scripts: [HOME_SCRIPT] })
+    on('classic.SessionStart', ($, e) => ((e as { source: string }).source === 'clear' ? { sessionTitle: 'only' } : { additionalContext: [PRINT, 'kept'] }))
+
+    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never)).toEqual({ sessionTitle: 'only' })
+    expect(await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)).toEqual({ additionalContext: ['kept'] })
+  })
+
+  // ---- the gate
+
+  const GATE = { options: { handoffGate: true } }
+
+  test('the allowance window: a compaction 9 min 59 s after the skip passes, one 10 min 1 s after it is skipped again, and that skip opens a new window', GATE, async ($, on) => {
+    const clock = mock.clock(on, { now: NOON })
+    engine(on, { ledgers: { 'ledger-x.md': { text: ledgerOf('main', '## Handoff (2020-01-01 — old)'), mtimeMs: NOON } } })
+
+    expect(await $.session.compact(compact('auto'))).toEqual({ skip: SKIP })
+    await clock.advance(10 * MIN - 1000)
+    expect(await $.session.compact(compact('auto')), 'inside the window').toEqual(COMPACTED)
+    await clock.advance(2000)
+    expect(await $.session.compact(compact('auto')), 'past the window, skipped again').toEqual({ skip: SKIP })
+    await clock.advance(MIN)
+    expect(await $.session.compact(compact('auto')), 'the new window, opened by the second skip').toEqual(COMPACTED)
+  })
+
+  test('the skip does not call the engine beneath; a pass does', GATE, async ($, on) => {
+    mock.clock(on, { now: NOON })
+    const spy = engine(on, { ledgers: { 'ledger-x.md': { text: ledgerOf('main', '## Handoff (2020-01-01 — old)'), mtimeMs: NOON } } })
+
+    await $.session.compact(compact('manual'))
+    expect(spy.compactions).toBe(0)
+    await $.session.compact(compact('manual'))
+    expect(spy.compactions).toBe(1)
+  })
+
+  test('precompute and plugin compactions pass AND leave the allowance unspent: the next manual one is still skipped', GATE, async ($, on) => {
+    mock.clock(on, { now: NOON })
+    const spy = engine(on, { ledgers: { 'ledger-x.md': { text: ledgerOf('main', '## Handoff (2020-01-01 — old)'), mtimeMs: NOON } } })
+
+    expect(await $.session.compact(compact('precompute'))).toEqual(COMPACTED)
+    expect(await $.session.compact(compact('plugin'))).toEqual(COMPACTED)
+    expect(await $.session.compact(compact('auto', { agentId: 'agent-c1' }))).toEqual(COMPACTED)
+    expect(spy.gits).toEqual([])
+    expect(await $.session.compact(compact('manual'))).toEqual({ skip: SKIP })
+  })
+
+  test('a fresh heading with a time 5 minutes old passes, spends no allowance, and a heading 31 minutes old is skipped', GATE, async ($, on) => {
+    mock.clock(on, { now: NOON })
+    const ledgers: Record<string, Entry> = { 'ledger-x.md': { text: ledgerOf('main', heading(NOON - 5 * MIN)), mtimeMs: NOON } }
+    engine(on, { ledgers })
+    expect(await $.session.compact(compact('manual'))).toEqual(COMPACTED)
+    ledgers['ledger-x.md'] = { text: ledgerOf('main', heading(NOON - 31 * MIN)), mtimeMs: NOON }
+    expect(await $.session.compact(compact('manual')), 'the earlier pass did not use the allowance').toEqual({ skip: SKIP })
+  })
+
+  test('only the NEWEST open ledger decides: a stale newest beside a fresh older one skips; a fresh newest beside a stale older one passes', GATE, async ($, on) => {
+    const clock = mock.clock(on, { now: NOON })
+    const ledgers: Record<string, Entry> = {
+      'ledger-old.md': { text: ledgerOf('main', heading(NOON - 2 * MIN)), mtimeMs: NOON - 90 * MIN },
+      'ledger-new.md': { text: ledgerOf('main', '## Handoff (2020-01-01 — stale)'), mtimeMs: NOON - 60 * MIN },
+    }
+    engine(on, { ledgers })
+    expect(await $.session.compact(compact('manual'))).toEqual({ skip: SKIP })
+    ledgers['ledger-new.md'] = { text: ledgerOf('main', heading(NOON - 2 * MIN)), mtimeMs: NOON - 60 * MIN }
+    ledgers['ledger-old.md'] = { text: ledgerOf('main', '## Handoff (2020-01-01 — stale)'), mtimeMs: NOON - 90 * MIN }
+    await clock.advance(11 * MIN)
+    expect(await $.session.compact(compact('manual'))).toEqual(COMPACTED)
+  })
+
+  test('a branch name git is never handed (a shell metacharacter, 129 characters) closes the ledger with no git run; so no open ledger passes', GATE, async ($, on) => {
+    mock.clock(on, { now: NOON })
+    const stale = '## Handoff (2020-01-01 — stale)'
+    const spy = engine(on, {
+      ledgers: {
+        'ledger-a.md': { text: ledgerOf('feat/x;touch pwned', stale), mtimeMs: NOON },
+        'ledger-b.md': { text: ledgerOf(`f${'x'.repeat(128)}`, stale), mtimeMs: NOON },
+        'ledger-c.md': { text: ledgerOf('$(id)', stale), mtimeMs: NOON },
+      },
+    })
+    expect(await $.session.compact(compact('manual'))).toEqual(COMPACTED)
+    expect(spy.gits).toEqual([])
+  })
+
+  test('a headerless ledger counts as open with no git run (stale: skipped)', GATE, async ($, on) => {
+    mock.clock(on, { now: NOON })
+    const spy = engine(on, { ledgers: { 'ledger-h.md': { text: ledgerOf(undefined, '## Handoff (2020-01-01 — stale)'), mtimeMs: NOON } } })
+    expect(await $.session.compact(compact('manual'))).toEqual({ skip: SKIP })
+    expect(spy.gits).toEqual([])
+  })
+
+  test('only regular ledger-*.md files count: a link, a directory, notes.md and ledger-x.txt are ignored (a fresh one of them beside a stale open ledger skips)', GATE, async ($, on) => {
+    mock.clock(on, { now: NOON })
+    const fresh = ledgerOf('main', heading(NOON - MIN))
+    engine(on, {
+      ledgers: {
+        'ledger-real.md': { text: ledgerOf('main', '## Handoff (2020-01-01 — stale)'), mtimeMs: NOON - 60 * MIN },
+        'ledger-link.md': { text: fresh, mtimeMs: NOON, isLink: true },
+        'ledger-dir.md': { text: fresh, mtimeMs: NOON, kind: 'directory' },
+        'notes.md': { text: fresh, mtimeMs: NOON },
+        'ledger-x.txt': { text: fresh, mtimeMs: NOON },
+      },
+    })
+
+    expect(await $.session.compact(compact('manual'))).toEqual({ skip: SKIP })
+  })
+
+  test('a listing that fails: no open ledger, the compaction passes', GATE, async ($, on) => {
+    mock.clock(on, { now: NOON })
+    engine(on, { listFails: true })
+    expect(await $.session.compact(compact('manual'))).toEqual(COMPACTED)
+  })
+
+  test('a ledger over the 4 MiB read bound is stale without being read, and never skips the gate for want of a read', GATE, async ($, on) => {
+    mock.clock(on, { now: NOON })
+    const spy = engine(on, { ledgers: { 'ledger-big.md': { text: ledgerOf('main', heading(NOON - MIN)), mtimeMs: NOON, size: 4 * 1024 * 1024 + 1 } } })
+
+    expect(await $.session.compact(compact('manual'))).toEqual({ skip: SKIP })
+    expect(spy.reads).toEqual([])
   })
 })

@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
-import { GIT_SKIP, ledger, project } from './fixtures/ledger-1.7.3.mjs';
+import { GIT_SKIP, PRINT_MARKER, ledger, printed, project } from './fixtures/ledger-1.7.3.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const REAL_LEDGER = pathToFileURL(join(ROOT, 'core', 'ledger.mjs')).href;
@@ -44,7 +44,8 @@ function fire(path, event, cwd) {
     env: { PATH: process.env.PATH, HOME },
   });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
-  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+  const out = r.stdout || '';
+  return { code: r.status, out: event.hook_event_name === 'SessionStart' ? printed(out) : out, err: r.stderr || '' };
 }
 const start = (source) => ({ hook_event_name: 'SessionStart', source });
 const compact = { hook_event_name: 'PreCompact', trigger: 'auto' };
@@ -249,18 +250,20 @@ test('the 12 KB cap is exact: 12288 bytes print whole, one more byte drops the l
   p.write('.omelette/ledger-a.md', block);
   p.write('.omelette/ledger-b.md', block);
   const setRegister = (pad) => p.write('.omelette/decisions.md', `- one ruling\nz${'z'.repeat(pad)}\n`);
+  // The whole print's bytes: since 1.8.0 its marker line is counted inside the cap.
+  const whole = (out) => bytes(PRINT_MARKER) + bytes(out);
   setRegister(100);
-  const base = bytes(fire(g, start('compact'), p.dir).out);
+  const base = whole(fire(g, start('compact'), p.dir).out);
   assert.ok(base < 12288, `${base}`);
   const pad = 100 + (12288 - base);
   setRegister(pad);
   const exact = fire(g, start('compact'), p.dir).out;
-  assert.equal(bytes(exact), 12288);
+  assert.equal(whole(exact), 12288);
   assert.ok(exact.includes('decisions register') && !exact.includes('[… truncated]'), 'nothing was dropped');
   assert.ok(exact.endsWith(`z${'z'.repeat(pad)}\n`), 'the register is whole at 12288');
   setRegister(pad + 1);
   const over = fire(g, start('compact'), p.dir).out;
-  assert.ok(bytes(over) <= 12288, `${bytes(over)}`);
+  assert.ok(whole(over) <= 12288, `${whole(over)}`);
   assert.ok(!over.includes('--- ledger-b.md · last handoff ---'), 'the handoff that no longer fits is dropped whole');
   assert.ok(over.includes(`${block}\n[… truncated]\n\n--- .omelette/decisions.md · decisions register ---\n`), 'ledger-a whole, then the marker, then the register');
   assert.ok(over.endsWith(`z${'z'.repeat(pad + 1)}\n`), 'the register is whole');

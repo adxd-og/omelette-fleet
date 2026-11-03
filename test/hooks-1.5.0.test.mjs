@@ -26,6 +26,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HANDOFF_SCHEMA, handoffSettings } from '../core/config.mjs';
 import { HOOK_EVENTS, HOOK_FILES, RETIRED_HOOK_EVENTS, hookSettingsSnippet, parseHookHandoff, renderHookFile } from '../core/rules.mjs';
+import { printed } from './fixtures/ledger-1.7.3.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -60,7 +61,8 @@ function runGuard(event, { cwd, guardPath }) {
     env: { PATH: process.env.PATH, HOME: cwd },
   });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
-  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+  const out = r.stdout || '';
+  return { code: r.status, out: event.hook_event_name === 'SessionStart' ? printed(out) : out, err: r.stderr || '' };
 }
 
 /** The CLI in a sandbox of its own: OMELETTE_HOME and HOME are `dir`, cwd is `cwd` (default `dir`). */

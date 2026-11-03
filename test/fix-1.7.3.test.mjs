@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { parsePointers } from '../core/check.mjs';
 import { STANDING_BRANCHES, classifyLedger, openLedger, sweepLedgers } from '../core/ledger.mjs';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
-import { GIT_SKIP, ledger, project } from './fixtures/ledger-1.7.3.mjs';
+import { GIT_SKIP, ledger, printed, project } from './fixtures/ledger-1.7.3.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -50,7 +50,8 @@ function fire(path, event, cwd) {
     env: { PATH: process.env.PATH, HOME },
   });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
-  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+  const out = r.stdout || '';
+  return { code: r.status, out: event.hook_event_name === 'SessionStart' ? printed(out) : out, err: r.stderr || '' };
 }
 const compact = { hook_event_name: 'SessionStart', source: 'compact' };
 const headings = (out) => out.split('\n').filter((l) => l.startsWith('--- '));

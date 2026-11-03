@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FLEET_CONTRACT, HOOK_FILES, SHORT_CONTRACT, renderHookFile, renderRulesFile, rulesTarget, unitInstructions } from '../core/rules.mjs';
 import { renderResult } from '../core/results.mjs';
+import { printed } from './fixtures/ledger-1.7.3.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
@@ -154,7 +155,8 @@ function fire(g, input) {
     env: { PATH: process.env.PATH, HOME: g.dir },
   });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
-  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+  const out = r.stdout || '';
+  return { code: r.status, out: input?.hook_event_name === 'SessionStart' ? printed(out) : out, err: r.stderr || '' };
 }
 
 const evt = (name, p, over = {}) => ({ hook_event_name: name, session_id: 's-1', transcript_path: p.transcript, cwd: p.dir, ...over });

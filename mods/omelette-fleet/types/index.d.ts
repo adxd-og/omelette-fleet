@@ -1,5 +1,7 @@
-// The `$.state` contract of the fleet pane: one value, `omelette-fleet.fleet`,
-// the fleet model of hooks/model.mjs (its JSDoc typedefs are these types).
+// The `$.state` contract of the fleet pane: `omelette-fleet.fleet`, the fleet
+// model of hooks/model.mjs (its JSDoc typedefs are these types), and
+// `omelette-fleet.handoffSkipAt`, when the handoff gate last skipped a
+// compaction (milliseconds since the epoch; 1.8.0).
 
 export type FleetNode = {
   id: string
@@ -43,6 +45,6 @@ export type FleetState = { nodes: FleetNode[]; history: FleetLink[]; usage: Flee
 
 declare module 'claude-code' {
   interface PluginState {
-    'omelette-fleet': { fleet: FleetState }
+    'omelette-fleet': { fleet: FleetState; handoffSkipAt: number }
   }
 }

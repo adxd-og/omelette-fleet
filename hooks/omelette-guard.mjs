@@ -39,6 +39,12 @@
  * context asks: where the work stands (the last handoff block of each open
  * ledger, then of each untracked one), what was decided (the decisions
  * register), and what comes next (the first table of `.omelette/backlog.md`).
+ * Since 1.8.0 it is printed as JSON, `hookSpecificOutput.additionalContext`,
+ * led by a marker line: the hooks reference adds a SessionStart hook's
+ * `additionalContext` to the context, and a module (the mod) can see and remove
+ * a JSON entry where it cannot see plain stdout — the mod delivers the same
+ * text as its own context block and takes this entry out, one copy.
+ * PreCompact's stdout stays plain: PreCompact reads no JSON.
  *
  * SubagentStop (1.8.0) — the touched record: when a guarded role stops, the
  * paths it wrote, read out of its own transcript, go to
@@ -1943,6 +1949,13 @@ const TAIL_NOTE = '[… ledger larger than 1 MiB — read from its tail; a fence
 
 /** The two sources that lost a context, and the only two the print runs on. */
 const PRINT_SOURCES = new Set(['compact', 'clear']);
+/**
+ * The print's first line (1.8.0): the entry it leads is the one the mod takes
+ * out of SessionStart's context, its own prompt.context block being the copy
+ * the session keeps. The mod's handoff.mjs holds the same literal, and a test
+ * compares the two.
+ */
+const HANDOFF_MARKER = '--- omelette-fleet · read before continuing ---';
 /** The register prints whole up to this, and its last this-many bytes past it. */
 const REGISTER_PRINT_MAX = 6 * 1024;
 /** The backlog is read this far from its head; its first table prints up to BACKLOG_PRINT_MAX. */
@@ -2106,6 +2119,14 @@ function backlogSection(dir) {
  *      whole lines (backlogSection).
  * Each opens on a one-line heading naming the file it came from.
  *
+ * THE PRINT IS JSON (1.8.0): one document, `{"hookSpecificOutput":
+ * {"hookEventName":"SessionStart","additionalContext":"<text>"}}`, the text led
+ * by the HANDOFF_MARKER line. The hooks reference adds a SessionStart hook's
+ * `additionalContext` to the context, and a module (the mod) can see and
+ * remove a JSON entry where it cannot see plain stdout: the mod delivers the
+ * same text as its prompt.context block and takes this entry out, so the
+ * session reads one copy.
+ *
  * Same ledgers as PreCompact and the same rule about them — `<cwd>/.omelette/
  * ledger-*.md`, sorted, a directory that is not a symlink (ledgerDir), and
  * every file read through readTail: a symlink seen and skipped rather than
@@ -2117,9 +2138,10 @@ function backlogSection(dir) {
  * A tail read says so, above the block, because it is not the whole file.
  *
  * Each block is bounded by lastHandoffBlock, and the print as a whole stops at
- * 12 KB. The register and the backlog are RESERVED first — each at its own cap,
- * heading included — and the handoffs get only what is left, so a long list of
- * ledgers never crowds out what was decided and what comes next: the first
+ * 12 KB of text. The marker line, the register and the backlog are RESERVED
+ * first — each at its own cap, heading included — and the handoffs get only
+ * what is left, so a long list of ledgers never crowds out what was decided
+ * and what comes next: the first
  * handoff that does not fit is dropped WHOLE with every handoff after it, and
  * one truncation line says so where they stop, because half a handoff read as
  * a whole one is worse than a line saying it was left out.
@@ -2167,12 +2189,16 @@ async function sessionStart(event) {
       return;
     }
   };
-  // The register and the backlog first, each at its own cap with the blank
-  // line before it: the handoffs get what they leave, so both always fit.
+  // The marker line, the register and the backlog first, each at its own cap
+  // with the blank line before it: the handoffs get what they leave, so all
+  // three always fit.
+  const head = `${HANDOFF_MARKER}\n`;
+  const room = HANDOFF_TOTAL_MAX - bytes(head);
   const reserved = [registerSection(register), backlogSection(found.dir)].filter(Boolean);
-  fill(ledgerSections(found.dir, ledgerNames(found.dir), swept), HANDOFF_TOTAL_MAX - reserved.reduce((n, s) => n + bytes(s) + 1, 0));
-  fill(reserved, HANDOFF_TOTAL_MAX);
-  if (parts.length) say(process.stdout, parts.join(''));
+  fill(ledgerSections(found.dir, ledgerNames(found.dir), swept), room - reserved.reduce((n, s) => n + bytes(s) + 1, 0));
+  fill(reserved, room);
+  if (!parts.length) return;
+  say(process.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `${head}${parts.join('')}` } }));
 }
 
 /**

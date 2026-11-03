@@ -9,7 +9,9 @@
  * reason of its own. A missing script or `node` is said once per module load.
  *
  * Also the touched record's line for the pane: the file the script's
- * SubagentStop writes, named and counted, never written here.
+ * SubagentStop writes, named and counted, never written here; and the
+ * handoff print (printHandoff): the script run as SessionStart on `clear`,
+ * its text handed to the prompt.context block.
  *
  * `$` is always spelled `$.noun.method(...)` literally: the engine scans the
  * source and refuses a call it did not see.
@@ -169,6 +171,52 @@ export async function askGuard($, script, event) {
     return {};
   }
   return ran.exitCode === 2 ? { deny: denyText(ran.stderr ?? '') || UNSAID } : {};
+}
+
+/** The handoff print's wall clock: the guard sweeps before it prints. */
+export const HANDOFF_TIMEOUT_MS = 5000;
+
+/**
+ * The text of the rendered guard's SessionStart print: `hookSpecificOutput.
+ * additionalContext` when stdout is one JSON document carrying it as a string;
+ * else stdout trimmed as it is (a script rendered before 1.8.0 prints plain text).
+ * @param {string} stdout
+ * @returns {string}
+ */
+function printedText(stdout) {
+  const text = String(stdout ?? '');
+  try {
+    const context = JSON.parse(text)?.hookSpecificOutput?.additionalContext;
+    if (typeof context === 'string') return context;
+  } catch {
+    // Not JSON: a pre-1.8.0 script's plain print.
+  }
+  return text.trim();
+}
+
+/**
+ * Runs `node <script>` as Claude Code's SessionStart hook on `clear`, `node`
+ * looked up in PATH's absolute entries, under HANDOFF_TIMEOUT_MS: the text it
+ * prints (printedText); '' with no absolute PATH entry, on an exit other than
+ * 0, and on a run that does not start or outlasts the clock. Never throws.
+ * @param {any} $ the engine interface
+ * @param {string} script the rendered guard's path
+ * @param {string | undefined} cwd the session's directory, absolute
+ * @returns {Promise<string>}
+ */
+export async function printHandoff($, script, cwd) {
+  try {
+    const path = absolutePath(await $.env.get('PATH'));
+    if (!path) return '';
+    const ran = await $.process.run(['node', script], {
+      stdin: JSON.stringify({ hook_event_name: 'SessionStart', source: 'clear', cwd }),
+      timeoutMs: HANDOFF_TIMEOUT_MS,
+      env: { PATH: path },
+    });
+    return ran.exitCode === 0 ? printedText(ran.stdout) : '';
+  } catch {
+    return '';
+  }
 }
 
 /**

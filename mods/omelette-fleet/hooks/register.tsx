@@ -10,7 +10,11 @@
  * exit 2 from the script is `{ deny }`; anything else, its own failures
  * included, lets the call go on. The one rewrite is the pin (1.8.0, roles.mjs):
  * a guarded role spawned on a model its definition does not name runs on the
- * definition's.
+ * definition's. The handoff (1.8.0, handoff.mjs) adds to what the session is
+ * sent: the rendered guard's print as a prompt.context block, the settings
+ * hook's copy of it taken out of SessionStart's context; and, with
+ * `handoffGate` on, one compaction is skipped while the newest open ledger has
+ * no fresh handoff.
  *
  * `$` is always spelled `$.noun.method(...)` literally: the engine scans this
  * source and refuses a call it did not see.
@@ -20,7 +24,8 @@ import type { AgentInfo, EngineInterface, Frozen, FsEntry, PluginOptions, Regist
 
 import type { FleetState } from '../types'
 import { parseSnapshot, snapshotNames } from './feed.mjs'
-import { askGuard, findGuardScript, toPreToolUse, touchedLine, touchedPath } from './guard.mjs'
+import { askGuard, findGuardScript, printHandoff, toPreToolUse, touchedLine, touchedPath } from './guard.mjs'
+import { HANDOFF_MARKER, lastHandoffFresh, newestOpenLedger } from './handoff.mjs'
 import { headerRow, historyRows, layout, statusLine } from './layout.mjs'
 import { initialState, MAIN, reduce, roleOf } from './model.mjs'
 import { namesModel, readRoleDefinitions } from './roles.mjs'
@@ -30,6 +35,12 @@ import { subjectOf } from './text.mjs'
 const PANE = 'omelette-fleet'
 const TITLE = 'Fleet'
 const fleet = { plugin: 'omelette-fleet', key: 'fleet' } as const
+/** When the handoff gate last skipped a compaction (1.8.0): the next one within GATE_PASS_MS passes. */
+const handoffSkip = { plugin: 'omelette-fleet', key: 'handoffSkipAt' } as const
+
+/** The handoff gate's skip, the notice it reads as, and how long after a skip the next compaction passes. */
+const GATE_SKIP = 'no handoff in the last 30 minutes: write one, then compact again'
+const GATE_PASS_MS = 10 * 60 * 1000
 
 /**
  * The pane's tick while it is open: every 250 ms while an agent or a unit runs
@@ -504,6 +515,44 @@ const touchedOf = async ($: EngineInterface, e: { agent_type: string; agent_id: 
   return touchedLine(path, await $.fs.read(`${e.cwd.replace(/\/+$/, '')}/${path}`))
 }
 
+/**
+ * The rendered guard's handoff print, for the prompt.context block: '' with no
+ * rendered script or nothing printed. The directory is `$.session.cwd()`:
+ * prompt.context's input carries none.
+ */
+const handoffText = async ($: EngineInterface): Promise<string> => {
+  const cwd = await $.session.cwd().catch(() => undefined)
+  const script = await findGuardScript($, cwd)
+
+  return script ? printHandoff($, script, cwd) : ''
+}
+
+/**
+ * The handoff gate's skip for a compaction it covers, or none (the compaction
+ * goes on): a skip while no skip of the last GATE_PASS_MS stands and the
+ * newest open ledger has no fresh handoff (handoff.mjs); the skip's time is
+ * written first, so the next compaction within GATE_PASS_MS passes. No open
+ * ledger, none.
+ */
+const gateSkip = async ($: EngineInterface): Promise<string | undefined> => {
+  const now = await $.clock.now()
+  const { value: skippedAt } = await $.state.get(handoffSkip)
+
+  if (typeof skippedAt === 'number' && now - skippedAt <= GATE_PASS_MS) {
+    return undefined
+  }
+
+  const ledger = await newestOpenLedger($, await $.session.cwd())
+
+  if (ledger === undefined || lastHandoffFresh(ledger.text, now)) {
+    return undefined
+  }
+
+  await $.state.set(handoffSkip, now)
+
+  return GATE_SKIP
+}
+
 /** The text style of a tone; none in the ASCII form, where liveness is the ▶ alone. */
 const styleOf = (tone: Tone, isAscii: boolean): { color?: string; bold?: boolean; dimColor?: boolean } => {
   if (isAscii || tone === 'plain') {
@@ -631,6 +680,53 @@ export const register: Register = (on, options) => {
     }
 
     return result
+  }).catch(($, e, next) => next(e))
+
+  // The handoff's one copy: the rendered guard's print as a block of the context the conversation carries, at every
+  // fire (a session's first request, and again when a compaction or a /clear has it read anew).
+  on('prompt.context', async ($, e, next) => {
+    const result = await next(e)
+    const text = await handoffText($).catch(() => '')
+
+    return text ? { ...result, blocks: [...result.blocks, { name: 'omeletteHandoff', text }] } : result
+  }).catch(($, e, next) => next(e))
+
+  // Way B: on the two sources the guard prints on, its entry (the one its marker leads) leaves SessionStart's context,
+  // and only while a rendered script is there for prompt.context to print from. Every other entry stays as it came.
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source !== 'compact' && e.source !== 'clear') {
+      return next(e)
+    }
+
+    const script = await findGuardScript($, e.cwd).catch(() => undefined)
+
+    if (!script) {
+      return next(e)
+    }
+
+    const result = await next(e)
+
+    if (!result.additionalContext) {
+      return result
+    }
+
+    const { additionalContext, ...rest } = result
+    const kept = additionalContext.filter(entry => !entry.startsWith(HANDOFF_MARKER))
+
+    // Nothing left: the key goes, never `additionalContext: undefined`.
+    return kept.length > 0 ? { ...rest, additionalContext: kept } : rest
+  }).catch(($, e, next) => next(e))
+
+  // The handoff gate, off by default: a manual or automatic compaction of the main conversation is skipped once while
+  // the newest open ledger has no handoff of the last 30 minutes. A sub-agent's own, a plugin's and a precompute pass.
+  on('session.compact', async ($, e, next) => {
+    if (options.handoffGate !== true || (e.trigger !== 'manual' && e.trigger !== 'auto') || e.agentId !== undefined) {
+      return next(e)
+    }
+
+    const skip = await gateSkip($).catch(() => undefined)
+
+    return skip === undefined ? next(e) : { skip }
   }).catch(($, e, next) => next(e))
 
   on('session.measure', async ($, e, next) => {

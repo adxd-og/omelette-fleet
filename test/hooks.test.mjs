@@ -16,6 +16,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { HOOK_FILES, HOOK_MARKER, parseHookMarker, renderHookFile } from '../core/rules.mjs';
+import { printed } from './fixtures/ledger-1.7.3.mjs';
 
 /** The refusal names the agent it caught, so two guarded roles never read each other's line. */
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
@@ -35,7 +36,8 @@ function fire(path, input, cwd, env) {
     encoding: 'utf8', cwd, env, timeout: 20000,
   });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
-  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+  const out = r.stdout || '';
+  return { code: r.status, out: input?.hook_event_name === 'SessionStart' ? printed(out) : out, err: r.stderr || '' };
 }
 
 /**

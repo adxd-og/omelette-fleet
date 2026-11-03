@@ -68,10 +68,16 @@ test('the plugin manifest: named omelette-fleet, at the package version, with a 
   assert.ok(p.description.length > 0 && !p.description.includes('\n'), p.description);
   assert.equal(p.types, './types/index.d.ts');
   assert.ok(existsSync(resolve(MOD, p.types)), `types names a file that does not exist: ${p.types}`);
-  assert.deepEqual(Object.keys(p.userConfig).sort(), ['animate', 'autoOpen'], 'autoOpen (Task 1) and animate (Task 3.2)');
-  const { autoOpen } = p.userConfig;
+  assert.deepEqual(Object.keys(p.userConfig).sort(), ['animate', 'autoOpen', 'handoffGate'], 'autoOpen (Task 1), animate (Task 3.2), handoffGate (1.8.0)');
+  const { autoOpen, handoffGate } = p.userConfig;
   assert.deepEqual([autoOpen.type, autoOpen.default, autoOpen.title], ['boolean', true, 'Open the pane at session start']);
   for (const words of [/wide terminal/, /\/omelette-fleet command/, /status line/]) assert.match(autoOpen.description, words);
+  assert.deepEqual(handoffGate, {
+    type: 'boolean',
+    title: 'Refuse a compaction without a fresh handoff',
+    description: 'On: a manual or automatic compaction is refused once when the newest open ledger has no handoff block of the last 30 minutes (a dated heading counts for its day); the next attempt within 10 minutes passes. Off: nothing is refused',
+    default: false,
+  }, 'off by default: the gate is the operator\'s to turn on');
 });
 
 test('hooks.json names exactly one module, ./register.tsx, and that module exists', () => {

@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { classifyLedger, harvestBindings, openLedger, sweepLedgers } from '../core/ledger.mjs';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
-import { GIT_SKIP, ledger, project } from './fixtures/ledger-1.7.3.mjs';
+import { GIT_SKIP, PRINT_MARKER, ledger, printed, project } from './fixtures/ledger-1.7.3.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const HOME = mkdtempSync(join(tmpdir(), 'omelette-home-tfix173-'));
@@ -36,7 +36,7 @@ function fire(path, cwd) {
   });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
   assert.equal(r.status, 0, r.stderr);
-  return r.stdout || '';
+  return printed(r.stdout || '');
 }
 const headings = (out) => out.split('\n').filter((l) => l.startsWith('--- '));
 const HANDOFF = ['## Handoff', ...Array.from({ length: 39 }, (_, i) => `${'h'.repeat(99)}${i % 10}`)].join('\n');
@@ -98,11 +98,13 @@ test('the print never exceeds 12 KB at any register size across the boundary whe
   let sawPop = false;
   let sawFull = false;
   // a and b fit and c does not from pad 267 on; from about pad 4238 the 14-byte marker has no room after b, so b goes too.
-  for (let pad = 4225; pad <= 4262; pad += 1) {
+  // Since 1.8.0 the print's first line (PRINT_MARKER) is counted inside the cap: every bound moves down by its bytes.
+  const lead = bytes(PRINT_MARKER);
+  for (let pad = 4225 - lead; pad <= 4262 - lead; pad += 1) {
     setRegister(pad);
     const out = fire(g, p.dir);
     const hs = headings(out);
-    assert.ok(bytes(out) <= 12288, `pad ${pad}: ${bytes(out)} bytes`);
+    assert.ok(lead + bytes(out) <= 12288, `pad ${pad}: ${lead + bytes(out)} bytes`);
     assert.equal(hs[hs.length - 1], '--- .omelette/decisions.md · decisions register ---', `pad ${pad}: the register is printed`);
     assert.ok(out.endsWith(`z${'z'.repeat(pad)}\n`), `pad ${pad}: the register is whole`);
     const shown = hs.filter((h) => h.endsWith('· last handoff ---')).map((h) => /ledger-(.)\.md/.exec(h)[1]);

@@ -16,6 +16,12 @@
       "title": "Animate running agents",
       "description": "A spinner on a running agent or unit and a faster tick while anything runs; on the desktop, moving live lines and a pulsing frame. Off draws the same pane without motion",
       "default": true
+    },
+    "handoffGate": {
+      "type": "boolean",
+      "title": "Refuse a compaction without a fresh handoff",
+      "description": "On: a manual or automatic compaction is refused once when the newest open ledger has no handoff block of the last 30 minutes (a dated heading counts for its day); the next attempt within 10 minutes passes. Off: nothing is refused",
+      "default": false
     }
   }
 }

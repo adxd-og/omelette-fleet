@@ -17,6 +17,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
+import { printed } from './fixtures/ledger-1.7.3.mjs';
 
 /** The guard exactly as `rules --hooks` writes it. */
 function guard() {
@@ -43,7 +44,8 @@ function fire(g, input) {
     env: { PATH: process.env.PATH, HOME: g.dir },
   });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
-  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+  const out = r.stdout || '';
+  return { code: r.status, out: input?.hook_event_name === 'SessionStart' ? printed(out) : out, err: r.stderr || '' };
 }
 
 const startEvent = (p) => ({ hook_event_name: 'SessionStart', source: 'compact', cwd: p.dir });
