@@ -1630,3 +1630,95 @@ test('curated (round 2): an absent target passes for Bash as it does for Write â
   assert.equal(run('cat > .omelette/ledger-d.md').code, 2);
   assert.equal(run('rm .omelette/ledger-*.md').code, 2);
 });
+
+const FENCE = 'omelette-reviewer writes nothing but .omelette/reports/<name>-review.md';
+
+/** A project holding .omelette/reports/, and a directory outside it. */
+function fenceProject() {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-fence-'));
+  mkdirSync(join(dir, '.omelette', 'reports'), { recursive: true });
+  const outside = mkdtempSync(join(tmpdir(), 'omelette-fence-outside-'));
+  return { dir, outside };
+}
+
+/** One reviewer (or other agent) edit tool call, its path under the field the tool names it by. */
+function fenceFire(g, cwd, { tool = 'Write', path, agent = 'omelette-reviewer' }) {
+  const field = tool === 'NotebookEdit' ? 'notebook_path' : 'file_path';
+  const tool_input = path === undefined ? { content: 'x' } : { [field]: path, content: 'x' };
+  return fire(g.path, preToolUse({ agent_type: agent, cwd, tool_name: tool, tool_input }), cwd);
+}
+
+test('fence: the reviewer writes .omelette/reports/<name>-review.md and nothing else', () => {
+  const g = guard();
+  const { dir } = fenceProject();
+  for (const [tool, rel, code] of [
+    ['Write', '.omelette/reports/x-review.md', 0],
+    ['Write', '.omelette/reports/x.md', 2],
+    ['Write', '.omelette/reports/sub/x-review.md', 2], // one level only
+    ['Write', '.omelette/x-review.md', 2],
+    ['Write', '../other/.omelette/reports/x-review.md', 2],
+    ['Edit', '.omelette/reports/x-review.md', 0],
+    ['Edit', '.omelette/reports/x.md', 2],
+    ['NotebookEdit', '.omelette/reports/x-review.md', 0],
+    ['NotebookEdit', '.omelette/reports/x.ipynb', 2],
+  ]) {
+    const r = fenceFire(g, dir, { tool, path: `${dir}/${rel}` });
+    assert.equal(r.code, code, `${tool} ${rel}: ${r.err}`);
+    assert.equal(r.err.trim(), code === 2 ? FENCE : '');
+  }
+  const none = fenceFire(g, dir, { path: undefined });
+  assert.equal(none.code, 2, 'a Write with no file_path is refused');
+  assert.equal(none.err.trim(), FENCE);
+  const coder = fenceFire(g, dir, { path: `${dir}/.omelette/reports/x.md`, agent: 'omelette-coder' });
+  assert.equal(coder.code, 0, `the fence is the reviewer's alone: ${coder.err}`);
+});
+
+test('fence: a symlinked reports directory or report file out of the project is refused', () => {
+  const g = guard();
+  const { dir, outside } = fenceProject();
+  const linkedDir = mkdtempSync(join(tmpdir(), 'omelette-fence-'));
+  mkdirSync(join(linkedDir, '.omelette'));
+  symlinkSync(outside, join(linkedDir, '.omelette', 'reports'));
+  const viaDir = fenceFire(g, linkedDir, { path: `${linkedDir}/.omelette/reports/link-review.md` });
+  assert.equal(viaDir.code, 2, viaDir.err);
+  assert.equal(viaDir.err.trim(), FENCE);
+  writeFileSync(join(outside, 'target.md'), 'outside\n');
+  symlinkSync(join(outside, 'target.md'), join(dir, '.omelette', 'reports', 'x-review.md'));
+  const viaFile = fenceFire(g, dir, { path: `${dir}/.omelette/reports/x-review.md` });
+  assert.equal(viaFile.code, 2, viaFile.err);
+  assert.equal(viaFile.err.trim(), FENCE);
+  // A dangling link is there too: existsSync misses it, and the Write would follow it out.
+  symlinkSync(join(outside, 'nowhere.md'), join(dir, '.omelette', 'reports', 'd-review.md'));
+  const dangling = fenceFire(g, dir, { path: `${dir}/.omelette/reports/d-review.md` });
+  assert.equal(dangling.code, 2, dangling.err);
+  assert.equal(dangling.err.trim(), FENCE);
+});
+
+test('fence: a case alias of .omelette passes only where the volume resolves it to the on-disk directory', () => {
+  const g = guard();
+  const { dir } = fenceProject();
+  const caseInsensitive = existsSync(join(dir, '.OMELETTE'));
+  const r = fenceFire(g, dir, { path: `${dir}/.OMELETTE/reports/x-review.md` });
+  assert.equal(r.code, caseInsensitive ? 0 : 2, `case-${caseInsensitive ? 'insensitive' : 'sensitive'} volume: ${r.err}`);
+});
+
+test('fence: the first report, before reports/ exists, is allowed â€” the Write tool creates the directory', () => {
+  const g = guard();
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-fence-'));
+  mkdirSync(join(dir, '.omelette'));
+  const r = fenceFire(g, dir, { path: `${dir}/.omelette/reports/x-review.md` });
+  assert.equal(r.code, 0, r.err);
+});
+
+test('fence: a project reached through a symlinked path writes its report, before and after reports/ exists', () => {
+  const g = guard();
+  const real = mkdtempSync(join(tmpdir(), 'omelette-fence-'));
+  mkdirSync(join(real, '.omelette'));
+  const via = join(mkdtempSync(join(tmpdir(), 'omelette-fence-via-')), 'proj');
+  symlinkSync(real, via);
+  const first = fenceFire(g, via, { path: `${via}/.omelette/reports/x-review.md` });
+  assert.equal(first.code, 0, `no reports/ yet: ${first.err}`);
+  mkdirSync(join(real, '.omelette', 'reports'));
+  const later = fenceFire(g, via, { path: `${via}/.omelette/reports/x-review.md` });
+  assert.equal(later.code, 0, `reports/ present: ${later.err}`);
+});

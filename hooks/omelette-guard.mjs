@@ -67,7 +67,7 @@
  *
  * Zero dependencies, Node >= 20, ESM — it is spawned as `node <this file>`.
  */
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, statSync, writeSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -1579,15 +1579,51 @@ function say(stream, text) {
   try { stream.write(text); } catch { /* a pipe nobody is reading is not a finding */ }
 }
 
+const FENCE_REFUSAL = 'omelette-reviewer writes nothing but .omelette/reports/<name>-review.md';
+const FENCED_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
+
+/**
+ * Whether the reviewer may write `filePath`: a `<name>-review.md` directly in
+ * `<cwd>/.omelette/reports/`. Compared through realpathSync.native, so a case
+ * alias resolves to the on-disk case and a symlinked file or directory fails
+ * the equality. The file is realpath'd when it exists, its directory when that
+ * exists; a reports/ not yet created is compared as its realpath'd parent plus
+ * the literal name — the first report, whose directory the Write tool creates
+ * itself, from a project reached through a symlinked path too.
+ */
+function reviewerMayWrite(cwd, filePath) {
+  if (!filePath) return false;
+  const name = basename(filePath);
+  if (!/^[^/]+-review\.md$/.test(name)) return false;
+  try {
+    const expected = join(realpathSync.native(join(cwd, '.omelette')), 'reports');
+    const resolved = resolve(cwd, filePath);
+    if (existsSync(resolved) || lstatExists(resolved)) return realpathSync.native(resolved) === join(expected, name);
+    const dir = dirname(resolved);
+    if (existsSync(dir)) return realpathSync.native(dir) === expected;
+    return join(realpathSync.native(dirname(dir)), basename(dir)) === expected;
+  } catch { return false; }
+}
+
+/** True when something — a dangling symlink included — sits at `path`. */
+function lstatExists(path) {
+  try { lstatSync(path); return true; } catch { return false; }
+}
+
 /**
  * Exit 2 = "do not run this", with the reason on stderr for the agent to read.
- * The curated rules first, for every agent and the main thread; then the git
- * rule, for the guarded roles' Bash calls.
+ * The curated rules first, for every agent and the main thread; then the
+ * reviewer's write fence; then the git rule, for the guarded roles' Bash calls.
  */
 async function preToolUse(event) {
   const input = event.tool_input && typeof event.tool_input === 'object' ? event.tool_input : {};
   let reason = await curatedRefusal(event, input, resolve(str(event.cwd, process.cwd())));
   const agent = str(event.agent_type);
+  if (!reason && agent === 'omelette-reviewer' && FENCED_TOOLS.has(event.tool_name)) {
+    const path = str(event.tool_name === 'NotebookEdit' ? input.notebook_path : input.file_path);
+    if (reviewerMayWrite(resolve(str(event.cwd, process.cwd())), path)) return;
+    reason = FENCE_REFUSAL;
+  }
   if (!reason) {
     if (!GUARDED_AGENTS.has(agent) || event.tool_name !== 'Bash') return;
     reason = REFUSAL(agent);
