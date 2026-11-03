@@ -1599,10 +1599,12 @@ const FENCED_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
 
 /**
  * Whether the reviewer may write `filePath`: a `<name>-review.md` directly in
- * `<cwd>/.omelette/reports/`. Compared through realpathSync.native, so a case
- * alias resolves to the on-disk case and a symlinked file or directory fails
- * the equality. The file is realpath'd when it exists, its directory when that
- * exists; a reports/ not yet created is compared as its realpath'd parent plus
+ * `<cwd>/.omelette/reports/`. Anchored on the realpath'd project: its
+ * `.omelette` must be a real directory, never a link out. Compared through
+ * realpathSync.native, so a case alias resolves to the on-disk case and a
+ * symlinked file or directory fails the equality. The file is realpath'd when
+ * anything sits at it, its directory likewise (a dangling link throws, and is
+ * refused); a reports/ not yet created is compared as its realpath'd parent plus
  * the literal name — the first report, whose directory the Write tool creates
  * itself, from a project reached through a symlinked path too.
  */
@@ -1611,11 +1613,14 @@ function reviewerMayWrite(cwd, filePath) {
   const name = basename(filePath);
   if (!/^[^/]+-review\.md$/.test(name)) return false;
   try {
-    const expected = join(realpathSync.native(join(cwd, '.omelette')), 'reports');
+    const root = realpathSync.native(cwd);
+    const own = lstatSync(join(root, '.omelette'));
+    if (!own.isDirectory() || own.isSymbolicLink()) return false;
+    const expected = join(root, '.omelette', 'reports');
     const resolved = resolve(cwd, filePath);
     if (existsSync(resolved) || lstatExists(resolved)) return realpathSync.native(resolved) === join(expected, name);
     const dir = dirname(resolved);
-    if (existsSync(dir)) return realpathSync.native(dir) === expected;
+    if (lstatExists(dir)) return realpathSync.native(dir) === expected;
     return join(realpathSync.native(dirname(dir)), basename(dir)) === expected;
   } catch { return false; }
 }

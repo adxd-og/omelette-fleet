@@ -1721,6 +1721,29 @@ test('fence: a symlinked reports directory or report file out of the project is 
   assert.equal(dangling.err.trim(), FENCE);
 });
 
+test('fence: a dangling reports/ link, or a .omelette/ linked out of the project, anchors nothing', () => {
+  const g = guard();
+  const { dir, outside } = fenceProject();
+  // reports/ a dangling link: the Write would land wherever it points once that exists.
+  const dangling = mkdtempSync(join(tmpdir(), 'omelette-fence-'));
+  mkdirSync(join(dangling, '.omelette'));
+  symlinkSync(join(outside, 'later'), join(dangling, '.omelette', 'reports'));
+  const viaDangling = fenceFire(g, dangling, { path: `${dangling}/.omelette/reports/x-review.md` });
+  assert.equal(viaDangling.code, 2, viaDangling.err);
+  assert.equal(viaDangling.err.trim(), FENCE);
+  // .omelette/ itself a link out: the fence is anchored on the project, not on where the link goes.
+  const linked = mkdtempSync(join(tmpdir(), 'omelette-fence-'));
+  mkdirSync(join(outside, 'reports'));
+  symlinkSync(outside, join(linked, '.omelette'));
+  for (const path of [`${linked}/.omelette/reports/x-review.md`, `${outside}/reports/x-review.md`]) {
+    const r = fenceFire(g, linked, { path });
+    assert.equal(r.code, 2, `${path}: ${r.err}`);
+    assert.equal(r.err.trim(), FENCE);
+  }
+  const plain = fenceFire(g, dir, { path: `${dir}/.omelette/reports/x-review.md` });
+  assert.equal(plain.code, 0, `a real .omelette/ is unchanged: ${plain.err}`);
+});
+
 test('fence: a case alias of .omelette passes only where the volume resolves it to the on-disk directory', () => {
   const g = guard();
   const { dir } = fenceProject();

@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
@@ -141,4 +141,45 @@ test('fence: one level only — a report inside an existing subdirectory of repo
       assert.equal(r.err, FENCE);
     }
   }
+});
+
+test('fence (round 3): a dangling reports/ link refuses, even though no directory is there yet', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-fence2-'));
+  mkdirSync(join(dir, '.omelette'));
+  const outside = mkdtempSync(join(tmpdir(), 'omelette-fence2-out-'));
+  symlinkSync(join(outside, 'later'), join(dir, '.omelette', 'reports'));
+  const r = write(dir, '.omelette/reports/x-review.md');
+  assert.equal(r.code, 2, r.err);
+  assert.equal(r.err, FENCE);
+});
+
+test('fence (round 3): a .omelette linked out of the project anchors nothing — by the project path or the real one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-fence2-'));
+  const outside = mkdtempSync(join(tmpdir(), 'omelette-fence2-out-'));
+  mkdirSync(join(outside, 'reports'));
+  symlinkSync(outside, join(dir, '.omelette'));
+  for (const path of ['.omelette/reports/x-review.md', join(dir, '.omelette', 'reports', 'x-review.md'), join(outside, 'reports', 'x-review.md'), join(outside, 'x-review.md')]) {
+    const r = write(dir, path);
+    assert.equal(r.code, 2, `${path}: ${r.err}`);
+    assert.equal(r.err, FENCE);
+  }
+  // the other roles are not the reviewer: the main thread and the coder write through the same link
+  for (const agent of [null, 'omelette-coder', 'omelette-tester']) {
+    assert.equal(write(dir, join(outside, 'reports', 'x-review.md'), { agent }).code, 0, `${agent ?? 'main thread'}`);
+  }
+});
+
+test('fence (round 3): a project reached through a symlinked cwd writes its report, before and after reports/ exists', () => {
+  const real = mkdtempSync(join(tmpdir(), 'omelette-fence2-'));
+  mkdirSync(join(real, '.omelette'));
+  const via = join(mkdtempSync(join(tmpdir(), 'omelette-fence2-via-')), 'proj');
+  symlinkSync(real, via);
+  const first = write(via, `${via}/.omelette/reports/x-review.md`);
+  assert.equal(first.code, 0, `no reports/ yet: ${first.err}`);
+  assert.equal(write(via, '.omelette/reports/x-review.md').code, 0, 'relative, no reports/ yet');
+  mkdirSync(join(real, '.omelette', 'reports'));
+  assert.equal(write(via, `${via}/.omelette/reports/x-review.md`).code, 0, 'reports/ present');
+  assert.equal(write(via, '.omelette/reports/x-review.md').code, 0, 'relative, reports/ present');
+  assert.equal(write(via, `${real}/.omelette/reports/x-review.md`).code, 0, 'by the real path');
+  assert.equal(write(via, '.omelette/x-review.md').code, 2, 'still only reports/');
 });
