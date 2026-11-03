@@ -1404,3 +1404,229 @@ test('PreToolUse: brackets that spend the scan budget are refused whole, fast, a
   assert.equal(r.code, 0, `closed regions should pass: ${r.out}${r.err}`);
   assert.equal(r.err, '');
 });
+
+/**
+ * A project holding every kind of curated file: a ledger of about 3 KB, the
+ * backlog, and a register redirected by its first line to docs/DECISIONS.md.
+ */
+function curatedProject() {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-curated-'));
+  mkdirSync(join(dir, '.omelette'));
+  mkdirSync(join(dir, 'docs'));
+  const ledger = `# ledger x\n${'- 2026-11-03 one line of the ledger\n'.repeat(85)}`;
+  writeFileSync(join(dir, '.omelette', 'ledger-x.md'), ledger);
+  writeFileSync(join(dir, '.omelette', 'backlog.md'), '# backlog\n');
+  writeFileSync(join(dir, '.omelette', 'decisions.md'), 'register: docs/DECISIONS.md\n');
+  writeFileSync(join(dir, 'docs', 'DECISIONS.md'), '# decisions\n');
+  return { dir, ledger };
+}
+
+const BASH_CURATED = (file) => `${file} is appended to, never rewritten; to replace it on purpose, move it first`;
+const WRITE_CURATED = (file) => `${file} is appended to, never rewritten: Edit for an in-place change (the harness checks it has not moved since your read), append otherwise; to replace it on purpose, move it first`;
+
+/** The main thread (no agent_type), a guarded role and a role nobody guards: the curated rule holds for all three. */
+const EVERY_AGENT = [undefined, 'omelette-coder', 'general-purpose'];
+
+test('curated: a truncating Bash write to a curated file is refused for every agent, the main thread included; appends and reads pass', () => {
+  const g = guard();
+  const { dir } = curatedProject();
+  for (const [command, code, file] of [
+    ['cat > .omelette/ledger-x.md', 2, '.omelette/ledger-x.md'],
+    ['echo x >> .omelette/ledger-x.md', 0],
+    ['tee .omelette/backlog.md', 2, '.omelette/backlog.md'],
+    ['tee -a .omelette/backlog.md', 0],
+    ["sed -i '' s/a/b/ docs/DECISIONS.md", 2, 'docs/DECISIONS.md'],
+    ['sed -i.bak s/a/b/ docs/DECISIONS.md', 2, 'docs/DECISIONS.md'], // GNU: the suffix attached
+    ['sed --in-place s/a/b/ docs/DECISIONS.md', 2, 'docs/DECISIONS.md'],
+    ['perl -pi -e s/a/b/ docs/DECISIONS.md', 2, 'docs/DECISIONS.md'], // a cluster holding `i`
+    ['perl -ne print docs/DECISIONS.md', 0],
+    ['sort -o .omelette/backlog.md .omelette/backlog.md', 2, '.omelette/backlog.md'],
+    ['mv x .omelette/backlog.md', 2, '.omelette/backlog.md'],
+    ['cp x docs/DECISIONS.md', 2, 'docs/DECISIONS.md'],
+    ['git mv .omelette/backlog.md y', 0],
+    ['rm .omelette/decisions.md', 2, '.omelette/decisions.md'],
+    [': > ./.omelette/ledger-x.md', 2, '.omelette/ledger-x.md'],
+    // An expansion the guard does not perform is not a known path.
+    ['cat > "$PWD/.omelette/ledger-x.md"', 0],
+    [`cat > ${dir}/.omelette/ledger-x.md`, 2, '.omelette/ledger-x.md'],
+    // Review Focus 1: after a `cd` the directory is unknown, so the basename decides.
+    ['cd .omelette && cat > ledger-x.md', 2, 'ledger-x.md'],
+    ['cat > .omelette/notes.md', 0],
+    ['cat > .omelette/ledger-x.md.bak', 0],
+  ]) {
+    for (const agent of EVERY_AGENT) {
+      const r = fire(g.path, preToolUse({ agent_type: agent, cwd: dir, tool_input: { command } }), dir);
+      assert.equal(r.code, code, `${command} (${agent || 'main thread'}) should exit ${code}: ${r.out}${r.err}`);
+      assert.equal(r.err.trim(), code === 2 ? BASH_CURATED(file) : '', `${command} (${agent || 'main thread'})`);
+    }
+  }
+});
+
+test('curated: a Write to a curated file is an append or it is refused — a new file passes, a re-encoded one does not, a symlink never', () => {
+  const g = guard();
+  const { dir, ledger } = curatedProject();
+  const outside = join(mkdtempSync(join(tmpdir(), 'omelette-outside-')), 'target.md');
+  writeFileSync(outside, 'outside\n');
+  symlinkSync(outside, join(dir, '.omelette', 'ledger-l.md'));
+  const ledgerPath = join(dir, '.omelette', 'ledger-x.md');
+  for (const [filePath, content, code, file] of [
+    [ledgerPath, `${ledger}\n- new line`, 0],
+    [ledgerPath, ledger.slice(0, ledger.length / 2), 2, '.omelette/ledger-x.md'],
+    // Review Focus 3: the file re-encoded is not an append, whatever it adds.
+    [ledgerPath, `${ledger.replace(/\n/g, '\r\n')}- new line\n`, 2, '.omelette/ledger-x.md'],
+    [ledgerPath, `${ledger.slice(0, -1)} and more\n`, 2, '.omelette/ledger-x.md'],
+    [join(dir, '.omelette', 'ledger-new.md'), '# a new ledger\n', 0],
+    [join(dir, '.omelette', 'ledger-l.md'), 'outside\nmore\n', 2, '.omelette/ledger-l.md'],
+  ]) {
+    for (const agent of EVERY_AGENT) {
+      const event = preToolUse({ agent_type: agent, cwd: dir, tool_name: 'Write', tool_input: { file_path: filePath, content } });
+      const r = fire(g.path, event, dir);
+      assert.equal(r.code, code, `Write ${filePath} (${agent || 'main thread'}) should exit ${code}: ${r.out}${r.err}`);
+      assert.equal(r.err.trim(), code === 2 ? WRITE_CURATED(file) : '');
+    }
+  }
+  assert.equal(readFileSync(outside, 'utf8'), 'outside\n', 'the guard only answers; it writes nothing');
+});
+
+test('curated: without core/ledger.mjs the register redirect is unknown — .omelette/decisions.md alone is curated, and one stderr line says so', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-guard-'));
+  const path = join(dir, 'omelette-guard.mjs');
+  writeFileSync(path, renderHookFile(HOOK_FILES[0], '1.2.3', undefined, join(dir, 'no-package-here')));
+  const { dir: proj } = curatedProject();
+  const fallback = fire(path, preToolUse({ agent_type: undefined, cwd: proj, tool_input: { command: 'cp x docs/DECISIONS.md' } }), proj);
+  assert.equal(fallback.code, 0, fallback.err);
+  assert.equal(fallback.err.trim().split('\n').length, 1, fallback.err);
+  assert.match(fallback.err, /cannot load .*ledger\.mjs/);
+  const own = fire(path, preToolUse({ agent_type: undefined, cwd: proj, tool_input: { command: 'rm .omelette/decisions.md' } }), proj);
+  assert.equal(own.code, 2, own.err);
+  assert.ok(own.err.includes(BASH_CURATED('.omelette/decisions.md')), own.err);
+});
+
+/** One guard run with its own environment: HOME decides `~` and where the fleet home is. */
+function fireIn(path, input, cwd, env) {
+  const r = spawnSync(process.execPath, [path], { input: JSON.stringify(input), encoding: 'utf8', cwd, env, timeout: 20000 });
+  assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
+  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+test('curated (round 2): a `cd` counts at command position only, and only a project holding .omelette/ makes a bare name curated', () => {
+  const g = guard();
+  const { dir } = curatedProject();
+  const bare = mkdtempSync(join(tmpdir(), 'omelette-no-ledger-'));
+  for (const [cwd, command, code, file] of [
+    [dir, 'echo cd; echo y > backlog.md', 0],
+    [dir, 'grep -n cd notes.md > backlog.md', 0],
+    [dir, 'cd x && make && echo y > backlog.md', 2, 'backlog.md'], // the accepted false refusal of Review Focus 1
+    [dir, 'pushd .omelette && tee backlog.md', 2, 'backlog.md'],
+    [bare, 'cd x && make && echo y > backlog.md', 0],
+    [bare, 'cd docs && echo y > decisions.md', 0],
+  ]) {
+    for (const agent of EVERY_AGENT) {
+      const r = fire(g.path, preToolUse({ agent_type: agent, cwd, tool_input: { command } }), cwd);
+      assert.equal(r.code, code, `${command} in ${cwd === bare ? 'a project without .omelette' : 'the project'} (${agent || 'main thread'}): ${r.err}`);
+      assert.equal(r.err.trim(), code === 2 ? BASH_CURATED(file) : '');
+    }
+  }
+});
+
+test('curated (round 2): from a subdirectory the project is the nearest directory holding .omelette/ — never the fleet home', () => {
+  const g = guard();
+  const { dir, ledger } = curatedProject();
+  const sub = join(dir, 'sub');
+  mkdirSync(sub);
+  for (const [command, code, file] of [
+    ['cat > ../.omelette/backlog.md', 2, '.omelette/backlog.md'],
+    ['cat > ../docs/DECISIONS.md', 2, 'docs/DECISIONS.md'],
+    ['cat > .omelette/backlog.md', 0], // sub/.omelette is not the project's
+  ]) {
+    const r = fire(g.path, preToolUse({ agent_type: undefined, cwd: sub, tool_input: { command } }), sub);
+    assert.equal(r.code, code, `${command} from sub/: ${r.err}`);
+    assert.equal(r.err.trim(), code === 2 ? BASH_CURATED(file) : '');
+  }
+  const ledgerPath = join(dir, '.omelette', 'ledger-x.md');
+  const write = (content) => fire(g.path, preToolUse({ agent_type: undefined, cwd: sub, tool_name: 'Write', tool_input: { file_path: ledgerPath, content } }), sub);
+  assert.equal(write('x').code, 2);
+  assert.equal(write('x').err.trim(), WRITE_CURATED('.omelette/ledger-x.md'));
+  assert.equal(write(`${ledger}- more\n`).code, 0);
+
+  // `~/.omelette` is the fleet home, not a project: a project under the home
+  // directory without a .omelette of its own is rooted at itself.
+  const home = mkdtempSync(join(tmpdir(), 'omelette-home-'));
+  mkdirSync(join(home, '.omelette'));
+  writeFileSync(join(home, '.omelette', 'backlog.md'), '# not a project\n');
+  const proj = join(home, 'proj');
+  mkdirSync(proj);
+  const env = { PATH: process.env.PATH, HOME: home };
+  for (const command of ['cd x && echo y > backlog.md', 'cat > ../.omelette/backlog.md']) {
+    const r = fireIn(g.path, preToolUse({ agent_type: undefined, cwd: proj, tool_input: { command } }), proj, env);
+    assert.equal(r.code, 0, `${command} under a home holding the fleet home: ${r.err}`);
+  }
+});
+
+test('curated (round 2): a command too deep to read is refused for every agent, the main thread included — nothing past the budget is read', () => {
+  const g = guard();
+  const { dir } = curatedProject();
+  const command = `${'a['.repeat(100000)}; cat > .omelette/backlog.md`;
+  for (const [agent, name] of [[undefined, 'main thread'], ['general-purpose', 'general-purpose'], ['omelette-coder', 'omelette-coder']]) {
+    const r = fire(g.path, preToolUse({ agent_type: agent, cwd: dir, tool_input: { command } }), dir);
+    assert.equal(r.code, 2, `${name}: ${r.err}`);
+    assert.equal(r.err.trim(), `${name}: command too deep to read (over 1 MiB of bracket scanning) — split it, or write the file with Write`);
+  }
+});
+
+test('curated (round 2): a wrapper\'s options and their values are stepped over on the way to the command', () => {
+  const g = guard();
+  const { dir } = curatedProject();
+  for (const command of [
+    'sudo -u root tee .omelette/backlog.md', 'sudo -E -u root -- tee .omelette/backlog.md', 'sudo --user root tee .omelette/backlog.md',
+    'nice -n 10 tee .omelette/backlog.md', 'nice -10 tee .omelette/backlog.md', 'env -u FOO X=1 tee .omelette/backlog.md',
+    'command -p tee .omelette/backlog.md', 'sudo -g staff nice -n 5 tee .omelette/backlog.md',
+  ]) {
+    for (const agent of EVERY_AGENT) {
+      const r = fire(g.path, preToolUse({ agent_type: agent, cwd: dir, tool_input: { command } }), dir);
+      assert.equal(r.code, 2, `${command} (${agent || 'main thread'}): ${r.err}`);
+      assert.equal(r.err.trim(), BASH_CURATED('.omelette/backlog.md'));
+    }
+  }
+});
+
+test('curated (round 2): `~/` is the home directory, quoted or not; `~user/` is not a known path', () => {
+  const g = guard();
+  const home = mkdtempSync(join(tmpdir(), 'omelette-home-'));
+  const proj = join(home, 'proj');
+  mkdirSync(join(proj, '.omelette'), { recursive: true });
+  writeFileSync(join(proj, '.omelette', 'backlog.md'), '# backlog\n');
+  const env = { PATH: process.env.PATH, HOME: home };
+  for (const [command, code] of [
+    ['cat > ~/proj/.omelette/backlog.md', 2],
+    ['cat > "~/proj/.omelette/backlog.md"', 2],
+    ['tee ~/proj/.omelette/backlog.md', 2],
+    ['cat > ~someone/proj/.omelette/backlog.md', 0],
+  ]) {
+    const r = fireIn(g.path, preToolUse({ agent_type: undefined, cwd: proj, tool_input: { command } }), proj, env);
+    assert.equal(r.code, code, `${command}: ${r.err}`);
+    assert.equal(r.err.trim(), code === 2 ? BASH_CURATED('.omelette/backlog.md') : '');
+  }
+});
+
+test('curated (round 2): an absent target passes for Bash as it does for Write — nothing is truncated — and refuses once it exists', () => {
+  const g = guard();
+  const { dir } = curatedProject();
+  const run = (command) => fire(g.path, preToolUse({ agent_type: undefined, cwd: dir, tool_input: { command } }), dir);
+  const rows = [
+    ['cat > .omelette/ledger-new.md', '.omelette/ledger-new.md'],
+    ['cd .omelette && cat > ledger-new.md', 'ledger-new.md'],
+    ['mv x .omelette/ledger-new.md', '.omelette/ledger-new.md'],
+  ];
+  for (const [command] of rows) assert.equal(run(command).code, 0, `${command} with no such file: ${run(command).err}`);
+  writeFileSync(join(dir, '.omelette', 'ledger-new.md'), '# new\n');
+  for (const [command, file] of rows) {
+    const r = run(command);
+    assert.equal(r.code, 2, `${command} once the file exists: ${r.err}`);
+    assert.equal(r.err.trim(), BASH_CURATED(file));
+  }
+  // A symlink at a curated name is there, whatever it points to; a glob is never known to be absent.
+  symlinkSync(join(dir, 'nowhere.md'), join(dir, '.omelette', 'ledger-d.md'));
+  assert.equal(run('cat > .omelette/ledger-d.md').code, 2);
+  assert.equal(run('rm .omelette/ledger-*.md').code, 2);
+});

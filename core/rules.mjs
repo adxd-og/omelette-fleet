@@ -638,7 +638,10 @@ export const shellWord = (s, platform = process.platform) => (/^[\w@%+=:,./-]+$/
  * on it.
  *
  * THE MATCHERS ARE NOT INTERCHANGEABLE. `PreToolUse` is matched against a TOOL
- * name and `SessionStart` against the session's SOURCE — `startup`, `resume`,
+ * name — Bash for the git rule; since 1.8.0 Bash and Write for the curated
+ * files, with Edit and NotebookEdit in the same group, answered with exit 0
+ * until a rule reads them — and `SessionStart` against the session's SOURCE —
+ * `startup`, `resume`,
  * `clear`, `compact`, `fork`. `SessionStart` has no matcher because the guard
  * sweeps on every source and prints on `compact` and `clear` only. A settings
  * file still matching `compact` keeps working there; `doctor` names it.
@@ -651,7 +654,7 @@ export function hookSettingsSnippet(scriptPath, platform = process.platform) {
   const command = JSON.stringify(`node ${shellQuote(resolve(scriptPath), platform)}`);
   return [
     '{ "hooks": {',
-    `  "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
+    `  "PreToolUse": [ { "matcher": "Bash|Write|Edit|NotebookEdit", "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
     `  "PreCompact": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ],`,
     `  "SessionStart": [ { "hooks": [ { "type": "command", "command": ${command} } ] } ] } }`,
   ];

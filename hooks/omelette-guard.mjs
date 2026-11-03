@@ -17,6 +17,11 @@
  * Exit 2 is what stops the call, and the reason it hands back names the agent
  * it caught.
  *
+ * PreToolUse (Bash and Write, every agent and the main thread) — the curated
+ * files (1.8.0): a ledger, the backlog and the decisions register are appended
+ * to, never rewritten. A Bash command that truncates one and a Write that is not
+ * an append to one are refused, naming the file; see CURATED below.
+ *
  * PreCompact — the ledger's re-read stamp. A compaction is where a plan loses
  * its context, so the guard runs the ledger sweep, then stamps every
  * `.omelette/ledger-*.md` left open or untracked with a line saying it must be
@@ -39,7 +44,8 @@
  * `core/ledger.mjs`, imported from the package root `rules --hooks` rendered
  * into PACKAGE_ROOT below. A failed import is one stderr line, and the stamp and
  * the print go on without the sweep; what this guard refuses and what it prints
- * stay in this file, and PreToolUse never loads anything.
+ * stay in this file. PreToolUse loads it for one value only, the register's
+ * path (readRegisterPath), and without it curates `.omelette/decisions.md`.
  *
  * The two ledger hooks answer to one switch, `handoff.enabled`, rendered into
  * this script as a literal (HANDOFF_CONFIG below): false turns the sweep, the
@@ -61,8 +67,9 @@
  *
  * Zero dependencies, Node >= 20, ESM — it is spawned as `node <this file>`.
  */
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, writeSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, statSync, writeSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // A write to a pipe the harness has stopped reading fails ASYNCHRONOUSLY: the
@@ -166,6 +173,10 @@ function withoutComments(command) {
 
 /** What ends one command and starts the next — outside quotes, and never inside them. */
 const SEPARATORS = new Set([';', '&', '|', '\n', '\r']);
+
+/** The redirections that write their target, and the two of them that only append to it. */
+const WRITE_REDIRECTS = new Set(['>', '>|', '>>', '<>', '&>', '&>>']);
+const APPEND_REDIRECTS = new Set(['>>', '&>>']);
 
 /**
  * Where the substitution opened at `start` — `$(`, `<(`, `>(` or a backquote —
@@ -337,24 +348,38 @@ function opaqueEnd(command, start, kind, budget) {
  * (`> $(git tag v1)`, `< <(git commit)`, and a `(` right behind the operator,
  * `>>(git push)`): the word goes, what it runs does not.
  *
- * @returns {object} `{ tokens, spans }`: each token `{ text, quoted, separator }`,
- *   each span a text to read again as a command — a quoted word with its quotes
- *   off, or what a command or process substitution runs — plus `exhausted: true`,
- *   and nothing read past that point, when the brackets spent OPAQUE_SCAN_BUDGET
+ * A TARGET THAT IS A FILE is handed back too, in `targets`, for the curated
+ * rule (bashWrites): its path with the quotes off, its operator without the fd
+ * number (`2>` is `>`), and `at`, the number of words before it — which is how
+ * a `cd` word is known to come first. `>&` with a word that is not an fd number
+ * or `-` sends both streams to that file, and is handed back as the `&>` it is.
+ *
+ * @returns {object} `{ tokens, spans, targets }`: each token `{ text, quoted,
+ *   separator }`, each span a text to read again as a command — a quoted word
+ *   with its quotes off, or what a command or process substitution runs — each
+ *   target `{ path, op, at }` with `op` one of WRITE_REDIRECTS; plus `exhausted:
+ *   true`, and nothing read past that point, when the brackets spent
+ *   OPAQUE_SCAN_BUDGET
  */
 function tokenize(command) {
   const tokens = [];
   const spans = [];
+  const targets = [];
   let text = '';
   let quoted = false;
   let quote = '';
   let redirect = false; // the next word is a redirection's target
+  let redirectOp = ''; //  …of this operator
   const pendingHeredocs = []; // `<<`/`<<-` read on this line, their bodies start at the next newline
   const budget = { left: OPAQUE_SCAN_BUDGET }; // shared by every opaqueEnd this command makes
   const push = () => {
     if (!text) return;
-    if (!redirect) tokens.push({ text, quoted, separator: false });
     const plain = unquote(text); // only a word that held a quote loses a character here
+    if (!redirect) tokens.push({ text, quoted, separator: false });
+    else {
+      const op = redirectOp === '>&' && !/^(?:\d+|-)$/.test(plain) ? '&>' : redirectOp;
+      if (WRITE_REDIRECTS.has(op)) targets.push({ path: plain, op, at: tokens.length });
+    }
     if (plain !== text) spans.push(plain);
     text = '';
     quoted = false;
@@ -373,7 +398,7 @@ function tokenize(command) {
     if (c === '(' && next === '(' && !text) opaque = opaqueEnd(command, i, '((', budget);
     else if (c === '$' && next === '{') opaque = opaqueEnd(command, i + 1, '{', budget);
     else if (c === '[' && text) opaque = opaqueEnd(command, i, '[', budget);
-    if (budget.left < 0) return { tokens, spans, exhausted: true }; // no partial reading: refused whole
+    if (budget.left < 0) return { tokens, spans, targets, exhausted: true }; // no partial reading: refused whole
     if (opaque >= 0) {
       // Part of the word, `<<` and all; only its substitutions are commands.
       let inner = '';
@@ -406,6 +431,7 @@ function tokenize(command) {
     }
     if (c === '<' || c === '>' || (c === '&' && next === '>')) {
       if (/^\d+$/.test(text)) text = ''; else push(); // `2>`: the fd number is part of the operator
+      const opAt = i;
       if (c === '&') i++; //                             `&>`, `&>>`: the `>` comes next
       const follows = (chars) => i + 1 < command.length && chars.includes(command[i + 1]);
       let heredoc = false;
@@ -416,6 +442,7 @@ function tokenize(command) {
         if (follows('<-')) i++;
       } else if (command[i] === '<' && follows('>&')) i++; //               `<>`, `<&`
       redirect = true;
+      redirectOp = command.slice(opAt, i + 1);
       if (heredoc) {
         const delimiter = heredocDelimiter(command, i + 1);
         if (delimiter) {
@@ -451,7 +478,7 @@ function tokenize(command) {
     text += c;
   }
   push(); // a quote the command never closed runs to its end, inside the last word
-  return { tokens, spans };
+  return { tokens, spans, targets };
 }
 
 /**
@@ -1002,6 +1029,460 @@ const TOO_DEEP = (agent) => `${agent}: command too deep to read (over 1 MiB of b
 const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
 
 /**
+ * CURATED FILES: the ones the operating model asks to be appended to, never
+ * rewritten — every `.omelette/ledger-*.md`, `.omelette/backlog.md`,
+ * `.omelette/decisions.md`, and the file the register's first line `register:
+ * <path>` names. A ledger rewritten "with a summary" loses what the next
+ * context needed. The harness already refuses an Edit, and a Write on a file
+ * the session has Read, once the file moved since that read; a Bash write and a
+ * Write to a file never Read were the open paths. These rules close them for
+ * EVERY agent, the main thread included, before the git rule's role gate.
+ *
+ * A path is curated by its NAME: resolved against the event's cwd, `..` folded
+ * as text, no symlink followed — the file's own name is what the rule protects,
+ * whatever it points to — within the PROJECT the cwd belongs to (projectRoot).
+ * The register's path is the one thing read from outside this file:
+ * core/ledger.mjs's readRegisterPath, through the one import this guard makes
+ * (loadLedgerModule), so the file curated is the file the print reads. Without
+ * the module, `.omelette/decisions.md` alone.
+ *
+ * Containment for an agent asked to behave, as the git rule is, and not a
+ * boundary: an expansion the guard does not perform (`$PWD/…`, `~user/…`), a
+ * glob that names no ledger, a quoted `sh -c`, or a program that opens the file
+ * itself are out of its reach.
+ */
+const CURATED_NAMES = ['backlog.md', 'decisions.md'];
+const LEDGER_GLOB = 'ledger-*.md';
+const LEDGER_NAME = /^ledger-.*\.md$/;
+const CURATED_BASH = (file) => `${file} is appended to, never rewritten; to replace it on purpose, move it first`;
+const CURATED_WRITE = (file) => `${file} is appended to, never rewritten: Edit for an in-place change (the harness checks it has not moved since your read), append otherwise; to replace it on purpose, move it first`;
+/** What a guard without core/ledger.mjs curates, said once on stderr. */
+const REGISTER_UNREAD = 'its register: redirect is not read, .omelette/decisions.md is curated alone';
+
+const rootCache = new Map(); //    one walk up per cwd, per event
+const curatedCache = new Map(); // one register read per project, per event
+
+/**
+ * THE PROJECT a cwd belongs to: the nearest directory, cwd included, holding a
+ * `.omelette/` directory — a session sitting in `<proj>/sub` still guards
+ * `<proj>/.omelette` — else cwd itself, with `omelette: false`. The FLEET HOME
+ * (`~/.omelette`, or OMELETTE_HOME) is passed over: it holds the units' state,
+ * not a project's, and every project under the home directory without a
+ * `.omelette` of its own would otherwise be rooted at `~`.
+ */
+function projectRoot(cwd) {
+  const start = resolve(cwd);
+  if (rootCache.has(start)) return rootCache.get(start);
+  const own = str(process.env.OMELETTE_HOME).trim();
+  const fleet = new Set([join(homedir(), '.omelette'), ...(own ? [resolve(own)] : [])]);
+  let found = { root: start, omelette: false };
+  for (let dir = start; ; dir = dirname(dir)) {
+    const candidate = join(dir, '.omelette');
+    try {
+      if (!fleet.has(candidate) && statSync(candidate).isDirectory()) { found = { root: dir, omelette: true }; break; }
+    } catch { /* not here */ }
+    if (dirname(dir) === dir) break;
+  }
+  rootCache.set(start, found);
+  return found;
+}
+
+/**
+ * Every curated path of the project `cwd` belongs to: absolute paths, the
+ * ledgers as the glob `<root>/.omelette/ledger-*.md` (isCurated matches it by
+ * name), and the register redirect when the module is loaded and
+ * readRegisterPath accepts it — a redirect it refuses curates nothing more.
+ */
+function curatedTargets(cwd) {
+  const { root } = projectRoot(cwd);
+  if (curatedCache.has(root)) return curatedCache.get(root);
+  const dir = join(root, '.omelette');
+  const targets = new Set([...CURATED_NAMES, LEDGER_GLOB].map((name) => join(dir, name)));
+  try {
+    const register = ledgerModule ? ledgerModule.readRegisterPath(root) : null;
+    if (isObject(register) && typeof register.path === 'string') targets.add(resolve(root, register.path));
+  } catch { /* a register nobody can read redirects nothing */ }
+  curatedCache.set(root, targets);
+  return targets;
+}
+
+/** Is `path`, resolved against `cwd` and never followed through a link, a curated file? */
+function isCurated(cwd, path) {
+  const abs = resolve(cwd, path);
+  if (curatedTargets(cwd).has(abs)) return true;
+  return dirname(abs) === join(projectRoot(cwd).root, '.omelette') && LEDGER_NAME.test(basename(abs));
+}
+
+/** …and a bare name whose directory a `cd` made unknown: curated when any curated file carries it. */
+function isCuratedName(cwd, name) {
+  return LEDGER_NAME.test(name) || [...curatedTargets(cwd)].some((path) => basename(path) === name);
+}
+
+/**
+ * Is anything at `path` — a file, a link, whatever lstat sees? Only an ABSENT
+ * name (ENOENT, ENOTDIR) is not, and an error that says neither is taken as
+ * present. A name holding a glob character is never known to be absent:
+ * `rm .omelette/ledger-*.md` removes every ledger the glob matches.
+ */
+function isPresent(path) {
+  if (/[*?[]/.test(basename(path))) return true;
+  try { lstatSync(path); return true; } catch (e) { return !(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')); }
+}
+
+/**
+ * Does a Bash write to `path` REWRITE a curated file? Only one that is there:
+ * an absent target has nothing to truncate, for Bash as for Write. A bare name
+ * (after a `cd`) is there when a curated file carrying it is.
+ */
+function rewritesCurated(cwd, path) {
+  if (isAbsolute(path)) return isCurated(cwd, path) && isPresent(path);
+  if (!isCuratedName(cwd, path)) return false;
+  const carrying = [...curatedTargets(cwd)].filter((p) => basename(p) === path);
+  if (LEDGER_NAME.test(path)) carrying.push(join(projectRoot(cwd).root, '.omelette', path));
+  return carrying.some(isPresent);
+}
+
+/**
+ * A command's arguments as getopt splits them: the OPTIONS — a short cluster
+ * letter by letter, a long one by name — each with the value it takes, for the
+ * letters in `valueShort` and the names in `valueLong` (the rest of the
+ * cluster, the part after `=`, or the next word); and the OPERANDS, every other
+ * word wherever it sits, and every word after a bare `--`.
+ */
+function parseArgs(args, valueShort = '', valueLong = []) {
+  const options = [];
+  const operands = [];
+  for (let k = 0; k < args.length; k++) {
+    const word = args[k];
+    if (word === '--') { operands.push(...args.slice(k + 1)); break; }
+    if (word === '-' || !word.startsWith('-')) { operands.push(word); continue; }
+    if (word.startsWith('--')) {
+      const eq = word.indexOf('=');
+      const name = eq < 0 ? word : word.slice(0, eq);
+      options.push({ name, value: eq >= 0 ? word.slice(eq + 1) : valueLong.includes(name) ? args[++k] : undefined });
+      continue;
+    }
+    for (let j = 1; j < word.length; j++) {
+      if (!valueShort.includes(word[j])) { options.push({ name: `-${word[j]}` }); continue; }
+      options.push({ name: `-${word[j]}`, value: j < word.length - 1 ? word.slice(j + 1) : args[++k] });
+      break;
+    }
+  }
+  return { options, operands };
+}
+
+const writesOf = (words, kind = 'write') => words.map((word) => ({ word, kind }));
+
+/** `tee` writes every file it is handed, and only appends to them under `-a`/`--append`. */
+function teeWrites(args) {
+  const { options, operands } = parseArgs(args);
+  return writesOf(operands, options.some(({ name }) => name === '-a' || name === '--append') ? 'append' : 'write');
+}
+
+/**
+ * `sed` rewrites its files under an in-place flag: `-i` alone or with a suffix
+ * attached (`-i.bak`), `--in-place[=suffix]`, or an `i` in a short cluster
+ * before a letter that takes a value (`-Ei`, `-ni`). BSD's `-i` takes its
+ * suffix as the next word — `sed -i '' …` — read as one when it is empty or a
+ * dot and a name without a `/`. The script is the first operand unless
+ * `-e`/`-f` supplied one; every other operand is a file it rewrites.
+ */
+function sedWrites(args) {
+  let inPlace = false;
+  let script = false;
+  const operands = [];
+  for (let k = 0; k < args.length; k++) {
+    const word = args[k];
+    if (word === '--') { operands.push(...args.slice(k + 1)); break; }
+    if (word === '-' || !word.startsWith('-')) { operands.push(word); continue; }
+    if (word.startsWith('--')) {
+      const eq = word.indexOf('=');
+      const name = eq < 0 ? word : word.slice(0, eq);
+      if (name === '--in-place') inPlace = true;
+      else if (name === '--expression' || name === '--file' || name === '--line-length') {
+        script = script || name !== '--line-length';
+        if (eq < 0) k++;
+      }
+      continue;
+    }
+    for (let j = 1; j < word.length; j++) {
+      const ch = word[j];
+      if (ch === 'i') {
+        inPlace = true;
+        const suffix = args[k + 1];
+        if (j === word.length - 1 && typeof suffix === 'string' && /^(?:$|\.[^/]*$)/.test(suffix)) k++;
+        break;
+      }
+      if (ch === 'e' || ch === 'f' || ch === 'l') {
+        script = script || ch !== 'l';
+        if (j === word.length - 1) k++;
+        break;
+      }
+    }
+  }
+  return inPlace ? writesOf(script ? operands : operands.slice(1)) : [];
+}
+
+/**
+ * `perl` rewrites its files under `-i`: a short cluster holding `i` before a
+ * letter whose value runs to the end of the cluster (`-pi`, `-i.bak`; in `-pie`
+ * the `e` is the suffix). The program is the value of `-e`/`-E` — the rest of
+ * the cluster or the next word — or else the first operand; every other operand
+ * is a file. `perl -ne print f` reads.
+ */
+function perlWrites(args) {
+  let inPlace = false;
+  let code = false;
+  const operands = [];
+  for (let k = 0; k < args.length; k++) {
+    const word = args[k];
+    if (word === '--') { operands.push(...args.slice(k + 1)); break; }
+    if (word === '-' || !word.startsWith('-')) { operands.push(word); continue; }
+    for (let j = 1; j < word.length && word[1] !== '-'; j++) {
+      const ch = word[j];
+      if (ch === 'i') { inPlace = true; break; }
+      if (ch === 'e' || ch === 'E') { code = true; if (j === word.length - 1) k++; break; }
+      if ('CDFIMVdmx'.includes(ch)) break; // the rest of the cluster is this letter's value
+    }
+  }
+  return inPlace ? writesOf(code ? operands : operands.slice(1)) : [];
+}
+
+/** `sort -o <file>` writes that file, its input included (`sort -o f f` sorts f in place). */
+function sortWrites(args) {
+  const { options } = parseArgs(args, 'kotST', ['--output']);
+  return writesOf(options.filter(({ name, value }) => (name === '-o' || name === '--output') && value !== undefined).map(({ value }) => value));
+}
+
+/**
+ * `mv` and `cp` write their DESTINATION: the last operand, or `-t <dir>`'s
+ * directory with each source's name. A destination that is a directory — a
+ * trailing `/`, `.`, `..`, or one that exists (`intoDir`) — takes each source
+ * under its own name: `mv /tmp/backlog.md .omelette` replaces the backlog.
+ * `-T` says the destination is a file. Moving a curated file AWAY writes
+ * nothing curated, and is how one is replaced on purpose.
+ */
+function moveWrites(args, intoDir) {
+  const { options, operands } = parseArgs(args, 'St', ['--suffix', '--target-directory']);
+  const has = (...names) => options.find(({ name }) => names.includes(name));
+  const target = has('-t', '--target-directory');
+  if (target) return typeof target.value === 'string' ? writesOf(operands.map((src) => join(target.value, basename(src)))) : [];
+  if (operands.length < 2) return [];
+  const dest = operands[operands.length - 1];
+  const into = !has('-T', '--no-target-directory') && intoDir(dest);
+  return writesOf([dest, ...(into ? operands.slice(0, -1).map((src) => join(dest, basename(src))) : [])]);
+}
+
+/** `rm` and `truncate` write every file they are handed. */
+const removeWrites = (args) => writesOf(parseArgs(args).operands);
+const truncateWrites = (args) => writesOf(parseArgs(args, 'rs', ['--reference', '--size']).operands);
+
+/** The commands that write the files they are handed, by name. */
+const WORD_RULES = new Map([
+  ['tee', teeWrites], ['sed', sedWrites], ['perl', perlWrites], ['sort', sortWrites],
+  ['mv', moveWrites], ['cp', moveWrites], ['rm', removeWrites], ['truncate', truncateWrites],
+]);
+
+/**
+ * Words that open a command without being its name: a group or a negation, the
+ * shell's own keywords, a variable assignment, and a wrapper that runs the next
+ * word — with the options it takes before that word.
+ */
+const COMMAND_KEYWORDS = new Set(['!', '{', '(', 'if', 'then', 'elif', 'else', 'do', 'while', 'until']);
+const COMMAND_WRAPPERS = new Set(['builtin', 'command', 'env', 'exec', 'nice', 'nohup', 'sudo', 'time']);
+const ASSIGNMENT = /^[A-Za-z_]\w*=/;
+
+/**
+ * The wrapper options that take the NEXT word as their value — `sudo -u root
+ * tee f` runs tee — as short letters and long names. An option this table does
+ * not know is stepped over alone, and the next word that is not an option is
+ * read as the command.
+ */
+const WRAPPER_VALUES = {
+  sudo: { short: 'CDgpRrTtUu', long: ['--chdir', '--chroot', '--close-from', '--command-timeout', '--group', '--host', '--other-user', '--prompt', '--role', '--type', '--user'] },
+  nice: { short: 'n', long: ['--adjustment'] },
+  env: { short: 'CPu', long: ['--chdir', '--unset'] },
+  exec: { short: 'a', long: [] },
+  time: { short: 'fo', long: ['--format', '--output'] },
+};
+
+/** Does the wrapper option `word` take the next word as its value? */
+function takesValue(wrapper, word) {
+  const values = WRAPPER_VALUES[wrapper];
+  if (!values || word === '--') return false;
+  if (word.startsWith('--')) return !word.includes('=') && values.long.includes(word);
+  for (let j = 1; j < word.length; j++) if (values.short.includes(word[j])) return j === word.length - 1;
+  return false;
+}
+
+/**
+ * A word without the closing parentheses a subshell's last word carries: `(cd
+ * x && cat > y)`. Counted from the end, once: a regex over a long run of `)`
+ * is quadratic, and this runs on every word of every Bash call.
+ */
+function closed(word) {
+  if (word.includes('(')) return word;
+  let end = word.length;
+  while (end > 0 && word.charCodeAt(end - 1) === 0x29) end--;
+  return end === word.length ? word : word.slice(0, end);
+}
+
+/**
+ * The simple commands among the words: for each run between separators, the
+ * command's name (its basename, past COMMAND_KEYWORDS, assignments, and a
+ * wrapper with its options and their values), its arguments with their quotes
+ * off, and the index of its name.
+ */
+function simpleCommands(tokens) {
+  const commands = [];
+  let run = [];
+  const flush = () => {
+    let wrapper = null;
+    let value = false; // the next word is a wrapper option's value
+    for (let k = 0; k < run.length; k++) {
+      const word = run[k].word.replace(/^[({!]+/, '');
+      if (value) { value = false; continue; }
+      if (!word || COMMAND_KEYWORDS.has(word) || ASSIGNMENT.test(word)) continue;
+      if (wrapper && word.startsWith('-')) { value = takesValue(wrapper, word); continue; }
+      if (COMMAND_WRAPPERS.has(word)) { wrapper = word; continue; }
+      commands.push({ name: basename(word), args: run.slice(k + 1).map(({ word: arg }) => closed(arg)), at: run[k].at });
+      break;
+    }
+    run = [];
+  };
+  tokens.forEach((token, at) => {
+    if (token.separator) flush();
+    else run.push({ word: unquote(token.text), at });
+  });
+  flush();
+  return commands;
+}
+
+/**
+ * A word as a path the guard knows, or null. `~` and `~/…` are the home
+ * directory, quoted or not (a quoted `~` is the shell's literal, read here as
+ * the home all the same: the guard fails closed). An expansion it does not
+ * perform — `$PWD/x`, a substitution, `~user/x` — is not a known path.
+ */
+function knownPath(word) {
+  if (!word || /[$`]/.test(word) || /^[<>]?\(/.test(word)) return null;
+  if (word === '~' || word.startsWith('~/')) return join(homedir(), word.slice(1));
+  return word.startsWith('~') ? null : word;
+}
+
+/** Would `mv`/`cp` put the sources INTO `word`? Lexically, or by a stat (followed, as they follow it) where the directory is known. */
+function intoDirectory(word, cwd, afterCd) {
+  const path = knownPath(word);
+  if (path === null) return false;
+  if (path.endsWith('/') || path === '.' || path === '..') return true;
+  if (afterCd && !isAbsolute(path)) return false;
+  try { return statSync(resolve(cwd, path)).isDirectory(); } catch { return false; }
+}
+
+/**
+ * EVERY PATH A BASH COMMAND WRITES, as far as its words say: each redirection
+ * that writes a file (`>`, `>|`, `<>`, `&>` rewrite it; `>>`, `&>>` append),
+ * and the commands in WORD_RULES. Each entry `{ path, kind }` — `kind` `write`
+ * or `append` — in the order the words come, the path resolved against `cwd`.
+ * After a `cd` or `pushd` at command position, in a project holding
+ * `.omelette/`, a relative path's directory is unknown and its entry is the
+ * bare name. A word the guard cannot know as a path (knownPath) is left out.
+ *
+ * Top-level words only: what a quoted `sh -c` or a substitution runs is not
+ * read here. A command whose brackets spent the scan budget is not read at all:
+ * TooDeep is thrown, as `forbidden` throws it, and the caller refuses it.
+ */
+function bashWrites(command, cwd) {
+  const { tokens, targets, exhausted } = tokenize(withoutComments(String(command)));
+  if (exhausted) throw new TooDeep();
+  const commands = simpleCommands(tokens);
+  const cd = commands.find(({ name }) => name === 'cd' || name === 'pushd');
+  const cdAt = cd && projectRoot(cwd).omelette ? cd.at : -1;
+  const afterCd = (at) => cdAt >= 0 && cdAt < at;
+  const found = [];
+  const add = (word, kind, at) => {
+    const path = knownPath(closed(word));
+    if (path === null) return;
+    found.push({ path: afterCd(at) && !isAbsolute(path) ? basename(path) : resolve(cwd, path), kind, at });
+  };
+  for (const { path, op, at } of targets) add(path, APPEND_REDIRECTS.has(op) ? 'append' : 'write', at);
+  for (const { name, args, at } of commands) {
+    const rule = WORD_RULES.get(name);
+    if (rule) for (const { word, kind } of rule(args, (dest) => intoDirectory(dest, cwd, afterCd(at)))) add(word, kind, at);
+  }
+  return found.sort((a, b) => a.at - b.at).map(({ path, kind }) => ({ path, kind }));
+}
+
+/** The first curated file the command REWRITES (rewritesCurated), or null. `found` is bashWrites' answer, when the caller has it. */
+function bashTruncates(command, cwd, found = bashWrites(command, cwd)) {
+  const hit = found.find(({ path, kind }) => kind === 'write' && rewritesCurated(cwd, path));
+  return hit ? hit.path : null;
+}
+
+/**
+ * Is this Write an APPEND to `filePath`? Yes when nothing is there yet, or when
+ * `content` starts with the file's current bytes, byte for byte — so the file
+ * re-encoded (CRLF for LF, its last newline dropped) is not one. Anything at the
+ * name that is not a regular file — a symlink above all, whatever it points to —
+ * is never appended to, and neither is a file this guard cannot read. The file
+ * is read only when it is no longer than `content`, through one O_NOFOLLOW |
+ * O_NONBLOCK descriptor that must fstat as a regular file.
+ */
+function writeIsAppend(cwd, filePath, content) {
+  const path = resolve(cwd, filePath);
+  let st;
+  try { st = lstatSync(path); } catch (e) { return !!e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'); }
+  const next = Buffer.from(typeof content === 'string' ? content : '', 'utf8');
+  if (!st.isFile() || st.size > next.length) return false;
+  let fd = null;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+    const now = fstatSync(fd);
+    if (!now.isFile() || now.size > next.length) return false;
+    const current = readFileSync(fd);
+    return current.length <= next.length && next.subarray(0, current.length).equals(current);
+  } catch { return false; } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
+  }
+}
+
+/** A path as a refusal names it: relative to the project root when it lies inside it, as given otherwise. */
+function shown(cwd, path) {
+  if (!isAbsolute(path)) return clean(path);
+  const rel = relative(projectRoot(cwd).root, path);
+  return clean(rel && !isAbsolute(rel) && rel.split(sep)[0] !== '..' ? rel.split(sep).join('/') : path);
+}
+
+/**
+ * The curated rules' answer to one PreToolUse event: the refusal, or null. A
+ * Bash command is read by bashWrites — one too deep to read is refused by
+ * TOO_DEEP for every agent, the main thread included, since nothing past the
+ * budget was read — and a Write by its `file_path` and writeIsAppend. The
+ * module is loaded only for an event that may need the register's path: a
+ * Bash command that rewrites something, or any Write.
+ */
+async function curatedRefusal(event, input, cwd) {
+  if (event.tool_name === 'Bash') {
+    const command = str(input.command);
+    let found;
+    try { found = bashWrites(command, cwd); } catch (e) {
+      if (e instanceof TooDeep) return TOO_DEEP(str(event.agent_type, 'main thread'));
+      throw e;
+    }
+    if (!found.some(({ kind }) => kind === 'write')) return null;
+    await loadLedgerModule(REGISTER_UNREAD);
+    const hit = bashTruncates(command, cwd, found);
+    return hit ? CURATED_BASH(shown(cwd, hit)) : null;
+  }
+  if (event.tool_name === 'Write' && str(input.file_path)) {
+    await loadLedgerModule(REGISTER_UNREAD);
+    if (!isCurated(cwd, input.file_path) || writeIsAppend(cwd, input.file_path, input.content)) return null;
+    return CURATED_WRITE(shown(cwd, resolve(cwd, input.file_path)));
+  }
+  return null;
+}
+
+/**
  * Stdin is somebody else's pipe: it can be far bigger than any real event and
  * it can simply never close. Both are answered the same way — stop, and exit 0
  * — because a guard that buffers without bound or waits without end is a
@@ -1048,10 +1529,12 @@ const AUTO_HANDOFF = {
  * JSON string literal, and the one module this guard loads from it — the
  * ledger sweep, `core/ledger.mjs`, which archives a ledger whose branch is gone
  * before it is stamped or printed. It is loaded by one dynamic import inside
- * try/catch (loadLedgerModule), only by the two ledger events and never by
- * PreToolUse: a package moved or removed since the render costs the sweep and
- * one stderr line, never a refusal, a stamp or a print. `doctor` reads this
- * line back and names a root that no longer holds the module.
+ * try/catch (loadLedgerModule), by the two ledger events and by a PreToolUse
+ * call the curated rule has to answer (the register's path): a package moved or
+ * removed since the render costs the sweep, the register redirect and one
+ * stderr line, never a stamp or a print, and never a refusal of its own.
+ * `doctor` reads this line back and names a root that no longer holds the
+ * module.
  *
  * `String()`, because the literal is a line somebody can edit by hand, and a
  * `join` that throws up here would take the git guard down with it.
@@ -1096,17 +1579,24 @@ function say(stream, text) {
   try { stream.write(text); } catch { /* a pipe nobody is reading is not a finding */ }
 }
 
-/** Exit 2 = "do not run this", with the reason on stderr for the agent to read. */
-function preToolUse(event) {
+/**
+ * Exit 2 = "do not run this", with the reason on stderr for the agent to read.
+ * The curated rules first, for every agent and the main thread; then the git
+ * rule, for the guarded roles' Bash calls.
+ */
+async function preToolUse(event) {
   const input = event.tool_input && typeof event.tool_input === 'object' ? event.tool_input : {};
+  let reason = await curatedRefusal(event, input, resolve(str(event.cwd, process.cwd())));
   const agent = str(event.agent_type);
-  if (!GUARDED_AGENTS.has(agent) || event.tool_name !== 'Bash') return;
-  let reason = REFUSAL(agent);
-  try {
-    if (!forbidden(str(input.command))) return;
-  } catch (e) {
-    if (!(e instanceof TooDeep)) throw e;
-    reason = TOO_DEEP(agent);
+  if (!reason) {
+    if (!GUARDED_AGENTS.has(agent) || event.tool_name !== 'Bash') return;
+    reason = REFUSAL(agent);
+    try {
+      if (!forbidden(str(input.command))) return;
+    } catch (e) {
+      if (!(e instanceof TooDeep)) throw e;
+      reason = TOO_DEEP(agent);
+    }
   }
   // exitCode, not exit(): the process leaves on its own once stderr is flushed.
   // Set first, so a stderr that cannot be written to still refuses the call.
@@ -1147,10 +1637,10 @@ let ledgerModule; // undefined until the first load; the module, or null, after 
 
 /**
  * The sweep's module, imported from PACKAGE_ROOT — or null, said ONCE on
- * stderr: a guard whose package has moved still stamps and prints, and the
- * line tells the operator what brings the sweep back.
+ * stderr: a guard whose package has moved still stamps, prints and refuses,
+ * and the line says what was `skipped` and what brings it back.
  */
-async function loadLedgerModule() {
+async function loadLedgerModule(skipped = 'ledger sweep skipped') {
   if (ledgerModule !== undefined) return ledgerModule;
   // Under a wall clock: a module whose own top-level await never settles would
   // otherwise leave this guard's await unsettled too, and Node exits 13 with the
@@ -1160,10 +1650,10 @@ async function loadLedgerModule() {
   const clock = new Promise((resolve) => { timer = setTimeout(() => resolve(null), IMPORT_CLOCK_MS); });
   try {
     ledgerModule = await Promise.race([import(pathToFileURL(LEDGER_MODULE).href), clock]);
-    if (ledgerModule === null) say(process.stderr, `omelette-guard: ${LEDGER_MODULE} did not load within ${IMPORT_CLOCK_MS / 1000} s — ledger sweep skipped\n`);
+    if (ledgerModule === null) say(process.stderr, `omelette-guard: ${LEDGER_MODULE} did not load within ${IMPORT_CLOCK_MS / 1000} s — ${skipped}\n`);
   } catch {
     ledgerModule = null;
-    say(process.stderr, `omelette-guard: cannot load ${LEDGER_MODULE} — ledger sweep skipped; run omelette-fleet rules --hooks\n`);
+    say(process.stderr, `omelette-guard: cannot load ${LEDGER_MODULE} — ${skipped}; run omelette-fleet rules --hooks\n`);
   } finally {
     clearTimeout(timer);
   }
@@ -1590,7 +2080,7 @@ const event = await readEvent();
 try {
   if (event) {
     const name = str(event.hook_event_name);
-    if (name === 'PreToolUse') preToolUse(event);
+    if (name === 'PreToolUse') await preToolUse(event);
     else if (name === 'PreCompact') await preCompact(event);
     else if (name === 'SessionStart') await sessionStart(event);
     // Anything else: this guard has no opinion about it.
