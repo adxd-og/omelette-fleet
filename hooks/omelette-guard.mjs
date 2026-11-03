@@ -118,8 +118,8 @@ const WRITES_HISTORY = new Set(['commit', 'merge', 'cherry-pick', 'revert', 'am'
 /**
  * The options git accepts BEFORE the subcommand, one word each. GLOBAL_VALUED
  * may take the NEXT word as its value: `-c`/`-C` (`-C "/My Dir"`, `-c
- * user.name="A B"`) and a long flag (`--work-tree /tmp/x`) — unless that word
- * opens with `-`, which leaves the flag without one. GLOBAL_FLAG needs nothing
+ * user.name="A B"`) and a long flag (`--work-tree /tmp/x`) — whatever that
+ * word opens with, as git takes it (`git -C -foo commit`). GLOBAL_FLAG needs nothing
  * after it: `-c`/`-C` with the value attached (`-cuser.name=a`, `-C/x`), a long
  * flag with its value attached by `=`, a value-less short flag (`-p`) and the
  * bare `--` separator. Everything in the run is stepped over on the way to the
@@ -454,8 +454,15 @@ function tokenize(command) {
   return { tokens, spans };
 }
 
-/** A word that ends in `git` where a word begins — `git`, `/usr/bin/git`, `(git` — which is where an invocation can start. */
-const isGitWord = ({ text, separator }) => !separator && text.endsWith('git') && !/\w/.test(text.charAt(text.length - 4));
+/**
+ * A word that ends in `git` where a word begins — `git`, `/usr/bin/git`, `(git` — which is where an invocation can start.
+ * Read with its quotes off: `"git"` and `g'it'` are the word git runs as.
+ */
+const isGitWord = ({ text, separator }) => {
+  if (separator) return false;
+  const word = unquote(text);
+  return word.endsWith('git') && !/\w/.test(word.charAt(word.length - 4));
+};
 
 /** A word that runs `xargs`, which hands the command after it arguments this command does not show. */
 const isXargsWord = ({ text, separator }) => !separator && /(?:^|\/)xargs$/.test(unquote(text));
@@ -481,19 +488,22 @@ function subcommandAt(tokens, at) {
   let fallback = -1;
   const isWord = () => j < tokens.length && !tokens[j].separator && !isGitWord(tokens[j]);
   while (isWord()) {
-    const { text } = tokens[j];
+    // Options and their values are read with the quotes off too: `git "-C" /x commit` is `git -C /x commit`.
+    const text = unquote(tokens[j].text);
     if (GLOBAL_VALUED.test(text) && !GLOBAL_NO_VALUE.has(text)) {
       j++;
-      if (isWord() && !tokens[j].text.startsWith('-')) {
-        if (SUBCOMMAND.test(tokens[j].text)) fallback = j;
+      // git takes the next word as the value whatever it opens with: `git -C -foo commit`.
+      if (isWord()) {
+        if (SUBCOMMAND.test(unquote(tokens[j].text))) fallback = j;
         j++;
       }
     } else if (GLOBAL_FLAG.test(text) || GLOBAL_NO_VALUE.has(text)) j++;
     else break;
   }
-  const sub = isWord() ? SUBCOMMAND.exec(tokens[j].text) : null;
+  // The subcommand is read with its quotes off, as git receives it: `git "commit"`, `git co"mm"it`.
+  const sub = isWord() ? SUBCOMMAND.exec(unquote(tokens[j].text)) : null;
   if (sub) return { name: sub[1], from: j + 1 };
-  return fallback < 0 ? null : { name: SUBCOMMAND.exec(tokens[fallback].text)[1], from: fallback + 1 };
+  return fallback < 0 ? null : { name: SUBCOMMAND.exec(unquote(tokens[fallback].text))[1], from: fallback + 1 };
 }
 
 /**
@@ -712,6 +722,12 @@ function unquote(text) {
  * `--exec 'echo --abort now'` says the word is data. A recovery flag spelled
  * with quotes in it is refused rather than guessed at: that costs a command an
  * agent can retype, where the other reading costs a rebase that ran.
+ *
+ * The git word and the subcommand, by contrast, are read unquoted (isGitWord,
+ * subcommandAt): quoting them changes nothing about what runs, so quotes there
+ * hide nothing. The action flags are not, because for them quoting is the one
+ * way a command says a word is data, and reading them unquoted would let a
+ * quoted `--abort` pass a rebase that writes.
  */
 function rebaseWrites(args) {
   let afterSeparator = false;

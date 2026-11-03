@@ -1341,6 +1341,46 @@ test('PreToolUse: a heredoc body is text — only its unquoted substitutions run
   }
 });
 
+test('PreToolUse: quoted git word — quotes hide neither the git word nor the subcommand', () => {
+  const g = guard();
+  for (const [command, code] of [
+    ['"git" commit -m x', 2],
+    ['git "commit" -m x', 2],
+    ["g'it' commit -m x", 2],
+    ['git co"mm"it -m x', 2],
+    // One quoted word: its span is re-read as a command.
+    ["'git commit'", 2],
+    // A quoted action flag is data, so this rebase writes.
+    ['git rebase "--abort"', 2],
+    // A `git` word anywhere starts an invocation; `sh -c 'git commit'` depends on it.
+    ['echo "git commit"', 2],
+    ['echo git commit', 2],
+    // A quoted global option is stepped over like the bare one.
+    ['git "-C" /x commit', 2],
+    ['git "-c" a=b commit', 2],
+    ['git "--no-pager" commit', 2],
+    ['git "-C" "/x" push', 2],
+    ['git "-p" commit', 2],
+    // A valued option takes the next word as its value whatever it opens with.
+    ['git -c "-C" commit', 2],
+    ['git -C "-foo" commit', 2],
+    ['git -C "-a b" commit', 2],
+    ['git --git-dir "--x y" commit', 2],
+    ['git -c "-x=1" commit', 2],
+    ['git -C "-" commit', 2],
+    ['git -C -foo commit', 2],
+    ['git -C - commit', 2],
+    ['git -C "-foo" log', 0],
+    ['git -c -C log', 0],
+    ['git "-C" /x log', 0],
+    ['git "--git-dir" /x status', 0],
+  ]) {
+    const r = fire(g.path, preToolUse({ agent_type: 'omelette-reviewer', tool_name: 'Bash', tool_input: { command } }));
+    assert.equal(r.code, code, `${JSON.stringify(command)} should exit ${code}: ${r.out}${r.err}`);
+    assert.equal(r.err.trim(), code === 2 ? REFUSAL('omelette-reviewer') : '');
+  }
+});
+
 test('PreToolUse: brackets that spend the scan budget are refused whole, fast, as too deep to read', () => {
   const g = guard();
   const spend = 'a['.repeat(100000);
