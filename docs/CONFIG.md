@@ -11,8 +11,10 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |
 | How do I switch the handoff hooks off? | [Handoff settings](#handoff-settings) |
 | What do the handoff hooks do to my ledger, and when? | [The handoff hooks](#the-handoff-hooks) |
+| Which settings groups does the guard need, and what is a touched report? | [The handoff hooks](#the-handoff-hooks) |
 | How do I open a ledger, close one, and where do binding rulings go? | [Ledgers and the decisions register](#ledgers-and-the-decisions-register) |
-| How do I install the fleet pane mod, and which two options does it have? | [The fleet pane mod](#the-fleet-pane-mod) |
+| How do I install the fleet pane mod, and which three options does it have? | [The fleet pane mod](#the-fleet-pane-mod) |
+| How do I make the mod refuse a compaction that has no fresh handoff? | [Handoff settings](#handoff-settings) |
 | How do I set whether the session merges or opens a PR? | [Workflow settings](#workflow-settings) |
 | What config keys exist and what do they default to? | [Keys](#keys) |
 | What extra keys does one unit have, and what's its built-in default? | [Unit-specific extras and built-in overrides](#unit-specific-extras-and-built-in-overrides) |
@@ -149,6 +151,8 @@ The `handoff` block configures the other managed file that is rendered rather th
 |---|---|---|---|
 | `handoff.enabled` | boolean | `true` | `false` renders a guard that neither sweeps nor stamps the ledgers on `PreCompact` and `SessionStart` nor prints on `SessionStart`; the git guard is unaffected, and `ledger sweep` and `doctor` still sweep |
 
+**The compaction gate is not in this block.** `handoffGate` belongs to the fleet pane mod, not to `fleet.config.json`: a boolean `userConfig` option of the plugin, default `false`, a row in Claude Code's plugin config menu titled **Refuse a compaction without a fresh handoff**. The menu's description reads *"On: a manual or automatic compaction is refused once when the newest open ledger has no handoff block of the last 30 minutes (a dated heading counts for its day); the next attempt within 10 minutes passes. Off: nothing is refused"*. A block is **fresh** when its heading's date is today's and, if the heading carries a time, `## Handoff (2026-11-03 14:05 — title)`, that time is within 30 minutes; a date-only heading counts for its whole day. The gate reads the **last** `## Handoff (` heading anywhere in the newest open ledger — a fenced code block included — while the guard's print skips a fenced heading, so a heading written inside a fence makes the two disagree. A skip is the mod's answer to `session.compact`: once, then the second attempt within 10 minutes passes; never for a sub-agent's own compaction. No open ledger, no skip. Why and how it is measured: [ORCHESTRATION, "Ledger and handoff"](ORCHESTRATION.md#ledger-and-handoff).
+
 The guard is one file copied into a project, and it loads nothing from this package but the ledger sweep (`core/ledger.mjs`, from the package root rendered into it) — so the value is **substituted into the script** at `rules --hooks` time, exactly the way the agent definitions get theirs, and it reaches a session on the next `rules --hooks`, not before:
 
 ```bash
@@ -213,12 +217,20 @@ What `omelette-fleet rules --hooks` does for the ledger, event by event. The rul
 
 | Event | What the guard does | Bounds and switch |
 |---|---|---|
-| `PreCompact` | Runs the [sweep](#ledgers-and-the-decisions-register), then appends `## Compaction <ISO> (trigger: …) — re-read this ledger before continuing` to every ledger left open or untracked, announced compaction or not | Regular files only: a symlink or a FIFO named like a ledger is skipped. Silent when no ledger exists (nothing stamped, nothing announced); `handoff.enabled=false` turns it off |
-| `SessionStart`, every source | Runs the sweep on every source (`startup`, `resume`, `clear`, `compact`, `fork`). On `compact` and `clear` only, prints three sections in order, each under a one-line heading naming its file: the **last handoff block** of each open ledger, then of each untracked one (`--- <ledger name> · last handoff ---`); the decisions register (`--- <register path> · decisions register ---`); the first table of `.omelette/backlog.md` (`--- .omelette/backlog.md · first table ---`). Control characters in a file name are shown escaped in its heading | Sweep: 2 s per git call, fail-soft (an error is one stderr line); the guard loads the sweep under a 2 s clock, so an import that hangs or fails is one stderr line and the stamp and print still happen. Print: 40 lines / 4 KB per ledger, 12 KB in all (the register 6 KB from its tail and the backlog table 2 KB inside it) — the register and the backlog are reserved first and the handoffs take what remains, open ledgers before untracked ones, a section past the cap dropped whole, and the `[… truncated]` line itself is paid for by the last handoff admitted when there is no room left; `handoff.enabled=false` turns it off |
+| `PreToolUse` (`Bash\|Write\|Edit\|NotebookEdit`) | Exits 2 on a `git` write by a guarded role, on a Bash truncation of a [curated file](ORCHESTRATION.md#guard-v2-the-rules) or a `Write` that is not an append to one (any caller), and on a reviewer's write outside `.omelette/reports/<name>-review.md` | One event, 8 MiB at most; anything that is not a refusal exits 0. Not switched by `handoff.enabled`: the git guard runs whatever it says |
+| `PreCompact` | Runs the [sweep](#ledgers-and-the-decisions-register), then appends `## Compaction <ISO> (trigger: <manual\|auto\|unknown>) — branch <b> · HEAD <h> · <n> dirty files — re-read this ledger before continuing` to every ledger left open or untracked, announced compaction or not | Regular files only: a symlink or a FIFO named like a ledger is skipped. The three facts come from `git rev-parse` and `git status --porcelain`, 2 s each, `unknown` on a failure. Silent when no ledger exists (nothing stamped, nothing announced); `handoff.enabled=false` turns it off |
+| `SessionStart`, every source | Runs the sweep on every source (`startup`, `resume`, `clear`, `compact`, `fork`). On `compact` and `clear` only, prints one JSON document (`hookSpecificOutput.additionalContext`) whose text opens with `--- omelette-fleet · read before continuing ---` and holds three sections in order, each under a one-line heading naming its file: the **last handoff block** of each open ledger, then of each untracked one (`--- <ledger name> · last handoff ---`); the decisions register (`--- <register path> · decisions register ---`); the first table of `.omelette/backlog.md` (`--- .omelette/backlog.md · first table ---`). Control characters in a file name are shown escaped in its heading | Sweep: 2 s per git call, fail-soft (an error is one stderr line); the guard loads the sweep under a 2 s clock, so an import that hangs or fails is one stderr line and the stamp and print still happen. Print: 40 lines / 4 KB per ledger, 12 KB in all (the register 6 KB from its tail and the backlog table 2 KB inside it) — the register and the backlog are reserved first and the handoffs take what remains, open ledgers before untracked ones, a section past the cap dropped whole, and the `[… truncated]` line itself is paid for by the last handoff admitted when there is no room left; `handoff.enabled=false` turns it off |
+| `SubagentStop` (no matcher) | For a guarded role only, writes `.omelette/reports/touched-<role>-<first 8 of the agent id>.md` — see [the touched reports](#the-touched-reports). Prints nothing and refuses nothing | One transcript, bounds below; a failure is one stderr line. Not switched by `handoff.enabled` |
 
 **What the hooks do not do.** They stamp and they print the block you wrote. Nothing measures the context and nothing holds a turn: over five compactions the nudge, the gate and the summary rescued nothing the session had not written itself ([MEASUREMENTS](MEASUREMENTS.md#the-handoff-hooks-over-five-compactions)); an operator whose `settings.json` still wires `PostToolUse`, `Stop` or `PostCompact` to the guard gets exit 0 and a `doctor` line naming the entries to remove.
 
 A changed value reaches a session only through a re-render — `omelette-fleet set handoff.enabled=false && omelette-fleet rules --hooks` — because the value is substituted into the script ([Handoff settings](#handoff-settings)).
+
+**The settings snippet wires four events.** `rules --hooks` prints a `hooks` object with `PreToolUse` (matcher `Bash|Write|Edit|NotebookEdit`), `PreCompact` and `SessionStart` (no matcher), and `SubagentStop` (no matcher); the snippet and how to merge it are in [ORCHESTRATION, "Layer 3: the guard"](ORCHESTRATION.md#layer-3-the-guard). A group merged before 1.8.0 keeps working for what it covered: with the matcher `Bash` alone the `Write` rules do not run, and without `SubagentStop` there is no touched report; `doctor` names both. The mod can deliver the same refusals ([MODS](MODS.md#the-guard-delivery)).
+
+### The touched reports
+
+`.omelette/reports/touched-<role>-<id8>.md` is what a guarded role's loop wrote, recorded when it stops: `# touched — <role> <agent id>`, a `transcript:` line, a `skipped:` line when part of the transcript was not read, one `- <path> (<tool or bash write>)` line per file in first-seen order, then `tool calls: <n> (<tool>: <count>, …)`. The guard reads the agent's own transcript, `agent_transcript_path` of the event, and only from under `~/.claude/projects` or `$CLAUDE_CONFIG_DIR/projects`: it opens it read-only without following a symlink, reads at most 16 MiB in 64 KB chunks, drops a line over 1 MiB and stops at 2 s, saying what it skipped. The report is written through a temporary file renamed over the name; a symlinked `.omelette/reports` is refused, and any failure is one stderr line, never a refusal. The session opens it beside the role's report ([ORCHESTRATION, "What each agent is handed"](ORCHESTRATION.md#what-each-agent-is-handed)).
 
 ## Ledgers and the decisions register
 
@@ -449,12 +461,15 @@ With the check off, `doctor` prints `latest check disabled` and `omelette-fleet 
 
 `omelette-fleet rules --mods` prints how to install the fleet pane (a Claude Code mod shipped in this package) and writes nothing: no file, no setting. What the pane shows and how to install, update and remove it: [MODS](MODS.md).
 
-The mod's two options are not in `fleet.config.json`. They belong to the plugin and are rows in Claude Code's plugin config menu:
+The mod's three options are not in `fleet.config.json`. They belong to the plugin and are rows in Claude Code's plugin config menu:
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
 | `autoOpen` | boolean | `true` | Open the pane when a session starts, on a wide terminal. `false` leaves the `/omelette-fleet` command and the status-line entry. |
 | `animate` | boolean | `true` | A spinner on a running agent or unit, a faster tick while anything runs, and on the desktop moving live lines and a pulsing frame. `false` draws the same pane without motion. |
+| `handoffGate` | boolean | `false` | Skip a manual or automatic compaction once when the newest open ledger has no handoff block of the last 30 minutes; the next attempt within 10 minutes passes. [Handoff settings](#handoff-settings) has the freshness rule. |
+
+Two more things the mod does read, neither a setting: the project's rendered `.claude/hooks/omelette-guard.mjs` (else the user's `$HOME` copy), which it runs with `node` from the absolute entries of `PATH` to deliver the guard and the handoff block, and each guarded role's definition, `.claude/agents/<role>.md` in the project, then the user's `$HOME`, for the model pin and the effort flag. What each does: [MODS](MODS.md#what-it-reads-and-writes). `doctor`'s `guard` line says whether the mod's copy is installed, enabled and current ([ORCHESTRATION, "What doctor says about the wiring"](ORCHESTRATION.md#what-doctor-says-about-the-wiring)).
 
 ## The ceiling, in config terms
 
