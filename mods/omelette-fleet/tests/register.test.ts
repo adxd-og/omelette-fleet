@@ -1380,6 +1380,170 @@ describe('guard v2: the mod runs the rendered guard (1.8.0)', () => {
   })
 })
 
+describe('pins, the effort flag and the effort variable (1.8.0)', () => {
+  const CWD = SESSION.cwd
+  /** The rendered omelette-coder definition, as `rules --agents` writes it. */
+  const CODER = [
+    '---',
+    '# omelette-fleet agent v1.8.0 · managed by `omelette-fleet rules --agents` · edits are overwritten on refresh',
+    'name: omelette-coder',
+    'description: Implements ONE task from a written brief — code and tests only, no commits unless the brief says so.',
+    'model: claude-opus-5-5',
+    'effort: xhigh',
+    'disallowedTools: Agent',
+    '---',
+    '',
+    'You implement exactly one task from the brief the orchestrator gives you.',
+    '',
+  ].join('\n')
+  const FILES = { [`${CWD}/.claude/agents/omelette-coder.md`]: CODER }
+  const NOTICE = 'CLAUDE_CODE_EFFORT_LEVEL=low is set: it overrides every agent definition\'s effort (rules, "Spawning sub-agents")'
+
+  type Seen = { models: (string | undefined)[]; toasts: string[] }
+
+  /** The engine beneath: the model each spawn reached it with, and the toasts the plugin raised. */
+  function engineOf(on: On): Seen {
+    const seen: Seen = { models: [], toasts: [] }
+
+    on('agent.spawn', ($, e) => {
+      seen.models.push(e.model)
+
+      return SPAWNED
+    })
+    on('ui.toast', ($, e) => {
+      seen.toasts.push(e.text)
+
+      return { value: undefined }
+    })
+    on('turn.step', async function* () {
+      return STEPPED
+    })
+
+    return seen
+  }
+
+  test('(a) omelette-coder spawned on haiku: the engine sees the definition\'s model, one toast, one pin counted', async ($, on) => {
+    const world = worldOf(on, { files: FILES })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    const seen = engineOf(on)
+    await $.session.start(SESSION)
+
+    const result = await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku' } as never)
+
+    expect(seen.models).toEqual(['claude-opus-5-5'])
+    expect(result).toEqual(SPAWNED)
+    expect(seen.toasts).toEqual(['pinned omelette-coder to claude-opus-5-5'])
+    expect(world.fleet?.counts?.pins).toBe(1)
+    expect(nodeOf(world, 'agent-c1')).toMatchObject({ role: 'omelette-coder', model: 'claude-opus-5-5', pinned: { from: 'haiku', to: 'claude-opus-5-5' } })
+  })
+
+  test('(a\') the engine runs the pinned spawn on another model (a session-forced subagent model): the override toast, no pin counted, the row on the engine\'s model', async ($, on) => {
+    const world = worldOf(on, { files: FILES })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    const seen: Seen = { models: [], toasts: [] }
+    const answer = { model: 'claude-haiku-5-5', agentId: 'agent-c1' }
+
+    on('agent.spawn', ($$, e) => {
+      seen.models.push(e.model)
+
+      return answer
+    })
+    on('ui.toast', ($$, e) => {
+      seen.toasts.push(e.text)
+
+      return { value: undefined }
+    })
+    await $.session.start(SESSION)
+
+    expect(await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku' } as never)).toEqual(answer)
+    expect(seen.models, 'the pin went down').toEqual(['claude-opus-5-5'])
+    expect(seen.toasts).toEqual(['omelette-coder runs on claude-haiku-5-5: the session\'s forced subagent model outranks the definition\'s claude-opus-5-5'])
+    expect(world.fleet?.counts?.pins).toBeUndefined()
+    expect(nodeOf(world, 'agent-c1')).toMatchObject({ role: 'omelette-coder', model: 'claude-haiku-5-5' })
+    expect(nodeOf(world, 'agent-c1')?.pinned).toBeUndefined()
+  })
+
+  test('(b) omelette-coder spawned on opus, the alias of its model: unchanged, no toast, no pin', async ($, on) => {
+    const world = worldOf(on, { files: FILES })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    const seen = engineOf(on)
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'opus' } as never)
+
+    expect(seen.models).toEqual(['opus'])
+    expect(seen.toasts).toEqual([])
+    expect(world.fleet?.counts?.pins).toBeUndefined()
+  })
+
+  test('(c) omelette-coder spawned with no model: unchanged, no toast', async ($, on) => {
+    worldOf(on, { files: FILES })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    const seen = engineOf(on)
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+
+    expect(seen.models).toEqual([undefined])
+    expect(seen.toasts).toEqual([])
+  })
+
+  test('(d) Explore spawned on haiku: not a pinned role, unchanged', async ($, on) => {
+    worldOf(on, { files: FILES })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    const seen = engineOf(on)
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'Explore', model: 'haiku' } as never)
+
+    expect(seen.models).toEqual(['haiku'])
+    expect(seen.toasts).toEqual([])
+  })
+
+  test('(e) an omelette-coder step on medium: one toast and the row flagged; a second step: no second toast', async ($, on) => {
+    const world = worldOf(on, { files: FILES })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    const seen = engineOf(on)
+    await $.session.start(SESSION)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+
+    expect(await step($ as never, 'agent-c1', 'medium'), 'the step goes on as it came').toEqual(STEPPED)
+    expect(seen.toasts).toEqual(['effort medium on omelette-coder (definition says xhigh)'])
+    expect(nodeOf(world, 'agent-c1')).toMatchObject({ effort: 'medium', effortFlag: { effort: 'medium', expected: 'xhigh' } })
+
+    await step($ as never, 'agent-c1', 'medium')
+    expect(seen.toasts, 'once per agent').toHaveLength(1)
+  })
+
+  test('(f) session.start with CLAUDE_CODE_EFFORT_LEVEL=low: the notice', async ($, on) => {
+    worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, CLAUDE_CODE_EFFORT_LEVEL: 'low' })
+    const seen = engineOf(on)
+
+    await $.session.start(SESSION)
+
+    expect(seen.toasts).toEqual([NOTICE])
+  })
+
+  test('(f) session.start with CLAUDE_CODE_EFFORT_LEVEL unset: no notice', async ($, on) => {
+    worldOf(on)
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    const seen = engineOf(on)
+
+    await $.session.start(SESSION)
+
+    expect(seen.toasts).toEqual([])
+  })
+})
+
 // tester 1.8.0 Task 7
 describe('tester 1.8.0 Task 7: the guard hook at the engine edge', () => {
   const CWD = '/home/op/work'
@@ -1581,5 +1745,262 @@ describe('tester 1.8.0 Task 7: the guard hook at the engine edge', () => {
     // The record there: three files, read at the agent's own cwd.
     await $.classic.SubagentStop({ ...STOP, agent_id: 'a1b2c3d4e5f6', agent_type: 'omelette-coder', cwd: `${CWD}/` } as never)
     expect(nodeOf(world, 'a1b2c3d4e5f6')?.touched).toBe('touched: .omelette/reports/touched-omelette-coder-a1b2c3d4.md — 3 files')
+  })
+})
+
+// tester 1.8.0 Task 8
+describe('tester 1.8.0 Task 8: pins, the effort flag and the effort notice at the engine edge', () => {
+  const CWD = SESSION.cwd
+  const NOTICE = (v: string) => `CLAUDE_CODE_EFFORT_LEVEL=${v} is set: it overrides every agent definition's effort (rules, "Spawning sub-agents")`
+
+  /** A rendered definition's frontmatter with the two lines the mod reads. */
+  const definition = (role: string, model: string, effort: string, nl = '\n') =>
+    ['---', `name: ${role}`, `model: ${model}`, `effort: ${effort}`, 'disallowedTools: Agent', '---', '', 'body', ''].join(nl)
+  const PROJECT = (role: string) => `${CWD}/.claude/agents/${role}.md`
+  const HOMEDIR = (role: string) => `${HOME}/.claude/agents/${role}.md`
+  const FOUR = {
+    [PROJECT('omelette-coder')]: definition('omelette-coder', 'claude-opus-5-5', 'xhigh'),
+    [PROJECT('omelette-coder-medium')]: definition('omelette-coder-medium', 'claude-opus-5-5', 'medium'),
+    [PROJECT('omelette-tester')]: definition('omelette-tester', 'claude-sonnet-5-5', 'high'),
+    [PROJECT('omelette-reviewer')]: definition('omelette-reviewer', 'claude-opus-5-5', 'xhigh'),
+  }
+
+  type Seen = { models: (string | undefined)[]; calls: number; toasts: string[] }
+
+  /** The engine beneath: each spawn's model as it arrived, a fresh agent id per spawn, the toasts raised. */
+  /** The engine beneath answers the model it was given, as it resolves a full id (a spawn with none: opus). */
+  function engineOf(on: On, answer: (n: number, model: string | undefined) => unknown = (n, model) => ({ model: model || 'claude-opus-5-5', agentId: `agent-${n}` })): Seen {
+    const seen: Seen = { models: [], calls: 0, toasts: [] }
+
+    on('agent.spawn', ($, e) => {
+      seen.models.push(e.model)
+      seen.calls += 1
+
+      return answer(seen.calls, e.model) as never
+    })
+    on('ui.toast', ($, e) => {
+      seen.toasts.push(e.text)
+
+      return { value: undefined }
+    })
+    on('turn.step', async function* () {
+      return STEPPED
+    })
+
+    return seen
+  }
+
+  async function started(on: On, files: Record<string, string>, env: Record<string, string> = {}, answer?: (n: number, model: string | undefined) => unknown) {
+    const world = worldOf(on, { files })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME, ...env })
+    const seen = engineOf(on, answer)
+
+    return { world, seen }
+  }
+
+  test('each of the four roles spawned on haiku reaches the engine with its own definition\'s id: one toast each, four pins', async ($, on) => {
+    const { world, seen } = await started(on, FOUR)
+    await $.session.start(SESSION)
+
+    for (const role of ['omelette-coder', 'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer']) {
+      await $.agent.spawn({ ...SPAWN, subagentType: role, model: 'haiku' } as never)
+    }
+
+    expect(seen.models).toEqual(['claude-opus-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'])
+    expect(seen.toasts).toEqual([
+      'pinned omelette-coder to claude-opus-5-5',
+      'pinned omelette-coder-medium to claude-opus-5-5',
+      'pinned omelette-tester to claude-sonnet-5-5',
+      'pinned omelette-reviewer to claude-opus-5-5',
+    ])
+    expect(world.fleet?.counts?.pins).toBe(4)
+    expect(nodeOf(world, 'agent-3')).toMatchObject({ role: 'omelette-tester', pinned: { from: 'haiku', to: 'claude-sonnet-5-5' } })
+  })
+
+  test('no pin where the call names the definition\'s model: its id, its alias, or a definition that spells an alias', async ($, on) => {
+    const files = { ...FOUR, [PROJECT('omelette-reviewer')]: definition('omelette-reviewer', 'opus', 'xhigh') }
+    const { world, seen } = await started(on, files)
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder-medium', model: 'opus' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'claude-opus-5-5' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-tester', model: 'sonnet' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-reviewer', model: 'claude-opus-5-5' } as never)
+
+    expect(seen.models).toEqual(['opus', 'claude-opus-5-5', 'sonnet', 'claude-opus-5-5'])
+    expect(seen.toasts).toEqual([])
+    expect(world.fleet?.counts?.pins).toBeUndefined()
+  })
+
+  test('another id of the same family is a pin, and a definition that spells an alias is pinned to the alias as written', async ($, on) => {
+    const files = { ...FOUR, [PROJECT('omelette-reviewer')]: definition('omelette-reviewer', 'opus', 'xhigh') }
+    const { seen } = await started(on, files)
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'claude-opus-4-6' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-reviewer', model: 'claude-opus-4-6' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'inherit' } as never)
+
+    expect(seen.models).toEqual(['claude-opus-5-5', 'opus', 'claude-opus-5-5'])
+    expect(seen.toasts).toHaveLength(3)
+  })
+
+  test('a spawn by the main loop and one by a sub-agent are pinned alike; a fork, a missing or empty model and a non-guarded role are not', async ($, on) => {
+    const { world, seen } = await started(on, FOUR)
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku', parentAgentId: 'agent-1' } as never)
+    expect(seen.models).toEqual(['claude-opus-5-5', 'claude-opus-5-5'])
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku', fork: true } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: '' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coders', model: 'haiku' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'general-purpose', model: 'haiku' } as never)
+    expect(seen.models.slice(2)).toEqual(['haiku', '', undefined, 'haiku', 'haiku'])
+    expect(seen.toasts).toHaveLength(2)
+    expect(world.fleet?.counts?.pins).toBe(2)
+  })
+
+  test('a definition read through CRLF, quotes and trailing comments pins and flags as a plain one does', async ($, on) => {
+    const crlf = ['---', 'name: omelette-coder', 'model: "claude-opus-5-5"  # pinned', 'effort: xhigh # note', '---', 'body', ''].join('\r\n')
+    const { world, seen } = await started(on, { [PROJECT('omelette-coder')]: crlf })
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku' } as never)
+    expect(seen.models).toEqual(['claude-opus-5-5'])
+
+    await step($ as never, 'agent-1', 'xhigh')
+    expect(seen.toasts, 'the pin only: xhigh is the definition\'s').toEqual(['pinned omelette-coder to claude-opus-5-5'])
+    await step($ as never, 'agent-1', 'low')
+    expect(seen.toasts.at(-1)).toBe('effort low on omelette-coder (definition says xhigh)')
+    expect(nodeOf(world, 'agent-1')?.effortFlag).toEqual({ effort: 'low', expected: 'xhigh' })
+  })
+
+  test('the project\'s definition wins over HOME\'s; a role only HOME has is read from HOME; with neither, no pin, no toast, no throw', async ($, on) => {
+    const files = {
+      [PROJECT('omelette-coder')]: definition('omelette-coder', 'claude-opus-5-5', 'xhigh'),
+      [HOMEDIR('omelette-coder')]: definition('omelette-coder', 'claude-haiku-5-5', 'low'),
+      [HOMEDIR('omelette-tester')]: definition('omelette-tester', 'claude-sonnet-5-5', 'high'),
+    }
+    const { seen } = await started(on, files)
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-tester', model: 'haiku' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-reviewer', model: 'haiku' } as never)
+
+    expect(seen.models).toEqual(['claude-opus-5-5', 'claude-sonnet-5-5', 'haiku'])
+    expect(seen.toasts).toEqual(['pinned omelette-coder to claude-opus-5-5', 'pinned omelette-tester to claude-sonnet-5-5'])
+  })
+
+  test('a spawn the engine refuses: no pin toast, no pin counted, no node, and the refusal comes back as it was', async ($, on) => {
+    const { world, seen } = await started(on, FOUR, {}, () => ({ deny: 'no more agents' }))
+    await $.session.start(SESSION)
+
+    const result = await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku' } as never)
+
+    expect(result).toEqual({ deny: 'no more agents' })
+    expect(seen.models, 'the engine was asked once, with the pinned model').toEqual(['claude-opus-5-5'])
+    expect(seen.toasts).toEqual([])
+    expect(world.fleet?.counts?.pins).toBeUndefined()
+    expect(world.fleet?.nodes.filter(node => node.role === 'omelette-coder') ?? []).toEqual([])
+  })
+
+  test('an engine answer that names the pin by its alias (or the alias\'s id) is a pin taken, not an override', async ($, on) => {
+    const files = { ...FOUR, [PROJECT('omelette-reviewer')]: definition('omelette-reviewer', 'opus', 'xhigh') }
+    const { world, seen } = await started(on, files, {}, (n, model) => ({ model: model === 'opus' ? 'claude-opus-5-5' : 'opus', agentId: `agent-${n}` }))
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-reviewer', model: 'haiku' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku' } as never)
+
+    expect(seen.models).toEqual(['opus', 'claude-opus-5-5'])
+    expect(seen.toasts).toEqual(['pinned omelette-reviewer to opus', 'pinned omelette-coder to claude-opus-5-5'])
+    expect(world.fleet?.counts?.pins).toBe(2)
+  })
+
+  test('a spawn answered without an agent id still counts the pin and toasts', async ($, on) => {
+    const world = worldOf(on, { files: FOUR })
+    mock.clock(on, { now: NOW })
+    mock.env(on, { HOME })
+    const seen = engineOf(on, () => ({ model: 'claude-opus-5-5' }))
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder', model: 'haiku' } as never)
+
+    expect(seen.toasts).toEqual(['pinned omelette-coder to claude-opus-5-5'])
+    expect(world.fleet?.counts?.pins).toBe(1)
+  })
+
+  test('a step: the definition\'s effort flags nothing; a step with no effort, the main loop\'s, and an agent the pane never saw flag nothing', async ($, on) => {
+    const { world, seen } = await started(on, FOUR)
+    await $.session.start(SESSION)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+
+    await step($ as never, 'agent-1', 'xhigh')
+    await step($ as never, undefined, 'low')
+    await step($ as never, 'agent-ghost', 'low')
+    const noEffort = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 3, agentId: 'agent-1' } as never)
+    for (let read = await noEffort.next(); !read.done; read = await noEffort.next());
+
+    expect(seen.toasts).toEqual([])
+    expect(nodeOf(world, 'agent-1')?.effortFlag).toBeUndefined()
+  })
+
+  test('a second differing step, even on another effort, says nothing more; another agent of the role is flagged on its own', async ($, on) => {
+    const { world, seen } = await started(on, FOUR)
+    await $.session.start(SESSION)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-tester' } as never)
+
+    await step($ as never, 'agent-1', 'low')
+    await step($ as never, 'agent-1', 'max')
+    await step($ as never, 'agent-2', 'xhigh')
+    await step($ as never, 'agent-2', 'xhigh')
+
+    expect(seen.toasts).toEqual(['effort low on omelette-coder (definition says xhigh)', 'effort xhigh on omelette-tester (definition says high)'])
+    expect(nodeOf(world, 'agent-1')?.effortFlag).toEqual({ effort: 'low', expected: 'xhigh' })
+    expect(nodeOf(world, 'agent-2')?.effortFlag).toEqual({ effort: 'xhigh', expected: 'high' })
+  })
+
+  test('a numeric effort is compared as its text; a definition with no effort line flags nothing', async ($, on) => {
+    const files = {
+      [PROJECT('omelette-coder')]: definition('omelette-coder', 'claude-opus-5-5', '8000'),
+      [PROJECT('omelette-tester')]: ['---', 'name: omelette-tester', 'model: claude-sonnet-5-5', '---', ''].join('\n'),
+    }
+    const { seen } = await started(on, files)
+    await $.session.start(SESSION)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-tester' } as never)
+
+    await step($ as never, 'agent-1', 8000)
+    await step($ as never, 'agent-2', 'low')
+
+    expect(seen.toasts).toEqual([])
+  })
+
+  for (const [set, said] of [['low', [NOTICE('low')]], ['  ', []], ['', []], ['  max ', [NOTICE('max')]]] as [string, string[]][]) {
+    test(`the effort notice with the variable set to ${JSON.stringify(set)}: ${said.length ? 'said, trimmed' : 'nothing'}`, async ($, on) => {
+      const { seen } = await started(on, {}, { CLAUDE_CODE_EFFORT_LEVEL: set })
+      await $.session.start(SESSION)
+
+      expect(seen.toasts).toEqual(said)
+    })
+  }
+
+  test('a reload (a second session.start) says the notice again and keeps the row\'s effort flag to once', async ($, on) => {
+    const { world, seen } = await started(on, FOUR, { CLAUDE_CODE_EFFORT_LEVEL: 'low' })
+    await $.session.start(SESSION)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder' } as never)
+    await step($ as never, 'agent-1', 'low')
+    await $.session.start(SESSION)
+    await step($ as never, 'agent-1', 'low')
+
+    expect(seen.toasts.filter(text => text === NOTICE('low'))).toHaveLength(2)
+    expect(seen.toasts.filter(text => text.startsWith('effort '))).toHaveLength(1)
+    expect(nodeOf(world, 'agent-1')?.effortFlag).toEqual({ effort: 'low', expected: 'xhigh' })
   })
 })

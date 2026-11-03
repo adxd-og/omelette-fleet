@@ -19,15 +19,18 @@
  *   feed?: 'ok'|'none', lastEndedAt?: number, order: number,
  *   openCalls?: { callId: string, callerId: string, tool: string, since: number }[],
  *   loopCalls?: { callId: string, subject: string, since: number }[],
- *   refusedAt?: number, touched?: string }} FleetNode
+ *   refusedAt?: number, touched?: string, pinned?: { from: string, to: string },
+ *   effortFlag?: { effort: string, expected: string } }} FleetNode
  *   `openCalls`: a unit's calls of this session still out; the unit shows the newest.
  *   `loopCalls`: a loop's own calls still out (the main loop's or an agent's); the loop shows the newest.
  *   `refusedAt`: when the guard refused the loop's call, while its row shows `refused` (until a tick has drawn it).
  *   `touched`: a stopped agent's touched record, `touched: <path> — <n> files` (guard v2).
+ *   `pinned`: the model the spawn asked for and the definition's it was pinned to (1.8.0).
+ *   `effortFlag`: the first effort a step reported that is not the definition's, and the definition's (1.8.0).
  */
 /** @typedef {{ at: number, from: string, to: string, label: string, fromRole?: string, toRole?: string }} FleetLink  node ids, or a SendMessage's raw target; a forgotten agent's end keeps its role */
 /** @typedef {{ contextPercent?: number, fiveHour?: number, sevenDay?: number }} FleetUsage */
-/** @typedef {{ day: string, refusals: { mod?: number, hook?: number } }} FleetCounts  the day's counts (UTC `YYYY-MM-DD`), started again on a new day; refusals by delivery */
+/** @typedef {{ day: string, refusals: { mod?: number, hook?: number }, pins?: number }} FleetCounts  the day's counts (UTC `YYYY-MM-DD`), started again on a new day; refusals by delivery, spawns pinned */
 /** @typedef {{ nodes: FleetNode[], history: FleetLink[], usage: FleetUsage, now: number, isOpen: boolean, forgotten?: ({ id: string, role: string } | string)[], counts?: FleetCounts }} FleetState  `forgotten`: the agents dropped after their report, newest last (a bare id from an older build) */
 /**
  * @typedef {{ type: 'spawn', at: number, agentId: string, role: string, parentId?: string, model?: string }
@@ -35,6 +38,8 @@
  *   | { type: 'call', at: number, agentId: string, callId: string, tool: string, subject?: string, target?: string }
  *   | { type: 'return', at: number, agentId: string, callId: string }
  *   | { type: 'refused', at: number, agentId: string, callId?: string, by: 'mod' | 'hook' }
+ *   | { type: 'pinned', at: number, agentId?: string, from: string, to: string }
+ *   | { type: 'effort-flag', at: number, agentId: string, effort: string, expected: string }
  *   | { type: 'settle', at: number, agentId: string }
  *   | { type: 'stop', at: number, agentId: string, touched?: string }
  *   | { type: 'agents', at: number, list: { id: string, type: string, status: string, parentId?: string }[] }
@@ -157,6 +162,12 @@ function dayOf(at) {
   return Number.isNaN(date.getTime()) ? 'unknown' : date.toISOString().slice(0, 10);
 }
 
+/** The counts of `at`'s day: the state's when they are that day's, else a new day's. */
+function countsOn(state, at) {
+  const day = dayOf(at);
+  return state.counts?.day === day ? state.counts : { day, refusals: {} };
+}
+
 /** What a node shows once its calls are over. */
 const NO_ACTIVITY = Object.freeze({ activity: undefined, activityCallId: undefined, loopCalls: undefined, refusedAt: undefined });
 /** A unit with no call running. */
@@ -259,12 +270,27 @@ const ON = {
   // The guard refused a call before it ran (guard v2): counted for the day by delivery; the loop's row shows `refused`.
   refused(state, e) {
     if (e.by !== 'mod' && e.by !== 'hook') return state;
-    const day = dayOf(e.at);
-    const today = state.counts?.day === day ? state.counts : { day, refusals: {} };
+    const today = countsOn(state, e.at);
     let next = { ...state, counts: { ...today, refusals: { ...today.refusals, [e.by]: (today.refusals?.[e.by] ?? 0) + 1 } } };
     const loop = find(next, e.agentId);
     if (loop && loop.kind !== 'unit') next = withNode(next, loop.id, { activity: 'refused', activityCallId: e.callId, refusedAt: e.at, status: 'running', since: e.at });
     return next;
+  },
+
+  // The mod pinned a spawn to its definition's model (1.8.0): counted for the day; the agent's row keeps what was asked.
+  pinned(state, e) {
+    if (typeof e.from !== 'string' || typeof e.to !== 'string' || !e.to) return state;
+    const today = countsOn(state, e.at);
+    const next = { ...state, counts: { ...today, pins: (today.pins ?? 0) + 1 } };
+    const agent = typeof e.agentId === 'string' ? findAgent(next, e.agentId) : undefined;
+    return agent ? withNode(next, agent.id, { pinned: { from: e.from, to: e.to } }) : next;
+  },
+
+  // A guarded role's step reported an effort its definition does not say (1.8.0): the row is flagged, nothing is changed.
+  'effort-flag'(state, e) {
+    const agent = findAgent(state, e.agentId);
+    if (!agent || typeof e.effort !== 'string' || typeof e.expected !== 'string') return state;
+    return withNode(state, agent.id, { effortFlag: { effort: e.effort, expected: e.expected } });
   },
 
   // A loop asks the model again only once its tool results are back: a call still open in it is one whose return never came.

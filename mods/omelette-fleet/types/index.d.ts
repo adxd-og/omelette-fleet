@@ -24,6 +24,10 @@ export type FleetNode = {
   refusedAt?: number
   /** A stopped agent's touched record, `touched: <path> — <n> files` (guard v2). */
   touched?: string
+  /** The model the spawn asked for and the definition's it was pinned to (1.8.0). */
+  pinned?: { from: string; to: string }
+  /** The first effort a step reported that is not the definition's, and the definition's (1.8.0). */
+  effortFlag?: { effort: string; expected: string }
 }
 
 /** Node ids, or a SendMessage's raw target; a forgotten agent's end keeps its role. */
@@ -31,8 +35,8 @@ export type FleetLink = { at: number; from: string; to: string; label: string; f
 
 export type FleetUsage = { contextPercent?: number; fiveHour?: number; sevenDay?: number }
 
-/** The day's counts (UTC `YYYY-MM-DD`), started again on a new day: the guard's refusals by delivery. */
-export type FleetCounts = { day: string; refusals: { mod?: number; hook?: number } }
+/** The day's counts (UTC `YYYY-MM-DD`), started again on a new day: the guard's refusals by delivery, the spawns pinned. */
+export type FleetCounts = { day: string; refusals: { mod?: number; hook?: number }; pins?: number }
 
 /** `forgotten`: the agents dropped after their report, newest last (a bare id from an older build). */
 export type FleetState = { nodes: FleetNode[]; history: FleetLink[]; usage: FleetUsage; now: number; isOpen: boolean; forgotten?: ({ id: string; role: string } | string)[]; counts?: FleetCounts }

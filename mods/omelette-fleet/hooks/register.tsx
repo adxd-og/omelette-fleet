@@ -8,7 +8,9 @@
  * an event (every state write goes through `apply`, which cannot throw). The
  * one refusal it answers is the rendered guard's (guard v2, 1.8.0, guard.mjs):
  * exit 2 from the script is `{ deny }`; anything else, its own failures
- * included, lets the call go on.
+ * included, lets the call go on. The one rewrite is the pin (1.8.0, roles.mjs):
+ * a guarded role spawned on a model its definition does not name runs on the
+ * definition's.
  *
  * `$` is always spelled `$.noun.method(...)` literally: the engine scans this
  * source and refuses a call it did not see.
@@ -21,6 +23,7 @@ import { parseSnapshot, snapshotNames } from './feed.mjs'
 import { askGuard, findGuardScript, toPreToolUse, touchedLine, touchedPath } from './guard.mjs'
 import { headerRow, historyRows, layout, statusLine } from './layout.mjs'
 import { initialState, MAIN, reduce, roleOf } from './model.mjs'
+import { namesModel, readRoleDefinitions } from './roles.mjs'
 import { svgOf } from './svg.mjs'
 import { subjectOf } from './text.mjs'
 
@@ -65,6 +68,14 @@ let agentsReadAt = -Infinity
 const AGENTS_MS = 5_000
 let feedReadAt = Number.NEGATIVE_INFINITY
 let drawnOn: string | undefined
+
+/** A guarded role's definition, its frontmatter's `model:` and `effort:` (roles.mjs). */
+type RoleDefinition = { readonly model?: string; readonly effort?: string }
+
+/** The guarded roles' definitions, read at each `session.start` (a reload's too); none before one. */
+let definitions: Promise<Map<string, RoleDefinition>> | undefined
+/** The agents whose effort was flagged since this module loaded; the row's flag in the state keeps it once across a reload. */
+const flagged = new Set<string>()
 
 /** Whether the chain of `gen` is the one running: a tick, an open or a feed read of an older chain writes nothing. */
 const isCurrent = (gen: number): boolean => ticker?.generation === gen
@@ -380,6 +391,86 @@ const noteStep = async ($: EngineInterface, agentId: string, model: string, effo
   }
 }
 
+/** Shows `text` as a toast; a toast that cannot be shown changes nothing. */
+const toast = ($: EngineInterface, text: string): void => {
+  try {
+    $.ui.toast(text)
+  } catch {
+    // The event goes on either way.
+  }
+}
+
+/**
+ * CLAUDE_CODE_EFFORT_LEVEL beats every agent definition's `effort:` (rules,
+ * "Spawning sub-agents"): set (and not blank), the session is told at its
+ * start. Never throws.
+ */
+const noticeEffortLevel = async ($: EngineInterface): Promise<void> => {
+  try {
+    const level = (await $.env.get('CLAUDE_CODE_EFFORT_LEVEL'))?.trim()
+
+    if (level) {
+      toast($, `CLAUDE_CODE_EFFORT_LEVEL=${level} is set: it overrides every agent definition's effort (rules, "Spawning sub-agents")`)
+    }
+  } catch {
+    // No notice: the session starts as it would.
+  }
+}
+
+/**
+ * The pin of a spawn, or none: a guarded role asked for by a model its
+ * definition does not name (roles.mjs, namesModel) runs on the definition's.
+ * None with no model asked for, no definition read, or a definition naming
+ * no model; none for a fork (it inherits, its model ignored) or a resume (a
+ * changed content key is ignored: `resume`, in the d.ts since 2.1.312). A
+ * workflow agent is pinned (the d.ts: its `model` rewrite applies), and so is
+ * a teammate (nothing says its `model` rewrite is dropped). The pin is asked
+ * for here; whether it took is the engine's answer (the `agent.spawn` hook).
+ */
+const pinOf = async (e: { subagentType: string; model?: string; fork?: boolean; resume?: unknown }): Promise<{ from: string; to: string } | undefined> => {
+  if (!e.model || e.fork || e.resume !== undefined) {
+    return undefined
+  }
+
+  const to = (await definitions)?.get(e.subagentType)?.model
+
+  return to !== undefined && !namesModel(e.model, to) ? { from: e.model, to } : undefined
+}
+
+/**
+ * A guarded role's step on an effort its definition does not say: one toast
+ * and the row's flag, once per agent. Nothing is changed: the engine honours
+ * the definition's `effort:`, and CLAUDE_CODE_EFFORT_LEVEL beats it; the flag
+ * makes the exception visible. The role is the pane's (none for an agent it
+ * never saw). Never throws.
+ */
+const flagEffort = async ($: EngineInterface, agentId: string | undefined, effort: unknown): Promise<void> => {
+  if (agentId === undefined || effort === undefined || flagged.has(agentId)) {
+    return
+  }
+
+  try {
+    const roles = await definitions
+    const state = roles?.size ? await read($, fleet) : undefined
+    const role = state ? roleOf(state, agentId) : undefined
+    const expected = role === undefined ? undefined : roles?.get(role)?.effort
+    const actual = String(effort)
+
+    if (expected === undefined || actual === expected) {
+      return
+    }
+
+    flagged.add(agentId)
+
+    if (state?.nodes.find(one => one.id === agentId)?.effortFlag === undefined) {
+      toast($, `effort ${actual} on ${role} (definition says ${expected})`)
+      await apply($, [{ type: 'effort-flag', agentId, effort: actual, expected }])
+    }
+  } catch {
+    // Bookkeeping only: the request goes on.
+  }
+}
+
 /**
  * The rendered guard's refusal of this call, or none: no script, no `node`,
  * an exit other than 2 or a run past the clock let it go on. The directory
@@ -433,7 +524,10 @@ const tzOffsetAt = (at: number): number => {
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
+    // Not awaited: a spawn waits for the definitions, the session's start does not.
+    definitions = readRoleDefinitions($, e.cwd).catch(() => new Map())
     await start($, options)
+    await noticeEffortLevel($)
 
     return next(e)
   })
@@ -457,11 +551,29 @@ export const register: Register = (on, options) => {
     return { text: opened.isPlaced ? 'Fleet pane opened.' : `Fleet pane waits: ${opened.reason}` }
   }).catch(() => ({ text: 'Fleet pane: the command failed (the debug log says why).' }))
 
+  // The pin rewrites the spawn before the engine resolves its model, and took only when the engine's answer names
+  // the definition's model: a session that forces one subagent model outranks a hook's (the d.ts, AgentSpawnInput's
+  // `model`), said once in a toast and never counted; an answer with no model is not taken either, and says nothing.
+  // The bookkeeping follows the engine's answer.
   on('agent.spawn', async ($, e, next) => {
-    const result = await next(e)
+    const pin = await pinOf(e).catch(() => undefined)
+    const result = await next(pin ? { ...e, model: pin.to } : e)
 
-    if (result.deny === undefined && result.agentId !== undefined) {
-      await apply($, [{ type: 'spawn', agentId: result.agentId, role: e.subagentType, parentId: e.parentAgentId, model: result.model }])
+    if (result.deny === undefined) {
+      const took = pin !== undefined && namesModel(result.model, pin.to)
+
+      if (took) {
+        toast($, `pinned ${e.subagentType} to ${pin.to}`)
+      } else if (pin && typeof result.model === 'string' && result.model) {
+        toast($, `${e.subagentType} runs on ${result.model}: the session's forced subagent model outranks the definition's ${pin.to}`)
+      }
+
+      const spawned: ModelEvent[] = result.agentId === undefined ? [] : [{ type: 'spawn', agentId: result.agentId, role: e.subagentType, parentId: e.parentAgentId, model: result.model }]
+      const pinned: ModelEvent[] = took ? [{ type: 'pinned', agentId: result.agentId, from: pin.from, to: pin.to }] : []
+
+      if (spawned.length + pinned.length > 0) {
+        await apply($, [...spawned, ...pinned])
+      }
     }
 
     return result
@@ -469,6 +581,7 @@ export const register: Register = (on, options) => {
 
   on('turn.step', async function* ($, e, next) {
     await noteStep($, e.agentId ?? MAIN, e.model, e.effort === undefined ? undefined : String(e.effort))
+    await flagEffort($, e.agentId, e.effort)
 
     return yield* next(e)
   })

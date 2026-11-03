@@ -16,7 +16,7 @@
  * is a number or a constant. No script, no event attribute, no external
  * reference: the only URI is the SVG namespace.
  */
-import { graphBoxes, graphColumns, layout, plainRows, touchedLines, touchedText } from './layout.mjs';
+import { graphBoxes, graphColumns, layout, noteLines, noteText, plainRows } from './layout.mjs';
 import { MAIN } from './model.mjs';
 import { clean, cut } from './text.mjs';
 
@@ -161,8 +161,8 @@ function around(agent, orch, unit, level, sides, width) {
  * whose call is in flight to its unit (the orchestrator straight down, an
  * agent around the orchestrator's box) — live when the agent runs or the call
  * is in flight; every link drawn from caller to callee; under the units, the
- * touched records, dim (layout's touchedLines). `alt` is the
- * terminal's drawing, 40 rows, at the columns that show every box the image
+ * notes — pins, effort flags, touched records — dim (layout's noteLines).
+ * `alt` is the terminal's drawing, 40 rows, at the columns that show every box the image
  * shows; `tzOffsetAt(at)` is `Date.prototype.getTimezoneOffset` at that
  * instant. `animate` adds the motion. `width` and `height` are the document's
  * size in CSS pixels.
@@ -205,11 +205,11 @@ export function svgOf(state, { tzOffsetAt = () => 0, animate = false } = {}) {
   y += BOX_H + gap;
   const unitPlaces = row(units.length, BOX_W, y, width);
   y += BOX_H;
-  // Under the units, dim and left-aligned: the touched records (guard v2), each cut to the cells the drawing's width holds.
-  const touched = touchedLines(state);
-  const touchedCells = Math.floor((width - 2 * MARGIN) / (0.6 * FONT_PX));
-  const notes = touched.map((line, i) => `<text x="${MARGIN}" y="${y + PAD_PX + FONT_PX + i * LINE_PX}">${lineText(touchedText(line, touchedCells), touchedCells)}</text>`);
-  if (touched.length) y += PAD_PX + touched.length * LINE_PX;
+  // Under the units, dim and left-aligned: the notes (pins, effort flags, touched records), each cut to the cells the drawing's width holds.
+  const lines = noteLines(state);
+  const noteCells = Math.floor((width - 2 * MARGIN) / (0.6 * FONT_PX));
+  const notes = lines.map((line, i) => `<text x="${MARGIN}" y="${y + PAD_PX + FONT_PX + i * LINE_PX}">${lineText(noteText(line, noteCells), noteCells)}</text>`);
+  if (lines.length) y += PAD_PX + lines.length * LINE_PX;
   const height = y + MARGIN;
 
   /** @type {Link[]} */

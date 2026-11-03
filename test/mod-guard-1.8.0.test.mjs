@@ -145,15 +145,15 @@ test('the Svg draws the touched line dim under the units and grows by its row; t
   assert.ok(with1.alt.split('\n').includes(SHORT));
 });
 
-test('past six touched lines the graph and the Svg show the newest six under a "+K more" line', () => {
+test('past six notes the graph and the Svg show the newest six under a "+K more notes" line', () => {
   let state = initialState(T0);
   for (let i = 1; i <= 8; i++) {
     const id = `${i}`.repeat(8);
     state = run(state, { type: 'spawn', at: T0, agentId: id, role: 'omelette-tester' }, { type: 'stop', at: T0 + i, agentId: id, touched: `touched: .omelette/reports/touched-omelette-tester-${id}.md — ${i} files` });
   }
-  const rows = plainRows(drawn(state, 160)).filter((row) => row.includes('touched'));
-  assert.deepEqual(rows, ['+2 more touched', ...[3, 4, 5, 6, 7, 8].map((i) => `touched: .omelette/reports/touched-omelette-tester-${`${i}`.repeat(8)}.md — ${i} files`)]);
+  const rows = plainRows(drawn(state, 160)).filter((row) => row.includes('touched') || row.includes('more notes'));
+  assert.deepEqual(rows, ['+2 more notes', ...[3, 4, 5, 6, 7, 8].map((i) => `touched: .omelette/reports/touched-omelette-tester-${`${i}`.repeat(8)}.md — ${i} files`)]);
   const { source } = svgOf(state);
   assert.equal((source.match(/ files<\/text>/g) ?? []).length, 6);
-  assert.ok(source.includes('>+2 more touched</text>'));
+  assert.ok(source.includes('>+2 more notes</text>'));
 });
