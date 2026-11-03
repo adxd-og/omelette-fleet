@@ -206,14 +206,14 @@ test('E: PreCompact writes `unknown` for a trigger that is not manual or auto, a
   const p = guardProject(g, 'trigger-pre');
   assert.equal(fire(g, preCompact(p, { trigger: FORGED_TRIGGER })).code, 0);
   const text = ledgerText(p);
-  assert.match(text, /^## Compaction \S+ \(trigger: unknown\) — re-read this ledger before continuing$/m, text);
+  assert.match(text, /^## Compaction \S+ \(trigger: unknown\) — branch \S+ · HEAD \S+ · \S+ dirty files — re-read this ledger before continuing$/m, text);
   assert.doesNotMatch(text, /^## Handoff/m, 'a trigger may never put a heading into the ledger');
 
   for (const trigger of ['manual', 'auto']) {
     const q = guardProject(g, `trigger-${trigger}`);
     assert.equal(fire(g, preCompact(q, { trigger })).code, 0);
     const t = ledgerText(q);
-    assert.match(t, new RegExp(`^## Compaction \\S+ \\(trigger: ${trigger}\\) — re-read`, 'm'), t);
+    assert.match(t, new RegExp(`^## Compaction \\S+ \\(trigger: ${trigger}\\) — branch \\S+ · HEAD \\S+ · \\S+ dirty files — re-read`, 'm'), t);
   }
 });
 

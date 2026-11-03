@@ -74,7 +74,7 @@ test('PreCompact sweeps first, then stamps only the ledgers left open or untrack
   const r = fire(guard(), { hook_event_name: 'PreCompact', trigger: 'auto' }, p.dir);
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out, HANDOFF_LINE);
-  const STAMP = /\n## Compaction \S+ \(trigger: auto\) — re-read this ledger before continuing\n$/;
+  const STAMP = /\n## Compaction \S+ \(trigger: auto\) — branch \S+ · HEAD \S+ · \S+ dirty files — re-read this ledger before continuing\n$/;
   assert.match(p.read('.omelette/ledger-open.md'), STAMP);
   assert.match(p.read('.omelette/ledger-old.md'), STAMP);
   assert.equal(p.read('.omelette/ledger-stuck.md'), ledger('feat/stuck'), 'closed and held in place by a collision: not stamped');

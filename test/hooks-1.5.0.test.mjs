@@ -119,7 +119,7 @@ test('handoff.enabled=true (the default) still stamps and still prints', () => {
   const { cwd } = p;
   const pre = runGuard({ hook_event_name: 'PreCompact', session_id: 's1', cwd, trigger: 'manual' }, p);
   assert.match(pre.out, /^HANDOFF: re-read \.omelette\/ledger-\*\.md before continuing\.\n$/);
-  assert.match(readFileSync(p.ledgerPath, 'utf8'), /\n## Compaction \S+ \(trigger: manual\) — re-read this ledger before continuing\n/);
+  assert.match(readFileSync(p.ledgerPath, 'utf8'), /\n## Compaction \S+ \(trigger: manual\) — branch \S+ · HEAD \S+ · \S+ dirty files — re-read this ledger before continuing\n/);
   const start = runGuard({ hook_event_name: 'SessionStart', session_id: 's1', cwd, source: 'compact' }, p);
   assert.match(start.out, /## Handoff/);
   assert.match(start.out, /^--- ledger-x\.md · last handoff ---$/m);

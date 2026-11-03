@@ -72,9 +72,10 @@
  *
  * Zero dependencies, Node >= 20, ESM — it is spawned as `node <this file>`.
  */
+import { execFileSync } from 'node:child_process';
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, delimiter as PATH_DELIMITER, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // A write to a pipe the harness has stopped reading fails ASYNCHRONOUSLY: the
@@ -1784,6 +1785,43 @@ const TRIGGERS = new Set(['manual', 'auto']);
 const triggerOf = (event) => (TRIGGERS.has(event.trigger) ? event.trigger : 'unknown');
 
 /**
+ * WHERE THE REPOSITORY STOOD (1.8.0): branch, short HEAD and the number of
+ * dirty files, so the stamp records facts and not only a time. Git runs in its
+ * own environment — PATH reduced to its absolute entries (git runs with cwd =
+ * the project, where a relative `bin` would be the project's own files), no
+ * optional locks, no prompt — under a 2 s wall clock each. Every value is held
+ * to the trigger's rule before it reaches the heading; anything else, and any
+ * failure, is `unknown`.
+ */
+const FACT = /^[\w./-]{1,64}$/;
+const GIT_TIMEOUT_MS = 2000;
+
+function gitEnv() {
+  const env = { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' };
+  for (const key of ['HOME', 'LANG', 'LC_ALL']) if (process.env[key] !== undefined) env[key] = process.env[key];
+  const path = String(process.env.PATH || '').split(PATH_DELIMITER).filter((p) => p && isAbsolute(p));
+  if (path.length) env.PATH = path.join(PATH_DELIMITER);
+  return env;
+}
+
+function repoFacts(cwd) {
+  const git = (args) => {
+    try {
+      return execFileSync('git', args, { cwd, env: gitEnv(), timeout: GIT_TIMEOUT_MS, killSignal: 'SIGKILL', encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      return null;
+    }
+  };
+  const fact = (out) => (out !== null && FACT.test(out.trim()) ? out.trim() : 'unknown');
+  const status = git(['status', '--porcelain']);
+  return {
+    branch: fact(git(['rev-parse', '--abbrev-ref', 'HEAD'])),
+    head: fact(git(['rev-parse', '--short', 'HEAD'])),
+    dirty: status === null ? 'unknown' : String(status.split('\n').filter((l) => l.length > 0).length),
+  };
+}
+
+/**
  * Sweep, then mark every ledger left open or untracked, then say so on stdout —
  * unless `handoff.enabled` is false. The sweep comes FIRST: a ledger it
  * archives is not stamped, and one it found closed but could not move is
@@ -1800,7 +1838,8 @@ async function preCompact(event) {
   const mod = await loadLedgerModule();
   const swept = mod ? runSweep(mod, str(event.cwd, process.cwd())) : null;
   const skip = closedNames(swept);
-  appendToLedgers(found, `\n## Compaction ${new Date().toISOString()} (trigger: ${triggerOf(event)}) — re-read this ledger before continuing\n`, skip);
+  const { branch, head, dirty } = repoFacts(str(event.cwd, process.cwd()));
+  appendToLedgers(found, `\n## Compaction ${new Date().toISOString()} (trigger: ${triggerOf(event)}) — branch ${branch} · HEAD ${head} · ${dirty} dirty files — re-read this ledger before continuing\n`, skip);
   if (!ledgerNames(found.dir).some((n) => !skip.has(n))) return;
   say(process.stdout, `${HANDOFF}\n`);
 }

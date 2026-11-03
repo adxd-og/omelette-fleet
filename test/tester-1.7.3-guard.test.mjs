@@ -23,7 +23,7 @@ const REAL_LEDGER = pathToFileURL(join(ROOT, 'core', 'ledger.mjs')).href;
 const HOME = mkdtempSync(join(tmpdir(), 'omelette-home-tester173-'));
 const REFUSAL = 'omelette-coder never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead';
 const HANDOFF_LINE = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.\n';
-const STAMP = /\n## Compaction \S+ \(trigger: auto\) — re-read this ledger before continuing\n$/;
+const STAMP = /\n## Compaction \S+ \(trigger: auto\) — branch \S+ · HEAD \S+ · \S+ dirty files — re-read this ledger before continuing\n$/;
 const bytes = (s) => Buffer.byteLength(s, 'utf8');
 
 function guard({ pkg = ROOT, enabled = true } = {}) {

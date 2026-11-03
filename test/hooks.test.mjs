@@ -12,9 +12,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { HOOK_FILES, HOOK_MARKER, parseHookMarker, renderHookFile } from '../core/rules.mjs';
 
 /** The refusal names the agent it caught, so two guarded roles never read each other's line. */
@@ -29,10 +29,10 @@ function guard() {
 }
 
 /** One hook invocation: the event on stdin, the answer as code/stdout/stderr. */
-function fire(path, input, cwd) {
+function fire(path, input, cwd, env) {
   const r = spawnSync(process.execPath, [path], {
     input: typeof input === 'string' ? input : JSON.stringify(input),
-    encoding: 'utf8', cwd, timeout: 20000,
+    encoding: 'utf8', cwd, env, timeout: 20000,
   });
   assert.equal(r.signal, null, `the guard hung: ${r.stdout}${r.stderr}`);
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
@@ -325,11 +325,99 @@ test('PreCompact: every ledger gets the re-read marker and the handoff line goes
     assert.ok(text.startsWith(`# ${l}\n`), 'the ledger is appended to, never rewritten');
     assert.match(
       text.slice(`# ${l}\n`.length),
-      /^\n## Compaction \d{4}-\d{2}-\d{2}T[\d:.]+Z \(trigger: manual\) — re-read this ledger before continuing\n$/,
+      /^\n## Compaction \d{4}-\d{2}-\d{2}T[\d:.]+Z \(trigger: manual\) — branch \S+ · HEAD \S+ · \S+ dirty files — re-read this ledger before continuing\n$/,
     );
   }
   assert.equal(readFileSync(join(proj, '.omelette', 'notes.md'), 'utf8'), 'untouched\n');
   assert.equal(readFileSync(join(proj, '.omelette', 'ledger-old.txt'), 'utf8'), 'untouched\n');
+});
+
+/* ── 1.8.0 · the stamp carries facts: branch, HEAD and the dirty count ─────── */
+
+/** Where the real git lives, so a test PATH can hold it and nothing else of the operator's. */
+const GIT_DIR = (() => {
+  const r = spawnSync('git', ['--exec-path'], { encoding: 'utf8' });
+  const w = spawnSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' });
+  return r.status === 0 && w.status === 0 ? dirname(w.stdout.trim()) : null;
+})();
+
+/** A git repo on `branch` with one commit; `.omelette/` is ignored, as a project holding a ledger keeps it. */
+function stampRepo(g, name, branch) {
+  const proj = join(g.dir, name);
+  mkdirSync(join(proj, '.omelette'), { recursive: true });
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (...args) => {
+    const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: proj, env, encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout;
+  };
+  git('init', '-q', '-b', branch);
+  writeFileSync(join(proj, '.gitignore'), '.omelette/\n');
+  writeFileSync(join(proj, 'a.txt'), 'a\n');
+  writeFileSync(join(proj, 'b.txt'), 'b\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'one');
+  writeFileSync(join(proj, '.omelette', 'ledger-x.md'), '# x\n');
+  return { proj, git };
+}
+
+const stampOf = (proj) => readFileSync(join(proj, '.omelette', 'ledger-x.md'), 'utf8');
+
+test('PreCompact (1.8.0): the stamp names the branch, the short HEAD and the number of dirty files', { skip: !GIT_DIR && 'git is not installed' }, () => {
+  const g = guard();
+  const { proj } = stampRepo(g, 'facts', 'feat/x');
+  writeFileSync(join(proj, 'a.txt'), 'a2\n');
+  writeFileSync(join(proj, 'b.txt'), 'b2\n');
+  const r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'manual', cwd: proj });
+  assert.equal(r.code, 0, r.err);
+  assert.match(stampOf(proj), /\n## Compaction \S+ \(trigger: manual\) — branch feat\/x · HEAD [0-9a-f]{7,12} · 2 dirty files — re-read this ledger before continuing\n$/);
+});
+
+test('PreCompact (1.8.0): without git on PATH every fact is `unknown`, and the stamp still lands', () => {
+  const g = guard();
+  const proj = join(g.dir, 'nogit');
+  mkdirSync(join(proj, '.omelette'), { recursive: true });
+  writeFileSync(join(proj, '.omelette', 'ledger-x.md'), '# x\n');
+  const empty = mkdtempSync(join(tmpdir(), 'omelette-nogit-'));
+  const r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'manual', cwd: proj }, proj, { ...process.env, PATH: empty });
+  assert.equal(r.code, 0, r.err);
+  assert.match(stampOf(proj), /— branch unknown · HEAD unknown · unknown dirty files — re-read this ledger before continuing\n$/);
+});
+
+test('PreCompact (1.8.0): a branch name outside ^[\\w./-]{1,64}$ is `unknown`; a detached HEAD is `HEAD`', { skip: !GIT_DIR && 'git is not installed' }, () => {
+  const g = guard();
+  const { proj: uber } = stampRepo(g, 'uber', 'über');
+  let r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'manual', cwd: uber });
+  assert.equal(r.code, 0, r.err);
+  assert.match(stampOf(uber), /— branch unknown · HEAD [0-9a-f]{7,12} · 0 dirty files —/);
+
+  // git itself refuses `we ird` as a branch name, so a git on PATH says it.
+  const { proj: weird } = stampRepo(g, 'weird', 'main');
+  const fake = mkdtempSync(join(tmpdir(), 'omelette-fakegit-'));
+  writeFileSync(join(fake, 'git'), '#!/bin/sh\nif [ "$2" = "--abbrev-ref" ]; then echo "we ird"; else echo "abc1234"; fi\n');
+  chmodSync(join(fake, 'git'), 0o755);
+  r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'manual', cwd: weird }, weird, { ...process.env, PATH: fake });
+  assert.equal(r.code, 0, r.err);
+  assert.match(stampOf(weird), /— branch unknown · HEAD abc1234 · 1 dirty files —/);
+
+  const { proj: detached, git } = stampRepo(g, 'detached', 'main');
+  git('checkout', '-q', '--detach');
+  r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'manual', cwd: detached });
+  assert.equal(r.code, 0, r.err);
+  assert.match(stampOf(detached), /— branch HEAD · HEAD [0-9a-f]{7,12} · 0 dirty files —/);
+});
+
+test('PreCompact (1.8.0): a relative PATH entry is dropped — a `bin/git` in the project never answers for git', { skip: (!GIT_DIR || process.platform === 'win32') && 'git and a POSIX shell' }, () => {
+  const g = guard();
+  const { proj } = stampRepo(g, 'relpath', 'feat/real');
+  mkdirSync(join(proj, 'bin'));
+  writeFileSync(join(proj, 'bin', 'git'), '#!/bin/sh\necho evil\n');
+  chmodSync(join(proj, 'bin', 'git'), 0o755);
+  const r = fire(g.path, { hook_event_name: 'PreCompact', trigger: 'manual', cwd: proj }, proj, { ...process.env, PATH: ['bin', GIT_DIR, '/usr/bin'].join(delimiter) });
+  assert.equal(r.code, 0, r.err);
+  const text = stampOf(proj);
+  assert.match(text, /— branch feat\/real · HEAD [0-9a-f]{7,12} · /);
+  assert.doesNotMatch(text, /evil/);
 });
 
 test('PreCompact: no ledger — no .omelette at all, or one without a ledger-*.md — is a clean, silent exit (1.2.0: the ledger is the opt-in)', () => {
