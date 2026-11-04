@@ -122,7 +122,7 @@ No faults in units that are both enabled and registered.
 Two more things ship with the operating model, both optional:
 
 - **The guard answers from two places.** The guard script refuses a sub-agent's `git` write, a rewrite of a ledger and a reviewer's write outside its report, wired as a settings hook; the fleet pane mod runs the same rendered script on `tool.call` and answers first ([ORCHESTRATION, "The two deliveries"](docs/ORCHESTRATION.md#the-two-deliveries)). The guard is containment for the sub-agent roles, not a security boundary.
-- **The handoff comes back as a context block.** At a session's start and again after a compaction or a `/clear`, the mod hands the session the open ledger's last handoff, the decisions register and the backlog's map as one context block ([ORCHESTRATION, "Ledger and handoff"](docs/ORCHESTRATION.md#ledger-and-handoff)).
+- **The handoff comes back at every session start.** The open ledger's last handoff, the decisions register and the backlog's map arrive as one `SessionStart` context entry: the settings hook's after a compaction or a `/clear`, and the mod's when the hook did not print (startup, resume, or no hook wired) — one copy by construction, and nothing reaches a sub-agent ([ORCHESTRATION, "Ledger and handoff"](docs/ORCHESTRATION.md#ledger-and-handoff)).
 
 ## How it fits together
 
