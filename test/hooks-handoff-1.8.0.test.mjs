@@ -100,3 +100,19 @@ test('the newest open ledger\'s handoff is reserved first: with a 6 KB register 
   assert.ok(two.startsWith(`${MARKER}\n${zeta}[… truncated]\n\n--- .omelette/decisions.md · decisions register ---\n`), two.slice(0, 300));
   assert.equal(two.includes('ledger-alpha.md'), false, 'the older handoff is dropped whole');
 });
+
+// 1.8.0 release fix, round 3: the register-error heading echoed the refused value whole,
+// so a `register:` line of 3 000 control bytes printed 18 KB, over the 12 KB cap.
+test('a refused register: line is named in one bounded heading, its value cut — the print stays under 12 KB', () => {
+  const p = project({ git: false });
+  p.write('.omelette/decisions.md', `register: ${'\x01'.repeat(3000)}\n`);
+  p.write('.omelette/ledger-x.md', '# x\n## Handoff\nnext: fix the register line\n');
+  const r = fire(guard(), 'clear', p.dir);
+  assert.equal(r.code, 0, r.err);
+  const text = JSON.parse(r.out).hookSpecificOutput.additionalContext;
+  assert.ok(bytes(text) <= CAP, `${bytes(text)} bytes`);
+  const heading = text.split('\n').find((l) => l.startsWith('--- decisions register not printed: register: '));
+  assert.ok(heading, text.slice(0, 400));
+  assert.match(heading, /… refused \([^()]*\) ---$/, 'the value cut with …, the reason kept');
+  assert.ok(bytes(heading) < 1500, `${bytes(heading)} bytes`);
+});

@@ -468,6 +468,9 @@ const ASSIGNMENT_WORD = /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/;
  * stripped comments without knowing heredocs, and took a `<<'#'` terminator line.
  * A word starts after a bare `(` or `)` too, which the shell reads as operators,
  * and after an arithmetic `((…))`: `(echo a)#c <<X` is a comment, no heredoc.
+ * Not after the `)` of an array assignment, `a=(1 2)#x`: bash reads `#x` as
+ * part of the word and runs what follows, zsh reads a comment — the rest is
+ * read as commands, and no heredoc body is skipped from there.
  *
  * A HEREDOC BODY IS SKIPPED ONLY WHERE BOTH SHELLS AGREE (bash 3.2 and zsh) on
  * where it starts and ends. `<<` is an operator outside quotes, escapes,
@@ -514,6 +517,11 @@ function tokenize(command) {
   // What the word so far is, kept per character (a regexp over a growing word is quadratic): 0 nothing
   // or only `(`s, 1 a plain name after them (a `[` behind it may open bash's subscript), 2 anything else.
   let wordShape = 0;
+  // An array assignment, `name=(…)` or `name+=(…)`: the index of an `=` that ends `name` or `name+`, of a `+`
+  // after `name`, and how deep the open array's parentheses are (0: none open).
+  let assignAt = -1;
+  let plusAt = -1;
+  let arrayDepth = 0;
   let skipBodies = true; //   false from the first heredoc the guard cannot place as both shells do
   const pendingHeredocs = []; // `<<`/`<<-` read on this line, their bodies start at the next newline
   const budget = { left: OPAQUE_SCAN_BUDGET }; // shared by every opaqueEnd this command makes
@@ -675,7 +683,16 @@ function tokenize(command) {
     }
     if (/\s/.test(c)) { push(); continue; }
     text += c;
-    operatorEnd = c === '(' || c === ')';
+    if (c === '(' && assignAt >= 0 && real(assignAt + 1) === i) { arrayDepth = 1; operatorEnd = false; } // `a=(`
+    else if (arrayDepth > 0 && (c === '(' || c === ')')) {
+      // The array's parentheses are the assignment's, no operators: a `#` glued to its closing `)` is part of
+      // the word to bash and a comment to zsh — the shells part on the rest of the line, so no body is skipped.
+      arrayDepth += c === '(' ? 1 : -1;
+      operatorEnd = false;
+      if (!arrayDepth && command[real(i + 1)] === '#') skipBodies = false;
+    } else operatorEnd = c === '(' || c === ')';
+    if (c === '=' && (wordShape === 1 || (plusAt >= 0 && real(plusAt + 1) === i))) assignAt = i;
+    if (c === '+' && wordShape === 1) plusAt = i;
     if (wordShape === 0) wordShape = c === '(' ? 0 : /[A-Za-z_]/.test(c) ? 1 : 2;
     else if (wordShape === 1 && !/\w/.test(c)) wordShape = 2;
   }
@@ -1655,18 +1672,34 @@ function cdTarget({ name, args }) {
 }
 
 /**
+ * How long a directory the guard follows a `cd` chain into. Past it the
+ * directory is unknown and the bare name is compared: no real chain gets there
+ * (`cd a && ` repeated thousands of times does), and it keeps every resolve
+ * short, so a chain is read in one linear pass.
+ */
+const CD_PATH_MAX = 4096;
+
+/** Where `cd` leaves a shell that was in `here` — a known absolute path, or null for unknown: an absolute target is known again, a relative one only from a known `here`. */
+function cdInto(here, cd) {
+  const target = cdTarget(cd);
+  if (target === null || (here === null && !isAbsolute(target))) return null;
+  const next = resolve(here ?? '/', target);
+  return next.length > CD_PATH_MAX ? null : next;
+}
+
+/**
  * EVERY PATH A BASH COMMAND WRITES, as far as its words say: each redirection
  * that writes a file (`>`, `>|`, `>!`, `<>`, `&>` rewrite it; `>>`, `&>>`
- * append), and the commands in WORD_RULES. Each entry `{ path, name, dirs, rel,
+ * append), and the commands in WORD_RULES. Each entry `{ path, name, dir, rel,
  * kind }` — `kind` `write` or `append` — in the order the words come, `path`
  * always resolved against `cwd`. After a `cd` or `pushd` at command position, in
  * a project holding `.omelette/`, a relative path is written somewhere the event
  * does not say: `name` carries its bare name (the touched record says `after
- * cd`), `rel` the path as written, and `dirs` every directory the shell may be
- * in by then — the event's cwd (a `cd` that failed, or ran in a subshell) and
- * each one a `cd` before it went to, in turn (cdTarget) — or null once a `cd`
- * goes where the guard cannot follow. A word the guard cannot know as a path
- * (knownPath) is left out.
+ * cd`), `rel` the path as written, and `dir` the directory the `cd`s before it
+ * left the shell in (cdInto) — or null where the guard cannot follow one. ONE
+ * PASS: the writes and the `cd`s are walked together in word order, one running
+ * directory updated per `cd`, so a chain of thousands costs what its words cost.
+ * A word the guard cannot know as a path (knownPath) is left out.
  *
  * Top-level words only: what a quoted `sh -c` or a substitution runs is not
  * read here. A command whose brackets spent the scan budget is not read at all:
@@ -1678,42 +1711,39 @@ function bashWrites(command, cwd) {
   const commands = simpleCommands(tokens);
   const cds = projectRoot(cwd).omelette ? commands.filter(({ name }) => name === 'cd' || name === 'pushd') : [];
   const afterCd = (at) => cds.length > 0 && cds[0].at < at;
-  const dirsAt = (at) => {
-    const dirs = [cwd];
-    for (const cd of cds) {
-      if (cd.at >= at) break;
-      const target = cdTarget(cd);
-      if (target === null) return null;
-      dirs.push(resolve(dirs[dirs.length - 1], target));
-    }
-    return dirs;
-  };
   const found = [];
   const add = (word, kind, at) => {
     const path = knownPath(closed(word));
     if (path === null) return;
-    const moved = afterCd(at) && !isAbsolute(path);
-    found.push({ path: resolve(cwd, path), name: moved ? basename(path) : undefined, dirs: moved ? dirsAt(at) : undefined, rel: path, kind, at });
+    found.push({ path: resolve(cwd, path), name: afterCd(at) && !isAbsolute(path) ? basename(path) : undefined, rel: path, kind, at });
   };
   for (const { path, op, at } of targets) add(path, APPEND_REDIRECTS.has(op) ? 'append' : 'write', at);
   for (const { name, args, at } of commands) {
     const rule = WORD_RULES.get(name);
     if (rule) for (const { word, kind } of rule(args, (dest) => intoDirectory(dest, cwd, afterCd(at)))) add(word, kind, at);
   }
-  return found.sort((a, b) => a.at - b.at).map(({ path, name, dirs, rel, kind }) => ({ path, name, dirs, rel, kind }));
+  found.sort((a, b) => a.at - b.at);
+  let here = cwd;
+  let k = 0;
+  return found.map(({ path, name, rel, kind, at }) => {
+    for (; k < cds.length && cds[k].at < at; k++) here = cdInto(here, cds[k]);
+    return { path, name, dir: name === undefined ? undefined : here, rel, kind };
+  });
 }
 
 /**
  * The first curated file the command REWRITES (rewritesCurated), or null. After
- * a `cd` the path is resolved against every directory the shell may be in
- * (`dirs`), and named by its bare `name`; only where a `cd` went somewhere the
- * guard cannot follow is the bare name compared (`cd "$d" && … > backlog.md`).
+ * a `cd` the path is resolved against the directory it left the shell in (`dir`)
+ * and against the event's cwd (the `cd` may have failed, or run in a subshell),
+ * and named by its bare `name`; only where a `cd` went somewhere the guard
+ * cannot follow is the bare name compared (`cd "$d" && … > backlog.md`).
  * `found` is bashWrites' answer, when the caller has it.
  */
 function bashTruncates(command, cwd, found = bashWrites(command, cwd)) {
-  const rewrites = ({ path, name, dirs, rel }) => {
+  const rewrites = ({ path, name, dir, rel }) => {
     if (name === undefined) return rewritesCurated(cwd, path);
-    return dirs ? dirs.some((dir) => rewritesCurated(cwd, resolve(dir, rel))) : rewritesCurated(cwd, name);
+    if (dir === null) return rewritesCurated(cwd, name);
+    return rewritesCurated(cwd, path) || rewritesCurated(cwd, resolve(dir, rel));
   };
   const hit = found.find((w) => w.kind === 'write' && rewrites(w));
   return hit ? hit.name ?? hit.path : null;
@@ -2371,11 +2401,18 @@ function ledgerSections(dir, names, swept) {
  *
  * `room` is what the section may take, heading and notes included: where 6 KB
  * of tail does not fit it (the newest handoff and the backlog came first), the
- * tail is cut to what does, under REGISTER_CUT_NOTE.
+ * tail is cut to what does, under REGISTER_CUT_NOTE. The one-heading answers are
+ * bounded too: a refused `register:` line's value is shown cut to
+ * REGISTER_VALUE_SHOWN characters (registerError), and a heading that does not
+ * fit `room` is no section.
  */
 function registerSection(register, room = Infinity) {
-  if (register === null) return `--- decisions register not printed: ${MODULE_MISSING} ---\n`;
-  if (register.error) return `--- decisions register not printed: ${register.error} ---\n`;
+  const notPrinted = (why) => {
+    const section = `--- decisions register not printed: ${why} ---\n`;
+    return Buffer.byteLength(section, 'utf8') <= Math.min(room, REGISTER_PRINT_MAX) ? section : '';
+  };
+  if (register === null) return notPrinted(MODULE_MISSING);
+  if (register.error) return notPrinted(registerError(String(register.error)));
   const heading = `--- ${clean(register.rel)} · decisions register ---\n`;
   // The section is at most the heading, a note and its newline, `max` bytes of lines and the last newline.
   const over = (note, max) => Buffer.byteLength(heading + note, 'utf8') + 1 + max + 1 > room;
@@ -2393,6 +2430,24 @@ function registerSection(register, room = Infinity) {
   if (read.tailed && lines[0] === '') lines.shift();
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
   return `${heading}${read.tailed ? `${note}\n` : ''}${lines.join('\n')}\n`;
+}
+
+/**
+ * A register error as the print shows it: core/ledger.mjs echoes the refused
+ * value (`register: <value> refused (<reason>)`), and a value of 3 000 control
+ * bytes made an 18 KB heading. The value is cut to REGISTER_VALUE_SHOWN
+ * characters with `…`, the reason kept; an error of any other shape is cut the
+ * same way whole. Control characters are escaped (clean).
+ */
+const REGISTER_VALUE_SHOWN = 200;
+function registerError(error) {
+  const cut = (text) => {
+    const chars = [...text.slice(0, 4 * REGISTER_VALUE_SHOWN)];
+    return chars.length > REGISTER_VALUE_SHOWN ? `${chars.slice(0, REGISTER_VALUE_SHOWN).join('')}…` : text;
+  };
+  const refused = / refused \([^()]*\)$/.exec(error);
+  if (error.startsWith('register: ') && refused) return clean(`register: ${cut(error.slice(10, refused.index))}${refused[0]}`);
+  return clean(cut(error));
 }
 
 /** WHAT COMES NEXT: the first table of `.omelette/backlog.md`, or no section. */

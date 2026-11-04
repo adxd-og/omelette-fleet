@@ -2119,3 +2119,32 @@ test('release review (1.8.0, round 2): a long `a[a[a[…` word is read in linear
   assert.equal(r.code, 0, r.err);
   assert.ok(ms < 1000, `1 MB of a[ took ${ms} ms`);
 });
+
+/*
+ * 1.8.0 release fix, round 3 — the re-reviews' findings, each verified by firing.
+ */
+test('release review (1.8.0, round 3): a `#` glued to an array assignment\'s `)` opens no comment, and a heredoc after it skips nothing', () => {
+  releaseRows([
+    ['a=(1 2)#x; git commit -m y', 2], //            bash: `#x` is part of the word, git runs; zsh: a comment
+    ['a+=(1 2)#x; git commit -m y', 2], //           bash: git runs; zsh: a comment
+    ['a=("x)" 2)#x; git commit -m y', 2], //         bash: the quoted `)` closes nothing, git runs; zsh: a comment
+    ['a=(1 2)#x <<X\ngit commit -m x\nX\n', 2], //   bash: a heredoc, git is body; zsh: a comment, git runs — unplaceable
+    ['(echo a)#c <<X\ngit commit -m x\n', 2], //     both: a comment after the subshell's `)`, git runs
+    ['a=(1 2) #x; git commit -m y', 0], //           both: a comment
+  ]);
+});
+
+test('release review (1.8.0, round 3): a `cd` chain is followed in one linear pass — 256 KB of `cd a && ` in under 1 s', () => {
+  const g = guard();
+  const { dir } = curatedProject();
+  const chain = 'cd a && '.repeat(32 * 1024);
+  // Past CD_PATH_MAX the directory is unknown, so the bare name is compared: backlog.md is curated, out.txt is not.
+  for (const [command, code] of [[`${chain}echo x > backlog.md`, 2], [`${chain}echo x > out.txt`, 0]]) {
+    const started = Date.now();
+    const r = fire(g.path, preToolUse({ agent_type: undefined, cwd: dir, tool_input: { command } }), dir);
+    const ms = Date.now() - started;
+    assert.equal(r.code, code, r.err);
+    assert.equal(r.err.trim(), code === 2 ? BASH_CURATED('backlog.md') : '');
+    assert.ok(ms < 1000, `256 KB of cd a && took ${ms} ms`);
+  }
+});

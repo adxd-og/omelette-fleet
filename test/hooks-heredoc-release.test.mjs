@@ -134,3 +134,17 @@ test('release (budget): a long `a[a[a[…` word is read in linear time', () => {
   assert.equal(r.code, 0, r.err);
   assert.ok(r.ms < 4000, `320 KB of a[a[… took ${r.ms} ms`);
 });
+
+// Round 3: the array-assignment rule is the assignment's alone. A `#` glued to a SUBSHELL's or an
+// arithmetic command's closing parenthesis is still a comment in both shells (neither runs the git
+// line behind it): read as an array it would open a word and expose that line.
+test('release (round 3): a `#` glued to a subshell\'s `)` is a comment — the array rule stops at `name=(`', () => {
+  check([
+    [`(echo a)#c; ${G}`, 0],
+    [`((1))#x; ${G}`, 0],
+    [`(a=(1))#x; ${G}`, 0],
+    [`a=(1 2) #x; ${G}`, 0],
+    [`a=(1 2)#x; ${G}`, 2],
+    [`b+=(1)#y; git push`, 2],
+  ]);
+});
