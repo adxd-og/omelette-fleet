@@ -69,15 +69,17 @@ test("fence: another project's reports/ is not this project's", () => {
   assert.equal(write(other, join(other, '.omelette', 'reports', 'x-review.md')).code, 0, 'the same path from its own cwd');
 });
 
-test('fence: it fails closed — a cwd that does not exist, a project with no .omelette/', () => {
+// 1.8.0 release fix (branch review F8): a project with no .omelette/ yet takes its
+// first report — an absent directory is no link — where this row refused it.
+test('fence: it fails closed on a cwd that does not exist; a project with no .omelette/ takes its first report', () => {
   const dir = project();
   const gone = write(join(dir, 'nope'), join(dir, 'nope', '.omelette', 'reports', 'x-review.md'));
   assert.equal(gone.code, 2, gone.err);
   assert.equal(gone.err, FENCE);
   const bare = mkdtempSync(join(tmpdir(), 'omelette-fence2-bare-'));
   const none = write(bare, '.omelette/reports/x-review.md');
-  assert.equal(none.code, 2, none.err);
-  assert.equal(none.err, FENCE);
+  assert.equal(none.code, 0, none.err);
+  assert.equal(none.err, '');
 });
 
 test('fence: the fence is the reviewer\'s alone — the main thread, the coder and the tester write where they like', () => {

@@ -1259,9 +1259,13 @@ test('PreToolUse: a git write inside nested quoting is refused at every depth; a
   }
   for (const base of ['git tag -l', 'echo hi']) {
     for (const depth of [1, 3, 6]) {
+      // Since the 1.8.0 release fix `\"` inside double quotes is read as the shell
+      // reads it, so every `sh -c` here is a real level: a listing six deep is past
+      // QUOTE_DEPTH and refused unread, as any text naming git past the last level is.
+      const code = base === 'git tag -l' && depth === 6 ? 2 : 0;
       const r = fire(g.path, preToolUse({ tool_input: { command: nest(base, depth) } }));
-      assert.equal(r.code, 0, `${base} at depth ${depth} should pass: ${r.out}${r.err}`);
-      assert.equal(r.err, '');
+      assert.equal(r.code, code, `${base} at depth ${depth} should exit ${code}: ${r.out}${r.err}`);
+      if (code === 0) assert.equal(r.err, '');
     }
   }
 });
@@ -1473,7 +1477,8 @@ test('PreToolUse: quoted git word — quotes hide neither the git word nor the s
 
 test('PreToolUse: brackets that spend the scan budget are refused whole, fast, as too deep to read', () => {
   const g = guard();
-  const spend = 'a['.repeat(100000);
+  // `$[` unclosed, over and over (until the 1.8.0 release fix `a[`, when any word's `[` opened a scan).
+  const spend = '$['.repeat(100000);
   for (const command of [
     spend, // no git word at all: the refusal is for the depth, not for git
     `${spend}; x=\${y:-1<<2}\ngit commit -m x\n`,
@@ -1539,7 +1544,8 @@ test('curated: a truncating Bash write to a curated file is refused for every ag
     // An expansion the guard does not perform is not a known path.
     ['cat > "$PWD/.omelette/ledger-x.md"', 0],
     [`cat > ${dir}/.omelette/ledger-x.md`, 2, '.omelette/ledger-x.md'],
-    // Review Focus 1: after a `cd` the directory is unknown, so the basename decides.
+    // After a `cd` the file is named as written; since the 1.8.0 release fix (G9) the
+    // path is resolved against where the `cd` went, the bare name only where it cannot be.
     ['cd .omelette && cat > ledger-x.md', 2, 'ledger-x.md'],
     ['cat > .omelette/notes.md', 0],
     ['cat > .omelette/ledger-x.md.bak', 0],
@@ -1606,7 +1612,8 @@ test('curated (round 2): a `cd` counts at command position only, and only a proj
   for (const [cwd, command, code, file] of [
     [dir, 'echo cd; echo y > backlog.md', 0],
     [dir, 'grep -n cd notes.md > backlog.md', 0],
-    [dir, 'cd x && make && echo y > backlog.md', 2, 'backlog.md'], // the accepted false refusal of Review Focus 1
+    // Review Focus 1's accepted false refusal until the 1.8.0 release fix (G9): `cd x` is followed, to x/backlog.md.
+    [dir, 'cd x && make && echo y > backlog.md', 0],
     [dir, 'pushd .omelette && tee backlog.md', 2, 'backlog.md'],
     [bare, 'cd x && make && echo y > backlog.md', 0],
     [bare, 'cd docs && echo y > decisions.md', 0],
@@ -1656,7 +1663,7 @@ test('curated (round 2): from a subdirectory the project is the nearest director
 test('curated (round 2): a command too deep to read is refused for every agent, the main thread included — nothing past the budget is read', () => {
   const g = guard();
   const { dir } = curatedProject();
-  const command = `${'a['.repeat(100000)}; cat > .omelette/backlog.md`;
+  const command = `${'$['.repeat(100000)}; cat > .omelette/backlog.md`; // `a[` until the 1.8.0 release fix
   for (const [agent, name] of [[undefined, 'main thread'], ['general-purpose', 'general-purpose'], ['omelette-coder', 'omelette-coder']]) {
     const r = fire(g.path, preToolUse({ agent_type: agent, cwd: dir, tool_input: { command } }), dir);
     assert.equal(r.code, 2, `${name}: ${r.err}`);
@@ -1891,14 +1898,25 @@ test('PreToolUse: heredoc (1b) — a continued operator line, a `#` delimiter an
 });
 
 // The 1b tester's two defects (session fix): a CRLF terminator is bash's word, and a
-// continued body is joined once, not sliced per piece.
-test('PreToolUse: heredoc (1b) — a CRLF terminator ends its body, and a long continued body is read in linear time', () => {
+// continued body is joined once, not sliced per piece. Since the 1.8.0 release fix
+// the CRLF rule is EXACT (guard review G4): the `\r` is part of the delimiter word
+// and the terminator line is compared raw, as both shells do — the 3e89dda strip
+// closed an LF operator's body at `EOF\r`, where a later `<<X` then hid the lines the
+// shell runs. Each row's comment is what bash 3.2.57 and zsh 5.9 did with a
+// logging fake `git` first on PATH.
+test('PreToolUse: heredoc (1b) — a CRLF terminator ends its body exactly where the shells end it, and a long continued body is read in linear time', () => {
   const g = guard();
   for (const [command, code] of [
-    ['cat <<EOF\r\nx\r\nEOF\r\ngit commit -m x\r\n', 2],
-    ['cat <<EOF\r\ngit commit -m x\r\nEOF\r\n', 0],
-    ['cat <<-EOF\r\n\tx\r\n\tEOF\r\ngit commit -m x\r\n', 2],
-    ['cat <<EOF\na\\\nb\\\nc\nEOF\ngit commit -m x\n', 2],
+    ['cat <<EOF\r\nx\r\nEOF\r\ngit commit -m x\r\n', 2], //          both: the word is `EOF\r`, `EOF\r` ends the body, git runs
+    ['cat <<EOF\r\ngit commit -m x\r\nEOF\r\n', 0], //               both: git is body
+    ['cat <<-EOF\r\n\tx\r\n\tEOF\r\ngit commit -m x\r\n', 2], //     both: git runs
+    ['cat <<EOF\na\\\nb\\\nc\nEOF\ngit commit -m x\n', 2], //        both: git runs
+    ['cat <<EOF\nEOF\r\ngit commit -m x\n', 0], //                   both: `EOF\r` is body under an LF operator, nothing runs
+    ['cat <<EOF\nEOF\r\ngit commit -m x\nEOF\n', 0], //              both: the body ends at `EOF`, git is body
+    ['cat <<EOF\r\nEOF\ngit commit -m y\nEOF\r\n', 0], //            both: `EOF` is body under a CRLF operator
+    ['cat <<EOF\nEOF\r\n: <<X\nEOF\ngit commit -m y\nX\n', 2], //    both: the body ends at `EOF`, git runs (the guard review's row)
+    ['cat <<EOF\r\nEOF\n: <<X\nEOF\r\ngit commit -m y\nX\n', 2], //  both: the body ends at `EOF\r`, git runs (the guard review's row)
+    ['cat <<EOF\\\r\nEOF\r\ngit commit -m y\nEOF\n', 2], //          both: `\` quotes the `\r`, the word is `EOF\r`, git runs
   ]) {
     const r = fire(g.path, preToolUse({ tool_input: { command } }));
     assert.equal(r.code, code, `${JSON.stringify(command)} should exit ${code}: ${r.out}${r.err}`);
@@ -1907,4 +1925,197 @@ test('PreToolUse: heredoc (1b) — a CRLF terminator ends its body, and a long c
   const r = fire(g.path, preToolUse({ tool_input: { command: `cat <<EOF\n${'x\\\n'.repeat(600_000)}y\nEOF\ngit commit -m x\n` } }));
   assert.equal(r.code, 2);
   assert.ok(Date.now() - started < 5000, `${Date.now() - started} ms for a 1.2 MB continued body (was 17.9 s)`);
+});
+
+/*
+ * 1.8.0 release review fix round — the guard review's G1–G4, G8, G9 and the
+ * branch review's F4, F6, F8. Every heredoc and quoting row was run through
+ * /bin/bash 3.2.57 and /bin/zsh 5.9 with a fake `git` first on PATH that logs
+ * its argv (and, for the main thread's rows, a project whose backlog was then
+ * read back); each row's comment is what the two shells did. The rule for the
+ * heredoc class: the guard skips a body only where both shells agree on where
+ * it starts and ends, and from a `<<` it cannot place it skips nothing.
+ */
+function releaseRows(rows) {
+  const g = guard();
+  const { dir } = curatedProject();
+  for (const [command, code, agent = 'omelette-coder'] of rows) {
+    const r = fire(g.path, preToolUse({ agent_type: agent ?? undefined, cwd: dir, tool_input: { command } }), dir);
+    assert.equal(r.code, code, `${JSON.stringify(command)} (${agent ?? 'main thread'}) should exit ${code}: ${r.out}${r.err}`);
+    if (code === 0) assert.equal(r.err, '', JSON.stringify(command));
+  }
+}
+const MAIN = null;
+
+test('release review (1.8.0): a `<<` the shells do not read as a heredoc hides no line — an escape, `$[…]`, a comment after `)`, arithmetic, a subscript', () => {
+  releaseRows([
+    ['echo \\<<EOF\ngit commit -m x\n', 2], //                 both: `\<` is a literal, `<EOF` an input file; git runs
+    ['cat \\<<EOF\ngit commit -m x\nEOF\n', 2], //             both: git runs
+    ['echo \\<<EOF\nhello\n', 0], //                           both: nothing runs
+    ['echo $[ 1 << 2 ]\ngit commit -m x\n', 2], //             both: `$[…]` is arithmetic; git runs
+    ['(echo a)#c <<X\ngit commit -m x\nX\n', 2], //            both: `#c <<X` is a comment after `)`; git runs
+    ['((1))#c <<X\ngit commit -m x\nX\n', 2], //               both: a comment after `((…))`; git runs
+    ['x[ 1 << 2 ]=3\ngit commit -m y\n', 2], //                bash: a subscript, git runs; zsh: bad pattern, stops
+    ['!((1<<2))\ngit commit -m y\n', 2], //                    bash: `!` then arithmetic, git runs; zsh: parse error, nothing runs
+    ['(\\\n(1<<2))\ngit commit -m y\n', 2], //                 bash: the continuation joins `((`, git runs; zsh: git does not run
+    ['a[<<EOF]\ngit commit -m x\nEOF]\n', 2], //               bash: `a[<<EOF]` is one word at command position, git runs; zsh: bad pattern `a[`, stops
+    ['echo a[<<EOF]\ngit commit -m x\nEOF]\n', 0], //          bash: a heredoc whose word is `EOF]`, git is body; zsh: bad pattern, stops
+    ['echo a[<<EOF]\n: <<X\nEOF]\ngit commit -m y\nX\n', 2], // bash: the body ends at `EOF]`, git runs; zsh: stops
+    ['cat <\\\n<EOF\n: <<X\nEOF\ngit commit -m y\nX\n', 2], //  bash: the continuation joins `<<EOF`, git runs; zsh: parse error
+    ['echo x # <<EOF\necho x > .omelette/backlog.md', 2, MAIN], // both: a comment, then the backlog truncated
+    ['cat \\<<EOF\n: > .omelette/backlog.md\nEOF\n', 2, MAIN], //  both: the backlog left empty
+  ]);
+});
+
+test('release review (1.8.0): a delimiter the guard cannot read as both shells do skips no body, from there on; `$\'…\'` decodes its simple escapes', () => {
+  releaseRows([
+    ['cat <<$(x)\ngit commit -m x\n', 2], //                   both: body to the end, nothing runs — refused, the guard cannot place it
+    ['cat <<$(x)\n$(x)\ngit commit -m y\n$\n', 2], //          both: the body ends at `$(x)`, git runs
+    ['cat <<$(x)\n: <<Y\n$(x)\ngit commit -m z\nY\n', 2], //   both: the body ends at `$(x)`, git runs — the later `<<Y` hides nothing
+    ['cat <<${x:- }\n${x:- }\ngit commit -m y\n${x:-\n', 2], // bash: the body ends at `${x:- }`, git runs; zsh: no git
+    ['cat <<`x`\n`x`\ngit commit -m y\n', 2], //               both: the body ends at `` `x` ``, git runs
+    ['cat <<$"EOF"\n$EOF\ngit commit -m x\nEOF\n', 2], //      bash: body to `EOF`, no git; zsh: the body ends at `$EOF`, git runs
+    ["cat <<$'E\\x4fF'\nEOF\ngit commit -m y\nE\\x4fF\n", 2], // both: `\x4f` is `O`, the body ends at `EOF`, git runs
+    ["cat <<$'E\\tF'\nE\tF\ngit commit -m y\n", 2], //         both: git runs
+    ["cat <<$'E\\'F'\nE'F\ngit commit -m y\n", 2], //          both: git runs
+    ["cat <<$'E\\117F'\nEOF\ngit commit -m y\nE\\117F\n", 2], // both: octal `\117` is `O`, git runs — an escape outside the simple ones skips nothing
+    ["cat <<$'EOF'\ngit commit -m x\nEOF\n", 0], //            both: git is body
+    ['cat <<E\\"F\ngit commit -m y\nE"F\n', 0], //             both: the word is `E"F`, git is body
+  ]);
+});
+
+test('release review (1.8.0): an escape, an ANSI-C quote and `\\"` inside double quotes end a word where the shells end it', () => {
+  releaseRows([
+    ["printf $'it\\'s' > .omelette/backlog.md", 2, MAIN], //  both: the backlog is `it's`
+    ["echo $'a\\'b'; git commit -m x", 2], //                   both: git runs
+    ["echo $'a\\nb'", 0], //                                    both: nothing runs
+    ['echo \\> .omelette/backlog.md', 0, MAIN], //              both: `>` is a literal, the backlog untouched
+    ['printf "\\"" > .omelette/backlog.md; echo "x"', 2, MAIN], // both: the backlog is `"`
+    ["git $'commit' -m y", 2], //                               both: git commit
+    ["git $'push'", 2], //                                      both: git push
+    ["git $'tag' v9", 2], //                                    both: git tag v9
+    ["git checkout $'-b' x", 2], //                             both: git checkout -b x
+    ['git $"commit" -m y', 2], //                               bash: git commit; zsh: git `$commit`
+    ["echo x > $'.omelette/backlog.md'", 2, MAIN], //           both: the backlog is `x`
+    ["echo $'x'", 0],
+  ]);
+});
+
+test('release review (1.8.0): the subcommand is the whole word — a file named after one is no commit', () => {
+  releaseRows([
+    ['grep -c "git" commit.mjs', 0],
+    ['grep -c git commit.mjs', 0],
+    ['grep -n "use git" commit.txt', 0],
+    ['git commit.mjs', 0], //                 git: not a git command
+    ['"git" commit -m x', 2],
+    ['git "-C" /x commit', 2],
+    ['env git commit', 2],
+    ['x=1 git commit', 2],
+    ['(git commit -m y)', 2], //              both: the subshell's `)` is no part of the subcommand
+    ['git commit$x -m y', 2], //              both: an expansion may be empty — git commit runs
+  ]);
+});
+
+test('release review (1.8.0): zsh\'s clobber `>!` and `&>!`, and `&>|`, truncate like `>|`', () => {
+  releaseRows([
+    ['echo x >! .omelette/backlog.md', 2, MAIN], //  zsh: the backlog is `x` (bash writes a file named `!`)
+    ['echo x &>! .omelette/backlog.md', 2, MAIN], // zsh: the backlog is `x`
+    ['echo x &>| .omelette/backlog.md', 2, MAIN], // zsh: the backlog is `x`
+    ['echo x >> .omelette/backlog.md', 0, MAIN],
+  ]);
+});
+
+test('release review (1.8.0): after a `cd` the guard can follow, a relative name is resolved — against the directory it went to and the one it left', () => {
+  const g = guard();
+  const { dir } = curatedProject();
+  for (const [command, code, file] of [
+    ['cd /tmp && echo x > backlog.md', 0],
+    ['cd /tmp && echo x > ledger-x.md', 0],
+    ['cd "$d" && echo x > backlog.md', 2, 'backlog.md'], //      a target it cannot follow: the bare name decides, as before
+    ['cd - && echo x > backlog.md', 2, 'backlog.md'],
+    ['cd .omelette && echo x > backlog.md', 2, 'backlog.md'], // resolved to the curated file
+    ['cd docs && cd ../.omelette && tee ledger-x.md', 2, 'ledger-x.md'], // a chain, each step resolved
+    ['(cd /tmp) && echo x > .omelette/backlog.md', 2, 'backlog.md'], // the cd ran in a subshell: the write is the project's
+    ['cd /tmp; cat > docs/DECISIONS.md', 2, 'DECISIONS.md'], //  a cd that failed leaves the shell where it was
+  ]) {
+    const r = fire(g.path, preToolUse({ agent_type: undefined, cwd: dir, tool_input: { command } }), dir);
+    assert.equal(r.code, code, `${command}: ${r.err}`);
+    assert.equal(r.err.trim(), code === 2 ? BASH_CURATED(file) : '', command);
+  }
+});
+
+test('release review (1.8.0): the reviewer\'s first report in a project with no .omelette/ yet is written; a .omelette that is a link still is not', { skip: process.platform === 'win32' && 'POSIX symlinks' }, () => {
+  const g = guard();
+  const bare = mkdtempSync(join(tmpdir(), 'omelette-fence-bare-'));
+  const first = fenceFire(g, bare, { path: `${bare}/.omelette/reports/x-review.md` });
+  assert.equal(first.code, 0, first.err);
+  for (const path of [`${bare}/.omelette/x-review.md`, `${bare}/.omelette/reports/sub/x-review.md`, `${bare}/reports/x-review.md`, `${bare}/.omelette/reports/x.md`]) {
+    const r = fenceFire(g, bare, { path });
+    assert.equal(r.code, 2, `${path}: ${r.err}`);
+    assert.equal(r.err.trim(), FENCE);
+  }
+  const linked = mkdtempSync(join(tmpdir(), 'omelette-fence-'));
+  symlinkSync(mkdtempSync(join(tmpdir(), 'omelette-fence-outside-')), join(linked, '.omelette'));
+  const viaLink = fenceFire(g, linked, { path: `${linked}/.omelette/reports/x-review.md` });
+  assert.equal(viaLink.code, 2, viaLink.err);
+  assert.equal(viaLink.err.trim(), FENCE);
+});
+
+/*
+ * 1.8.0 release fix, round 2 — the three defects the tester found with the shell
+ * oracle (test/hooks-heredoc-release.test.mjs). Each row's comment is what
+ * /bin/bash 3.2.57 and /bin/zsh 5.9 did with the logging fake `git` first on PATH,
+ * in an environment without LANG (bash 3.2 then keeps `\u` as written).
+ */
+test('release review (1.8.0, round 2): a subcommand written with a brace is read by prefix, its braces off; a plain word is still exact', () => {
+  releaseRows([
+    ['git commit{,} -m y', 2], //     both: git commit commit -m y
+    ['git tag{,x} v1', 2], //         both: git tag tagx v1
+    ['git push{,}', 2], //            both: git push push
+    ['git reset{,} --hard', 2], //    both: git reset reset --hard
+    ['git checkout{,} -b zzz', 2], // both: git checkout checkout -b zzz
+    ['git {commit,} -m y', 2], //     both: git commit -m y
+    ['git comm{it,} -m y', 2], //     both: git commit comm -m y
+    ['git log{,}', 0], //             both: git log log
+    ['git {log,show}', 0], //         both: git log show
+    ['grep -c git commit.mjs', 0],
+  ]);
+});
+
+test('release review (1.8.0, round 2): every ANSI-C escape is decoded in a word, the reading that can name something where the shells part', () => {
+  releaseRows([
+    ["git $'comm\\151t' -m y", 2], //          both: git commit (octal)
+    ["git $'comm\\x69t' -m y", 2], //          both: git commit
+    ["git $'comm\\u0069t' -m y", 2], //        zsh: git commit; bash 3.2 keeps \u0069
+    ["git $'comm\\U00000069t' -m y", 2], //    zsh: git commit; bash keeps \U00000069
+    ["git $'comm\\it' -m y", 2], //            zsh: git commit (drops the backslash); bash: comm\it
+    ["git $'\\commit' -m y", 2], //            zsh: git commit; bash: \co is a control character
+    ["git $'commit\\xg' -m y", 2], //          zsh: a NUL, git commit; bash: commit\xg
+    ["git $'commit\\0' -m y", 2], //           both: git commit (the NUL ends the string)
+    ["git $'commit'", 2], //                   both: git commit
+    ["echo $'a\\tb'", 0],
+    ["echo $'\\a\\b\\e\\E\\f\\r\\v\\?'", 0],
+    ["echo x > $'\\056omelette/backlog.md'", 2, MAIN], //   both: the backlog is x
+    ["echo x > $'.omelette/back\\log.md'", 2, MAIN], //     zsh: the backlog is x; bash writes back\log.md
+  ]);
+});
+
+test('release review (1.8.0, round 2): a `$\'…\'` delimiter is read only where both shells make the same ASCII of it', () => {
+  releaseRows([
+    ["cat <<$'E\\117F'\nEOF\ngit commit -m y\nE\\117F\n", 2], // both: octal \117 is O, the body ends at EOF, git runs
+    ["cat <<$'E\\117F'\ngit commit -m y\nEOF\n", 0], //           both: git is body
+    ["cat <<$'A\\vB'\ngit commit -m y\nA\vB\n", 0], //           both: git is body
+    ["cat <<$'E\\u004fF'\nEOF\ngit commit -m y\n", 2], //        zsh: the body ends at EOF, git runs; bash: no git
+    ["cat <<$'E\\qF'\nEqF\ngit commit -m y\n", 2], //            zsh: the body ends at EqF, git runs; bash: no git
+  ]);
+});
+
+test('release review (1.8.0, round 2): a long `a[a[a[…` word is read in linear time; the budget rows are unchanged', () => {
+  const g = guard();
+  const started = Date.now();
+  // One scan, from the first `[` (a name at command position), and under the 1 MiB budget: no git word, exit 0.
+  const r = fire(g.path, preToolUse({ tool_input: { command: 'a['.repeat(500000) } }));
+  const ms = Date.now() - started;
+  assert.equal(r.code, 0, r.err);
+  assert.ok(ms < 1000, `1 MB of a[ took ${ms} ms`);
 });

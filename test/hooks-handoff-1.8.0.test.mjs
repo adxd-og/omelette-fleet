@@ -9,12 +9,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
-import { project } from './fixtures/ledger-1.7.3.mjs';
+import { GIT_SKIP, ledger, project } from './fixtures/ledger-1.7.3.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const HOME = mkdtempSync(join(tmpdir(), 'omelette-home-180-'));
@@ -65,4 +65,38 @@ test('the cap holds with the marker counted: sections that fill 12 KB exactly pr
   const text = JSON.parse(fire(guard(), 'clear', p.dir).out).hookSpecificOutput.additionalContext;
   assert.ok(text.startsWith(`${MARKER}\n--- ledger-a.md · last handoff ---\n`));
   assert.ok(bytes(text) <= CAP, `${bytes(text)} bytes`);
+});
+
+// 1.8.0 release fix (guard review G5): the register (6 KB) and the backlog (2 KB)
+// reserved first left about 3.9 KB, under one handoff block's own 4 KB, and this
+// repository's print carried the register and the backlog but no handoff. The newest
+// open ledger's last handoff is reserved first now, then the backlog, then the
+// register in what is left; the other handoffs get the rest.
+test('the newest open ledger\'s handoff is reserved first: with a 6 KB register and a 2 KB backlog all three print, the register cut to what is left', { skip: GIT_SKIP }, () => {
+  const p = project();
+  p.git(['branch', 'feat/alpha']);
+  p.git(['branch', 'feat/zeta']);
+  // A last block at lastHandoffBlock's own bound: 40 lines, just under 4 KB.
+  const block = (tag) => [`## Handoff (2026-11-04 — ${tag})`, ...Array.from({ length: 39 }, (_, i) => `${tag[0].repeat(99)}${i % 10}`)].join('\n');
+  const register = Array.from({ length: 80 }, (_, i) => `- 2026-11-01 · p · Ruling(binding): ${String(i).padStart(2, '0')} ${'r'.repeat(80)}`);
+  p.write('.omelette/decisions.md', `${register.join('\n')}\n`);
+  p.write('.omelette/backlog.md', ['# Backlog', '', '| # | What |', '|---|---|', ...Array.from({ length: 60 }, (_, i) => `| ${i} | ${'y'.repeat(60)} |`), ''].join('\n'));
+  p.write('.omelette/ledger-zeta.md', ledger('feat/zeta', block('zeta')));
+  const zeta = `--- ledger-zeta.md · last handoff ---\n${block('zeta')}\n`;
+
+  const one = JSON.parse(fire(guard(), 'clear', p.dir).out).hookSpecificOutput.additionalContext;
+  assert.ok(bytes(one) <= CAP, `${bytes(one)} bytes`);
+  assert.ok(one.startsWith(`${MARKER}\n${zeta}\n--- .omelette/decisions.md · decisions register ---\n[… register cut to its last `), one.slice(0, 300));
+  assert.ok(one.includes(`${register[79]}\n\n--- .omelette/backlog.md · first table ---\n| # | What |\n`), 'the register ends whole on its last line, then the backlog');
+  assert.ok(one.endsWith('[… truncated]\n'), 'the backlog\'s table at its own 2 KB');
+  assert.ok(bytes(one) > CAP - 200, `the register takes what the handoff and the backlog leave: ${bytes(one)} bytes`);
+
+  // An older open ledger, first by name: the newest by mtime is the one reserved, the other is dropped whole.
+  p.write('.omelette/ledger-alpha.md', ledger('feat/alpha', block('alpha')));
+  const old = new Date(Date.now() - 3600_000);
+  utimesSync(join(p.dir, '.omelette', 'ledger-alpha.md'), old, old);
+  const two = JSON.parse(fire(guard(), 'clear', p.dir).out).hookSpecificOutput.additionalContext;
+  assert.ok(bytes(two) <= CAP, `${bytes(two)} bytes`);
+  assert.ok(two.startsWith(`${MARKER}\n${zeta}[… truncated]\n\n--- .omelette/decisions.md · decisions register ---\n`), two.slice(0, 300));
+  assert.equal(two.includes('ledger-alpha.md'), false, 'the older handoff is dropped whole');
 });

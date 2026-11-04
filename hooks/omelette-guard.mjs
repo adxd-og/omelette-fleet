@@ -41,9 +41,9 @@
  * register), and what comes next (the first table of `.omelette/backlog.md`).
  * Since 1.8.0 it is printed as JSON, `hookSpecificOutput.additionalContext`,
  * led by a marker line: the hooks reference adds a SessionStart hook's
- * `additionalContext` to the context, and a module (the mod) can see and remove
- * a JSON entry where it cannot see plain stdout — the mod delivers the same
- * text as its own context block and takes this entry out, one copy.
+ * `additionalContext` to the context, and a module (the mod) can see a JSON
+ * entry where it cannot see plain stdout — the mod adds the same text as its
+ * own SessionStart entry only when this one is not there, one copy.
  * PreCompact's stdout stays plain: PreCompact reads no JSON.
  *
  * SubagentStop (1.8.0) — the touched record: when a guarded role stops, the
@@ -118,9 +118,10 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  *   - `branch`, `checkout`, `switch`, `tag`, `rebase`, `reset` and
  *     `symbolic-ref` are read by their ARGUMENTS, because a flag or a name
  *     among them decides what they do — see WRITES_BY_ARGUMENTS below;
- *   - and a longer subcommand that merely starts like one of these is NOT it:
- *     `git commit-tree` writes an object and commits nothing, and `merge-base`
- *     only computes — hence the `(?![\w-])` in SUBCOMMAND.
+ *   - and a longer word that merely starts like one of these is NOT it:
+ *     `git commit-tree` writes an object and commits nothing, `merge-base`
+ *     only computes, and `grep -c git commit.mjs` greps — SUBCOMMAND takes
+ *     the whole word.
  *
  * NOT a security boundary: this is containment for a delegated agent that is
  * asked to behave, so an argv-array spawn, a backslash-escaped `g\it`, an alias
@@ -159,8 +160,8 @@ const GLOBAL_NO_VALUE = new Set([
 /** What ends one command and starts the next — outside quotes, and never inside them. */
 const SEPARATORS = new Set([';', '&', '|', '\n', '\r']);
 
-/** The redirections that write their target, and the two of them that only append to it. */
-const WRITE_REDIRECTS = new Set(['>', '>|', '>>', '<>', '&>', '&>>']);
+/** The redirections that write their target, and the two of them that only append to it. `>!` and `&>!` are zsh's clobber, `>|` and `&>|` by another name. */
+const WRITE_REDIRECTS = new Set(['>', '>|', '>!', '>>', '<>', '&>', '&>|', '&>!', '&>>']);
 const APPEND_REDIRECTS = new Set(['>>', '&>>']);
 /** The word after `>&` that duplicates or closes a descriptor rather than naming a file: digits or `-`, and the `)` of a subshell the word ends in. */
 const FD_DUPLICATE = /^(?:\d+|-)\)*$/;
@@ -193,15 +194,95 @@ function substitutionEnd(command, start) {
 }
 
 /**
- * The delimiter word of a `<<` or `<<-` whose operator ends just before `from`:
- * `{ raw, word, quoted, end }` — the word as written, the word with its quotes
- * and backslashes off, whether any were there (a quoted delimiter makes the body
- * literal), and the index just past it — or null when no word follows on the line.
+ * The ANSI-C escapes `$'…'` decodes to one character, alike in bash 3.2 and
+ * zsh: `\a \b \e \E \f \n \r \t \v \\ \' \" \?`.
+ */
+const ANSI_C_SIMPLE = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
+/** How many digits a numeric ANSI-C escape takes, at most, and in which base. */
+const ANSI_C_NUMERIC = { x: [/^[0-9A-Fa-f]{1,2}/, 16], u: [/^[0-9A-Fa-f]{1,4}/, 16], U: [/^[0-9A-Fa-f]{1,8}/, 16] };
+
+/**
+ * An ANSI-C quoted span whose body starts at `from`, just past `$'`: `{ value,
+ * end, exact }` — the body decoded, the index of its closing quote (the
+ * command's length when it never closes), and whether bash 3.2 and zsh make the
+ * same ASCII of it. Inside it a backslash escapes the next character, so `\'`
+ * does not close it.
  *
- * `$'EOF'` and `$"EOF"` are the quoted word `EOF`, as bash reads them: the `$`
- * goes. ANSI-C escapes inside `$'…'` stay literal here — a delimiter written
- * with escapes is not a case worth modelling. A backslash-newline inside the
- * word is a continuation: both go and the word goes on.
+ * DECODED: ANSI_C_SIMPLE, `\nnn` (one to three octal digits), `\xHH` (one or
+ * two hex), `\uHHHH` (one to four) and `\UHHHHHHHH` (one to eight). Where the
+ * two shells part, `value` is the reading that can name something, because a
+ * git word or a curated path is what the guard compares it with:
+ *   - `\u` and `\U`, which zsh decodes and bash 3.2 keeps as written in a C
+ *     locale: decoded (`$'commit'` is zsh's `commit`);
+ *   - `\cX`, a control character in bash and `cX` in zsh, and an unknown escape
+ *     (`\q`), kept as `\q` by bash and read as `q` by zsh: zsh's (bash's
+ *     backslash or control character names no subcommand and no curated file,
+ *     while zsh runs `git $'comm\it'` as `git commit`);
+ *   - a NUL (`\0`, `\x00`, and `\x` with no digit, zsh's NUL) ends the span
+ *     there, as bash ends the string; what follows to the closing quote is
+ *     dropped (`$'commit\0x'` is `commit`).
+ * `exact` is false for every one of these, for a character past 0x7f (a byte
+ * the shell compares where the guard compares a character), and for an unclosed
+ * span: a heredoc delimiter is read only where it is true (heredocDelimiter).
+ */
+function ansiC(command, from) {
+  let value = '';
+  let exact = true;
+  for (let j = from; j < command.length; j++) {
+    const c = command[j];
+    if (c === "'") return { value, end: j, exact };
+    if (c !== '\\' || j + 1 >= command.length) { value += c; continue; }
+    const e = command[++j];
+    if (Object.hasOwn(ANSI_C_SIMPLE, e)) { value += ANSI_C_SIMPLE[e]; continue; }
+    let code = 0;
+    if (e >= '0' && e <= '7') {
+      const digits = /^[0-7]{1,3}/.exec(command.slice(j, j + 3))[0];
+      code = parseInt(digits, 8) & 0xff;
+      j += digits.length - 1;
+    } else if (Object.hasOwn(ANSI_C_NUMERIC, e)) {
+      const [pattern, base] = ANSI_C_NUMERIC[e];
+      const digits = pattern.exec(command.slice(j + 1, j + 9));
+      if (digits) { code = parseInt(digits[0], base); j += digits[0].length; }
+      if (e !== 'x') exact = false;
+    } else {
+      // `\cX` is zsh's `cX`, an unknown `\q` zsh's `q`: the backslash goes, the character is read on.
+      value += e;
+      exact = false;
+      continue;
+    }
+    if (code === 0) {
+      // A NUL ends bash's string: the rest of the span, to its closing quote, is dropped.
+      for (j++; j < command.length && command[j] !== "'"; j++) if (command[j] === '\\') j++;
+      return { value, end: Math.min(j, command.length), exact: false };
+    }
+    if (code > 0x7f) exact = false;
+    value += String.fromCodePoint(code <= 0x10ffff ? code : 0xfffd);
+  }
+  return { value, end: command.length, exact: false };
+}
+
+/**
+ * The delimiter word of a `<<` or `<<-` whose operator ends just before `from`,
+ * AS BASH 3.2 AND ZSH BOTH READ IT: `{ raw, word, quoted, end }` — the word as
+ * written, the word with its quoting off, whether any was there (a quoted
+ * delimiter makes the body literal), and the index just past it; `{ unknown:
+ * true }` when the guard cannot read it as both shells do; null when no word
+ * follows on the line.
+ *
+ * The word ends where the shell ends a word: a space, a tab, a newline or one
+ * of `;&|<>()`. A `\r`, a form feed or a vertical tab is part of it, as both
+ * shells keep it: `<<EOF` on a CRLF line is the word `EOF\r`. A backslash-newline
+ * is a continuation (both go, the word goes on); any other backslash quotes the
+ * character after it. `'…'` is taken as it stands, `"…"` too unless it holds a
+ * backslash or an expansion, and `$'…'` decoded (ansiC).
+ *
+ * UNKNOWN — the lines after it are read as commands, and no heredoc body is
+ * skipped after it (tokenize): a word holding `$(`, `${`, `$[` or a backquote,
+ * which the shells take literally where the guard cannot follow them; `$"…"`,
+ * which zsh ends at `$EOF` where bash ends it at `EOF`; `$$`; a `$'…'` the two
+ * shells read differently (ansiC's `exact`: `\u`, `\U`, `\cX`, an unknown or
+ * malformed escape, a NUL, a byte past 0x7f); a `"…"` holding a backslash or an
+ * expansion; a quote that never closes.
  */
 function heredocDelimiter(command, from) {
   let i = from;
@@ -209,16 +290,33 @@ function heredocDelimiter(command, from) {
   const start = i;
   let word = '';
   let quoted = false;
-  let quote = '';
-  for (; i < command.length; i++) {
+  const unknown = { unknown: true };
+  while (i < command.length) {
     const c = command[i];
-    if (quote) { if (c === quote) quote = ''; else word += c; continue; }
-    if (c === '$' && (command[i + 1] === "'" || command[i + 1] === '"')) continue;
-    if (c === '"' || c === "'") { quote = c; quoted = true; continue; }
-    if (c === '\\' && command[i + 1] === '\n') { i++; continue; }
-    if (c === '\\' && i + 1 < command.length) { quoted = true; word += command[++i]; continue; }
-    if (/\s/.test(c) || ';&|<>()'.includes(c)) break;
+    const next = command[i + 1];
+    if (c === '\\' && next === '\n') { i += 2; continue; }
+    if (c === '\\' && i + 1 < command.length) { quoted = true; word += next; i += 2; continue; }
+    if (c === '`' || (c === '$' && '({["$'.includes(next ?? ' '))) return unknown;
+    if (c === '$' && next === "'") {
+      const a = ansiC(command, i + 2);
+      if (!a.exact) return unknown;
+      word += a.value;
+      quoted = true;
+      i = a.end + 1;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      const end = command.indexOf(c, i + 1);
+      const inner = end < 0 ? '' : command.slice(i + 1, end);
+      if (end < 0 || (c === '"' && /[\\`]|\$[({[]/.test(inner))) return unknown;
+      word += inner;
+      quoted = true;
+      i = end + 1;
+      continue;
+    }
+    if (c === ' ' || c === '\t' || c === '\n' || ';&|<>()'.includes(c)) break;
     word += c;
+    i++;
   }
   return i > start ? { raw: command.slice(start, i), word, quoted, end: i } : null;
 }
@@ -253,11 +351,12 @@ function skipHeredocBodies(command, pos, heredocs, spans) {
         if (!continues) break;
       }
       const line = pieces.length === 1 ? pieces[0] : pieces.join('');
-      // On a CRLF line bash keeps the `\r` in the word and in the terminator; the
-      // word here ends before it, so the terminator is read with or without one —
-      // the guard never closes a body later than bash does.
-      const bare = line.endsWith('\r') ? line.slice(0, -1) : line;
-      if ((stripTabs ? bare.replace(/^\t+/, '') : bare) === word) break;
+      // The line is compared RAW, as both shells compare it: a `\r` is part of
+      // the word (heredocDelimiter) and of the line, so `EOF\r` ends a body opened
+      // on a CRLF line and is body under an LF one — closing earlier than the
+      // shell is no safer than closing later, since a `<<` read in the shell's
+      // body would open one the shell never does.
+      if ((stripTabs ? line.replace(/^\t+/, '') : line) === word) break;
       if (!quoted) body += `${line}\n`;
     }
     if (quoted) continue;
@@ -276,11 +375,12 @@ function skipHeredocBodies(command, pos, heredocs, spans) {
  * WHERE THE SHELL READS NO REDIRECTION. The index of the last character of the
  * region opened at `start`, or -1 when it is not one: `((` — arithmetic, only
  * when its matching close is `))`, else nested subshells (`((git commit); x)`);
- * `{` — a `${…}`, to its matching `}`; `[` — a subscript inside a word, to its
- * `]`, and not one when an unquoted blank or separator comes first. A region
- * that never closes is not one, so the rest of the command is read as before.
- * Quotes, backslashes and substitutions are skipped, so a `)` or `}` inside them
- * closes nothing.
+ * `{` — a `${…}`, to its matching `}`; `[` — bash's subscript of a word at
+ * command position (`a[1<<2]=x`), and `$[` — the old arithmetic `$[ 1 << 2 ]`,
+ * each to its matching `]`, blanks, separators and newlines included, as bash
+ * reads them. A region that never closes is not one, so the rest of the
+ * command is read as before. Quotes, backslashes and substitutions are skipped,
+ * so a `)`, `}` or `]` inside them closes nothing.
  *
  * ONE BUDGET PER COMMAND. Every call made for one tokenize shares `budget`, the
  * characters left to examine: `a[a[a[…` unclosed would otherwise scan to the end
@@ -292,7 +392,7 @@ function skipHeredocBodies(command, pos, heredocs, spans) {
 const OPAQUE_SCAN_BUDGET = 1 << 20;
 
 function opaqueEnd(command, start, kind, budget) {
-  const [open, close] = kind === '{' ? '{}' : kind === '[' ? '[]' : '()';
+  const [open, close] = kind === '{' ? '{}' : kind === '((' ? '()' : '[]';
   let depth = 0;
   let quote = '';
   for (let j = start; j < command.length; j++) {
@@ -307,7 +407,6 @@ function opaqueEnd(command, start, kind, budget) {
       j = end;
       continue;
     }
-    if (kind === '[' && (/\s/.test(c) || SEPARATORS.has(c))) return -1;
     if (c === open) depth++;
     else if (c === close) {
       depth--;
@@ -318,6 +417,11 @@ function opaqueEnd(command, start, kind, budget) {
   return -1;
 }
 
+/** Words after which bash is still at command position: the reserved words that open a command, `(` and `!` included. */
+const LEADS_A_COMMAND = new Set(['!', '{', '(', 'if', 'then', 'elif', 'else', 'do', 'while', 'until', 'time']);
+/** An assignment word, `name=…`, `name+=…` or `name[…]=…`: the command position goes on after it. */
+const ASSIGNMENT_WORD = /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/;
+
 /**
  * The whole command as WORDS and SEPARATORS, in one left-to-right pass. A quoted
  * span is opaque — the whitespace, the `;` and the `>` inside it belong to the
@@ -327,6 +431,15 @@ function opaqueEnd(command, start, kind, budget) {
  * passes it on — quotes off and its pieces JOINED, so `'git tag '"v1"` is the
  * one word `git tag v1` — because `sh -c 'git commit'` runs that word, and
  * forbidden reads it again as a command.
+ *
+ * AN ESCAPE IS THE SHELL'S (1.8.0 release fix). Outside quotes a backslash
+ * makes the next character part of the word, whatever it is: `\<<EOF` opens no
+ * heredoc, `\>` no redirection, `\;` separates nothing, `\#` starts no comment
+ * and `\'` opens no quote — both stay in the word as written. A backslash-newline
+ * is a continuation: both go. Inside `"…"` a backslash escapes the next character
+ * (`"\""` is one quote), and so it does inside an ANSI-C `$'…'` (`$'it\'s'` is
+ * one word); `$"…"` is a double quote. `$$` is one parameter, so the `$` after
+ * it opens nothing.
  *
  * A COMMAND SUBSTITUTION IS A COMMAND OF ITS OWN. An unquoted `$(…)` or
  * backquoted one is part of ONE word of the command around it — in the word it
@@ -353,6 +466,23 @@ function opaqueEnd(command, start, kind, budget) {
  * the `git tag v1` on the line below it, `git tag v1 # --list` creates a tag, and
  * the `git commit` inside `echo x # git commit` is text. Until 1.8.0 a pre-pass
  * stripped comments without knowing heredocs, and took a `<<'#'` terminator line.
+ * A word starts after a bare `(` or `)` too, which the shell reads as operators,
+ * and after an arithmetic `((…))`: `(echo a)#c <<X` is a comment, no heredoc.
+ *
+ * A HEREDOC BODY IS SKIPPED ONLY WHERE BOTH SHELLS AGREE (bash 3.2 and zsh) on
+ * where it starts and ends. `<<` is an operator outside quotes, escapes,
+ * comments, `((…))`, `$[…]`, `${…}` and a subscript bash reads: `name[…]` in a
+ * word at COMMAND POSITION — the first word of a command, or one after an
+ * assignment or a keyword (`!`, `{`, `(`, `if`, `then`, `elif`, `else`, `do`,
+ * `while`, `until`, `time`) — and nowhere else (`echo a[<<EOF]` is a heredoc
+ * whose word is `EOF]`; after a redirection bash reads no subscript either). A
+ * `<` or `<<` split by a line continuation is the operator it is joined into.
+ * WHERE THE GUARD CANNOT KNOW, IT SKIPS NOTHING: from a delimiter it cannot read
+ * as both shells do (heredocDelimiter's unknown), or a `<<` inside a bracket
+ * after a `\r` (which bash does not separate on), no further body is skipped in
+ * the command — every line is read as one, an over-refusal and never a hidden
+ * line, because a body boundary read differently lets a later `<<X` hide the
+ * lines the shell runs.
  *
  * A TARGET THAT IS A FILE is handed back too, in `targets`, for the curated
  * rule (bashWrites): its path with the quotes off, its operator without the fd
@@ -376,15 +506,27 @@ function tokenize(command) {
   let text = '';
   let quoted = false;
   let quote = '';
+  let ansi = false; //    the open quote is an ANSI-C `$'…'`, where a backslash escapes
   let redirect = false; // the next word is a redirection's target
   let redirectOp = ''; //  …of this operator
+  let position = 'command'; // where the word being read started: 'command', 'argument', or 'unknown' (after a `\r`)
+  let operatorEnd = false; //  the word so far ends in a bare `(` or `)` or a `((…))`: a `#` after it starts a comment
+  // What the word so far is, kept per character (a regexp over a growing word is quadratic): 0 nothing
+  // or only `(`s, 1 a plain name after them (a `[` behind it may open bash's subscript), 2 anything else.
+  let wordShape = 0;
+  let skipBodies = true; //   false from the first heredoc the guard cannot place as both shells do
   const pendingHeredocs = []; // `<<`/`<<-` read on this line, their bodies start at the next newline
   const budget = { left: OPAQUE_SCAN_BUDGET }; // shared by every opaqueEnd this command makes
+  // The index of the next character that is not a line continuation: both shells join `<\` + newline + `<` into `<<`.
+  const real = (j) => { while (command[j] === '\\' && command[j + 1] === '\n') j += 2; return j; };
   const push = () => {
     if (!text) return;
     const plain = unquote(text); // only a word that held a quote loses a character here
-    if (!redirect) tokens.push({ text, quoted, separator: false });
-    else {
+    if (!redirect) {
+      tokens.push({ text, quoted, separator: false });
+      const lead = text.replace(/^\(+/, '');
+      if (position !== 'argument' && lead && !LEADS_A_COMMAND.has(lead) && !ASSIGNMENT_WORD.test(lead)) position = 'argument';
+    } else {
       const op = redirectOp === '>&' && !FD_DUPLICATE.test(plain) ? '&>' : redirectOp;
       if (WRITE_REDIRECTS.has(op)) targets.push({ path: plain, op, at: tokens.length });
     }
@@ -392,17 +534,42 @@ function tokenize(command) {
     text = '';
     quoted = false;
     redirect = false;
+    operatorEnd = false;
+    wordShape = 0;
   };
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     if (quote) {
-      if (c === quote) quote = '';
+      if (c === '\\' && (quote === '"' || ansi) && i + 1 < command.length) { text += c + command[++i]; continue; }
+      if (c === quote) { quote = ''; ansi = false; }
       text += c;
       continue;
     }
-    if (c === '"' || c === "'") { quoted = quoted || !text; text += c; quote = c; continue; }
     const next = command[i + 1] ?? '';
-    if (c === '#' && !text) {
+    if (c === '\\') {
+      // An escape: the next character is the word's, and nothing else — no
+      // operator, quote, comment or separator. A backslash-newline continues the
+      // line: both go, no separator, and pending heredoc bodies start at the next
+      // REAL newline — after the joined line, as bash reads `cat <<EOF \` + `; x`.
+      if (next !== '\n') text += c + next;
+      i++;
+      operatorEnd = false;
+      wordShape = 2;
+      continue;
+    }
+    if (c === '"' || c === "'") { quoted = quoted || !text; text += c; quote = c; operatorEnd = false; wordShape = 2; continue; }
+    if (c === '$' && next === '$') { text += '$$'; i++; operatorEnd = false; wordShape = 2; continue; }
+    if (c === '$' && (next === "'" || next === '"')) {
+      quoted = quoted || !text;
+      text += c + next;
+      quote = next;
+      ansi = next === "'";
+      i++;
+      operatorEnd = false;
+      wordShape = 2;
+      continue;
+    }
+    if (c === '#' && (!text || operatorEnd)) {
       // A comment, from a `#` that starts a word to the end of its line; the
       // newline stays, it separates the next command. Read here, where quotes
       // and heredoc bodies are known: `<<'#'` ends at a `#` line, and an
@@ -410,18 +577,19 @@ function tokenize(command) {
       while (i + 1 < command.length && command[i + 1] !== '\n' && command[i + 1] !== '\r') i++;
       continue;
     }
-    if (c === '\\' && next === '\n') {
-      // An unescaped backslash-newline (an odd run of backslashes) continues the
-      // line: both go, no separator, and pending heredoc bodies start at the next
-      // REAL newline — after the joined line, as bash reads `cat <<EOF \` + `; x`.
-      let run = 1;
-      while (i - run >= 0 && command[i - run] === '\\') run++;
-      if (run % 2 === 1) { i++; continue; }
-    }
     let opaque = -1;
-    if (c === '(' && next === '(' && !text) opaque = opaqueEnd(command, i, '((', budget);
-    else if (c === '$' && next === '{') opaque = opaqueEnd(command, i + 1, '{', budget);
-    else if (c === '[' && text) opaque = opaqueEnd(command, i, '[', budget);
+    let arithmetic = false;
+    if (c === '(' && command[real(i + 1)] === '(' && (!text || text === '!')) {
+      opaque = opaqueEnd(command, i, '((', budget);
+      arithmetic = true;
+    } else if (c === '$' && command[real(i + 1)] === '{') opaque = opaqueEnd(command, real(i + 1), '{', budget);
+    else if (c === '$' && command[real(i + 1)] === '[') opaque = opaqueEnd(command, real(i + 1), '$[', budget);
+    else if (c === '[' && position !== 'argument' && wordShape === 1) {
+      const end = opaqueEnd(command, i, '[', budget);
+      if (position === 'command') opaque = end;
+      // After a `\r` bash may read a subscript or not: a `<<` inside it is no body to skip.
+      else if (end >= 0 && command.slice(i, end).includes('<<')) skipBodies = false;
+    }
     if (budget.left < 0) return { tokens, spans, targets, exhausted: true }; // no partial reading: refused whole
     if (opaque >= 0) {
       // Part of the word, `<<` and all; only its substitutions are commands.
@@ -441,6 +609,8 @@ function tokenize(command) {
         text += ch;
       }
       i = opaque;
+      operatorEnd = arithmetic;
+      wordShape = 2;
       continue;
     }
     if (((c === '$' || c === '<' || c === '>') && next === '(') || c === '`') {
@@ -451,30 +621,34 @@ function tokenize(command) {
       // read again is never longer than the one it came from.
       text += end < command.length ? `${open}${c === '`' ? '`' : ')'}` : open;
       i = end;
+      operatorEnd = false;
+      wordShape = 2;
       continue;
     }
     if (c === '<' || c === '>' || (c === '&' && next === '>')) {
-      if (/^\d+$/.test(text)) text = ''; else push(); // `2>`: the fd number is part of the operator
+      if (/^\d+$/.test(text)) { text = ''; wordShape = 0; } else push(); // `2>`: the fd number is part of the operator
+      if (position === 'command') position = 'argument'; // bash reads no subscript after a redirection
       const opAt = i;
       if (c === '&') i++; //                             `&>`, `&>>`: the `>` comes next
       const follows = (chars) => i + 1 < command.length && chars.includes(command[i + 1]);
       let heredoc = false;
-      if (command[i] === '>' && follows('>|&')) i++; //                     `>>`, `>|`, `>&`
-      else if (command[i] === '<' && follows('<')) { // `<<`, `<<<`, `<<-`
-        i++;
-        heredoc = !follows('<(');
-        if (follows('<-')) i++;
+      if (command[i] === '>' && follows('>|&!')) i++; //   `>>`, `>|`, `>&`, zsh's `>!`
+      else if (command[i] === '<' && command[real(i + 1)] === '<') { // `<<`, `<<<`, `<<-`, across a continuation
+        i = real(i + 1);
+        const after = real(i + 1);
+        heredoc = command[after] !== '<' && command[after] !== '(';
+        if (command[after] === '<' || command[after] === '-') i = after;
       } else if (command[i] === '<' && follows('>&')) i++; //               `<>`, `<&`
       redirect = true;
-      redirectOp = command.slice(opAt, i + 1);
+      redirectOp = command.slice(opAt, i + 1).replace(/\\\n/g, '');
       if (heredoc) {
         const delimiter = heredocDelimiter(command, i + 1);
-        if (delimiter) {
-          pendingHeredocs.push({ word: delimiter.word, quoted: delimiter.quoted, stripTabs: command[i] === '-' });
+        if (delimiter && !delimiter.unknown) {
+          if (skipBodies) pendingHeredocs.push({ word: delimiter.word, quoted: delimiter.quoted, stripTabs: command[i] === '-' });
           text = delimiter.raw;
           push();
           i = delimiter.end - 1;
-        }
+        } else if (delimiter) skipBodies = false; // its word is read on as a word, and no body is skipped from here
         continue;
       }
       if (follows('(')) {
@@ -493,6 +667,7 @@ function tokenize(command) {
       push();
       redirect = false;
       tokens.push({ text: c, quoted: false, separator: true });
+      position = c === '\r' ? 'unknown' : 'command'; // bash separates nothing on a `\r`: the word it glues on is anywhere
       if (c === '\n' && pendingHeredocs.length) {
         i = skipHeredocBodies(command, i + 1, pendingHeredocs.splice(0), spans) - 1;
       }
@@ -500,6 +675,9 @@ function tokenize(command) {
     }
     if (/\s/.test(c)) { push(); continue; }
     text += c;
+    operatorEnd = c === '(' || c === ')';
+    if (wordShape === 0) wordShape = c === '(' ? 0 : /[A-Za-z_]/.test(c) ? 1 : 2;
+    else if (wordShape === 1 && !/\w/.test(c)) wordShape = 2;
   }
   push(); // a quote the command never closed runs to its end, inside the last word
   return { tokens, spans, targets };
@@ -507,12 +685,13 @@ function tokenize(command) {
 
 /**
  * A word that ends in `git` where a word begins — `git`, `/usr/bin/git`, `(git` — which is where an invocation can start.
- * Read with its quotes off: `"git"` and `g'it'` are the word git runs as.
+ * Read with its quotes off: `"git"`, `g'it'` and `$'git'` are the word git runs as. A blank before `git` is inside
+ * quotes, so the word is one argument (`"use git"`), never the program.
  */
 const isGitWord = ({ text, separator }) => {
   if (separator) return false;
   const word = unquote(text);
-  return word.endsWith('git') && !/\w/.test(word.charAt(word.length - 4));
+  return word.endsWith('git') && !/[\w\s]/.test(word.charAt(word.length - 4));
 };
 
 /** A word that runs `xargs`, which hands the command after it arguments this command does not show. */
@@ -545,16 +724,32 @@ function subcommandAt(tokens, at) {
       j++;
       // git takes the next word as the value whatever it opens with: `git -C -foo commit`.
       if (isWord()) {
-        if (SUBCOMMAND.test(unquote(tokens[j].text))) fallback = j;
+        if (subcommandOf(tokens[j])) fallback = j;
         j++;
       }
     } else if (GLOBAL_FLAG.test(text) || GLOBAL_NO_VALUE.has(text)) j++;
     else break;
   }
-  // The subcommand is read with its quotes off, as git receives it: `git "commit"`, `git co"mm"it`.
-  const sub = isWord() ? SUBCOMMAND.exec(unquote(tokens[j].text)) : null;
-  if (sub) return { name: sub[1], from: j + 1 };
-  return fallback < 0 ? null : { name: SUBCOMMAND.exec(unquote(tokens[fallback].text))[1], from: fallback + 1 };
+  const sub = isWord() ? subcommandOf(tokens[j]) : null;
+  if (sub) return { name: sub, from: j + 1 };
+  return fallback < 0 ? null : { name: subcommandOf(tokens[fallback]), from: fallback + 1 };
+}
+
+/**
+ * The subcommand a word names, or null — read with its quotes off, as git
+ * receives it (`git "commit"`, `git co"mm"it`, `git $'commit'`), and the closing
+ * parentheses of a subshell off (`(git tag)`).
+ *
+ * A word holding a brace is read BY PREFIX with its braces off: both shells
+ * expand `commit{,}` to `commit commit` and `tag{,x}` to `tag tagx`, and git
+ * takes the first word as its subcommand, so `commit{,}`, `{commit,}` and
+ * `comm{it,}` are `commit` and `tag{,x}` is `tag` (SUBCOMMAND_BRACED). A plain
+ * word is the exact subcommand still: `commit.mjs` is none.
+ */
+function subcommandOf({ text }) {
+  const word = closed(unquote(text));
+  const sub = /[{}]/.test(word) ? SUBCOMMAND_BRACED.exec(word.replace(/[{}]/g, '')) : SUBCOMMAND.exec(word);
+  return sub ? sub[1] : null;
 }
 
 /**
@@ -748,13 +943,43 @@ const rebaseTakesValue = (name) => REBASE_VALUE_LONG.has(name)
  * rebase --ex"ec" --abort main` — a rebase whose exec command is `--abort` —
  * pass until 0.3.4. A quote character INSIDE a span opened by the other one is
  * a literal character (`"it's"` is `it's`), exactly as tokenize reads them.
+ *
+ * `$'…'` comes off decoded (ansiC: `$'commit'` and `$'comm\151t'` are
+ * `commit`, `$'it\'s'` is `it's`), and `$"…"` as `"…"` does. Inside `"…"` a
+ * backslash before `"`, `\`, `$` or a backquote is taken off, and a
+ * backslash-newline goes whole. Outside quotes an escape stays as written — a
+ * backslash-escaped `g\it` is out of scope — and opens nothing: `\"` is no quote.
  */
 function unquote(text) {
   let out = '';
-  let quote = '';
-  for (const c of text) {
-    if (quote) { if (c === quote) quote = ''; else out += c; continue; }
-    if (c === '"' || c === "'") { quote = c; continue; }
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '\\') { out += text.slice(i, i + 2); i++; continue; }
+    if (c === '$' && text[i + 1] === '$') { out += '$$'; i++; continue; }
+    if (c === '$' && text[i + 1] === "'") {
+      const a = ansiC(text, i + 2);
+      out += a.value;
+      i = a.end;
+      continue;
+    }
+    if (c === "'") {
+      const end = text.indexOf("'", i + 1);
+      const stop = end < 0 ? text.length : end;
+      out += text.slice(i + 1, stop);
+      i = stop;
+      continue;
+    }
+    if (c === '"' || (c === '$' && text[i + 1] === '"')) {
+      for (i += c === '$' ? 2 : 1; i < text.length && text[i] !== '"'; i++) {
+        if (text[i] === '\\' && '"\\$`\n'.includes(text[i + 1] ?? ' ')) {
+          i++;
+          if (text[i] !== '\n') out += text[i];
+          continue;
+        }
+        out += text[i];
+      }
+      continue;
+    }
     out += c;
   }
   return out;
@@ -972,13 +1197,17 @@ const WRITES_BY_ARGUMENTS = new Map([
 ]);
 
 /**
- * A word that OPENS with a subcommand the guard answers for, and which one —
- * built from the two tables above, so a subcommand the guard can find is always
- * one it can answer. Whatever follows the name inside the same word is no
- * argument of it (`(git tag)` ends in `tag)`); a name followed by `-` or a word
- * character is another subcommand altogether.
+ * A word that IS a subcommand the guard answers for, and which one — built from
+ * the two tables above, so a subcommand the guard can find is always one it can
+ * answer. The name is the whole word (the closing parentheses of a subshell
+ * taken off first, subcommandOf): `commit.mjs` or `commit-tree` is another word
+ * altogether, which git refuses as no command of its own. The one thing it may
+ * be followed by is an expansion, `$` or a backquote, which can expand to
+ * nothing: `git commit$x` commits.
  */
-const SUBCOMMAND = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUMENTS.keys()].join('|')})(?![\\w-])`);
+const SUBCOMMAND = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUMENTS.keys()].join('|')})(?![^$\`])`);
+/** …and a braced word's, its braces off: a name followed by no word character and no `-` (subcommandOf). */
+const SUBCOMMAND_BRACED = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUMENTS.keys()].join('|')})(?![\\w-])`);
 
 /**
  * The subcommands that WRITE when xargs feeds them: what decides each one is in
@@ -1404,15 +1633,40 @@ function intoDirectory(word, cwd, afterCd) {
 }
 
 /**
+ * Where a `cd` or `pushd` goes, as a path the guard knows (knownPath) relative
+ * to the directory it runs in — or null where it cannot follow: `cd -`, a stack
+ * entry (`+1`), more than one operand, an expansion it does not perform. Its
+ * options (`-L`, `-P`, `-e`, `-@`) are stepped over; a `cd` with no operand is
+ * the home directory, a `pushd` with none swaps the stack and is null. CDPATH is
+ * not read.
+ */
+function cdTarget({ name, args }) {
+  const operands = [];
+  let options = true;
+  for (const word of args) {
+    if (options && word === '--') { options = false; continue; }
+    if (options && /^-[LPe@]+$/.test(word)) continue;
+    options = false;
+    operands.push(word);
+  }
+  if (!operands.length) return name === 'cd' ? homedir() : null;
+  if (operands.length > 1 || operands[0] === '-' || /^[+-]\d/.test(operands[0])) return null;
+  return knownPath(operands[0]);
+}
+
+/**
  * EVERY PATH A BASH COMMAND WRITES, as far as its words say: each redirection
- * that writes a file (`>`, `>|`, `<>`, `&>` rewrite it; `>>`, `&>>` append),
- * and the commands in WORD_RULES. Each entry `{ path, name, kind }` — `kind`
- * `write` or `append` — in the order the words come, `path` always resolved
- * against `cwd`. After a `cd` or `pushd` at command position, in a project
- * holding `.omelette/`, a relative path's directory is unknown: `name` carries
- * its bare name, which the curated rule compares (bashTruncates), and is
- * undefined otherwise. A word the guard cannot know as a path (knownPath) is
- * left out.
+ * that writes a file (`>`, `>|`, `>!`, `<>`, `&>` rewrite it; `>>`, `&>>`
+ * append), and the commands in WORD_RULES. Each entry `{ path, name, dirs, rel,
+ * kind }` — `kind` `write` or `append` — in the order the words come, `path`
+ * always resolved against `cwd`. After a `cd` or `pushd` at command position, in
+ * a project holding `.omelette/`, a relative path is written somewhere the event
+ * does not say: `name` carries its bare name (the touched record says `after
+ * cd`), `rel` the path as written, and `dirs` every directory the shell may be
+ * in by then — the event's cwd (a `cd` that failed, or ran in a subshell) and
+ * each one a `cd` before it went to, in turn (cdTarget) — or null once a `cd`
+ * goes where the guard cannot follow. A word the guard cannot know as a path
+ * (knownPath) is left out.
  *
  * Top-level words only: what a quoted `sh -c` or a substitution runs is not
  * read here. A command whose brackets spent the scan budget is not read at all:
@@ -1422,30 +1676,46 @@ function bashWrites(command, cwd) {
   const { tokens, targets, exhausted } = tokenize(String(command));
   if (exhausted) throw new TooDeep();
   const commands = simpleCommands(tokens);
-  const cd = commands.find(({ name }) => name === 'cd' || name === 'pushd');
-  const cdAt = cd && projectRoot(cwd).omelette ? cd.at : -1;
-  const afterCd = (at) => cdAt >= 0 && cdAt < at;
+  const cds = projectRoot(cwd).omelette ? commands.filter(({ name }) => name === 'cd' || name === 'pushd') : [];
+  const afterCd = (at) => cds.length > 0 && cds[0].at < at;
+  const dirsAt = (at) => {
+    const dirs = [cwd];
+    for (const cd of cds) {
+      if (cd.at >= at) break;
+      const target = cdTarget(cd);
+      if (target === null) return null;
+      dirs.push(resolve(dirs[dirs.length - 1], target));
+    }
+    return dirs;
+  };
   const found = [];
   const add = (word, kind, at) => {
     const path = knownPath(closed(word));
     if (path === null) return;
-    found.push({ path: resolve(cwd, path), name: afterCd(at) && !isAbsolute(path) ? basename(path) : undefined, kind, at });
+    const moved = afterCd(at) && !isAbsolute(path);
+    found.push({ path: resolve(cwd, path), name: moved ? basename(path) : undefined, dirs: moved ? dirsAt(at) : undefined, rel: path, kind, at });
   };
   for (const { path, op, at } of targets) add(path, APPEND_REDIRECTS.has(op) ? 'append' : 'write', at);
   for (const { name, args, at } of commands) {
     const rule = WORD_RULES.get(name);
     if (rule) for (const { word, kind } of rule(args, (dest) => intoDirectory(dest, cwd, afterCd(at)))) add(word, kind, at);
   }
-  return found.sort((a, b) => a.at - b.at).map(({ path, name, kind }) => ({ path, name, kind }));
+  return found.sort((a, b) => a.at - b.at).map(({ path, name, dirs, rel, kind }) => ({ path, name, dirs, rel, kind }));
 }
 
 /**
- * The first curated file the command REWRITES (rewritesCurated), or null —
- * compared, and named, by its bare `name` after a `cd`. `found` is bashWrites'
- * answer, when the caller has it.
+ * The first curated file the command REWRITES (rewritesCurated), or null. After
+ * a `cd` the path is resolved against every directory the shell may be in
+ * (`dirs`), and named by its bare `name`; only where a `cd` went somewhere the
+ * guard cannot follow is the bare name compared (`cd "$d" && … > backlog.md`).
+ * `found` is bashWrites' answer, when the caller has it.
  */
 function bashTruncates(command, cwd, found = bashWrites(command, cwd)) {
-  const hit = found.find(({ path, name, kind }) => kind === 'write' && rewritesCurated(cwd, name ?? path));
+  const rewrites = ({ path, name, dirs, rel }) => {
+    if (name === undefined) return rewritesCurated(cwd, path);
+    return dirs ? dirs.some((dir) => rewritesCurated(cwd, resolve(dir, rel))) : rewritesCurated(cwd, name);
+  };
+  const hit = found.find((w) => w.kind === 'write' && rewrites(w));
   return hit ? hit.name ?? hit.path : null;
 }
 
@@ -1621,7 +1891,10 @@ const FENCED_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
  * anything sits at it, its directory likewise (a dangling link throws, and is
  * refused); a reports/ not yet created is compared as its realpath'd parent plus
  * the literal name — the first report, whose directory the Write tool creates
- * itself, from a project reached through a symlinked path too.
+ * itself, from a project reached through a symlinked path too. A project with
+ * no `.omelette` at all (lstat ENOENT) is compared lexically: the path must be
+ * `.omelette/reports/<name>` under a directory that realpaths to the project —
+ * an absent directory is no link, so the first report of a fresh project passes.
  */
 function reviewerMayWrite(cwd, filePath) {
   if (!filePath) return false;
@@ -1629,10 +1902,15 @@ function reviewerMayWrite(cwd, filePath) {
   if (!/^[^/]+-review\.md$/.test(name)) return false;
   try {
     const root = realpathSync.native(cwd);
-    const own = lstatSync(join(root, '.omelette'));
+    const resolved = resolve(cwd, filePath);
+    let own;
+    try { own = lstatSync(join(root, '.omelette')); } catch (e) {
+      if (!e || e.code !== 'ENOENT') return false;
+      const project = dirname(dirname(dirname(resolved)));
+      return resolved === join(project, '.omelette', 'reports', name) && realpathSync.native(project) === root;
+    }
     if (!own.isDirectory() || own.isSymbolicLink()) return false;
     const expected = join(root, '.omelette', 'reports');
-    const resolved = resolve(cwd, filePath);
     if (existsSync(resolved) || lstatExists(resolved)) return realpathSync.native(resolved) === join(expected, name);
     const dir = dirname(resolved);
     if (lstatExists(dir)) return realpathSync.native(dir) === expected;
@@ -1950,10 +2228,10 @@ const TAIL_NOTE = '[… ledger larger than 1 MiB — read from its tail; a fence
 /** The two sources that lost a context, and the only two the print runs on. */
 const PRINT_SOURCES = new Set(['compact', 'clear']);
 /**
- * The print's first line (1.8.0): the entry it leads is the one the mod takes
- * out of SessionStart's context, its own prompt.context block being the copy
- * the session keeps. The mod's handoff.mjs holds the same literal, and a test
- * compares the two.
+ * The print's first line (1.8.0): the mod looks for an entry it leads in
+ * SessionStart's context, and adds its own copy of the print only when there
+ * is none. The mod's handoff.mjs holds the same literal, and a test compares
+ * the two.
  */
 const HANDOFF_MARKER = '--- omelette-fleet · read before continuing ---';
 /** The register prints whole up to this, and its last this-many bytes past it. */
@@ -1962,6 +2240,8 @@ const REGISTER_PRINT_MAX = 6 * 1024;
 const BACKLOG_READ_MAX = 64 * 1024;
 const BACKLOG_PRINT_MAX = 2 * 1024;
 const REGISTER_TAIL_NOTE = '[… register larger than 6 KB — its last 6 KB]';
+/** …and when the newest handoff and the backlog left less than 6 KB for it. */
+const REGISTER_CUT_NOTE = (max) => `[… register cut to its last ${max} bytes — the newest handoff came first]`;
 /** Why the register is not printed when the module that knows where it is did not load. */
 const MODULE_MISSING = 'the guard could not load core/ledger.mjs — run omelette-fleet rules --hooks';
 
@@ -2049,6 +2329,10 @@ function firstTable(text) {
  * — and any the sweep did not list — by name, then the untracked ones by name:
  * the ledger of the plan in flight before the notes nobody tied to a branch.
  * Without one, every ledger by name, as before 1.7.3.
+ *
+ * Each as `{ section, open, mtime }`: `open` for one of the first group of a
+ * sweep's order (without a sweep no ledger is known to be open), and `mtime` its
+ * lstat's, for the newest open one the print reserves first (sessionStart).
  */
 function ledgerSections(dir, names, swept) {
   const states = new Map();
@@ -2067,7 +2351,13 @@ function ledgerSections(dir, names, swept) {
     if (!read) continue;
     const block = lastHandoffBlock(read.text);
     if (!block) continue;
-    sections.push(`--- ${clean(name)} · last handoff ---\n${read.tailed ? `${TAIL_NOTE}\n` : ''}${block}\n`);
+    let mtime = -Infinity;
+    try { mtime = lstatSync(join(dir, name)).mtimeMs; } catch { /* read a moment ago; gone now is simply oldest */ }
+    sections.push({
+      section: `--- ${clean(name)} · last handoff ---\n${read.tailed ? `${TAIL_NOTE}\n` : ''}${block}\n`,
+      open: !!swept && states.get(name) !== 'untracked',
+      mtime,
+    });
   }
   return sections;
 }
@@ -2078,17 +2368,31 @@ function ledgerSections(dir, names, swept) {
  * the tail under REGISTER_TAIL_NOTE — the newest rulings are at the end. A
  * register the module refused, or a module that never loaded, is one heading
  * saying why; an absent or empty register is no section.
+ *
+ * `room` is what the section may take, heading and notes included: where 6 KB
+ * of tail does not fit it (the newest handoff and the backlog came first), the
+ * tail is cut to what does, under REGISTER_CUT_NOTE.
  */
-function registerSection(register) {
+function registerSection(register, room = Infinity) {
   if (register === null) return `--- decisions register not printed: ${MODULE_MISSING} ---\n`;
   if (register.error) return `--- decisions register not printed: ${register.error} ---\n`;
-  const read = readTail(register.path, REGISTER_PRINT_MAX);
+  const heading = `--- ${clean(register.rel)} · decisions register ---\n`;
+  // The section is at most the heading, a note and its newline, `max` bytes of lines and the last newline.
+  const over = (note, max) => Buffer.byteLength(heading + note, 'utf8') + 1 + max + 1 > room;
+  let max = REGISTER_PRINT_MAX;
+  let note = REGISTER_TAIL_NOTE;
+  if (over(note, max)) {
+    note = REGISTER_CUT_NOTE(Math.max(0, Math.floor(room)));
+    max = Math.max(0, Math.floor(room) - Buffer.byteLength(heading + note, 'utf8') - 2);
+    note = REGISTER_CUT_NOTE(max); // as many digits or fewer: still fits
+  }
+  const read = readTail(register.path, max);
   if (!read || !read.text.trim()) return '';
   const lines = read.text.split(HANDOFF_LINE_BREAK);
   // A tail opens on the newline the one-byte-early read kept: not a line of the register.
   if (read.tailed && lines[0] === '') lines.shift();
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-  return `--- ${clean(register.rel)} · decisions register ---\n${read.tailed ? `${REGISTER_TAIL_NOTE}\n` : ''}${lines.join('\n')}\n`;
+  return `${heading}${read.tailed ? `${note}\n` : ''}${lines.join('\n')}\n`;
 }
 
 /** WHAT COMES NEXT: the first table of `.omelette/backlog.md`, or no section. */
@@ -2122,10 +2426,10 @@ function backlogSection(dir) {
  * THE PRINT IS JSON (1.8.0): one document, `{"hookSpecificOutput":
  * {"hookEventName":"SessionStart","additionalContext":"<text>"}}`, the text led
  * by the HANDOFF_MARKER line. The hooks reference adds a SessionStart hook's
- * `additionalContext` to the context, and a module (the mod) can see and
- * remove a JSON entry where it cannot see plain stdout: the mod delivers the
- * same text as its prompt.context block and takes this entry out, so the
- * session reads one copy.
+ * `additionalContext` to the context, and a module (the mod) can see a JSON
+ * entry where it cannot see plain stdout: the mod adds the same text as its
+ * own SessionStart entry only when this one is not there, so the session reads
+ * one copy.
  *
  * Same ledgers as PreCompact and the same rule about them — `<cwd>/.omelette/
  * ledger-*.md`, sorted, a directory that is not a symlink (ledgerDir), and
@@ -2138,13 +2442,19 @@ function backlogSection(dir) {
  * A tail read says so, above the block, because it is not the whole file.
  *
  * Each block is bounded by lastHandoffBlock, and the print as a whole stops at
- * 12 KB of text. The marker line, the register and the backlog are RESERVED
- * first — each at its own cap, heading included — and the handoffs get only
- * what is left, so a long list of ledgers never crowds out what was decided
- * and what comes next: the first
- * handoff that does not fit is dropped WHOLE with every handoff after it, and
- * one truncation line says so where they stop, because half a handoff read as
- * a whole one is worse than a line saying it was left out.
+ * 12 KB of text. RESERVED FIRST, in this order (1.8.0 release fix), each at its
+ * own cap, heading included: the marker line; the last handoff of the NEWEST
+ * open ledger (by mtime, among the open, standing and unknown ones a sweep
+ * listed) — the print exists for it, and a register and a backlog near their
+ * caps left less room than one block; the backlog; the register, in what is
+ * left (6 KB at most, cut to its tail under a note past that). The other
+ * handoffs get only what the four leave, so a long list of ledgers never
+ * crowds out what was decided and what comes next: the first other handoff
+ * that does not fit is dropped WHOLE with every one after it, and one
+ * truncation line says so where they stop, because half a handoff read as a
+ * whole one is worse than a line saying it was left out. Without a newest open
+ * ledger (no sweep, or only untracked ones) the order is 1.7.3's: the backlog
+ * and the register, then the handoffs.
  *
  * Nothing to print is printed as nothing: no header, no blank line, exit 0 —
  * and nothing at all is read while `handoff.enabled` is false.
@@ -2168,35 +2478,40 @@ async function sessionStart(event) {
     if (!isObject(register)) register = { error: 'register: unreadable' };
   }
   const bytes = (s) => Buffer.byteLength(s, 'utf8');
+  const cost = (s) => (s ? bytes(s) + 1 : 0); // a section and the blank line before it
   const marker = `${TRUNCATED}\n`;
-  const parts = [];
-  let total = 0;
-  let marked = false;
-  // Sections in order while they fit `limit`; the first that does not goes
-  // with the rest of `sections`, and ONE marker line says so — room made for
-  // it, if need be, by dropping the last section this call admitted.
-  const fill = (sections, limit) => {
-    const from = parts.length;
-    for (const section of sections) {
-      const part = `${parts.length ? '\n' : ''}${section}`;
-      if (total + bytes(part) <= limit) { parts.push(part); total += bytes(part); continue; }
-      if (!marked) {
-        while (parts.length > from && total + bytes(marker) > limit) total -= bytes(parts.pop());
-        parts.push(marker);
-        total += bytes(marker);
-        marked = true;
-      }
-      return;
-    }
-  };
-  // The marker line, the register and the backlog first, each at its own cap
-  // with the blank line before it: the handoffs get what they leave, so all
-  // three always fit.
+  // RESERVED IN THIS ORDER, each at its own cap, the marker line first: the
+  // newest open ledger's last handoff, the backlog, the register in what is left
+  // (6 KB at most); the other handoffs get what the four leave.
   const head = `${HANDOFF_MARKER}\n`;
   const room = HANDOFF_TOTAL_MAX - bytes(head);
-  const reserved = [registerSection(register), backlogSection(found.dir)].filter(Boolean);
-  fill(ledgerSections(found.dir, ledgerNames(found.dir), swept), room - reserved.reduce((n, s) => n + bytes(s) + 1, 0));
-  fill(reserved, room);
+  const handoffs = ledgerSections(found.dir, ledgerNames(found.dir), swept);
+  const newest = handoffs.reduce((at, h, k) => (h.open && (at < 0 || h.mtime > handoffs[at].mtime) ? k : at), -1);
+  const others = handoffs.map((_, k) => k).filter((k) => k !== newest); // indexes into handoffs, in ledger order
+  const backlog = backlogSection(found.dir);
+  let left = room - (newest < 0 ? 0 : cost(handoffs[newest].section)) - cost(backlog);
+  const decisions = registerSection(register, left - 1 - (others.length ? bytes(marker) : 0));
+  left -= cost(decisions);
+  // The other handoffs in order while they fit; the first that does not goes
+  // with the rest, and ONE marker line says so — room made for it, if need be,
+  // by dropping the last one admitted.
+  let admitted = 0;
+  let used = 0;
+  let marked = false;
+  for (const k of others) {
+    const size = bytes(handoffs[k].section) + (admitted ? 1 : 0);
+    if (used + size <= left) { admitted++; used += size; continue; }
+    while (admitted && used + bytes(marker) > left) { admitted--; used -= bytes(handoffs[others[admitted]].section) + (admitted ? 1 : 0); }
+    marked = true;
+    break;
+  }
+  // Printed in the order of the three questions: the handoffs in ledger order,
+  // the newest in its place, then the marker, the register, the backlog.
+  const kept = new Set([...others.slice(0, admitted), newest]);
+  const parts = [];
+  for (const [k, h] of handoffs.entries()) if (kept.has(k)) parts.push(`${parts.length ? '\n' : ''}${h.section}`);
+  if (marked) parts.push(marker);
+  for (const section of [decisions, backlog]) if (section) parts.push(`${parts.length ? '\n' : ''}${section}`);
   if (!parts.length) return;
   say(process.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `${head}${parts.join('')}` } }));
 }

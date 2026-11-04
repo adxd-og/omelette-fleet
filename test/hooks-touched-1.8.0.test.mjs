@@ -167,7 +167,8 @@ test('touched: tee, sed -i, mv and cp are bash writes of their targets; a comman
     useLine('b2', 'Bash', { command: "sed -i '' s/x/y/ b.txt" }),
     useLine('b3', 'Bash', { command: 'mv c d.txt' }),
     useLine('b4', 'Bash', { command: 'cp e f.txt' }),
-    useLine('b5', 'Bash', { command: `${'a['.repeat(100000)}; cat > g.txt` }),
+    // `$[` unclosed, over and over: since the 1.8.0 release fix only a command-position name opens a `[` scan, so `a[` no longer spends the budget.
+    useLine('b5', 'Bash', { command: `${'$['.repeat(100000)}; cat > g.txt` }),
   ].join('\n')}\n`);
   const r = fire(g, stopEvent(s.proj, transcript, 'omelette-tester'), s.proj, s.env);
   assert.equal(r.code, 0, r.err);

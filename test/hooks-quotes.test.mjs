@@ -63,8 +63,10 @@ test('quotes: reading quotes off does not make read-only git refused', () => {
   ]);
 });
 
-test('quotes: a quoted spaced value that reads as a subcommand is refused (accepted false refusal, ruled 2026-11-03)', () => {
-  check([['git -c "commit x" log', 2]]);
+// 1.8.0 release fix (branch review F6): the subcommand is the whole word, so the
+// spaced value `commit x` names none and the false refusal ruled 2026-11-03 is gone.
+test('quotes: a quoted spaced value is no subcommand — the subcommand is the whole word', () => {
+  check([['git -c "commit x" log', 0]]);
 });
 
 test('quotes: a quoted global option does not hide the subcommand behind it', () => {
@@ -81,7 +83,8 @@ test('quotes: git -c repeated 4 000 times is still read in one pass', () => {
   for (const [command, code] of [
     [`${'git -c '.repeat(4000)}log`, 0],
     [`${'git -c '.repeat(4000)}; git commit -m x`, 2],
-    [`${'git -c "commit x" '.repeat(4000)}log`, 2],
+    [`${'git -c "commit x" '.repeat(4000)}log`, 0], // 1.8.0 release fix F6: `commit x` is no subcommand
+    [`${'git -c "commit" '.repeat(4000)}log`, 2],
   ]) {
     const r = run(path, command);
     assert.equal(r.code, code, `${command.slice(0, 30)}… exited ${r.code}: ${r.err}`);

@@ -353,7 +353,9 @@ test('curated: a project under the fleet home is not rooted at it — $OMELETTE_
     }
   }
   // …while the same file is curated for a project that has its own `.omelette/`.
+  // (1.8.0 release fix G9: a `cd` the guard can follow is resolved, so the row
+  // goes where the backlog is; `cd x` now lands on proj/x/backlog.md, no curated file.)
   mkdirSync(join(proj, '.omelette'));
   writeFileSync(join(proj, '.omelette', 'backlog.md'), '# backlog\n');
-  assert.equal(fire(g, bashEvent(proj, 'cd x && echo y > backlog.md'), proj, env).code, 2);
+  assert.equal(fire(g, bashEvent(proj, 'cd .omelette && echo y > backlog.md'), proj, env).code, 2);
 });

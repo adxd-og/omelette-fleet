@@ -478,8 +478,8 @@
   {
     "id": "guard-unquote-nested-quote",
     "file": "hooks/omelette-guard.mjs",
-    "find": "if (quote) { if (c === quote) quote = ''; else out += c; continue; }",
-    "replace": "if (quote) { if (c === '\"' || c === \"'\") quote = ''; else out += c; continue; }",
+    "find": "for (i += c === '$' ? 2 : 1; i < text.length && text[i] !== '\"'; i++) {",
+    "replace": "for (i += c === '$' ? 2 : 1; i < text.length && text[i] !== '\"' && text[i] !== \"'\"; i++) {",
     "breaks": "a quote of the other kind ends a quoted span in unquote: sh -c \"git rebase --exec 'echo --abort' main\" reads as an --abort and passes"
   }
 ]
