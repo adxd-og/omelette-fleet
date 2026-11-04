@@ -11,11 +11,14 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |
 | How do I switch the handoff hooks off? | [Handoff settings](#handoff-settings) |
 | What do the handoff hooks do to my ledger, and when? | [The handoff hooks](#the-handoff-hooks) |
-| Which settings groups does the guard need, and what is a touched report? | [The handoff hooks](#the-handoff-hooks) |
+| Which settings groups does the guard need? | [The handoff hooks](#the-handoff-hooks) |
+| What is a touched report, and what does it record? | [The touched reports](#the-touched-reports) |
 | How do I open a ledger, close one, and where do binding rulings go? | [Ledgers and the decisions register](#ledgers-and-the-decisions-register) |
+| How do I move the decisions register, and what does a refused `register:` line mean? | [Ledgers and the decisions register](#ledgers-and-the-decisions-register) |
 | How do I install the fleet pane mod, and which three options does it have? | [The fleet pane mod](#the-fleet-pane-mod) |
 | How do I make the mod refuse a compaction that has no fresh handoff? | [Handoff settings](#handoff-settings) |
 | How do I set whether the session merges or opens a PR? | [Workflow settings](#workflow-settings) |
+| How does `doctor` decide a repository looks PR-gated? | [Workflow settings](#workflow-settings) |
 | What config keys exist and what do they default to? | [Keys](#keys) |
 | What extra keys does one unit have, and what's its built-in default? | [Unit-specific extras and built-in overrides](#unit-specific-extras-and-built-in-overrides) |
 | Which config keys does a given unit actually read? | [Which unit actually uses which key](#which-unit-actually-uses-which-key) |
@@ -23,6 +26,8 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | In what order do env, file and defaults get resolved? | [Resolution order](#resolution-order) |
 | How do I change a config value from the command line? | [Editing with `set`](#editing-with-set) |
 | Which environment variables override which config keys? | [Environment overrides](#environment-overrides) |
+| How do I point a unit at a vendor CLI that is not on `PATH` (`AGY_BIN`, `GROK_BIN`, `CODEX_BIN`)? | [Environment overrides](#environment-overrides) |
+| What do `OMELETTE_ENV_PASSTHROUGH` and `OMELETTE_PKG_ROOT` do? | [Environment overrides](#environment-overrides) |
 | How does the self-update check work, and how do I disable it? | [Update check](#update-check) |
 | How does the write ceiling show up in resolved config? | [The ceiling, in config terms](#the-ceiling-in-config-terms) |
 | Which config key does `doctor --probe-sandbox` override, and where is the probe described? | [Cancellation](#cancellation) |
@@ -197,8 +202,8 @@ The file is rewritten at the same package version — the marker is the proof of
 
 | Signal | Where it looks | Only when | Bound |
 |---|---|---|---|
-| A pull-request template | `PULL_REQUEST_TEMPLATE.md` at the root, under `.github/` or under `docs/`, or any `.md` file inside `.github/PULL_REQUEST_TEMPLATE/`, the directory GitHub reads when a repository offers several | always | Regular files of this repository's own only; the listing of that directory stops at 64 entries, in the order the filesystem hands them over, because this is a hint and not a search |
-| A `CODEOWNERS` file | Those same three places (root, `.github/`, `docs/`) | always | Regular files of this repository's own only |
+| A pull-request template | `PULL_REQUEST_TEMPLATE.md` at the root, under `.github/` or under `docs/`, or any `.md` file inside `.github/PULL_REQUEST_TEMPLATE/`, the directory GitHub reads when a repository offers several | always | The three fixed paths are read with `stat`, which follows a symlink to a regular file; the directory form is `lstat`ed, entry by entry, so a linked-in file is not a template. Its listing stops at 64 entries, in the order the filesystem hands them over, because this is a hint and not a search |
+| A `CODEOWNERS` file | Those same three places (root, `.github/`, `docs/`) | always | A regular file; a symlink to one counts, because the lookup follows links |
 | Branch protection | `gh api repos/{owner}/{repo}/branches/main/protection` exiting 0 for the repository you are standing in | **only** when no file said so, and only when `gh` is on your PATH | Five seconds. No `gh`, no network call at all; a `gh` that fails for any reason whatsoever says nothing |
 
 Never read as a signal:
@@ -238,8 +243,8 @@ A ledger belongs to a branch. Its first lines carry `branch: <name>`: it is **op
 
 | Command | What it does |
 |---|---|
-| `omelette-fleet ledger open <plan>` | Writes `.omelette/ledger-<plan>.md` headed `branch: <the current branch>`. Refuses a detached HEAD, a file that exists, and a plan name whose ledger already sits in `.omelette/archive/` (the two would collide once closed) |
-| `omelette-fleet ledger sweep [--dry-run]` | For each closed ledger, in name order: copies every `Ruling(binding):` line (fenced code and an inline-quoted `` `Ruling(binding):` `` excluded) to the register, appends `closed <ISO> by sweep — <n> binding rulings → <register>` to the ledger, and moves it to `.omelette/archive/` — never over a file of the same name, which is reported and left in place (as is a ledger on a filesystem without hard links: `not moved`, the move is a link and an unlink). A ruling held twice — dated in the log and undated in a handoff block — is one register line: the date is not part of the match. Lists each untracked ledger and leaves it alone. One line per action, and always exit 0, even when it refuses (the refusal is the line, not the exit code); without git, outside a repository or with a refused `register:` line it says so once and writes nothing; `--dry-run` prints the same lines and writes nothing. A `.omelette/` that is the fleet home itself (`~/.omelette`, or `OMELETTE_HOME`) is not a project: the sweep reports nothing there |
+| `omelette-fleet ledger open <plan>` | Writes `.omelette/ledger-<plan>.md` headed `branch: <the current branch>`. Exit 0 on success. Exit 2 on a usage error: no plan, an extra argument, an unknown flag, or a plan name that does not start with a letter or digit and hold only letters, digits, `.`, `_` and `-`. Exit 1 on a refusal, one line on stderr: a detached HEAD; a HEAD outside `refs/heads/`; a branch name that cannot be written as a header; a file that exists; a plan name whose ledger already sits in `.omelette/archive/` (the two would collide once closed); a `.omelette` that is not a directory of this project; git missing, silent, or not looking at a repository |
+| `omelette-fleet ledger sweep [--dry-run]` | For each closed ledger, in name order: copies every `Ruling(binding):` line (fenced code and an inline-quoted `` `Ruling(binding):` `` excluded) to the register, appends `closed <ISO> by sweep — <n> binding rulings → <register>` to the ledger, and moves it to `.omelette/archive/` — never over a file of the same name, which is reported and left in place (as is a ledger on a filesystem without hard links: `not moved`, the move is a link and an unlink). A ruling held twice — dated in the log and undated in a handoff block — is one register line: the date is not part of the match. Lists each untracked ledger and leaves it alone. One line per action, and exit 0 for every ledger outcome, even a refusal (the refusal is the line, not the exit code); exit 2 on a usage error (an extra argument, an unknown flag); without git, outside a repository or with a refused `register:` line it says so once and writes nothing; `--dry-run` prints the same lines and writes nothing. A `.omelette/` that is the fleet home itself (`~/.omelette`, or `OMELETTE_HOME`) is not a project: the sweep reports nothing there |
 
 **Nobody has to call the sweep.** The guard runs it at every `SessionStart` and before the `PreCompact` stamp; `doctor` runs it and prints its lines. The command is there for the operator and for the rules file.
 
@@ -263,7 +268,7 @@ The date is the ledger line's own leading date, else the sweep's. A line that no
 
 | `doctor` prints | When |
 |---|---|
-| `ledgers       1 open (ledger-1.7.3.md → feat/1.7.3), 0 untracked, 22 archived` | `.omelette/` exists; counted after doctor's own sweep, whose lines follow it (`closed: …`, `untracked: …`, `register: … refused (…) — nothing swept`). No `ledgers` or `decisions` row for the fleet home |
+| `ledgers       1 open (ledger-1.7.3.md → feat/1.7.3), 0 untracked, 22 archived` | `.omelette/` exists; counted after doctor's own sweep, whose lines follow it (`closed: …`, `untracked: …`, `register: … refused (…) — nothing swept`). After the open count the row adds, when there are any, `N standing (…)` (a `branch: main`, `master` or `trunk` ledger), `N closed (…)` and `N unclassified (…)` — a ledger whose branch git could not be asked about (git missing, timed out, not a repository, or failed); then `N untracked, N archived`. No `ledgers` or `decisions` row for the fleet home |
 | `decisions     docs/DECISIONS.md (via .omelette/decisions.md) — 25 lines, 0 struck, 0 stale pointers` | the register: its entry lines, the struck ones, and the pointers of the live ones `check` does not find `ok` |
 | `warning: 2 open ledgers — …` | more than one open ledger; a standing one is not counted |
 | `warning: 31 unstruck lines — …` | more than 30 live lines; no cap is enforced |
@@ -530,9 +535,12 @@ Two related guarantees, neither of them configurable:
 - **A cancelled request never gets a response.** The result is recorded, not sent.
 - **Closing the connection is not a cancellation.** When the client closes the
   server's stdin, the server stops reading, waits for the calls still in flight
-  (each bounded by that unit's `timeoutS`) and only then exits. `finish` therefore
-  survives a client timeout and a client restart — it does not survive a `kill`
-  of the server process itself.
+  (each bounded by that unit's `timeoutS`) and only then exits. The drain runs
+  only if no stop signal arrives first. On `SIGTERM` or `SIGHUP`
+  — the code notes that Claude Code sends `SIGTERM` when a server outlives its
+  closed stdin — the server kills the vendor process groups and exits within 1 s,
+  without draining. `finish` therefore survives a client that closes stdin and
+  waits; it does not survive a signal, or a `kill` of the server process.
 
 ## How `timeoutS` differs per unit
 
@@ -604,7 +612,7 @@ Every tool call that spawns a vendor CLI has its answer written to `<home>/resul
 
 It exists because an answer can outlive the request that asked for it. Claude Code abandons a stdio tool call at `MCP_TOOL_TIMEOUT`, and again after 30 minutes without progress; a cancelled call under `cancel: finish` is left to finish deliberately. In each case the run was paid for and the client is gone. `<unit>_result` (in a session) and `omelette-fleet results` (in a shell) read the file back, and neither starts a run.
 
-Retention is per unit and runs after every write and at server start: `resultsKeep` results (default 50), inside `resultsMaxBytes` (default 50 MB), oldest by `endedAt` removed first, abandoned `*.tmp` files older than an hour swept. A single result larger than the whole budget is kept anyway — it is the answer that was just paid for. `results: false` (per unit or in `defaults`) switches writing off; it does not hide what is already spooled, and `doctor` says so on the unit's `results` line.
+Retention is per unit and runs after every write and at server start: `resultsKeep` results (default 50), inside `resultsMaxBytes` (default 50 MB), oldest by `endedAt` removed first, abandoned `*.tmp` files older than an hour swept. A single result larger than the whole budget is kept anyway — it is the answer that was just paid for. `results: false` (per unit or in `defaults`) switches writing off; it does not hide what is already spooled. `doctor` prints `(disabled in config) — answers are not spooled` on the unit's `results` line.
 
 ### The `usage:` line
 
@@ -612,4 +620,4 @@ A record carries `usage: input=<n> output=<n> [cachedInput=<n>] [reasoning=<n>]`
 
 ### `omelette-fleet results --stats [<unit>] [--since <when>]`
 
-What the spool cost, rather than what it holds: one row per unit that has records, plus a total, over `calls`, `ok/error/cancelled`, `partial`, wall time (the sum of `durationMs`, as `1h 2m 3s`), the bytes those records occupy, and `tokens in / out`. The token cell is a number only when **every** call in the row reported one; otherwise it is `n/a (<k> of <n> calls reported)`, so a partial picture is never printed as a total. `--since` takes a window (`24h`, `7d`, at most `87600h` / `3650d`) or a date (`2026-09-09`, or a whole ISO timestamp — in UTC, or with the offset `git log --format=%cI` prints, `2026-09-25T18:47:00+03:00`) that spells a day which exists — `2026-02-30` is refused rather than read as 2 March — measures it against `startedAt`, and prints the window it used as a `since <ISO>` line above the table; a value that is neither is exit 1 with one line, and so is `--since` without `--stats`. Everything else is exit 0 — an empty spool, or a window with nothing in it, prints `no results`. Retention bounds what can be counted: `--stats` sees what `resultsKeep` and `resultsMaxBytes` left on disk, not the whole history of the install.
+What the spool cost, rather than what it holds: one row per unit that has records, plus a total, over `calls`, `ok/error/cancelled`, `partial`, wall time (the sum of `durationMs`, as `1h 2m 3s`), the bytes those records occupy, and `tokens in / out`. The token cell is a number only when **every** call in the row reported one; otherwise it is `n/a (<k> of <n> calls reported)`, so a partial picture is never printed as a total. `--since` takes a window (`24h`, `7d`, at most `87600h` / `3650d`) or a date (`2026-09-09`, or a whole ISO timestamp — in UTC, or with the offset `git log --format=%cI` prints, `2026-09-25T18:47:00+03:00`) that spells a day which exists — `2026-02-30` is refused rather than read as 2 March — measures it against `startedAt`, and prints the window it used as a `since <ISO>` line above the table; a value that is neither is exit 1 with one line. Exit 1 also for an unknown unit, a result id or any other argument after the unit, `--stats --path`, and `--since` without `--stats`. Every other `--stats` call is exit 0 — an empty spool, or a window with nothing in it, prints `no results`. Retention bounds what can be counted: `--stats` sees what `resultsKeep` and `resultsMaxBytes` left on disk, not the whole history of the install.
