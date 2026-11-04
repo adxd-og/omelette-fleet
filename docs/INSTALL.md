@@ -116,10 +116,10 @@ rules         project: v1.8.0 · global: absent
 agents        project: v1.8.0 (4) · global: absent
 skills        project: v1.8.0 (1) · global: absent
 hooks         project: v1.8.0 (wired: PreToolUse, PreCompact, SessionStart, SubagentStop) · global: absent
-guard         settings hook wired (PreToolUse Bash|Write|Edit|NotebookEdit, SubagentStop) · mod omelette-fleet enabled, installed 1.8.0 — the mod answers first
+guard         settings hook wired (PreToolUse Bash|Write|Edit|NotebookEdit, SubagentStop)
 handoff       stamp and print on · ledgers: 1
 ledgers       1 open (ledger-docs-pass.md → feat/docs-pass), 0 untracked, 26 archived
-decisions     docs/DECISIONS.md (via .omelette/decisions.md) — 34 lines, 1 struck, 5 stale pointers
+decisions     docs/DECISIONS.md (via .omelette/decisions.md) — 34 lines, 1 struck, 0 stale pointers
 contract      short (rules installed here)
 merge policy  session (rules rendered) — this repository looks PR-gated: consider set workflow.merge=pr
 mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1800000 needed · ok
@@ -195,7 +195,7 @@ A registration counts as ours by **where it points**, not by what it is called: 
 | `rules`, `agents`, `skills`, `hooks` | Each managed kind at both scopes, with its marker version; `hooks` also says whether the guard is wired ([every NOT-wired reason](ORCHESTRATION.md#what-doctor-says-about-the-wiring)) | No: a missing file is never counted |
 | `guard` | The two deliveries of the guard: the settings hook and the fleet pane mod, each as it stands ([The two deliveries](ORCHESTRATION.md#the-two-deliveries)) | No |
 | `handoff` | What the installed guard will do, read back out of the script itself: `stamp and print on · ledgers: 1`; `off (handoff.enabled=false)` when the switch is off; `ledgers: none (nothing to stamp — omelette-fleet ledger open <plan> starts one)` when the project keeps no ledger. Then the print after a `/clear` or a compaction carries the register and the backlog alone | No |
-| `ledgers`, `decisions` | `ledgers` is printed when the project has an `.omelette/`, and `decisions` when it also has a decisions register. `doctor` runs the ledger sweep first and prints its lines. `ledgers` counts the open, untracked and archived ledgers; `decisions` counts the register's lines, the struck ones and the pointers `check` does not find ok. A `warning` line follows past 30 unstruck lines, or with more than one open ledger. Every form: [CONFIG, "Ledgers and the decisions register"](CONFIG.md#ledgers-and-the-decisions-register) | No |
+| `ledgers`, `decisions` | `ledgers` and `decisions` are printed when the project has an `.omelette/`; without a register the `decisions` row reads `.omelette/decisions.md — none yet`. `doctor` runs the ledger sweep first and prints its lines. `ledgers` counts the open, untracked and archived ledgers; `decisions` counts the register's lines, the struck ones and the pointers `check` does not find ok. A `warning` line follows past 30 unstruck lines, or with more than one open ledger. Every form: [CONFIG, "Ledgers and the decisions register"](CONFIG.md#ledgers-and-the-decisions-register) | No |
 | `contract` | Which contract the unit servers send this project: `short (rules installed here)`, or the full one ([CONFIG](CONFIG.md#the-contract-and-why-auto-is-the-default)) | No |
 | `merge policy` | The configured policy, and whether the rendered rules file carries its sentence yet ([CONFIG](CONFIG.md#workflow-settings)) | No: its PR-gated hint is a hint |
 | `mcp timeout` | The client's own two timeout walls: the wall-clock `MCP_TOOL_TIMEOUT` against the longest call the enabled units can make, and the 30-minute stdio idle abort. It prints the snippet to merge when the first one is short ([CONFIG](CONFIG.md#client-timeouts)) | No: informational |

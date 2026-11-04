@@ -67,7 +67,7 @@ Then merge the settings snippet that step 4 printed into the project's `.claude/
 | An image, or an edit of one | `gemini_image`, `grok_image`, `codex_image`; `grok_image_edit` edits |
 | The answer to a call your client timed out on | `<unit>_result` on the same unit: every answer is saved before it is sent |
 
-Each unit also has a `<unit>_models` tool: its models, and which tasks belong on each. The full routing table: [ORCHESTRATION, "Routing by task"](docs/ORCHESTRATION.md#routing-by-task). Every unit writes what it is doing to a status feed under `~/.omelette`, which a menu-bar app, a HUD or `tail -f` can read; [Omelette usage-checker](https://github.com/adxd-og/usage-checker) is one reader ([STATUS-FEED](docs/STATUS-FEED.md)).
+Each unit also has a `<unit>_models` tool: its models, and which tasks belong on each. The full routing table: [ORCHESTRATION, "Routing by task"](docs/ORCHESTRATION.md#routing-by-task). Every unit writes what it is doing to a status feed under `~/.omelette`, which a menu-bar app, a HUD or `tail -f` can read; [Omelette usage-checker](https://github.com/adxd-og/usage-checker), a macOS menu-bar app, is one reader ([STATUS-FEED](docs/STATUS-FEED.md)).
 
 One call, from Claude Code to the vendor CLI and back:
 
@@ -135,7 +135,7 @@ Billing and safety. Each vendor CLI signs in to the subscription you already pay
 A review peer that can also write is one you have to supervise twice. Units read, search, analyse and propose; Claude Code applies the change, where your approval flow already sits. It also contains prompt injection: a unit that reads a hostile web page or repository can only report back, not act.
 
 **Can I let a unit write?**
-Only on purpose, with both keys. Even then Codex writes only inside the `cwd` you pass to `codex_code_review`, Gemini uses agy's own permission layer, and Grok refuses: [SECURITY, "The ceiling"](docs/SECURITY.md#the-ceiling).
+Only on purpose, with both keys (for Gemini alone, the legacy `ORION_ALLOW_GEMINI_MUTATE=1` still counts as the second). Even then Codex writes only inside the `cwd` you pass to `codex_code_review`, Gemini uses agy's own permission layer, and Grok refuses: [SECURITY, "The ceiling"](docs/SECURITY.md#the-ceiling).
 
 **How does it compare to codex-plugin-cc or pal?**
 Both drive vendor CLIs from inside Claude Code. [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) is OpenAI's own plugin: Codex only, reviews run read-only with approvals off, one command (`/codex:rescue`) writes to the workspace, and a Stop hook can run a review and hold the session until it passes. [pal](https://github.com/BeehiveInnovations/pal-mcp-server) is one MCP server over several CLIs: it starts Codex with `--dangerously-bypass-approvals-and-sandbox`, Gemini with `--yolo` and Claude with `--permission-mode acceptEdits`, and a client timeout loses the answer (its docs say to raise `MCP_TOOL_TIMEOUT`). What this package does differently, on purpose:
