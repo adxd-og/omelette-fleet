@@ -306,9 +306,7 @@ A run that produced text but did not finish properly keeps its text — the call
 
 `omelette-fleet rules --hooks` writes one script, `.claude/hooks/omelette-guard.mjs`, and it is the only thing this package ships that runs *inside* your Claude Code session rather than around it. It serves four events — `PreToolUse` on `Bash|Write|Edit|NotebookEdit`, `PreCompact`, `SessionStart` and `SubagentStop` — and exits 2 in four cases only: a guarded role's `git` write, a curated-file truncation or a `Write` that is not an append, by any caller, the reviewer's write outside its one report, and a command too deep to read. What it does is small and worth stating exactly:
 
-<img src="assets/diagrams/guard-verdict.svg" alt="The guard hook from the event on stdin to its exit code, as drawn for 1.5.0: exit 2 for a git write by one of the four sub-agent roles on PreToolUse; the PreCompact stamp and the SessionStart handoff print; everything else, bad input included, exits 0. Since 1.8.0 it also serves SubagentStop and exits 2 for a curated-file write by any caller, for the reviewer's write outside its report and for a command too deep to read." width="820">
-
-The drawing shows the 1.5.0 shape; the table below is current.
+<img src="assets/diagrams/guard-verdict.svg" alt="The guard hook from the event on stdin to its exit code: on PreToolUse it exits 2 for a command too deep to read, a curated-file truncation or non-append Write by any caller, the reviewer's write outside its report and a guarded role's git write; PreCompact sweeps and stamps the ledgers, SessionStart sweeps and on compact or clear prints the handoff context, SubagentStop writes the touched record, and everything else, bad input included, exits 0." width="820">
 
 | Event (matcher) | Acts when | What it does | Bounds | Switched by |
 |---|---|---|---|---|
