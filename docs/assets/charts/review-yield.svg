@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="review-yield-title review-yield-desc" viewBox="0 0 880 452" width="880" height="452">
+<title id="review-yield-title">Review yield per release</title>
+<desc id="review-yield-desc">Review yield per release: stacked bars, one per release in release order, found = accepted + rejected, not changed or duplicate. 0.3.4 and 0.3.5 were reconstructed after the fact; the yield line is kept from 0.3.6 on. 0.3.4: found 33, accepted 32, rejected 1. 0.3.5: found 25, accepted 23, rejected 2. 0.3.6: found 27, accepted 25, rejected 2. 0.3.7: found 31, accepted 28, rejected 3. 1.0.0: found 10, accepted 8, rejected 2. 1.1.0: found 37, accepted 29, rejected 8. 1.2.0: found 24, accepted 17, rejected 7. 1.3.0: found 34, accepted 30, rejected 4. 1.4.0: found 53, accepted 49, rejected 4. 1.5.0: found 21, accepted 15, rejected 6. 1.6.0: found 43, accepted 38, rejected 5. 1.6.1: found 22, accepted 18, rejected 4. 1.6.2: found 15, accepted 13, rejected 2. 1.7.0: found 31, accepted 25, rejected 6. 1.7.1: found 20, accepted 18, rejected 2. 1.7.2: found 33, accepted 29, rejected 4. 1.7.3: found 53, accepted 39, rejected 14. 1.8.0: found 23, accepted 17, rejected 6. Across 18 releases: 535 findings, 453 accepted, 82 rejected, not changed or duplicate.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.t{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e1e0d9}.base{stroke:#c3c2b7}
+.c1{fill:#2a78d6}.c0{fill:#898781}.in{fill:#ffffff}
+@media (prefers-color-scheme: dark){
+.t{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.base{stroke:#383835}
+.c1{fill:#3987e5}
+}
+</style>
+<text class="t" x="16" y="26" font-size="16" font-weight="600">Review yield per release</text>
+<text class="t2" x="16" y="48" font-size="12">Findings per release, stacked: accepted (the number on each bar) and the rest, rejected, not changed or duplicate.</text>
+<text class="t2" x="16" y="66" font-size="12">18 releases: 535 findings, 453 accepted, 82 rejected, not changed or duplicate.</text>
+<text class="t2" x="16" y="84" font-size="12">0.3.4 and 0.3.5 were reconstructed after the fact; the yield line is kept from 0.3.6 on.</text>
+<rect class="c1" x="16" y="103" width="10" height="10" rx="2"/>
+<text class="t" x="32" y="112" font-size="12">Accepted</text>
+<rect class="c0" x="109.76" y="103" width="10" height="10" rx="2"/>
+<text class="t" x="125.76" y="112" font-size="12">Rejected, not changed or duplicate (found − accepted)</text>
+<text class="t2" x="16" y="140" font-size="12">Findings (count)</text>
+<g class="plot" data-x0="56" data-x1="864" data-y0="396" data-y1="156" data-max="60">
+<line class="base" x1="56" y1="396" x2="864" y2="396" stroke-width="1"/>
+<text class="t2" x="48" y="400" font-size="11" text-anchor="end">0</text>
+<line class="grid" x1="56" y1="356" x2="864" y2="356" stroke-width="1"/>
+<text class="t2" x="48" y="360" font-size="11" text-anchor="end">10</text>
+<line class="grid" x1="56" y1="316" x2="864" y2="316" stroke-width="1"/>
+<text class="t2" x="48" y="320" font-size="11" text-anchor="end">20</text>
+<line class="grid" x1="56" y1="276" x2="864" y2="276" stroke-width="1"/>
+<text class="t2" x="48" y="280" font-size="11" text-anchor="end">30</text>
+<line class="grid" x1="56" y1="236" x2="864" y2="236" stroke-width="1"/>
+<text class="t2" x="48" y="240" font-size="11" text-anchor="end">40</text>
+<line class="grid" x1="56" y1="196" x2="864" y2="196" stroke-width="1"/>
+<text class="t2" x="48" y="200" font-size="11" text-anchor="end">50</text>
+<line class="grid" x1="56" y1="156" x2="864" y2="156" stroke-width="1"/>
+<text class="t2" x="48" y="160" font-size="11" text-anchor="end">60</text>
+<path class="bar c1" data-release="0.3.4" data-series="accepted" data-value="32" data-found="33" d="M 66.44 396 V 269 H 90.44 V 396 Z"><title>0.3.4: 32 accepted of 33 found</title></path>
+<path class="bar c0" data-release="0.3.4" data-series="rejected" data-value="1" data-found="33" d="M 66.44 267 V 265.5 Q 66.44 264 67.94 264 H 88.94 Q 90.44 264 90.44 265.5 V 267 Z"><title>0.3.4: 1 rejected, not changed or duplicate, of 33 found</title></path>
+<text class="in" x="78.44" y="283" font-size="11" font-weight="600" text-anchor="middle">32</text>
+<text class="t2" x="78.44" y="414" font-size="12" text-anchor="middle">0.3.4</text>
+<path class="bar c1" data-release="0.3.5" data-series="accepted" data-value="23" data-found="25" d="M 111.33 396 V 305 H 135.33 V 396 Z"><title>0.3.5: 23 accepted of 25 found</title></path>
+<path class="bar c0" data-release="0.3.5" data-series="rejected" data-value="2" data-found="25" d="M 111.33 303 V 299.5 Q 111.33 296 114.83 296 H 131.83 Q 135.33 296 135.33 299.5 V 303 Z"><title>0.3.5: 2 rejected, not changed or duplicate, of 25 found</title></path>
+<text class="in" x="123.33" y="319" font-size="11" font-weight="600" text-anchor="middle">23</text>
+<text class="t2" x="123.33" y="414" font-size="12" text-anchor="middle">0.3.5</text>
+<path class="bar c1" data-release="0.3.6" data-series="accepted" data-value="25" data-found="27" d="M 156.22 396 V 297 H 180.22 V 396 Z"><title>0.3.6: 25 accepted of 27 found</title></path>
+<path class="bar c0" data-release="0.3.6" data-series="rejected" data-value="2" data-found="27" d="M 156.22 295 V 291.5 Q 156.22 288 159.72 288 H 176.72 Q 180.22 288 180.22 291.5 V 295 Z"><title>0.3.6: 2 rejected, not changed or duplicate, of 27 found</title></path>
+<text class="in" x="168.22" y="311" font-size="11" font-weight="600" text-anchor="middle">25</text>
+<text class="t2" x="168.22" y="414" font-size="12" text-anchor="middle">0.3.6</text>
+<path class="bar c1" data-release="0.3.7" data-series="accepted" data-value="28" data-found="31" d="M 201.11 396 V 285 H 225.11 V 396 Z"><title>0.3.7: 28 accepted of 31 found</title></path>
+<path class="bar c0" data-release="0.3.7" data-series="rejected" data-value="3" data-found="31" d="M 201.11 283 V 276 Q 201.11 272 205.11 272 H 221.11 Q 225.11 272 225.11 276 V 283 Z"><title>0.3.7: 3 rejected, not changed or duplicate, of 31 found</title></path>
+<text class="in" x="213.11" y="299" font-size="11" font-weight="600" text-anchor="middle">28</text>
+<text class="t2" x="213.11" y="414" font-size="12" text-anchor="middle">0.3.7</text>
+<path class="bar c1" data-release="1.0.0" data-series="accepted" data-value="8" data-found="10" d="M 246 396 V 365 H 270 V 396 Z"><title>1.0.0: 8 accepted of 10 found</title></path>
+<path class="bar c0" data-release="1.0.0" data-series="rejected" data-value="2" data-found="10" d="M 246 363 V 359.5 Q 246 356 249.5 356 H 266.5 Q 270 356 270 359.5 V 363 Z"><title>1.0.0: 2 rejected, not changed or duplicate, of 10 found</title></path>
+<text class="in" x="258" y="379" font-size="11" font-weight="600" text-anchor="middle">8</text>
+<text class="t2" x="258" y="414" font-size="12" text-anchor="middle">1.0.0</text>
+<path class="bar c1" data-release="1.1.0" data-series="accepted" data-value="29" data-found="37" d="M 290.89 396 V 281 H 314.89 V 396 Z"><title>1.1.0: 29 accepted of 37 found</title></path>
+<path class="bar c0" data-release="1.1.0" data-series="rejected" data-value="8" data-found="37" d="M 290.89 279 V 252 Q 290.89 248 294.89 248 H 310.89 Q 314.89 248 314.89 252 V 279 Z"><title>1.1.0: 8 rejected, not changed or duplicate, of 37 found</title></path>
+<text class="in" x="302.89" y="295" font-size="11" font-weight="600" text-anchor="middle">29</text>
+<text class="t2" x="302.89" y="414" font-size="12" text-anchor="middle">1.1.0</text>
+<path class="bar c1" data-release="1.2.0" data-series="accepted" data-value="17" data-found="24" d="M 335.78 396 V 329 H 359.78 V 396 Z"><title>1.2.0: 17 accepted of 24 found</title></path>
+<path class="bar c0" data-release="1.2.0" data-series="rejected" data-value="7" data-found="24" d="M 335.78 327 V 304 Q 335.78 300 339.78 300 H 355.78 Q 359.78 300 359.78 304 V 327 Z"><title>1.2.0: 7 rejected, not changed or duplicate, of 24 found</title></path>
+<text class="in" x="347.78" y="343" font-size="11" font-weight="600" text-anchor="middle">17</text>
+<text class="t2" x="347.78" y="414" font-size="12" text-anchor="middle">1.2.0</text>
+<path class="bar c1" data-release="1.3.0" data-series="accepted" data-value="30" data-found="34" d="M 380.67 396 V 277 H 404.67 V 396 Z"><title>1.3.0: 30 accepted of 34 found</title></path>
+<path class="bar c0" data-release="1.3.0" data-series="rejected" data-value="4" data-found="34" d="M 380.67 275 V 264 Q 380.67 260 384.67 260 H 400.67 Q 404.67 260 404.67 264 V 275 Z"><title>1.3.0: 4 rejected, not changed or duplicate, of 34 found</title></path>
+<text class="in" x="392.67" y="291" font-size="11" font-weight="600" text-anchor="middle">30</text>
+<text class="t2" x="392.67" y="414" font-size="12" text-anchor="middle">1.3.0</text>
+<path class="bar c1" data-release="1.4.0" data-series="accepted" data-value="49" data-found="53" d="M 425.56 396 V 201 H 449.56 V 396 Z"><title>1.4.0: 49 accepted of 53 found</title></path>
+<path class="bar c0" data-release="1.4.0" data-series="rejected" data-value="4" data-found="53" d="M 425.56 199 V 188 Q 425.56 184 429.56 184 H 445.56 Q 449.56 184 449.56 188 V 199 Z"><title>1.4.0: 4 rejected, not changed or duplicate, of 53 found</title></path>
+<text class="in" x="437.56" y="215" font-size="11" font-weight="600" text-anchor="middle">49</text>
+<text class="t2" x="437.56" y="414" font-size="12" text-anchor="middle">1.4.0</text>
+<path class="bar c1" data-release="1.5.0" data-series="accepted" data-value="15" data-found="21" d="M 470.44 396 V 337 H 494.44 V 396 Z"><title>1.5.0: 15 accepted of 21 found</title></path>
+<path class="bar c0" data-release="1.5.0" data-series="rejected" data-value="6" data-found="21" d="M 470.44 335 V 316 Q 470.44 312 474.44 312 H 490.44 Q 494.44 312 494.44 316 V 335 Z"><title>1.5.0: 6 rejected, not changed or duplicate, of 21 found</title></path>
+<text class="in" x="482.44" y="351" font-size="11" font-weight="600" text-anchor="middle">15</text>
+<text class="t2" x="482.44" y="414" font-size="12" text-anchor="middle">1.5.0</text>
+<path class="bar c1" data-release="1.6.0" data-series="accepted" data-value="38" data-found="43" d="M 515.33 396 V 245 H 539.33 V 396 Z"><title>1.6.0: 38 accepted of 43 found</title></path>
+<path class="bar c0" data-release="1.6.0" data-series="rejected" data-value="5" data-found="43" d="M 515.33 243 V 228 Q 515.33 224 519.33 224 H 535.33 Q 539.33 224 539.33 228 V 243 Z"><title>1.6.0: 5 rejected, not changed or duplicate, of 43 found</title></path>
+<text class="in" x="527.33" y="259" font-size="11" font-weight="600" text-anchor="middle">38</text>
+<text class="t2" x="527.33" y="414" font-size="12" text-anchor="middle">1.6.0</text>
+<path class="bar c1" data-release="1.6.1" data-series="accepted" data-value="18" data-found="22" d="M 560.22 396 V 325 H 584.22 V 396 Z"><title>1.6.1: 18 accepted of 22 found</title></path>
+<path class="bar c0" data-release="1.6.1" data-series="rejected" data-value="4" data-found="22" d="M 560.22 323 V 312 Q 560.22 308 564.22 308 H 580.22 Q 584.22 308 584.22 312 V 323 Z"><title>1.6.1: 4 rejected, not changed or duplicate, of 22 found</title></path>
+<text class="in" x="572.22" y="339" font-size="11" font-weight="600" text-anchor="middle">18</text>
+<text class="t2" x="572.22" y="414" font-size="12" text-anchor="middle">1.6.1</text>
+<path class="bar c1" data-release="1.6.2" data-series="accepted" data-value="13" data-found="15" d="M 605.11 396 V 345 H 629.11 V 396 Z"><title>1.6.2: 13 accepted of 15 found</title></path>
+<path class="bar c0" data-release="1.6.2" data-series="rejected" data-value="2" data-found="15" d="M 605.11 343 V 339.5 Q 605.11 336 608.61 336 H 625.61 Q 629.11 336 629.11 339.5 V 343 Z"><title>1.6.2: 2 rejected, not changed or duplicate, of 15 found</title></path>
+<text class="in" x="617.11" y="359" font-size="11" font-weight="600" text-anchor="middle">13</text>
+<text class="t2" x="617.11" y="414" font-size="12" text-anchor="middle">1.6.2</text>
+<path class="bar c1" data-release="1.7.0" data-series="accepted" data-value="25" data-found="31" d="M 650 396 V 297 H 674 V 396 Z"><title>1.7.0: 25 accepted of 31 found</title></path>
+<path class="bar c0" data-release="1.7.0" data-series="rejected" data-value="6" data-found="31" d="M 650 295 V 276 Q 650 272 654 272 H 670 Q 674 272 674 276 V 295 Z"><title>1.7.0: 6 rejected, not changed or duplicate, of 31 found</title></path>
+<text class="in" x="662" y="311" font-size="11" font-weight="600" text-anchor="middle">25</text>
+<text class="t2" x="662" y="414" font-size="12" text-anchor="middle">1.7.0</text>
+<path class="bar c1" data-release="1.7.1" data-series="accepted" data-value="18" data-found="20" d="M 694.89 396 V 325 H 718.89 V 396 Z"><title>1.7.1: 18 accepted of 20 found</title></path>
+<path class="bar c0" data-release="1.7.1" data-series="rejected" data-value="2" data-found="20" d="M 694.89 323 V 319.5 Q 694.89 316 698.39 316 H 715.39 Q 718.89 316 718.89 319.5 V 323 Z"><title>1.7.1: 2 rejected, not changed or duplicate, of 20 found</title></path>
+<text class="in" x="706.89" y="339" font-size="11" font-weight="600" text-anchor="middle">18</text>
+<text class="t2" x="706.89" y="414" font-size="12" text-anchor="middle">1.7.1</text>
+<path class="bar c1" data-release="1.7.2" data-series="accepted" data-value="29" data-found="33" d="M 739.78 396 V 281 H 763.78 V 396 Z"><title>1.7.2: 29 accepted of 33 found</title></path>
+<path class="bar c0" data-release="1.7.2" data-series="rejected" data-value="4" data-found="33" d="M 739.78 279 V 268 Q 739.78 264 743.78 264 H 759.78 Q 763.78 264 763.78 268 V 279 Z"><title>1.7.2: 4 rejected, not changed or duplicate, of 33 found</title></path>
+<text class="in" x="751.78" y="295" font-size="11" font-weight="600" text-anchor="middle">29</text>
+<text class="t2" x="751.78" y="414" font-size="12" text-anchor="middle">1.7.2</text>
+<path class="bar c1" data-release="1.7.3" data-series="accepted" data-value="39" data-found="53" d="M 784.67 396 V 241 H 808.67 V 396 Z"><title>1.7.3: 39 accepted of 53 found</title></path>
+<path class="bar c0" data-release="1.7.3" data-series="rejected" data-value="14" data-found="53" d="M 784.67 239 V 188 Q 784.67 184 788.67 184 H 804.67 Q 808.67 184 808.67 188 V 239 Z"><title>1.7.3: 14 rejected, not changed or duplicate, of 53 found</title></path>
+<text class="in" x="796.67" y="255" font-size="11" font-weight="600" text-anchor="middle">39</text>
+<text class="t2" x="796.67" y="414" font-size="12" text-anchor="middle">1.7.3</text>
+<path class="bar c1" data-release="1.8.0" data-series="accepted" data-value="17" data-found="23" d="M 829.56 396 V 329 H 853.56 V 396 Z"><title>1.8.0: 17 accepted of 23 found</title></path>
+<path class="bar c0" data-release="1.8.0" data-series="rejected" data-value="6" data-found="23" d="M 829.56 327 V 308 Q 829.56 304 833.56 304 H 849.56 Q 853.56 304 853.56 308 V 327 Z"><title>1.8.0: 6 rejected, not changed or duplicate, of 23 found</title></path>
+<text class="in" x="841.56" y="343" font-size="11" font-weight="600" text-anchor="middle">17</text>
+<text class="t2" x="841.56" y="414" font-size="12" text-anchor="middle">1.8.0</text>
+</g>
+<text class="t2" x="460" y="436" font-size="12" text-anchor="middle">Release, oldest first</text>
+</svg>

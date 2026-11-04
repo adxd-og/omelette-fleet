@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="test-suite-title test-suite-desc" viewBox="0 0 880 410" width="880" height="410">
+<title id="test-suite-title">Tests in the suite, before and after the clean-up gate</title>
+<desc id="test-suite-desc">Tests in the suite, before and after the clean-up gate. The gate cut 315 tests, 275 of them tester-written. No catalogue mutant the suite caught before the gate went uncaught after it. Tester-written tests were counted only at the gate. The docs pass of 2026-11-04 removed the 89 documentation tests. Before the gate (f336303 · 2026-10-22): 1871 tests, 587 tester-written. After the gate (858d0a2 · 2026-10-23): 1556 tests, 312 tester-written. v1.8.0 (release · 2026-11-04): 1855 tests, tester-written not counted. After the docs pass (docs pass · 2026-11-04): 1766 tests, tester-written not counted.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.t{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e1e0d9}.base{stroke:#c3c2b7}
+.c1{fill:#2a78d6}.c0{fill:#898781}.in{fill:#ffffff}
+@media (prefers-color-scheme: dark){
+.t{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.base{stroke:#383835}
+.c1{fill:#3987e5}
+}
+</style>
+<text class="t" x="16" y="26" font-size="16" font-weight="600">Tests in the suite, before and after the clean-up gate</text>
+<text class="t2" x="16" y="48" font-size="12">The gate cut 315 tests, 275 of them tester-written.</text>
+<text class="t2" x="16" y="66" font-size="12">No catalogue mutant the suite caught before the gate went uncaught after it.</text>
+<text class="t2" x="16" y="84" font-size="12">Tester-written tests were counted only at the gate. The docs pass of 2026-11-04 removed the 89 documentation tests.</text>
+<rect class="c1" x="16" y="103" width="10" height="10" rx="2"/>
+<text class="t" x="32" y="112" font-size="12">Whole suite</text>
+<rect class="c0" x="129.92000000000002" y="103" width="10" height="10" rx="2"/>
+<text class="t" x="145.92000000000002" y="112" font-size="12">Tester-written</text>
+<g class="plot" data-x0="167.52" data-x1="816" data-max="2000">
+<text class="t2" x="167.52" y="372" font-size="11" text-anchor="middle">0</text>
+<text class="t2" x="329.64" y="372" font-size="11" text-anchor="middle">500</text>
+<text class="t2" x="491.76" y="372" font-size="11" text-anchor="middle">1000</text>
+<text class="t2" x="653.88" y="372" font-size="11" text-anchor="middle">1500</text>
+<text class="t2" x="816" y="372" font-size="11" text-anchor="middle">2000</text>
+<text class="t" x="155.52" y="158" font-size="12" text-anchor="end">Before the gate</text>
+<text class="t2" x="155.52" y="173" font-size="11" text-anchor="end">f336303 · 2026-10-22</text>
+<path class="bar c1" data-row="Before the gate" data-series="tests" data-value="1871" d="M 167.52 145 H 770.17 Q 774.17 145 774.17 149 V 155 Q 774.17 159 770.17 159 H 167.52 Z"><title>Before the gate (f336303 · 2026-10-22): whole suite, 1871 tests</title></path>
+<text class="t2" x="782.17" y="157" font-size="12">1871</text>
+<path class="bar c0" data-row="Before the gate" data-series="testerWritten" data-value="587" d="M 167.52 161 H 353.85 Q 357.85 161 357.85 165 V 171 Q 357.85 175 353.85 175 H 167.52 Z"><title>Before the gate (f336303 · 2026-10-22): tester-written, 587 tests</title></path>
+<text class="t2" x="365.85" y="173" font-size="12">587</text>
+<text class="t" x="155.52" y="214" font-size="12" text-anchor="end">After the gate</text>
+<text class="t2" x="155.52" y="229" font-size="11" text-anchor="end">858d0a2 · 2026-10-23</text>
+<path class="bar c1" data-row="After the gate" data-series="tests" data-value="1556" d="M 167.52 201 H 668.04 Q 672.04 201 672.04 205 V 211 Q 672.04 215 668.04 215 H 167.52 Z"><title>After the gate (858d0a2 · 2026-10-23): whole suite, 1556 tests</title></path>
+<text class="t2" x="680.04" y="213" font-size="12">1556</text>
+<path class="bar c0" data-row="After the gate" data-series="testerWritten" data-value="312" d="M 167.52 217 H 264.68 Q 268.68 217 268.68 221 V 227 Q 268.68 231 264.68 231 H 167.52 Z"><title>After the gate (858d0a2 · 2026-10-23): tester-written, 312 tests</title></path>
+<text class="t2" x="276.68" y="229" font-size="12">312</text>
+<text class="t" x="155.52" y="270" font-size="12" text-anchor="end">v1.8.0</text>
+<text class="t2" x="155.52" y="285" font-size="11" text-anchor="end">release · 2026-11-04</text>
+<path class="bar c1" data-row="v1.8.0" data-series="tests" data-value="1855" d="M 167.52 257 H 764.99 Q 768.99 257 768.99 261 V 267 Q 768.99 271 764.99 271 H 167.52 Z"><title>v1.8.0 (release · 2026-11-04): whole suite, 1855 tests</title></path>
+<text class="t2" x="776.99" y="269" font-size="12">1855</text>
+<text class="t2" x="175.52" y="284" font-size="11">not counted</text>
+<text class="t" x="155.52" y="326" font-size="12" text-anchor="end">After the docs pass</text>
+<text class="t2" x="155.52" y="341" font-size="11" text-anchor="end">docs pass · 2026-11-04</text>
+<path class="bar c1" data-row="After the docs pass" data-series="tests" data-value="1766" d="M 167.52 313 H 736.13 Q 740.13 313 740.13 317 V 323 Q 740.13 327 736.13 327 H 167.52 Z"><title>After the docs pass (docs pass · 2026-11-04): whole suite, 1766 tests</title></path>
+<text class="t2" x="748.13" y="325" font-size="12">1766</text>
+<text class="t2" x="175.52" y="340" font-size="11">not counted</text>
+<line class="base" x1="167.52" y1="132" x2="167.52" y2="356" stroke-width="1"/>
+</g>
+<text class="t2" x="491.76" y="394" font-size="12" text-anchor="middle">Tests in the suite (count)</text>
+</svg>
