@@ -1,9 +1,9 @@
 /**
  * omelette-fleet :: mods/omelette-fleet/hooks/handoff.mjs
  * The handoff in the mod (1.8.0): the marker the rendered guard leads its
- * SessionStart print with (the mod strips that entry, its own prompt.context
- * block being the one copy), whether a ledger's last handoff is fresh, and the
- * open ledgers the compaction gate reads. Nothing here writes.
+ * SessionStart print with (an entry it leads is the settings hook's copy, and
+ * the mod then adds none of its own), whether a ledger's last handoff is
+ * fresh, and the open ledgers the compaction gate reads. Nothing here writes.
  *
  * `$` is always spelled `$.noun.method(...)` literally: the engine scans the
  * source and refuses a call it did not see.

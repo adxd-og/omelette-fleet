@@ -2320,17 +2320,21 @@ function modInstall({ home = homedir(), env = process.env } = {}) {
  * Write, by its matcher, and a SubagentStop entry — and the mod (modInstall),
  * whose installed copy behind the package is a cache that carries no guard.
  * PreToolUse counts as wired by the hooks line's rule, an entry that sees Bash;
- * entries that see only Write are named as NOT wired, with what they miss. The
- * half that holds is printed; with neither, no line: the hooks line already
- * says what to paste.
+ * entries that see only Write are named as NOT wired, with what they miss, and
+ * so is a SubagentStop entry with no PreToolUse entry beside it. The half that
+ * holds is printed; with neither, no line: the hooks line already says what to
+ * paste.
  */
 function guardLine(wiring, mod, version) {
   const entries = new Map();
   for (const g of [...wiring.project.guardMatchers, ...wiring.global.guardMatchers]) entries.set(g.matcher, g.bash);
   const bash = [...entries.values()].some(Boolean);
-  const groups = [...entries.keys()].map((m) => (bash ? `PreToolUse ${m}` : `PreToolUse ${m} — Bash not matched, re-merge the PreToolUse group`));
-  if (wiring.project.subagentStop || wiring.global.subagentStop) groups.push('SubagentStop');
-  const halves = groups.length ? [`settings hook ${bash || !entries.size ? 'wired' : 'not wired'} (${groups.join(', ')})`] : [];
+  const groups = entries.size
+    ? [...entries.keys()].map((m) => (bash ? `PreToolUse ${m}` : `PreToolUse ${m} — Bash not matched, re-merge the PreToolUse group`))
+    : ['no PreToolUse entry — re-merge the PreToolUse group'];
+  const subagentStop = wiring.project.subagentStop || wiring.global.subagentStop;
+  if (subagentStop) groups.push('SubagentStop');
+  const halves = entries.size || subagentStop ? [`settings hook ${bash ? 'wired' : 'not wired'} (${groups.join(', ')})`] : [];
   if (mod) {
     const installed = mod.installed === null ? null : visible(mod.installed);
     if (!mod.enabled) halves.push(`mod omelette-fleet ${installed ? `installed ${installed}, ` : ''}not enabled — the second delivery is absent`);

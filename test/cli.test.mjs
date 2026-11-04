@@ -2199,6 +2199,19 @@ test('doctor: the guard line names both deliveries — the settings hook by its 
   assert.doesNotMatch(stale, /loaded/, 'the CLI cannot see what a session loaded, and never says so');
 });
 
+test('doctor: a settings file with only a SubagentStop group — the guard line reads the settings hook as not wired, no PreToolUse entry', () => {
+  const dir = home();
+  const proj = join(dir, 'proj'); mkdirSync(proj);
+  const doctor = () => spawnSync(process.execPath, [BIN, 'doctor'], { cwd: proj, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0' } }).stdout;
+  const written = rulesIn(proj, dir, ['--hooks']);
+  assert.equal(written.status, 0, written.stderr);
+  const command = JSON.parse(snippetFrom(written.stdout)).hooks.PreToolUse[0].hooks[0].command;
+  writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ hooks: { SubagentStop: [{ hooks: [{ type: 'command', command }] }] } }));
+
+  const guard = doctor().split('\n').find((line) => line.startsWith('guard ')) || '';
+  assert.equal(guard, 'guard         settings hook not wired (no PreToolUse entry — re-merge the PreToolUse group, SubagentStop)');
+});
+
 test('doctor: a guard wired at 0.3.2 — PreToolUse and PreCompact only — is NOT wired, and the missing event is named', () => {
   const dir = home();
   const proj = join(dir, 'proj'); mkdirSync(proj);

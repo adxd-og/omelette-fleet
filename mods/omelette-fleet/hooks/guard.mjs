@@ -11,7 +11,7 @@
  * Also the touched record's line for the pane: the file the script's
  * SubagentStop writes, named and counted, never written here; and the
  * handoff print (printHandoff): the script run as SessionStart on `clear`,
- * its text handed to the prompt.context block.
+ * its text handed to the mod's SessionStart context entry.
  *
  * `$` is always spelled `$.noun.method(...)` literally: the engine scans the
  * source and refuses a call it did not see.

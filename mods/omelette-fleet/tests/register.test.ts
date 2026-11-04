@@ -1544,7 +1544,7 @@ describe('pins, the effort flag and the effort variable (1.8.0)', () => {
   })
 })
 
-describe('the handoff: a prompt.context block, one copy, the compaction skip (1.8.0)', () => {
+describe('the handoff: a SessionStart entry, one copy, the compaction skip (1.8.0)', () => {
   const CWD = '/home/op/work'
   const SCRIPT = `${CWD}/.claude/hooks/omelette-guard.mjs`
   const NODE_DIR = '/opt/node/bin'
@@ -1552,7 +1552,6 @@ describe('the handoff: a prompt.context block, one copy, the compaction skip (1.
   const MARKER = '--- omelette-fleet · read before continuing ---'
   const SECTIONS = '--- ledger-x.md · last handoff ---\n## Handoff (2026-10-08 — x)\nnext: run npm test\n'
   const PRINT = `${MARKER}\n${SECTIONS}`
-  const DATE = { name: 'currentDate', text: "Today's date is 2026-10-08." }
   const SKIP = 'no handoff in the last 30 minutes: write one, then compact again'
   const MIN = 60_000
 
@@ -1616,82 +1615,86 @@ describe('the handoff: a prompt.context block, one copy, the compaction skip (1.
   const COMPACTED = { messages: [{ role: 'user' as const, text: 'the summary', toolUses: [] }] }
   const compact = (trigger: string, more: Record<string, unknown> = {}) => ({ trigger, messages: MESSAGES, ...more }) as never
 
-  test('(a) prompt.context adds omeletteHandoff with the text the rendered guard answered as JSON, at a fire with no compaction before it', async ($, on) => {
-    mock.clock(on, { now: NOW })
+  const SUPERPOWERS = 'superpowers: using-superpowers loaded'
+
+  test('(a) clear with the settings hook\'s marked entry beneath: the answer comes back unchanged and the script never runs', async ($, on) => {
+    mock.env(on, { HOME, PATH: NODE_DIR })
+    const seen = handoffOf(on, { answer: { stdout: asJson(PRINT) } })
+    const beneath = { additionalContext: [PRINT, SUPERPOWERS] }
+    on('classic.SessionStart', () => beneath)
+
+    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never)).toEqual(beneath)
+    expect(seen.runs).toEqual([])
+  })
+
+  test('(b) startup with no marked entry beneath: the mod\'s entry is appended from the script\'s JSON print, every other entry kept in order', async ($, on) => {
     mock.env(on, { HOME, PATH: `${NODE_DIR}:node_modules/.bin` })
     const seen = handoffOf(on, { answer: { stdout: asJson(PRINT) } })
-    on('prompt.context', () => ({ blocks: [DATE] }))
+    on('classic.SessionStart', () => ({ additionalContext: [SUPERPOWERS, 'other'], sessionTitle: 'x' }))
 
-    const result = await $.prompt.context({ blocks: [DATE] })
-
-    expect(result.blocks).toEqual([DATE, { name: 'omeletteHandoff', text: PRINT }])
+    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual({ additionalContext: [SUPERPOWERS, 'other', PRINT], sessionTitle: 'x' })
     expect(seen.runs.map(run => run.argv)).toEqual([['node', SCRIPT]])
     expect(seen.runs[0]?.init?.timeoutMs).toBe(5000)
     expect(seen.runs[0]?.init?.env, 'node from PATH, its absolute entries only').toEqual({ PATH: NODE_DIR })
     expect(JSON.parse(seen.runs[0]?.init?.stdin ?? 'null')).toEqual({ hook_event_name: 'SessionStart', source: 'clear', cwd: CWD })
   })
 
-  test('(a2) a pre-1.8.0 rendered script prints plain text: the block carries it, trimmed', async ($, on) => {
-    mock.clock(on, { now: NOW })
+  test('(b) startup with no additionalContext beneath: the key is present, holding the mod\'s entry', async ($, on) => {
     mock.env(on, { HOME, PATH: NODE_DIR })
-    handoffOf(on, { answer: { stdout: `${SECTIONS}\n` } })
-    on('prompt.context', () => ({ blocks: [DATE] }))
+    handoffOf(on, { answer: { stdout: asJson(PRINT) } })
+    on('classic.SessionStart', () => ({ sessionTitle: 'x' }))
 
-    expect((await $.prompt.context({ blocks: [DATE] })).blocks).toEqual([DATE, { name: 'omeletteHandoff', text: SECTIONS.trim() }])
+    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual({ sessionTitle: 'x', additionalContext: [PRINT] })
   })
 
-  for (const [name, answer] of [['empty stdout', { stdout: '' }], ['a run that rejects (timeout)', { reject: 'still running after 5000 ms' }]] as const) {
-    test(`(b) ${name}: no block, next's blocks untouched`, async ($, on) => {
-      mock.clock(on, { now: NOW })
-      mock.env(on, { HOME, PATH: NODE_DIR })
-      const seen = handoffOf(on, { answer })
-      on('prompt.context', () => ({ blocks: [DATE] }))
+  test('(c) a pre-1.8.0 rendered script prints plain text: appended as it is, trimmed', async ($, on) => {
+    mock.env(on, { HOME, PATH: NODE_DIR })
+    handoffOf(on, { answer: { stdout: `${SECTIONS}\n` } })
+    on('classic.SessionStart', () => ({ additionalContext: [SUPERPOWERS] }))
 
-      expect((await $.prompt.context({ blocks: [DATE] })).blocks).toEqual([DATE])
-      expect(seen.runs).toHaveLength(1)
+    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never)).toEqual({ additionalContext: [SUPERPOWERS, SECTIONS.trim()] })
+  })
+
+  const nothing: [string, Parameters<typeof handoffOf>[1], number][] = [
+    ['empty stdout', { answer: { stdout: '' } }, 1],
+    ['process.run throws (timeout)', { answer: { reject: 'still running after 5000 ms' } }, 1],
+    ['a non-zero exit', { answer: { stdout: asJson(PRINT), exitCode: 1 } }, 1],
+    ['no rendered script', { scripts: [], answer: { stdout: asJson(PRINT) } }, 0],
+  ]
+
+  for (const [name, world, runs] of nothing) {
+    test(`(d) ${name}: the answer beneath comes back unchanged, an absent key still absent`, async ($, on) => {
+      mock.env(on, { HOME, PATH: NODE_DIR })
+      const seen = handoffOf(on, world)
+      on('classic.SessionStart', () => ({ sessionTitle: 'x' }))
+
+      const result = await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)
+
+      expect(result).toEqual({ sessionTitle: 'x' })
+      expect('additionalContext' in result, 'left out, never undefined').toBe(false)
+      expect(seen.runs).toHaveLength(runs)
     })
   }
 
-  const SUPERPOWERS = 'superpowers: using-superpowers loaded'
+  test('(e) compact without the marked entry (no settings hook wired): the mod\'s entry is appended', async ($, on) => {
+    mock.env(on, { HOME, PATH: NODE_DIR })
+    handoffOf(on, { answer: { stdout: asJson(PRINT) } })
+    on('classic.SessionStart', () => ({ additionalContext: [SUPERPOWERS] }))
 
-  test('(c) classic.SessionStart on clear: the guard\'s marked entry is stripped, every other entry kept', async ($, on) => {
-    mock.env(on, { HOME })
-    handoffOf(on)
-    on('classic.SessionStart', () => ({ additionalContext: [PRINT, SUPERPOWERS] }))
-
-    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never)).toEqual({ additionalContext: [SUPERPOWERS] })
+    expect(await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)).toEqual({ additionalContext: [SUPERPOWERS, PRINT] })
   })
 
-  test('(c) the marked entry alone on compact: the result carries no additionalContext key at all', async ($, on) => {
-    mock.env(on, { HOME })
-    handoffOf(on)
-    on('classic.SessionStart', () => ({ additionalContext: [PRINT], sessionTitle: 'x' }))
+  test('prompt.context: the mod adds nothing and runs nothing, so no sub-agent inherits the handoff (branch review F1)', async ($, on) => {
+    mock.env(on, { HOME, PATH: NODE_DIR })
+    const seen = handoffOf(on, { answer: { stdout: asJson(PRINT) } })
+    const blocks = [{ name: 'currentDate', text: "Today's date is 2026-10-08." }]
+    on('prompt.context', () => ({ blocks }))
 
-    const result = await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)
-
-    expect(result).toEqual({ sessionTitle: 'x' })
-    expect('additionalContext' in result, 'left out, never undefined').toBe(false)
+    expect((await $.prompt.context({ blocks })).blocks).toEqual(blocks)
+    expect(seen.runs).toEqual([])
   })
 
-  test('(c) startup keeps both entries', async ($, on) => {
-    mock.env(on, { HOME })
-    const beneath = { additionalContext: [PRINT, SUPERPOWERS] }
-    on('classic.SessionStart', () => beneath)
-    handoffOf(on)
-
-    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual(beneath)
-  })
-
-  test('(c) no rendered script (fs.exists false): clear keeps both entries', async ($, on) => {
-    mock.env(on, { HOME })
-    const beneath = { additionalContext: [PRINT, SUPERPOWERS] }
-    handoffOf(on, { scripts: [] })
-    on('classic.SessionStart', () => beneath)
-
-    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never)).toEqual(beneath)
-  })
-
-  test('(d) handoffGate on, a stale open ledger: the compaction is skipped once; a second one a minute later passes', { options: { handoffGate: true } }, async ($, on) => {
+  test('(gate) handoffGate on, a stale open ledger: the compaction is skipped once; a second one a minute later passes', { options: { handoffGate: true } }, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const seen = handoffOf(on, { ledgers: { 'ledger-x.md': { text: ledgerText('feat/x', STALE), mtimeMs: NOW - 5 * MIN } }, branches: ['feat/x'] })
     on('session.compact', () => COMPACTED)
@@ -1705,7 +1708,7 @@ describe('the handoff: a prompt.context block, one copy, the compaction skip (1.
   })
 
   for (const [name, input] of [['trigger precompute', compact('precompute')], ['a sub-agent\'s own compaction (agentId)', compact('auto', { agentId: 'agent-c1' })]] as const) {
-    test(`(d) ${name}: passes`, { options: { handoffGate: true } }, async ($, on) => {
+    test(`(gate) ${name}: passes`, { options: { handoffGate: true } }, async ($, on) => {
       mock.clock(on, { now: NOW })
       const seen = handoffOf(on, { ledgers: { 'ledger-x.md': { text: ledgerText('feat/x', STALE), mtimeMs: NOW } }, branches: ['feat/x'] })
       on('session.compact', () => COMPACTED)
@@ -1715,7 +1718,7 @@ describe('the handoff: a prompt.context block, one copy, the compaction skip (1.
     })
   }
 
-  test('(d) the option off (its default): a stale open ledger passes', async ($, on) => {
+  test('(gate) the option off (its default): a stale open ledger passes', async ($, on) => {
     mock.clock(on, { now: NOW })
     handoffOf(on, { ledgers: { 'ledger-x.md': { text: ledgerText('feat/x', STALE), mtimeMs: NOW } }, branches: ['feat/x'] })
     on('session.compact', () => COMPACTED)
@@ -1723,7 +1726,7 @@ describe('the handoff: a prompt.context block, one copy, the compaction skip (1.
     expect(await $.session.compact(compact('manual'))).toEqual(COMPACTED)
   })
 
-  test('(d) a closed ledger (its branch gone) newer and fresh beside an open stale one: skipped, the closed one does not count', { options: { handoffGate: true } }, async ($, on) => {
+  test('(gate) a closed ledger (its branch gone) newer and fresh beside an open stale one: skipped, the closed one does not count', { options: { handoffGate: true } }, async ($, on) => {
     mock.clock(on, { now: NOW })
     const seen = handoffOf(on, {
       ledgers: {
@@ -1738,7 +1741,7 @@ describe('the handoff: a prompt.context block, one copy, the compaction skip (1.
     expect([...seen.gits].sort()).toEqual(['refs/heads/feat/done', 'refs/heads/feat/x'])
   })
 
-  test('(d) a main ledger with a fresh heading: passes, and git never runs', { options: { handoffGate: true } }, async ($, on) => {
+  test('(gate) a main ledger with a fresh heading: passes, and git never runs', { options: { handoffGate: true } }, async ($, on) => {
     mock.clock(on, { now: NOW })
     const seen = handoffOf(on, { ledgers: { 'ledger-lane.md': { text: ledgerText('main', FRESH), mtimeMs: NOW } } })
     on('session.compact', () => COMPACTED)
@@ -2210,7 +2213,7 @@ describe('tester 1.8.0 Task 8: pins, the effort flag and the effort notice at th
 })
 
 // tester 1.8.0 Task 9
-describe('tester 1.8.0 Task 9: the handoff block, the one-copy strip and the compaction skip at the engine edge', () => {
+describe('tester 1.8.0 Task 9: the handoff entry, the one copy and the compaction skip at the engine edge', () => {
   const CWD = '/home/op/work'
   const SCRIPT = `${CWD}/.claude/hooks/omelette-guard.mjs`
   const HOME_SCRIPT = `${HOME}/.claude/hooks/omelette-guard.mjs`
@@ -2280,25 +2283,25 @@ describe('tester 1.8.0 Task 9: the handoff block, the one-copy strip and the com
 
   const asJson = (text: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } })
 
-  // ---- the block
+  // ---- the entry
 
-  test('a script that exits 1 with text on stdout adds no block', async ($, on) => {
+  test('a script that exits 1 with text on stdout adds no entry', async ($, on) => {
     mock.clock(on, { now: NOON })
     mock.env(on, { HOME, PATH: '/opt/node/bin' })
     const spy = engine(on, { exitCode: 1, stdout: asJson(PRINT) })
-    on('prompt.context', () => ({ blocks: [] }))
+    on('classic.SessionStart', () => ({ additionalContext: [] }))
 
-    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
+    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual({ additionalContext: [] })
     expect(spy.runs).toBe(1)
   })
 
-  test('no rendered script anywhere: no block and no node run; the copy under HOME is found when the project has none', async ($, on) => {
+  test('no rendered script anywhere: no entry and no node run; the copy under HOME is found when the project has none', async ($, on) => {
     mock.clock(on, { now: NOON })
     mock.env(on, { HOME, PATH: '/opt/node/bin' })
     const none = engine(on, { scripts: [] })
-    on('prompt.context', () => ({ blocks: [] }))
+    on('classic.SessionStart', () => ({}))
 
-    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
+    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual({})
     expect(none.runs).toBe(0)
   })
 
@@ -2306,19 +2309,19 @@ describe('tester 1.8.0 Task 9: the handoff block, the one-copy strip and the com
     mock.clock(on, { now: NOON })
     mock.env(on, { HOME, PATH: '/opt/node/bin' })
     const spy = engine(on, { scripts: [HOME_SCRIPT] })
-    on('prompt.context', () => ({ blocks: [] }))
+    on('classic.SessionStart', () => ({}))
 
-    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([{ name: 'omeletteHandoff', text: PRINT }])
+    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual({ additionalContext: [PRINT] })
     expect(spy.nodeArgv).toEqual([['node', HOME_SCRIPT]])
   })
 
-  test('a PATH with no absolute entry: the script is not run and no block is added', async ($, on) => {
+  test('a PATH with no absolute entry: the script is not run and no entry is added', async ($, on) => {
     mock.clock(on, { now: NOON })
     mock.env(on, { HOME, PATH: 'node_modules/.bin:bin' })
     const spy = engine(on)
-    on('prompt.context', () => ({ blocks: [] }))
+    on('classic.SessionStart', () => ({}))
 
-    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
+    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual({})
     expect(spy.runs).toBe(0)
   })
 
@@ -2326,20 +2329,24 @@ describe('tester 1.8.0 Task 9: the handoff block, the one-copy strip and the com
     mock.clock(on, { now: NOON })
     mock.env(on, { HOME, PATH: '/opt/node/bin' })
     engine(on, { stdout: '{"hookSpecificOutput":{"hookEventName":"SessionStart"}}\n' })
-    on('prompt.context', () => ({ blocks: [] }))
+    on('classic.SessionStart', () => ({}))
 
-    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([{ name: 'omeletteHandoff', text: '{"hookSpecificOutput":{"hookEventName":"SessionStart"}}' }])
+    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual({ additionalContext: ['{"hookSpecificOutput":{"hookEventName":"SessionStart"}}'] })
   })
 
-  // ---- the strip
+  // ---- the one copy
 
-  test('the strip keeps the entries in their order, removes every marker-led one, and keeps one that only MENTIONS the marker', async ($, on) => {
-    mock.env(on, { HOME })
-    engine(on)
+  test('an entry that only MENTIONS the marker is not the settings hook\'s: the mod appends its entry after the others, in order; a marker-led entry anywhere means no run', async ($, on) => {
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const spy = engine(on)
     const mentions = `a note quoting ${MARKER} in its middle`
-    on('classic.SessionStart', () => ({ additionalContext: ['first', PRINT, mentions, `${MARKER}\nanother`, 'last'], sessionTitle: 't' }))
+    const marked = ['first', mentions, `${MARKER}\nanother`, 'last']
+    on('classic.SessionStart', ($, e) => ({ additionalContext: (e as { source: string }).source === 'clear' ? marked : ['first', mentions, 'last'], sessionTitle: 't' }))
 
-    expect(await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)).toEqual({ additionalContext: ['first', mentions, 'last'], sessionTitle: 't' })
+    expect(await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)).toEqual({ additionalContext: ['first', mentions, 'last', PRINT], sessionTitle: 't' })
+    expect(spy.runs).toBe(1)
+    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never), 'a marker-led entry, not the first').toEqual({ additionalContext: marked, sessionTitle: 't' })
+    expect(spy.runs).toBe(1)
   })
 
   test('resume and fork leave the engine\'s answer untouched, the marked entry included', async ($, on) => {
@@ -2353,13 +2360,15 @@ describe('tester 1.8.0 Task 9: the handoff block, the one-copy strip and the com
     }
   })
 
-  test('a result with no additionalContext passes as it is; the script under HOME alone licenses the strip', async ($, on) => {
-    mock.env(on, { HOME })
-    engine(on, { scripts: [HOME_SCRIPT] })
+  test('a result with no additionalContext gets the key with the mod\'s entry; with the marked entry beneath, the script under HOME is not run', async ($, on) => {
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const spy = engine(on, { scripts: [HOME_SCRIPT] })
     on('classic.SessionStart', ($, e) => ((e as { source: string }).source === 'clear' ? { sessionTitle: 'only' } : { additionalContext: [PRINT, 'kept'] }))
 
-    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never)).toEqual({ sessionTitle: 'only' })
-    expect(await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)).toEqual({ additionalContext: ['kept'] })
+    expect(await $.classic.SessionStart({ source: 'clear', cwd: CWD } as never)).toEqual({ sessionTitle: 'only', additionalContext: [PRINT] })
+    expect(spy.nodeArgv).toEqual([['node', HOME_SCRIPT]])
+    expect(await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)).toEqual({ additionalContext: [PRINT, 'kept'] })
+    expect(spy.runs).toBe(1)
   })
 
   // ---- the gate
@@ -2472,5 +2481,80 @@ describe('tester 1.8.0 Task 9: the handoff block, the one-copy strip and the com
 
     expect(await $.session.compact(compact('manual'))).toEqual({ skip: SKIP })
     expect(spy.reads).toEqual([])
+  })
+})
+
+// tester 1.8.0 release fix, the mod's SessionStart entry
+describe('tester 1.8.0 release fix: the SessionStart entry at the engine edge', () => {
+  const CWD = '/home/op/work'
+  const SCRIPT = `${CWD}/.claude/hooks/omelette-guard.mjs`
+  const HOME_SCRIPT = `${HOME}/.claude/hooks/omelette-guard.mjs`
+  const MARKER = '--- omelette-fleet · read before continuing ---'
+  const PRINT = `${MARKER}\n--- ledger-x.md · last handoff ---\n## Handoff (2026-10-08 — x)\nnext: run npm test\n`
+  const asJson = (text: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } })
+
+  function engine(on: On, { scripts = [SCRIPT] }: { scripts?: string[] } = {}) {
+    const seen: { argv: (readonly string[])[]; stdin: string[] } = { argv: [], stdin: [] }
+
+    on('session.cwd', () => ({ value: CWD }))
+    on('fs.exists', ($, e) => ({ value: scripts.includes(e.path) }))
+    on('process.run', ($, e) => {
+      seen.argv.push((e as { argv: readonly string[] }).argv)
+      seen.stdin.push(e.init?.stdin ?? '')
+
+      return { value: { exitCode: 0, stdout: asJson(PRINT), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    })
+
+    return seen
+  }
+
+  test('two marker-led entries beneath (two settings files): the answer comes back unchanged and the script never runs', async ($, on) => {
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const seen = engine(on)
+    const beneath = { additionalContext: [PRINT, 'other', `${MARKER}\nsecond copy`] }
+    on('classic.SessionStart', () => beneath)
+
+    expect(await $.classic.SessionStart({ source: 'compact', cwd: CWD } as never)).toEqual(beneath)
+    expect(seen.argv).toEqual([])
+  })
+
+  test('startup and resume with no entry beneath: each gets the mod\'s entry, one run each', async ($, on) => {
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const seen = engine(on)
+    on('classic.SessionStart', () => ({ additionalContext: ['other'] }))
+
+    expect(await $.classic.SessionStart({ source: 'startup', cwd: CWD } as never)).toEqual({ additionalContext: ['other', PRINT] })
+    expect(await $.classic.SessionStart({ source: 'resume', cwd: CWD } as never)).toEqual({ additionalContext: ['other', PRINT] })
+    expect(seen.argv).toHaveLength(2)
+  })
+
+  test('the event carries no cwd and the project has no script: no crash, the answer as it came, nothing run', async ($, on) => {
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const seen = engine(on)
+    on('classic.SessionStart', () => ({ sessionTitle: 'x' }))
+
+    const result = await $.classic.SessionStart({ source: 'startup' } as never)
+
+    expect(result).toEqual({ sessionTitle: 'x' })
+    expect('additionalContext' in result).toBe(false)
+    expect(seen.argv).toEqual([])
+  })
+
+  test('the event carries no cwd and a script is under HOME: it runs', async ($, on) => {
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const seen = engine(on, { scripts: [HOME_SCRIPT] })
+    on('classic.SessionStart', () => ({}))
+
+    expect(await $.classic.SessionStart({ source: 'startup' } as never)).toEqual({ additionalContext: [PRINT] })
+    expect(seen.argv).toEqual([['node', HOME_SCRIPT]])
+  })
+
+  test('prompt.context carries no block of the mod\'s and the mod\'s hooks never run the script on it, even with a script and a marker-less SessionStart', async ($, on) => {
+    mock.env(on, { HOME, PATH: '/opt/node/bin' })
+    const seen = engine(on)
+    on('prompt.context', () => ({ blocks: [] }))
+
+    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
+    expect(seen.argv).toEqual([])
   })
 })

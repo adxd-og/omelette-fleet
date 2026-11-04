@@ -11,10 +11,9 @@
  * included, lets the call go on. The one rewrite is the pin (1.8.0, roles.mjs):
  * a guarded role spawned on a model its definition does not name runs on the
  * definition's. The handoff (1.8.0, handoff.mjs) adds to what the session is
- * sent: the rendered guard's print as a prompt.context block, the settings
- * hook's copy of it taken out of SessionStart's context; and, with
- * `handoffGate` on, one compaction is skipped while the newest open ledger has
- * no fresh handoff.
+ * sent: the rendered guard's print as a SessionStart context entry, when the
+ * settings hook's own is not there already; and, with `handoffGate` on, one
+ * compaction is skipped while the newest open ledger has no fresh handoff.
  *
  * `$` is always spelled `$.noun.method(...)` literally: the engine scans this
  * source and refuses a call it did not see.
@@ -516,18 +515,6 @@ const touchedOf = async ($: EngineInterface, e: { agent_type: string; agent_id: 
 }
 
 /**
- * The rendered guard's handoff print, for the prompt.context block: '' with no
- * rendered script or nothing printed. The directory is `$.session.cwd()`:
- * prompt.context's input carries none.
- */
-const handoffText = async ($: EngineInterface): Promise<string> => {
-  const cwd = await $.session.cwd().catch(() => undefined)
-  const script = await findGuardScript($, cwd)
-
-  return script ? printHandoff($, script, cwd) : ''
-}
-
-/**
  * The handoff gate's skip for a compaction it covers, or none (the compaction
  * goes on): a skip while no skip of the last GATE_PASS_MS stands and the
  * newest open ledger has no fresh handoff (handoff.mjs); the skip's time is
@@ -682,39 +669,20 @@ export const register: Register = (on, options) => {
     return result
   }).catch(($, e, next) => next(e))
 
-  // The handoff's one copy: the rendered guard's print as a block of the context the conversation carries, at every
-  // fire (a session's first request, and again when a compaction or a /clear has it read anew).
-  on('prompt.context', async ($, e, next) => {
-    const result = await next(e)
-    const text = await handoffText($).catch(() => '')
-
-    return text ? { ...result, blocks: [...result.blocks, { name: 'omeletteHandoff', text }] } : result
-  }).catch(($, e, next) => next(e))
-
-  // Way B: on the two sources the guard prints on, its entry (the one its marker leads) leaves SessionStart's context,
-  // and only while a rendered script is there for prompt.context to print from. Every other entry stays as it came.
+  // The handoff's one copy, on every source: the settings hook beneath prints on compact and clear (its entry is the one
+  // its marker leads); where it did not (startup, resume, or no hook wired), the rendered guard's print is added as a
+  // SessionStart context entry, which no sub-agent inherits. Nothing printed, the answer beneath as it came.
   on('classic.SessionStart', async ($, e, next) => {
-    if (e.source !== 'compact' && e.source !== 'clear') {
-      return next(e)
-    }
-
-    const script = await findGuardScript($, e.cwd).catch(() => undefined)
-
-    if (!script) {
-      return next(e)
-    }
-
     const result = await next(e)
 
-    if (!result.additionalContext) {
+    if (result.additionalContext?.some(entry => entry.startsWith(HANDOFF_MARKER))) {
       return result
     }
 
-    const { additionalContext, ...rest } = result
-    const kept = additionalContext.filter(entry => !entry.startsWith(HANDOFF_MARKER))
+    const script = await findGuardScript($, e.cwd).catch(() => undefined)
+    const text = script ? await printHandoff($, script, e.cwd) : ''
 
-    // Nothing left: the key goes, never `additionalContext: undefined`.
-    return kept.length > 0 ? { ...rest, additionalContext: kept } : rest
+    return text ? { ...result, additionalContext: [...(result.additionalContext ?? []), text] } : result
   }).catch(($, e, next) => next(e))
 
   // The handoff gate, off by default: a manual or automatic compaction of the main conversation is skipped once while

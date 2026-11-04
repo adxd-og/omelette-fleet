@@ -2,8 +2,8 @@
  * omelette-fleet :: test/mod-handoff-1.8.0.test.mjs
  * The handoff's pure half in the mod (1.8.0, Task 9): `lastHandoffFresh`, the
  * compaction gate's freshness rule (the last handoff heading, its local date,
- * its HH:MM within 30 minutes), and the marker the mod strips, which must be
- * the rendered guard's first printed line. The kit tests
+ * its HH:MM within 30 minutes), and the marker by which the mod knows the
+ * settings hook's entry, which must be the rendered guard's first printed line. The kit tests
  * (mods/omelette-fleet/tests/register.test.ts) run the hooks themselves.
  */
 import { test } from 'node:test';
