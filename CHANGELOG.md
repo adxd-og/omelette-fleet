@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.8.0 — <unreleased>
+## 1.8.0 — 2026-11-04
 
 Guard v2 reads heredocs and quotes as the shell does, protects the ledger files from being rewritten, fences the reviewer's writes and records what a sub-agent wrote; the mod can run the same guard and answers first; a spawn's model is pinned to its definition; the handoff has named fields and the mod hands it to a fresh session too; the review brief says how to read a change and how to label a finding. The guard is containment for the sub-agent roles, not a security boundary. Map: [ORCHESTRATION, "Layer 3: the guard"](docs/ORCHESTRATION.md#layer-3-the-guard).
 
