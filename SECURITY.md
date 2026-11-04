@@ -32,7 +32,7 @@ These are the reports we want, in rough order of severity:
 
 Also in scope: argv or path handling that turns data into shell syntax, a status-feed write that escapes `$OMELETTE_HOME` or lands with wrong permissions, and anything that makes `doctor` report a broken unit as healthy.
 
-**Not in scope:** a vulnerability in a vendor CLI itself or in the model behind it — report those to the vendor; the quality, accuracy or hallucinations of a unit's answers (see the per-unit "do not trust it with" column in the README); and anything that requires you to have already deliberately opened the write ceiling on your own machine.
+**Not in scope:** a vulnerability in a vendor CLI itself or in the model behind it — report those to the vendor; the quality, accuracy or hallucinations of a unit's answers (see what not to trust each unit with in [docs/ORCHESTRATION.md, "Never a sole source"](docs/ORCHESTRATION.md#never-a-sole-source)); and anything that requires you to have already deliberately opened the write ceiling on your own machine.
 
 ## What to expect
 

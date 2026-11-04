@@ -52,7 +52,38 @@ $OMELETTE_HOME/fleet.config.json      # OMELETTE_HOME set
 
 ## Shape
 
-The full map of keys. The shipped `examples/fleet.config.json`, which `install` copies into a new fleet home, carries only what an operator decides — which units run, their mode, timeouts and web search, the status feed, and Gemini's model, which has no built-in default — and every key it omits follows the package's defaults, release by release.
+The shipped `examples/fleet.config.json`, which `install` copies into a new fleet home, carries only what an operator decides — which units run, their mode, timeouts and web search, the status feed, and Gemini's model, which has no built-in default — and every key it omits follows the package's defaults, release by release:
+
+```json
+{
+  "version": 1,
+  "defaults": {
+    "status": true
+  },
+  "units": {
+    "gemini": {
+      "enabled": true,
+      "mode": "read-only",
+      "model": "Gemini 3.8 Flash (High)",
+      "timeoutS": 300
+    },
+    "grok": {
+      "enabled": true,
+      "mode": "read-only",
+      "timeoutS": 1800,
+      "maxTurns": 30
+    },
+    "codex": {
+      "enabled": true,
+      "mode": "read-only",
+      "webSearch": true,
+      "timeoutS": 600
+    }
+  }
+}
+```
+
+The full map of keys:
 
 ```json
 {
