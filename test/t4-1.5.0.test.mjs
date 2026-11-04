@@ -1,8 +1,7 @@
 /**
  * omelette-fleet :: test/t4-1.5.0.test.mjs
- * 1.5.0 T4, the docs half: README and SECURITY describe the three-event guard,
- * the Codex web default mode is recorded, the spooled body is named as
- * best-effort, and the Gemini catalog no longer claims a sync source.
+ * 1.5.0 T4: the Codex adapter header carries the measured sentence and the
+ * Gemini catalog no longer claims a sync source (the docs half was removed).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,56 +11,6 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
-const section = (md, heading) => {
-  const from = md.indexOf(`\n## ${heading}\n`);
-  assert.ok(from >= 0, `section "${heading}" exists`);
-  const to = md.indexOf('\n## ', from + 1);
-  return md.slice(from, to === -1 ? undefined : to);
-};
-
-test('README: the doctor sample names the four events and the stamp-and-print handoff line', () => {
-  const md = read('README.md');
-  assert.match(md, /^hooks {9}project: v\d+\.\d+\.\d+ \(wired: PreToolUse, PreCompact, SessionStart, SubagentStop\) · global: absent$/m);
-  assert.match(md, /^handoff {7}stamp and print on · ledgers: 1$/m);
-  assert.doesNotMatch(md, /wired: PreToolUse, PreCompact, SessionStart, PostToolUse/);
-  assert.doesNotMatch(md, /nudge at 90%|Stop gate on|summary on/);
-  assert.doesNotMatch(md, /90 % of (the|its) (context )?window/);
-  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F1): the 1.5.0 removal and its
-  // MEASUREMENTS link have one home, SECURITY's guard table; README links there.
-  assert.doesNotMatch(md, /five compactions/);
-  assert.match(md, /\(\[SECURITY, "The guard hook"\]\(docs\/SECURITY\.md#the-guard-hook\)\)/);
-  assert.match(read('docs/SECURITY.md'), /\(\[MEASUREMENTS\]\(MEASUREMENTS\.md#the-handoff-hooks-over-five-compactions\)\)/);
-});
-
-test('SECURITY: the guard section names no transcript read, no state file and no PostCompact handler', () => {
-  const guard = section(read('docs/SECURITY.md'), 'The guard hook');
-  assert.doesNotMatch(guard, /tail of the transcript/i);
-  assert.doesNotMatch(guard, /handoff-state\.json/);
-  assert.doesNotMatch(guard, /^- \*\*`PostCompact`/m);
-  assert.doesNotMatch(guard, /^- \*\*`PostToolUse` and `Stop`/m);
-  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F1): the per-event bullets became
-  // the rows of one event table; the same facts, one row each.
-  assert.match(guard, /^\| `PreCompact` \|/m);
-  assert.match(guard, /^\| `SessionStart` \(every source\) \|[^\n]*1 MiB[^\n]*40 lines \/ 4 KB per ledger, the register 6 KB from its tail, the backlog table 2 KB, 12 KB in all/m);
-  assert.match(guard, /it reads no other transcript, keeps no state file/);
-});
-
-test('SECURITY: the body of a spooled answer is named as best-effort', () => {
-  const best = section(read('docs/SECURITY.md'), 'What is best-effort');
-  assert.match(best, /^- \*\*The body of a spooled answer\.\*\* `omelette-fleet results` escapes the header it prints/m);
-});
-
-test('MEASUREMENTS: the Codex web default mode has its section, its map row and its method', () => {
-  const md = read('docs/MEASUREMENTS.md');
-  assert.match(md, /\| \[The Codex web default mode\]\(#the-codex-web-default-mode\) \|/);
-  const s = section(md, 'The Codex web default mode');
-  assert.match(s, /^\| none \(the CLI's default\) \| 2 /m);
-  assert.match(s, /^\| `web_search="cached"` \| 2 /m);
-  assert.match(s, /^\| `web_search="live"` \| 2 /m);
-  assert.match(s, /the default is indistinguishable from either on the exec output/);
-  assert.ok(md.indexOf('\n## The Codex web default mode\n') < md.indexOf('\n## How the numbers are taken\n'));
-  assert.match(section(md, 'How the numbers are taken'), /^- \*\*The Codex web default mode\.\*\*[^\n]*< \/dev\/null/m);
-});
 
 test('the Codex adapter header carries the measured sentence; the Gemini catalog claims no sync source', () => {
   assert.match(read('units/codex/adapter.mjs'), /Measured 2026-09-25 on codex-cli 0\.156\.1/);

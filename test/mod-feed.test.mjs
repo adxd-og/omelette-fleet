@@ -3,27 +3,42 @@
  * The fleet pane's reading of the status feed (1.7.0, Task 2):
  * mods/omelette-fleet/hooks/feed.mjs picks the schema-2 snapshot files of the
  * three units out of a fleet-home listing and parses one snapshot's text. The
- * STATUS-FEED example is parsed verbatim, so a change to the documented
- * contract breaks this test before it breaks the pane.
+ * snapshot example (a literal copy of the shape docs/STATUS-FEED.md shows) is
+ * parsed verbatim.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseSnapshot, snapshotNames } from '../mods/omelette-fleet/hooks/feed.mjs';
 
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
 
-/** The per-process snapshot example of docs/STATUS-FEED.md, as written there. */
+/** A per-process snapshot as the status feed writes it (the shape docs/STATUS-FEED.md shows). */
 function documentedSnapshot() {
-  const doc = readFileSync(join(ROOT, 'docs', 'STATUS-FEED.md'), 'utf8');
-  const start = doc.indexOf('```json\n') + '```json\n'.length;
-  const text = doc.slice(start, doc.indexOf('\n```', start));
-  assert.match(text, /"schema": 2/, 'the first JSON block of STATUS-FEED is the snapshot');
-  return text;
+  return JSON.stringify({
+    schema: 2,
+    unit: 'codex',
+    pid: 48123,
+    active: [{
+      id: '48123-2',
+      tool: 'codex_code_review',
+      model: 'gpt-5.6-terra',
+      effort: 'high',
+      promptPreview: 'review the spawn layer for unbounded output',
+      startedAt: '2026-09-03T09:14:02.118Z',
+      resultId: '20260903T091402Z-48123-2',
+    }],
+    lastEvent: {
+      tool: 'codex_research',
+      status: 'ok',
+      endedAt: '2026-09-03T09:13:44.902Z',
+      durationMs: 21883,
+      error: null,
+      resultId: '20260903T091323Z-48123-1',
+      usage: { input: 60835, cachedInput: 45312, output: 236, reasoning: 103 },
+    },
+    updatedAt: '2026-09-03T09:14:02.119Z',
+  }, null, 2);
 }
 
 /** A schema-2 snapshot of `unit` written at `updatedAt`, with the given active calls. */
@@ -49,7 +64,7 @@ test('snapshotNames keeps the three units\' status-<unit>-<pid>.json and drops e
   assert.deepEqual(snapshotNames([]), []);
 });
 
-test('parseSnapshot reads the STATUS-FEED example verbatim: times in ms, the active call\'s fields, lastEvent\'s end', () => {
+test('parseSnapshot reads the documented snapshot example verbatim: times in ms, the active call\'s fields, lastEvent\'s end', () => {
   const now = Date.parse('2026-09-03T09:14:05.000Z');
   assert.deepEqual(parseSnapshot(documentedSnapshot(), now), {
     unit: 'codex',

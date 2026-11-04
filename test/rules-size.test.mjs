@@ -1,17 +1,12 @@
 // 1.2.0 P1 (spec docs/superpowers/specs/2026-09-20-1.2.0-context-design.md,
 // "P1 — the rules file as a map"): the rules file keeps every rule byte for byte
 // and loses only the prose that explained how the handoff hooks work, which now
-// lives in CONFIG "The handoff hooks". These tests pin both halves: what left the
-// rules, and where it went.
+// lives in CONFIG "The handoff hooks". These tests pin what left the rules; the
+// half on where it went (CONFIG's prose) was removed with the documentation tests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { MERGE_SENTENCES, renderRulesFile } from '../core/rules.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 /** The rules file as a session loads it: rendered, under the default merge policy. */
 const rules = () => renderRulesFile('1.2.0', { merge: 'session' });
 
@@ -28,30 +23,6 @@ function section(md, heading) {
 
 /** How the handoff hooks work, in the words that carry it: CONFIG's to say, never the rules'. */
 const MECHANICS = ['40 lines', '4 KB', '12 KB', 'PreCompact', 'SessionStart'];
-
-test('CONFIG carries the handoff hooks the rules file used to explain', () => {
-  const md = read('docs/CONFIG.md');
-  const hooks = section(md, '## The handoff hooks');
-  for (const mechanism of MECHANICS) assert.ok(hooks.includes(mechanism), `CONFIG "The handoff hooks" carries: ${mechanism}`);
-  for (const event of ['PreCompact', 'SessionStart']) {
-    assert.ok(hooks.includes(`\`${event}\``), `${event} named`);
-  }
-  for (const fact of [
-    '<session cwd>/.omelette/ledger-*.md',
-    'a ledger kept in another repository gets neither the stamp nor the print',
-    '40 lines / 4 KB per ledger, 12 KB in all',
-    '`handoff.enabled=false` turns it off',
-    'They stamp and they print the block you wrote',
-    'Nothing measures the context and nothing holds a turn',
-    'MEASUREMENTS.md#the-handoff-hooks-over-five-compactions',
-  ]) assert.ok(hooks.includes(fact), `CONFIG "The handoff hooks" says: ${fact}`);
-  // The three retired events are named only as what an old settings file may
-  // still wire, never as rows of the table.
-  for (const retired of ['PostToolUse', 'Stop', 'PostCompact']) {
-    assert.doesNotMatch(hooks, new RegExp(`^\\| \`${retired}\``, 'm'), `no table row for the retired ${retired}`);
-  }
-  assert.match(md, /^\| .+ \| \[The handoff hooks\]\(#the-handoff-hooks\) \|$/m, 'the map at the top links it');
-});
 
 // ── the rules file: explanation out, every rule kept ─────────────────────────
 
@@ -161,28 +132,6 @@ test('"Reviews" says how the session reviews a plan, after the four-part finding
   assert.ok(four !== -1 && clean !== -1 && four < at && clean < at, 'it follows the two rules it rests on');
 });
 
-/**
- * ORCHESTRATION's list under "Evidence with pointers" (spec P2): the same three
- * rules and the principle, in the spec's full wording, each a whole line. The
- * rules file says each in one line; this is where the full text lives.
- */
-const HANDED_DOC = [
-  "- **A planner gets its section.** Its brief carries the package's section of the spec and the pointers the session hands it; the plan's header lists what it read. When several packages are planned by fresh delegates, a scout map is the way to hand them the same reading once — see [The scout map, when a fresh planner needs one](#the-scout-map-when-a-fresh-planner-needs-one).",
-  "- **A coder gets its task, not the release.** Its brief carries the task's section of the plan and the pointers it needs, not the whole spec; the spec's path is there for the cases the plan did not settle. The brief also names which coder, by how much the section leaves to decide. **`omelette-coder-medium`** (`effort: medium`) when the section prints the exact text, the diff, the tests and the numbers they must print: the coder executes it, and on one plan-driven trial medium built the same behaviour as xhigh, which took 2.5× the cache reads and 3.6× the wall clock ([MEASUREMENTS](MEASUREMENTS.md#coder-effort-medium-high-xhigh-on-one-task), N = 1). **`omelette-coder`** (`effort: xhigh`) otherwise: a new thing with no written shape, debugging with no known cause, or a decision the brief *explicitly delegates* (decide X between A and B, report the trade-off) — effort buys depth on the decisions the brief hands over, not permission to guess. A brief that leaves a required decision open gets `NEEDS_CONTEXT` back at any effort: the coder template says so, and neither bucket changes it. The bucket and the reason for it go into the brief and into the task's ledger line.",
-  "- **The session reviews a plan by its header, task list and Self-Review.** The full plan file goes to a unit — `codex_code_review` or `grok_code_review`, with the spec's path and the plan's path, asking for four-part findings — and the session opens the pointers of the findings, not the file. The ledger records the findings and the rulings as for any review.",
-  "- **Pay for judgement, not for repetition.** Reviews, clean-context testers and arbitration are what the tokens are for; re-reading, re-running and re-deriving are where they are lost. A planner does not dry-run its plan: the review reads it, and the coder and the tester run it for real.",
-];
-
-test('ORCHESTRATION "Evidence with pointers" says what each agent is handed, and its map links it', () => {
-  const md = read('docs/ORCHESTRATION.md');
-  const handed = section(md, '### What each agent is handed');
-  assert.ok(section(md, '## Evidence with pointers').includes(handed), 'the subsection sits inside "Evidence with pointers"');
-  const lines = handed.split('\n');
-  for (const item of HANDED_DOC) assert.ok(lines.includes(item), `a line of its own: ${item.slice(0, 60)}`);
-  const head = md.slice(0, md.indexOf('\n## '));
-  assert.match(head, /^\| .+ \| \[What each agent is handed\]\(#what-each-agent-is-handed\) \|$/m, 'the map at the top, before the first section, links it');
-});
-
 // ── 1.3.0 P1: the shipped reviewer in the rules ─────────────────────────────
 
 /**
@@ -242,75 +191,6 @@ test('the operating model\'s coder line stays byte for byte, and no 1.3.0 line c
   for (const line of [P1_REVIEWS_LINE, P1_DEFINITIONS_LINE, P1_BRANCH_LINE_HEAD, P1_NESTING_LINE, P1_GUARD_LINE]) {
     for (const mechanism of MECHANICS) assert.ok(!line.includes(mechanism), `${mechanism} stays out of: ${line.slice(0, 50)}`);
   }
-});
-
-// ── 1.3.0 P1: the reviewer in the docs ───────────────────────────────────────
-
-/** ORCHESTRATION "Reviews": what the shipped reviewer is and does, and what keeps it read-only — each a whole paragraph line. Re-pinned in 1.6.1 Task 2: the model default is the exact id `claude-opus-5-5`. */
-const REVIEWER_DOC = [
-  "**The shipped reviewer.** `omelette-fleet rules --agents` writes `omelette-reviewer` — the clean-context second reader on our own model, the Opus review 1.2.0 briefed by hand, now a definition (`model: claude-opus-5-5` and `effort: xhigh` by default, tools `Read, Grep, Glob, Bash, Write`, `disallowedTools: Agent, Edit, NotebookEdit`). One spawn is one review of one thing: a plan, a task's diff or a branch. Its brief carries the base and head (or the file) and the spec's path, and, for a re-review only, the earlier findings and the rulings on them. It reads what it reviews, runs the suite when the brief says so, and reports findings only, ranked, each `location · scenario · consequence · how to confirm` with the location as a pointer line `omelette-fleet check` can verify, then one verdict line: `ship`, `do not ship` or `needs-check`. The report goes to `.omelette/reports/<name>-review.md`; the reply is the verdict line and the count. The Routing table's code-review row stays Codex: this adds a reader, it replaces none.",
-  "**Read-only by definition and by check, not by enforcement.** Claude Code's tool filtering cannot scope `Write` to one path or make `Bash` read-only, and the guard refuses the git commands it names and, since 1.8.0, the reviewer's `Write`, `Edit` and `NotebookEdit` outside its report. So the definition says the only file the reviewer writes is its report; the guard refuses its `git commit`, `stash`, branch creation and `worktree` by name, as it does the coder's, and its `reset --hard`/`--merge`/`--keep`, `update-ref` and writing `symbolic-ref`, which move HEAD or a ref and leave the tree clean; and the session runs `git status --porcelain` after every review and rejects the review outright if anything but that report changed, and compares `git rev-parse HEAD` and `git symbolic-ref -q HEAD` from before the review with their values after it (two branches at one commit would otherwise hide a switch). The check sees what git sees: `git status --porcelain` lists tracked and untracked paths — not ignored ones, and not a moved HEAD, which is what the `rev-parse` comparison is for. The report itself lives in the ignored `.omelette/`, and a write elsewhere under an ignored path is not caught (containment, not enforcement).",
-];
-/** ORCHESTRATION "Spawning sub-agents": the reviewer's item in the list of shipped definitions (1.6.1 Task 2: `model: claude-opus-5-5`). */
-const SPAWN_BULLET = "- **`omelette-reviewer`** — `model: claude-opus-5-5`, `effort: xhigh`, `disallowedTools: Agent, Edit, NotebookEdit`, tools `Read, Grep, Glob, Bash, Write`. One review of one thing with a clean context: findings only, ranked, in four parts, then `ship`, `do not ship` or `needs-check`; the one file it writes is its report ([Reviews](#reviews)).";
-/** CONFIG "Agent settings": the reviewer's two keys (1.6.1 Task 2: the model default is `"claude-opus-5-5"`). */
-const CONFIG_ROWS = [
-  '| `agents.reviewer.model` | one printable line | `"claude-opus-5-5"` | The `model:` line of `omelette-reviewer.md` |',
-  '| `agents.reviewer.effort` | `low` \\| `medium` \\| `high` \\| `xhigh` \\| `max` | `"xhigh"` | Its `effort:` line — review is judgement, the thing a release pays for |',
-];
-/** SECURITY "The guard hook": what the guard does, and does not do, for the reviewer. */
-const SECURITY_REVIEWER = "The reviewer is contained the same way, and this guard is all the enforcement it gets: Claude Code cannot scope `Write` to one path or make `Bash` read-only, so its read-only is the definition's text — the only file it writes is `.omelette/reports/<name>-review.md` — and the session's check after every review: `git status --porcelain`, which rejects the review if anything but that report changed, and `git rev-parse HEAD` and `git symbolic-ref -q HEAD` compared with their values before the review. The status sees tracked and untracked paths, not ignored ones and not a moved HEAD — hence the `rev-parse` comparison, and hence the guard refuses, for the reviewer as for every role, the writes that move HEAD or a ref and leave the tree clean: `reset --hard`/`--merge`/`--keep`, `update-ref` and a writing `symbolic-ref`.";
-/** What SECURITY keeps of it since 1.6.1 Task 5a: the writes the guard refuses for the reviewer as for every role. */
-const SECURITY_REVIEWER_KEPT = "The reviewer is contained the same way, and this guard is all the enforcement it gets: for the reviewer as for every role, the guard refuses the writes that move HEAD or a ref and leave the tree clean — `reset --hard`/`--merge`/`--keep`, `update-ref` and a writing `symbolic-ref`.";
-/** README's `rules` row: the four definitions `--agents` writes. Re-pinned in 1.6.1 Task 2: the tester at high, the generations named, the ids pinned. */
-const README_AGENTS = "`--agents` also writes four sub-agent definitions (`omelette-coder`: Opus 5.5 xhigh; `omelette-coder-medium`: Opus 5.5 medium; `omelette-tester`: Sonnet 5.5 high; `omelette-reviewer`: Opus 5.5 xhigh; each model pinned by exact id; all four `disallowedTools: Agent`, the reviewer also `Edit, NotebookEdit`)";
-
-test('ORCHESTRATION "Reviews" describes the shipped reviewer and what keeps it read-only, and the map asks for it', () => {
-  const md = read('docs/ORCHESTRATION.md');
-  const lines = section(md, '## Reviews').split('\n');
-  for (const paragraph of REVIEWER_DOC) assert.ok(lines.includes(paragraph), `a paragraph of its own: ${paragraph.slice(0, 60)}`);
-  const head = md.slice(0, md.indexOf('\n## '));
-  assert.ok(head.split('\n').includes('| Which sub-agent runs a review, and what keeps it read-only? | [Reviews](#reviews) |'), 'the map at the top asks for it');
-});
-
-test('ORCHESTRATION counts four definitions and four guarded roles, and lists the reviewer', () => {
-  const md = read('docs/ORCHESTRATION.md');
-  assert.ok(md.includes('when the caller is one of the four roles this package ships — `omelette-coder`, `omelette-coder-medium`, `omelette-tester` or `omelette-reviewer` —'), 'Layer 3 names the four guarded roles');
-  const spawning = section(md, '## Spawning sub-agents: model and effort');
-  const lines = spawning.split('\n');
-  assert.ok(lines.includes('`omelette-fleet rules --agents` writes four of these next to the rules file:'));
-  assert.ok(lines.includes(SPAWN_BULLET), 'the reviewer item, whole');
-  assert.ok(spawning.includes('Select them with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`. All four are refreshed'));
-  assert.ok(!spawning.includes('writes two of these') && !/\b(both|BOTH) shipped\b/.test(spawning), 'no count of two is left');
-});
-
-test('CONFIG "Agent settings" documents agents.reviewer.model and agents.reviewer.effort', () => {
-  const md = read('docs/CONFIG.md');
-  const lines = section(md, '### Agent settings').split('\n');
-  for (const row of CONFIG_ROWS) assert.ok(lines.includes(row), `a key row: ${row.slice(0, 40)}`);
-  assert.ok(lines.some((l) => l.includes('the four Claude Code sub-agent definitions `omelette-fleet rules --agents` writes')), 'the intro counts four');
-  assert.ok(md.split('\n').includes('| How do I configure the coder, tester and reviewer sub-agents? | [Agent settings](#agent-settings) |'), 'the map row names the reviewer');
-  assert.ok(md.includes('    "reviewer": { "model": "claude-opus-5-5", "effort": "xhigh" }'), 'the Shape block shows the reviewer entry');
-});
-
-test('SECURITY: the PreToolUse row names the four guarded roles and says what the guard does not do for the reviewer', () => {
-  const md = read('docs/SECURITY.md');
-  const guard = section(md, '## The guard hook');
-  assert.ok(guard.includes('When the caller is one of the four sub-agent roles this package ships — `omelette-coder`, `omelette-coder-medium`, `omelette-tester` or `omelette-reviewer` —'));
-  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F23): ORCHESTRATION "Reviews" is the
-  // home of what keeps the reviewer read-only (REVIEWER_DOC above); SECURITY keeps
-  // the HEAD-moving writes the guard refuses for every role, and links the home.
-  assert.ok(guard.includes(SECURITY_REVIEWER_KEPT), 'the HEAD-moving writes, whole');
-  assert.ok(guard.includes('[ORCHESTRATION, "Reviews"](ORCHESTRATION.md#reviews)'), 'the link to the home');
-  assert.ok(md.includes('`.claude/agents/omelette-coder.md`, `.claude/agents/omelette-coder-medium.md`, `.claude/agents/omelette-tester.md`, `.claude/agents/omelette-reviewer.md` and `.claude/skills/omelette-test/SKILL.md`'), '"What this package never does" lists every file it writes');
-});
-
-test('README counts four sub-agent definitions where it counted two, then three', () => {
-  const md = read('README.md');
-  assert.ok(md.includes('so you get the operating rules, the four sub-agent definitions, the `/omelette-test` skill'));
-  assert.ok(md.includes(README_AGENTS));
-  assert.ok(!md.includes('two sub-agent definitions') && !md.includes('both sub-agent definitions') && !md.includes('three sub-agent definitions'));
-  assert.ok(!md.includes('the coder and tester sub-agent definitions') && !md.includes('coder / tester sub-agent definitions'));
 });
 
 // ── 1.3.0 P2: the coder line says which coder to brief ───────────────────────

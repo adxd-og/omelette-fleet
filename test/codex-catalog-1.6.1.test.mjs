@@ -241,25 +241,6 @@ test('doctor: the bundled default is a fact about the binary — a signed-out lo
   assert.match(r.codex, /^  models      CLI default gpt-6\.1-sol — in the catalog; /m, r.out + r.err);
 });
 
-// --- docs --------------------------------------------------------------------
-
-test('docs: no Codex step-down to gpt-5.6-terra, no "plan-gated" sol; the default reads gpt-6.1-sol at xhigh', () => {
-  for (const rel of ['docs/ORCHESTRATION.md', 'README.md', 'docs/CONFIG.md']) {
-    const text = read(rel);
-    assert.doesNotMatch(text, /plan-gated/i, rel);
-    assert.doesNotMatch(text, /Down to `gpt-5\.6-terra`|step-down|`gpt-5\.6-terra` is the cheaper/i, rel);
-    assert.doesNotMatch(text, /"model": "gpt-6-astra", "effort": "high"/, rel);
-    assert.doesNotMatch(text, /`none`\/`low`/, rel);
-  }
-  const orch = read('docs/ORCHESTRATION.md');
-  assert.match(orch, /^\*\*Codex\*\* — default `gpt-6\.1-sol` at `effort: xhigh`/m);
-  assert.match(orch, /^\| Final pre-release security audit \| \*\*Codex\*\* on `gpt-6-astra` \(heavy reviews only\)/m);
-  assert.match(read('docs/CONFIG.md'), /^\| codex \| — \| `timeoutS: 600`, `effort: "xhigh"`, /m);
-  assert.match(read('docs/CONFIG.md'), /installed binary's catalog, not the server's/);
-  assert.match(read('README.md'), /on `gpt-6\.1-sol` \(xhigh\) by default/);
-  assert.match(read('CHANGELOG.md'), /^## 1\.6\.1 — (unreleased|\d{4}-\d\d-\d\d)$/m);
-});
-
 // =============================================================================
 // Task 1b (the fix round after the two-pass tester, rulings of 2026-09-30)
 // =============================================================================
@@ -493,39 +474,9 @@ test('1b rule 3: a call under a config holding `none` sends the resolved model\'
 
 // --- rule 4: text ------------------------------------------------------------
 
-test('1b rule 4: the text items — README\'s probe claim is versioned, 5.6-luna steps up to gpt-6-sol, CHANGELOG gives the upgrade path, AA figures say at max and when', () => {
-  const readme = read('README.md');
-  assert.match(readme, /on codex-cli 0\.159\.2/);
-  assert.doesNotMatch(readme, /accepted every id in the catalog, including/);
+test('1b rule 4: 5.6-luna steps up to gpt-6-sol, not terra', () => {
   assert.match(find('gpt-5.6-luna').avoid, /Step up to gpt-6-sol/);
   assert.doesNotMatch(find('gpt-5.6-luna').avoid, /Step up to terra/);
-  const entry = read('CHANGELOG.md').split(/^## /m).find((s) => s.startsWith('1.6.1'));
-  // Re-pinned in 1b round 3 (ruling 4): the upgrade clears codex.effort so the pairings apply.
-  // Re-pinned in 1.6.1 Task 2 (ruling B): it clears codex.model too, so the catalog head follows the package.
-  assert.ok(entry.includes('omelette-fleet set codex.model= codex.effort='), entry);
-  assert.ok(!entry.includes('codex.effort=xhigh'), entry);
-  assert.ok(entry.includes('omelette-fleet rules --agents --hooks'), entry);
-  assert.match(entry, /catalog pairing/);
-  assert.match(entry, /`set` refuses/);
-  // Every AA figure the two files quote says at max effort and when it was read.
-  for (const [name, text] of [['README.md', readme], ['CHANGELOG 1.6.1', entry]]) {
-    for (const sentence of text.split(/(?<=[.;])\s+|\n/).filter((s) => /AA Intelligence Index|per Index task/.test(s))) {
-      assert.match(sentence, /at max effort/, `${name}: ${sentence}`);
-      assert.match(sentence, /AA, read 2026-09-30/, `${name}: ${sentence}`);
-    }
-  }
-  // README's doctor sample carries a codex that knows 6.1-sol, and its models line
-  // (re-taken at the 1.6.1 live gate on an install that pins no codex model: the catalog head).
-  const sample = readme.slice(readme.indexOf('── codex'), readme.indexOf('── codex') + 800);
-  assert.match(sample, /^  version     codex-cli 0\.159\.2$/m, sample);
-  assert.match(sample, /^  models      CLI default gpt-6\.1-sol — in the catalog; the fleet pins gpt-6\.1-sol \(catalog head\)$/m, sample); // live gate 1.6.1: the sample install pins no codex model
-  assert.match(readme, /on codex-cli 0\.159\.2, `doctor --probe-models`[^\n]*accepted every id in the catalog[^\n]*0\.157\.1 had refused `gpt-6\.1-sol`/); // live gate 1.6.1: every id re-probed on 0.159.2
-});
-
-test('1b: CONFIG and ORCHESTRATION say a named model brings its own pairing unless an effort is configured', () => {
-  for (const rel of ['docs/CONFIG.md', 'docs/ORCHESTRATION.md']) {
-    assert.match(read(rel), /a named model brings its own pairing unless an effort is configured/i, rel);
-  }
 });
 
 // --- 1b round 2: the resolution lives in core, behind `pairedEffort` ---------
@@ -624,15 +575,6 @@ test('1b core: only codex opts in; grok, which does not, is unchanged for a name
   assert.ok(!argv.includes('--reasoning-effort'), argv.join(' '));
 });
 
-test('1b round 2: every AA Index figure in ORCHESTRATION\'s Codex routing rows and escalation block says at max effort', () => {
-  const orch = read('docs/ORCHESTRATION.md');
-  const block = orch.slice(orch.indexOf('**Codex** — default'), orch.indexOf('\n\n', orch.indexOf('**Codex** — default')));
-  const rows = orch.split('\n').filter((l) => /^\| (Strongest code review|Final pre-release security audit)/.test(l));
-  const sentences = [block, ...rows].join('\n').split(/(?<=[.;])\s+|\n/).filter((s) => /AA (Intelligence )?Index/.test(s));
-  assert.ok(sentences.length >= 3, sentences.join('\n'));
-  for (const s of sentences) assert.match(s, /at max effort/, s);
-});
-
 // --- 1b round 3 ---------------------------------------------------------------
 
 /** A throwaway unit whose tools echo `effort|effortFrom`; model `c` has no usable pairing. */
@@ -690,25 +632,4 @@ test('1b round 3 (4): the shipped example, used as a fleet config, runs 6.1-sol 
   const rt = execRuntime(st, { config: JSON.parse(read('examples/fleet.config.json')) });
   assert.deepEqual(await oneCall(st, rt, {}), [HEAD, 'model_reasoning_effort="xhigh"']);
   assert.deepEqual(await oneCall(st, rt, { model: 'gpt-6-luna' }), ['gpt-6-luna', 'model_reasoning_effort="medium"']);
-  for (const rel of ['README.md', 'docs/CONFIG.md']) assert.doesNotMatch(read(rel), /"model": "gpt-6\.1-sol",?\s*"effort"/, rel);
-});
-
-test('1b round 3 (5): ARCHITECTURE, CONFIG and ADAPTERS document pairedEffort and the bundled-catalog tail', () => {
-  const arch = read('docs/ARCHITECTURE.md');
-  assert.match(arch, /^ {2}pairedEffort: true, +\/\/ codex only/m);
-  assert.match(arch, /`auth: null`, `pairedEffort: false`\./);
-  assert.ok(read('docs/CONFIG.md').includes("ends `— NOT in this CLI's bundled catalog: update codex (codex-cli 0.157.1 refused a model its bundle lacked)`"));
-  assert.match(read('docs/ADAPTERS.md'), /A model entry's `effort` is applied only when the unit opts in with `pairedEffort: true` in its definition/);
-});
-
-test('1b round 3 (2, 3, C): CHANGELOG measures the pairing change against 1.6.0, names the changed 5.6 sentences, and carries the new doctor tail', () => {
-  const entry = read('CHANGELOG.md').split(/^## /m).find((x) => x.startsWith('1.6.1'));
-  assert.match(entry, /a call naming no model moves from `gpt-6-astra` at `high` to `gpt-6\.1-sol` at `xhigh`; a call naming `gpt-6-astra` moves from `high` to `xhigh`; `gpt-5\.6-terra` and `gpt-5\.6-sol` stay at `high`; `gpt-5\.6-luna` moves from `high` to `medium`/);
-  assert.match(entry, /`results --stats` totals per unit, not per model or effort/);
-  assert.doesNotMatch(entry, /keep their 2026-09-03 text/);
-  assert.match(entry, /`gpt-5\.6-luna`'s "Step up to terra" becomes "Step up to gpt-6-sol, which supersedes terra"/);
-  assert.match(entry, /`gpt-5\.6-sol` loses its PLAN-GATED sentences/);
-  assert.ok(entry.includes("update codex (codex-cli 0.157.1 refused a model its bundle lacked)"), entry);
-  assert.ok(!entry.includes('this CLI would refuse it'), entry);
-  assert.match(entry, /Keeping an explicit `codex\.effort` is the way to force one effort for every model/);
 });

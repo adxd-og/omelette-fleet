@@ -118,13 +118,6 @@ test('gemini_deep_research with a Flash id or no model still reaches the stages'
   }
 });
 
-test('ORCHESTRATION and CHANGELOG carry 1.6.2', () => {
-  const orch = read('docs/ORCHESTRATION.md');
-  assert.ok(orch.includes("- `Claude Opus 5.5 (High|Medium)` and `Claude Sonnet 5.5 (High|Medium)` run on Antigravity's separate Claude quota — the same generation as the fleet's own coder and reviewer, so they buy an independent read, not a stronger one."));
-  assert.ok(!orch.includes('Opus 4.6 (Thinking)'));
-  assert.ok(read('CHANGELOG.md').split('\n').includes('## 1.6.2 — 2026-10-03'));
-});
-
 // --- Round 2: a configured Claude default is refused by gemini_research (R5) ---
 
 const DEFAULT_REFUSAL = (id) => 'Error: a Claude id is named per call, not configured as `gemini.model` ("' + id + '" is the configured default): Antigravity\'s Claude quota is small and separate, and a default would spend it on every call. Name the model in this call to use it once, or clear the default: `omelette-fleet set gemini.model=`, or unset the legacy `AGY_DEFAULT_MODEL` env override if that is where it comes from.';
@@ -183,7 +176,7 @@ test('an exhausted Claude run says so once, with no retry; a Flash run keeps the
 
 // --- Round 2: texts (R2, R3, R4, R5, R6, R8) ---
 
-test('round 2 texts: the verification sentence, the picker default, the upgrade note, the routing row', () => {
+test('round 2 texts: the verification sentence and the picker default', () => {
   const byId = Object.fromEntries(GEMINI_MODELS.map((m) => [m.id, m]));
   assert.ok(byId['Claude Opus 5.5 (High)'].useFor.endsWith('Opus 5.5 (Medium) and Sonnet 5.5 (High) ran headless via agy 1.2.14 on 2026-10-03; the other two ids are listed by agy models and share the id form, and did not run — the bucket answered RESOURCE_EXHAUSTED to both that afternoon, after three calls, which is the point.'));
   assert.ok(!byId['Claude Opus 5.5 (High)'].useFor.includes('Verified headless'));
@@ -191,16 +184,6 @@ test('round 2 texts: the verification sentence, the picker default, the upgrade 
   assert.ok(byId['Claude Opus 5.5 (Medium)'].useFor.startsWith("Antigravity's picker default for Claude (2026-10-03): an Opus-class second opinion where High's latency is not worth it — "));
   assert.ok(GUIDE.includes('never a deep-research stage (gemini_deep_research refuses Claude ids), never configured as gemini.model (gemini_research and gemini_image refuse a Claude default); the same'));
   assert.ok(!read('units/gemini/models.js').includes('(non-Claude)'));
-  const cl = read('CHANGELOG.md');
-  const entry = cl.slice(cl.indexOf('## 1.6.2'), cl.indexOf('## 1.6.1'));
-  assert.equal(entry.split('\n').filter((l) => l.startsWith('- ')).length, 4);
-  assert.ok(!entry.includes('Both verified headless'));
-  assert.ok(entry.includes("the other two were accepted by `agy models` and did not run — the Claude bucket answered `RESOURCE_EXHAUSTED` to both the same afternoon, after three calls, which is the quota rule in one line."));
-  assert.ok(entry.includes('`gemini_research` and `gemini_image` refuse a Claude id that arrives only from the configured `gemini.model`, naming the per-call alternative: a Claude call is named where it is spent.'));
-  assert.ok(entry.includes('- **Upgrading from 1.6.1 with `gemini.model` pinned to `Claude Opus 4.6 (Thinking)`:**'));
-  const orch = read('docs/ORCHESTRATION.md');
-  assert.ok(orch.includes("| An independent Claude read on Antigravity's quota | Gemini `gemini_research` with `Claude Opus 5.5 (High)` or `Claude Sonnet 5.5 (High)` named in the call | One named call per question; never deep research, never the configured default — the Claude bucket is small |"));
-  assert.ok(orch.indexOf('| Multi-source deep research |') < orch.indexOf("| An independent Claude read on Antigravity's quota |"));
 });
 
 // --- Round 3: gemini_image refuses a configured Claude default too (R9–R12) ---

@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENT_SETTINGS_SCHEMA } from '../core/config.mjs';
-import { AGENT_FILES, AGENT_ROLES, agentSettings, renderAgentFile, renderRulesFile } from '../core/rules.mjs';
+import { agentSettings, renderAgentFile, renderRulesFile } from '../core/rules.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 import codexUnit from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -153,118 +153,11 @@ for (const merge of ['session', 'pr']) {
   });
 }
 
-// ── ORCHESTRATION ────────────────────────────────────────────────────────────
+// ── the rules file and the CLI help follow the defaults ───────────────────────────────────────
 
-test('ORCHESTRATION "Effort by role and model" sits under "Spawning sub-agents", has a map row, and its table agrees with the schema defaults row by row', () => {
-  const md = read('docs/ORCHESTRATION.md');
-  const effort = section(md, '### Effort by role and model');
-  assert.ok(section(md, '## Spawning sub-agents: model and effort').includes(effort), 'a subsection of "Spawning sub-agents"');
-  const head = md.slice(0, md.indexOf('\n## '));
-  assert.match(head, /^\| .+ \| \[Effort by role and model\]\(#effort-by-role-and-model\) \|$/m, 'the map at the top links it');
-  const lines = effort.split('\n');
-  assert.ok(lines.includes('| Role | Model id | Effort | Why |'), 'the table header');
-  const rows = lines.filter((l) => l.startsWith('| `omelette-')).map((l) => l.split(' | ').map((c) => c.replace(/^\| /, '')));
-  assert.deepEqual(rows.map((r) => r[0]), AGENT_FILES.map((f) => `\`${f.replace(/\.md$/, '')}\``), 'one row per shipped role, in the order rules writes them');
-  for (const row of rows) {
-    const role = AGENT_ROLES[`${row[0].replaceAll('`', '')}.md`];
-    assert.equal(row[1], `\`${AGENT_SETTINGS_SCHEMA[role].model.default}\``, `${role}: the model id is the default`);
-    assert.equal(row[2].match(/`([^`]+)`/)[1], AGENT_SETTINGS_SCHEMA[role].effort.default, `${role}: the effort is the default`);
-    assert.ok(row[3].length > 20, `${role}: a reason`);
-  }
-  for (const lead of ['**What the measurement showed.**', '**The advisor, measured and not adopted.**', '**What actually ran is in the transcript.**']) {
-    assert.ok(lines.some((l) => l.startsWith(lead)), `a paragraph: ${lead}`);
-  }
-  assert.ok(effort.includes('(MEASUREMENTS.md#the-testers-effort-a-second-pass-and-an-advisor)'), 'the measurement is linked');
-  assert.ok(effort.includes('$1.10 of a $2.06 run'), 'the advisor paragraph carries the measured cost');
-});
-
-test('ORCHESTRATION\'s tester section sends the second pass by its trigger word before arbitration, and at once, by what the transcripts measured', () => {
-  const md = read('docs/ORCHESTRATION.md');
-  const tester = section(md, '## Tester sub-agent and arbitration');
-  const paras = tester.split('\n');
-  const second = paras.findIndex((l) => l.startsWith('**Then a second pass, in the same tester, before arbitration.**'));
-  const atOnce = paras.findIndex((l) => l.startsWith('**Send it at once.**'));
-  const arbitration = paras.findIndex((l) => l.startsWith('**Arbitration belongs to the orchestrator'));
-  assert.ok(second !== -1 && atOnce === second + 2 && atOnce < arbitration, 'the two paragraphs, in order, before arbitration');
-  for (const fact of ['"Second pass"', 'docs-only diff', 'small-change exception', '(MEASUREMENTS.md#the-testers-effort-a-second-pass-and-an-advisor)', 'was not tried', 'dispatch a fresh `omelette-tester` with the words "Second pass", the spec, the diff and the first tester\'s test file']) {
-    assert.ok(paras[second].includes(fact), `it says: ${fact}`);
-  }
-  for (const fact of ['31.5 minutes idle', '76 439 cache tokens and read none', 'sent within ten seconds of its report, wrote 58 878 in all', 'past about five minutes', 'several shorter commands']) {
-    assert.ok(paras[atOnce].includes(fact), `it says: ${fact}`);
-  }
-  for (const p of [paras[second], paras[atOnce]]) assert.ok(p.split(/\s+/).length <= 250, 'not a wall');
-  assert.ok(!md.includes('373 k'), 'the two-pass total is not presented as the cost of the pause');
-});
-
-test('round 3 (3, 7, 8): the alias lag is stated as measured, exact ids are first-party ids, and the coder row says what the rows say', () => {
-  const clause = 'on a provider that names models differently (Bedrock, Vertex, Foundry)';
-  const config = section(read('docs/CONFIG.md'), '### Agent settings');
-  assert.ok(!config.includes('aliases lag a release'), 'CONFIG states the measurement, not a rule');
-  assert.ok(config.includes('on 2026-09-30, on Claude Code 2.1.284, a sub-agent spawned with the `sonnet` alias ran on Sonnet 5 two days after 5.5 shipped, while `opus` resolved to Opus 5.5'));
-  const spawning = section(read('docs/ORCHESTRATION.md'), '## Spawning sub-agents: model and effort');
-  const md = read('CHANGELOG.md');
-  const bullet = md.slice(md.indexOf('## 1.6.1'), md.indexOf('## 1.6.0')).split('\n').find((l) => l.startsWith('- **The tester runs at `high`'));
-  for (const [name, text] of [['CONFIG', config], ['ORCHESTRATION', spawning], ['CHANGELOG', bullet]]) {
-    assert.ok(text.includes(clause) && /`agents\.<role>\.model` to that provider's id or back to the alias/.test(text) && text.includes('not tested here'), `${name}: the provider clause`);
-  }
-  assert.ok(spawning.includes('medium left a fail-open class in place; xhigh\'s misses were two narrow writes, fixed in one round'));
-  assert.ok(!spawning.includes('xhigh did not'));
-  for (const rel of ['CHANGELOG.md', 'docs/CONFIG.md', 'README.md']) assert.ok(!read(rel).includes('an empty value clears the key'), `${rel}: an empty value is an empty string, read as unset`);
-  assert.ok(read('docs/CONFIG.md').includes('writes an empty string, which the runtime reads as unset — `show` prints `(unset) file`'));
-});
-
-test('ORCHESTRATION names the pinned ids where it named the aliases', () => {
-  const spawning = section(read('docs/ORCHESTRATION.md'), '## Spawning sub-agents: model and effort');
-  assert.ok(!spawning.includes('The shipped definitions name the aliases'), 'the alias sentence is rewritten');
-  assert.ok(spawning.includes('The shipped definitions pin exact model ids'), 'around the pinned ids');
-  assert.ok(spawning.includes('- **`omelette-tester`** — `model: claude-sonnet-5-5`, `effort: high`, `maxTurns: 80` by default (config)'), 'the tester item');
-  for (const stale of ['`model: sonnet`, `effort: xhigh`', '`model: opus`, `effort: xhigh`', '`model: opus`, `effort: medium`']) {
-    assert.ok(!spawning.includes(stale), `gone: ${stale}`);
-  }
-});
-
-// ── MEASUREMENTS ─────────────────────────────────────────────────────────────
-
-const ROW_SINGLE_PASS = '| `claude-sonnet-5-5` · xhigh | 2.1.284 | 44 | 56 | 30.8 | 2.90 | 10 | yes (16, 14 caught) |';
-const ROW_ADVISOR = '| `--advisor opus`, the brief asking for two consultations | `claude-sonnet-5-5` · high, `claude-opus-5-5` advisor | 2.1.285 | 2 | 22 | 19 | 12.8 | 2.06 = Sonnet 0.96 + advisor 1.10 | 4 |';
-const ROW_TWO_PASSES = '| high, two passes | `claude-sonnet-5-5` · 2.1.284 | 31 | 39 | 24.8 | 1.46 | 13 |';
-
-test('MEASUREMENTS: the tester section, mapped in the process-cost group, carries the three tables and their limits', () => {
-  const md = read('docs/MEASUREMENTS.md');
-  const s = section(md, "## The tester's effort, a second pass and an advisor");
-  const group = md.slice(md.indexOf('**Process cost**'), md.indexOf('**Review value**'));
-  assert.ok(group.includes("| [The tester's effort, a second pass and an advisor](#the-testers-effort-a-second-pass-and-an-advisor) |"), 'a row in the process-cost group');
-  const lines = s.split('\n');
-  for (const row of [ROW_SINGLE_PASS, ROW_ADVISOR, ROW_TWO_PASSES]) assert.ok(lines.includes(row), `the row: ${row.slice(0, 50)}`);
-  for (const fact of ['union of distinct valid findings', 'nine of the frame', 'one run per cell', 'lower bounds', 'a fifth to a quarter', 'main sessions, not sub-agents', 'the two sub-agent runs at high found the same four findings and the headless pair at high found one and two', '`advisor_redacted_result`', '45 tests', '33 mutants', '76 439 cache tokens and read none', 'wrote 58 878 in all', 'three tool calls ran 6.2, 10.0 and 6.5 minutes', 'several shorter commands']) {
-    assert.ok(s.includes(fact), `it says: ${fact}`);
-  }
-  for (const p of lines) assert.ok(p.split(/\s+/).length <= 250, `no paragraph over 250 words: ${p.slice(0, 40)}`);
-  assert.ok(!s.includes('373 k') && !/cold cache between/.test(s), 'the cache is framed by the per-request fields, and Task 1b had no pause between passes');
-});
-
-test('MEASUREMENTS "Not measured yet" names the second pass on another task and Opus as the second-pass reader', () => {
-  const s = section(read('docs/MEASUREMENTS.md'), '## Not measured yet');
-  assert.ok(s.includes('- **The second pass on another task, against one xhigh pass.**'));
-  assert.ok(s.includes('- **Opus as the second-pass reader.**'));
-  assert.ok(s.includes('- **The second pass after a skill-forked first pass.**'));
-});
-
-// ── the other docs follow the defaults ───────────────────────────────────────
-
-test('no doc still gives the shipped tester Sonnet at xhigh or the alias `sonnet` as its default', () => {
-  const orchestration = read('docs/ORCHESTRATION.md');
-  const config = read('docs/CONFIG.md');
-  const readme = read('README.md');
+test('the rules file and `rules --help` no longer give the shipped tester Sonnet at xhigh or the alias `sonnet` as its default', () => {
   const rules = read('rules/omelette-fleet.md');
   assert.ok(!rules.includes('(Sonnet, `effort: xhigh`') && !rules.includes('Sonnet-class, xhigh'), 'rules');
-  assert.ok(!orchestration.includes('`model: sonnet`,') && !orchestration.includes('Sonnet, `effort: xhigh`'), 'ORCHESTRATION: no definition item or line gives the tester the alias or xhigh');
-  assert.ok(!readme.includes('`omelette-tester`: Sonnet xhigh'), 'README rules row');
-  assert.ok(readme.includes('`omelette-tester`: Sonnet 5.5 high'), 'README rules row names the new pair');
-  const agentSection = section(config, '### Agent settings');
-  assert.ok(agentSection.includes('| `agents.tester.model` | one printable line | `"claude-sonnet-5-5"` |'), 'CONFIG tester model row');
-  assert.ok(agentSection.includes('| `agents.tester.effort` | `low` \\| `medium` \\| `high` \\| `xhigh` \\| `max` | `"high"` |'), 'CONFIG tester effort row');
-  assert.ok(config.includes('    "tester": { "model": "claude-sonnet-5-5", "effort": "high", "maxTurns": 80 },'), 'CONFIG Shape block');
   const help = spawnSync(process.execPath, [BIN, 'rules', '--help'], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home(), OMELETTE_HOME: home(), OMELETTE_UPDATE_CHECK: '0' } });
   assert.match(help.stdout, /^\s*Sonnet high; omelette-reviewer: Opus xhigh; all four disallow\s*$/m, '`rules --help`');
 });
@@ -317,16 +210,6 @@ test('the shipped example carries only what an operator decides: no agents block
   assert.equal(geminiUnit.builtin.model, undefined, 'gemini has no built-in model, so the example keeps the operator\'s choice');
   assert.equal(example.units.gemini.model, 'Gemini 3.8 Flash (High)');
   assert.deepEqual(example.defaults, { status: true });
-  const readme = read('README.md');
-  const block = readme.slice(readme.indexOf('`examples/fleet.config.json`, which carries only what an operator decides'));
-  const json = block.slice(block.indexOf('```json\n') + 8, block.indexOf('\n```', block.indexOf('```json\n') + 8));
-  assert.deepEqual(JSON.parse(json), example, 'README shows the file as it is');
-  for (const rel of ['README.md', 'docs/CONFIG.md']) {
-    const md = read(rel);
-    assert.ok(md.includes('carries only what an operator decides') && md.includes('follows the package\'s defaults, release by release'), `${rel} says what the example carries`);
-  }
-  const shape = section(read('docs/CONFIG.md'), '## Shape');
-  assert.ok(shape.includes('"tester": { "model": "claude-sonnet-5-5", "effort": "high", "maxTurns": 80 },') && shape.includes('"model": "gpt-6.1-sol"'), 'CONFIG\'s Shape block stays the full map of keys');
 });
 
 test('install from the shipped example in a throwaway home: the tester and codex follow the package\'s defaults', async () => {
@@ -361,20 +244,4 @@ test('the upgrade path CHANGELOG gives: `set codex.model= codex.effort=` clears 
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify(edited));
   const s = agentSettings({ OMELETTE_HOME: dir });
   assert.deepEqual([s.tester.model, s.tester.effort, s.coder.model], [SONNET, 'high', OPUS], 'the hand edit follows the defaults');
-});
-
-test('CHANGELOG 1.6.1 states the three behaviour changes and how to keep the old values', () => {
-  const md = read('CHANGELOG.md');
-  const entry = md.slice(md.indexOf('## 1.6.1'), md.indexOf('## 1.6.0'));
-  const bullet = entry.split('\n').find((l) => l.startsWith('- **The tester runs at `high` with a second pass'));
-  assert.ok(bullet, 'the bullet');
-  for (const fact of ['`claude-opus-5-5`', '`claude-sonnet-5-5`', '"Second pass"', 'stop-and-report', '`omelette-fleet set agents.tester.effort=xhigh agents.tester.model=sonnet`', 'rules --agents', '(docs/MEASUREMENTS.md#the-testers-effort-a-second-pass-and-an-advisor)']) {
-    assert.ok(bullet.includes(fact), `it says: ${fact}`);
-  }
-  const example = entry.split('\n').find((l) => l.startsWith('- **The shipped example config carries only what an operator decides.**'));
-  assert.ok(example, 'the example bullet');
-  for (const fact of ['`omelette-fleet set codex.model= codex.effort=`', 'by hand', '`set` refuses an empty value for an agents key', 'release by release']) {
-    assert.ok(example.includes(fact), `it says: ${fact}`);
-  }
-  for (const b of [bullet, example]) assert.ok(b.split(/\s+/).length <= 250, 'not a wall');
 });

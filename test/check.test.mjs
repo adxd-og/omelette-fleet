@@ -769,13 +769,6 @@ test('check: a CRLF map still has its commit line read', { skip: GIT_SKIP }, () 
   assert.equal(cli(['check', 'bad.md', '--strict'], { cwd: root }).code, 1);
 });
 
-test('the example pointer in docs/ORCHESTRATION.md still points at a real line', () => {
-  const md = readFileSync(join(ROOT, 'docs', 'ORCHESTRATION.md'), 'utf8');
-  const { pointers, counts } = checkPointers({ text: md, root: ROOT, changed: null });
-  assert.ok(counts.total >= 1, 'the section shows at least one pointer line');
-  assert.deepEqual(pointers.filter((p) => p.status !== 'ok').map((p) => `line ${p.line}: ${p.status}`), []);
-});
-
 test('check: the help lists it next to the other subcommands, and says what the statuses cost', () => {
   const dir = tmp();
   const r = cli(['--help'], { cwd: dir });

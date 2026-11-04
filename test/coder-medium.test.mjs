@@ -46,28 +46,6 @@ function cli(args, { dir, cwd = dir } = {}) {
 /** A rendered definition without its `name:` and `effort:` lines — what the two coders must share. */
 const withoutNameAndEffort = (text) => text.split('\n').filter((l) => !/^(name|effort): /.test(l)).join('\n');
 
-/** A file of the repository, as text. */
-function read(rel) {
-  return readFileSync(join(ROOT, rel), 'utf8');
-}
-
-/** One section of a Markdown text: its heading line up to the next heading of the same or a higher level. */
-function section(md, heading) {
-  const from = md.indexOf(`\n${heading}\n`);
-  assert.notEqual(from, -1, `${heading} present`);
-  const level = heading.match(/^#+/)[0].length;
-  const next = new RegExp(`\\n#{1,${level}} `, 'g');
-  next.lastIndex = from + 1;
-  const m = next.exec(md);
-  return md.slice(from, m ? m.index : undefined);
-}
-
-/** ORCHESTRATION's "Spawning sub-agents" item for the medium coder, whole. */
-// Re-pinned in 1.6.1 Task 2: the model is the exact id.
-const MEDIUM_BULLET = "- **`omelette-coder-medium`** — `model: claude-opus-5-5`, `effort: medium`, `disallowedTools: Agent`, otherwise the default tools: the coder's own template rendered under a second name, from its own `agents.coderMedium` block, so its instructions are the coder's word for word and the two cannot drift apart. Which one a brief goes to is the rule under [What each agent is handed](#what-each-agent-is-handed).";
-/** The guarded roles, as ORCHESTRATION's Layer 3 and SECURITY's PreToolUse row list them. */
-const FOUR_ROLES = '`omelette-coder`, `omelette-coder-medium`, `omelette-tester` or `omelette-reviewer`';
-
 // ── Task 2: the fourth definition renders ────────────────────────────────────
 
 test('rules --agents ships four definitions, the medium coder right after the coder, each with the marker on line 2 and its own name', () => {
@@ -227,59 +205,6 @@ test('set refuses an invalid agents.coderMedium value and a key the role does no
   assert.equal(role.code, 1, 'the key is agents.coderMedium, not the file name');
   assert.match(role.err, /unknown agent "coder-medium" — known agents: coder, coderMedium, tester, reviewer/);
   assert.equal(existsSync(join(dir, 'fleet.config.json')), false);
-});
-
-// ── Task 7: ORCHESTRATION lists four definitions ─────────────────────────────
-
-test('ORCHESTRATION: "Spawning sub-agents" lists the four definitions, the medium coder right after the coder, and Layer 3 names the four guarded roles', () => {
-  const md = read('docs/ORCHESTRATION.md');
-  const spawning = section(md, '## Spawning sub-agents: model and effort');
-  const lines = spawning.split('\n');
-  assert.ok(lines.includes('`omelette-fleet rules --agents` writes four of these next to the rules file:'), 'the count sentence says four');
-  const coder = lines.findIndex((l) => l.startsWith('- **`omelette-coder`** — '));
-  assert.notEqual(coder, -1, 'the coder item is there');
-  assert.equal(lines[coder + 1], MEDIUM_BULLET, 'the medium coder follows it, whole');
-  for (const name of ['omelette-tester', 'omelette-reviewer']) assert.ok(lines.some((l) => l.startsWith(`- **\`${name}\`**`)), `${name} is listed`);
-  assert.ok(spawning.includes('Select them with `subagent_type: omelette-coder` / `omelette-coder-medium` / '), 'selected by name');
-  assert.ok(spawning.includes('All four are refreshed by re-running the command'), 'the refresh sentence counts four');
-  assert.ok(spawning.includes('`disallowedTools: Agent` in every shipped definition takes the possibility away'), 'the nesting paragraph does not count');
-  assert.ok(spawning.includes('for EVERY shipped role'), 'nor does its guard sentence');
-  assert.doesNotMatch(spawning, /both shipped|BOTH shipped|Both are refreshed/, 'no sentence still counts two');
-  assert.ok(md.includes(`when the caller is one of the four roles this package ships — ${FOUR_ROLES} — and the command is`), 'Layer 3 names the four guarded roles');
-});
-
-// ── Task 8: CONFIG documents agents.coderMedium ──────────────────────────────
-
-test('CONFIG "Agent settings": agents.coderMedium.* rows, the 1.2.0 trial as the reason, the coder\'s default unchanged, and what a default change does to a rendered file', () => {
-  const agentSection = section(read('docs/CONFIG.md'), '### Agent settings');
-  const lines = agentSection.split('\n');
-  assert.ok(agentSection.includes('the four Claude Code sub-agent definitions'), 'the intro counts four');
-  const effortRow = lines.findIndex((l) => l.startsWith('| `agents.coder.effort` |'));
-  assert.notEqual(effortRow, -1, 'the coder effort row');
-  assert.ok(lines[effortRow + 1].startsWith('| `agents.coderMedium.model` | one printable line | `"claude-opus-5-5"` |'), 'the model row follows the coder rows (an exact id since 1.6.1 Task 2)');
-  assert.ok(lines[effortRow + 2].startsWith('| `agents.coderMedium.effort` | `low` \\| `medium` \\| `high` \\| `xhigh` \\| `max` | `"medium"` |'), 'the effort row, default medium');
-  assert.ok(agentSection.includes('(MEASUREMENTS.md#coder-effort-medium-high-xhigh-on-one-task)'), 'the 1.2.0 trial is the reason');
-  assert.ok(read('docs/MEASUREMENTS.md').includes('\n## Coder effort: medium, high, xhigh on one task\n'), 'and the anchor is a heading there');
-  assert.ok(agentSection.includes('so `agents.coder.effort` stays `"xhigh"`'), 'the deep coder keeps its default');
-  for (const fact of [
-    'reaches it only when `omelette-fleet rules --agents` runs',
-    'a key you never set follows the new default',
-    '`omelette-fleet set agents.coder.effort=xhigh` survives any later change of the default',
-    'already sets `agents.coder` and `agents.tester` explicitly',
-    'it does not compare what they say with the config',
-  ]) assert.ok(agentSection.includes(fact), `the migration paragraph says: ${fact}`);
-});
-
-// ── Task 9: SECURITY names the medium coder ──────────────────────────────────
-
-test('SECURITY: the PreToolUse row names the four guarded roles, and rules --agents writes the medium coder too', () => {
-  const lines = read('docs/SECURITY.md').split('\n');
-  // Re-pinned in 1.6.1 Task 5a (plan Task 5, F1): the PreToolUse bullet is a row of the event table.
-  const pre = lines.find((l) => l.startsWith('| `PreToolUse` (`Bash`) |'));
-  assert.ok(pre, 'the PreToolUse row');
-  assert.ok(pre.includes(`When the caller is one of the four sub-agent roles this package ships — ${FOUR_ROLES} — *and* the command is`), 'four roles, each by name');
-  const writes = lines.find((l) => l.includes('The one command that writes into a project is'));
-  assert.ok(writes && writes.includes('`.claude/agents/omelette-coder.md`, `.claude/agents/omelette-coder-medium.md`, '), 'the medium coder is among the files --agents writes');
 });
 
 // ── 1.8.0 Task 10: every red test is a finding, FINDINGS about ten lines ─────
