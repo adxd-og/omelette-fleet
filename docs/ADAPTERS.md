@@ -1,6 +1,6 @@
 # Adding a unit
 
-A unit is one vendor CLI exposed as one MCP server. Adding one is three files and a test. The runtime already owns everything that is not vendor-specific, so an adapter that reaches for `process.stdout`, `readFileSync` on the config, or `child_process` directly is doing the runtime's job.
+A unit is one vendor CLI exposed as one MCP server. Adding one is three files and a test for the unit itself, plus a few places that still name the three shipped units by hand (the CLI, the fleet pane, the child-env scrub); the [checklist](#checklist) lists them. The runtime already owns everything that is not vendor-specific, so an adapter that reaches for `process.stdout`, `readFileSync` on the config, or `child_process` directly is doing the runtime's job.
 
 Read [ARCHITECTURE, "The adapter contract"](ARCHITECTURE.md#the-adapter-contract) first: it is what `defineUnit` validates, and this guide builds on it and on the call path under it.
 
@@ -67,6 +67,7 @@ The whole minimal unit:
 ```js
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
+import { partialMark, withPartial } from '../../core/partial.mjs';
 import { ACME_MODELS, EFFORTS, GUIDE } from './models.js';
 
 export const catalog = makeCatalog({ models: ACME_MODELS, efforts: EFFORTS, guide: GUIDE, title: 'ACME MODEL CATALOG' });
@@ -84,23 +85,33 @@ export function buildArgs({ model, effort }) {
 }
 
 /** Turn a finished run into text, or throw a clear error. Exported for tests. */
-export function interpretAcme(res, { timeoutS }) {
+export function interpretAcme(res, { timeoutS, outputCap }) {
   // One parser for both paths: what a finished run returns is also what a
   // killed run salvages — a second parser for the failure path is how they drift.
   const answer = (() => { try { return (JSON.parse(res.stdout || '{}').text || '').trim(); } catch { return ''; } })();
+  // The tail cap drops the BEGINNING of stdout: whatever survives is a fragment.
+  const cap = (r) => (res.capped ? withPartial(r, partialMark('acme', 'capped', { outputCap })) : r);
   if (res.killed) {
-    if (answer) return { text: `${answer}\n\n[acme: hard-killed after ${timeoutS}s — treat the answer as partial; raise acme.timeoutS in the fleet config]`, partial: true };
+    // One SIGKILL ends a timeout and a cancelled request; `cancelled` says which.
+    const mark = res.cancelled ? partialMark('acme', 'cancelled') : partialMark('acme', 'killed', { after: timeoutS });
+    if (answer) return cap(withPartial(answer, mark));
+    if (res.cancelled) throw new Error('acme cancelled by the client');   // neither bound was reached: do not name one
     throw new Error(`acme hard-killed after ${timeoutS}s with no output (raise acme.timeoutS in the fleet config)`);
   }
-  if (!answer) throw new Error(`acme exited ${res.code}: ${res.stderr.trim().slice(-500) || '(no stderr)'}`);
-  return answer;
+  if (!answer) {
+    // A capped envelope no longer parses; say so instead of "no stderr".
+    if (res.capped) throw new Error(`acme output exceeded the ${outputCap} char cap and the answer envelope was lost — raise acme.outputCap or narrow the task`);
+    throw new Error(`acme exited ${res.code}: ${res.stderr.trim().slice(-500) || '(no stderr)'}`);
+  }
+  return cap(answer);
 }
 
-const isDeterministic = (e) => /not authenticated|hard-killed|not found in PATH/i.test((e && e.message) || '');
+const isDeterministic = (e) => /not authenticated|hard-killed|cancelled by the client|output exceeded|not found in PATH/i.test((e && e.message) || '');
 
 export default defineUnit({
   name: 'acme',
   label: 'Acme',
+  instructions: 'This unit: Acme via the acme CLI. Use it for … (one routing line the model sees in the fleet contract).',
   bin: { env: 'ACME_BIN', default: 'acme' },
   riskEnv: ['ACME_API_KEY'],
   envPassthrough: ['ACME_HOME'],   // exact names the CLI needs; never a pattern — defineUnit refuses one
@@ -129,7 +140,7 @@ export default defineUnit({
         if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
         return ctx.retry(async () => {
           const res = await ctx.spawn({ args: [...buildArgs({ model: ctx.model, effort: ctx.effort }), '-p', READONLY_PREFIX + prompt] });
-          return interpretAcme(res, { timeoutS: ctx.cfg.timeoutS });
+          return interpretAcme(res, { timeoutS: ctx.cfg.timeoutS, outputCap: ctx.cfg.outputCap });
         }, { skipIf: isDeterministic });
       },
     },
@@ -223,8 +234,8 @@ Each tool looks where its own run puts files:
 ### The `local` kind
 
 A tool whose answer needs no vendor CLI is `kind: 'local'`. It still gets
-`run(args, ctx)`, but with a reduced context — `{ cfg, mode, log, catalog, home }`,
-no `spawn`, no `retry` — because a local tool that spawns is not local. The
+`run(args, ctx)`, but with a reduced context — `{ cfg, mode, log, catalog, home, usedModel }`
+(`usedModel` is a no-op), no `spawn`, no `retry` — because a local tool that spawns is not local. The
 runtime answers it directly: it is never tracked by the status feed, never
 spooled, and (like a `catalog` read) it still answers while the unit is
 `enabled: false`, since what it serves was produced before someone switched the
@@ -285,7 +296,7 @@ import unit from '../units/acme/adapter.mjs';
 startUnit(unit);
 ```
 
-Register it with `claude mcp add -s user <prefix>-acme -- node /abs/path/servers/acme.mjs`, or add the unit to the CLI's install list. Drive it by hand with `node scripts/mcp-call.mjs servers/acme.mjs acme_models '{}'` — the low-level entry point, which takes a server path rather than a unit name and therefore works before the unit is wired into the CLI. Once it is, `omelette-fleet call acme acme_models '{}'` does the same through `core/client.mjs`. Both keep stdin open until the call answers, and that is on the client's side of the bargain: on stdin EOF a server stops reading, lets the calls already in flight finish (each bounded by that unit's `timeoutS`), flushes stdout and exits. The answer is written, but a `printf | node server` pipeline has usually gone away by then — the response has to be read before the client closes.
+Register it with `claude mcp add -s user <prefix>-acme -- node /abs/path/servers/acme.mjs`, or add the unit to the CLI's install list (the last [checklist](#checklist) items name the tables). Drive it by hand with `node scripts/mcp-call.mjs servers/acme.mjs acme_models '{}'` — the low-level entry point, which takes a server path rather than a unit name and therefore works before the unit is wired into the CLI. Once it is, `omelette-fleet call acme acme_models '{}'` does the same through `core/client.mjs`. Both keep stdin open until the call answers, and that is on the client's side of the bargain: on stdin EOF a server stops reading, lets the calls already in flight finish (each bounded by that unit's `timeoutS`), flushes stdout and exits. The answer is written, but a `printf | node server` pipeline has usually gone away by then — the response has to be read before the client closes.
 
 ## 4. `test/<unit>.test.mjs` — the fake-binary pattern
 
@@ -341,4 +352,6 @@ Also worth a test each: an unknown model is rejected before any spawn, a disable
 - [ ] **Choose a streaming output format over a whole-document one** where the CLI has both. A format that writes nothing until the run ends leaves the hard-kill salvage above with nothing to salvage — measured, not assumed. See [Prefer a streaming output format](#prefer-a-streaming-output-format).
 - [ ] **stdout is JSON-RPC only.** Log through `ctx.log`.
 - [ ] **`mutateGate`** on prompt-driven research tools; leave it off where git-reading is a legitimate ask, and off for image prompts.
-- [ ] **Add the unit to the CLI's install list** and to `doctor`, so a missing CLI is skipped rather than registered broken.
+- [ ] **The CLI's hard-coded unit tables, in `bin/omelette-fleet.mjs`.** The CLI does not discover units. Add yours to `UNITS` and `UNIT_ORDER` (`install`, `doctor`, `show`, `set`, `call` and `results --stats` read them), to `PROBE_TOOL` (the unit's cheapest spawning tool, called by `doctor --probe-sandbox`), and to the `argsFor` table inside `probeLogin` (the argv of the login probe). `probeLogin` has no fallback: for a unit missing from `argsFor` it reads `undefined.join` and throws, and nothing at that point in `doctor` catches it. This is also what makes a missing CLI skipped rather than registered broken.
+- [ ] **`BILLING_ENV` in `core/spawn.mjs`.** Copy your `riskEnv` names into it, and a credential your `envPassthrough` admits (a token, not a state directory) into `VENDOR_CREDENTIALS` beside it. `OMELETTE_ENV_PASSTHROUGH` applies to every unit, so a key named only in your own `riskEnv` still reaches the other units' children when the operator passes a matching pattern. Core cannot import the adapters, so these are copies; `test/billing-scrub-1.7.2.test.mjs` checks them against a fixed list of the three shipped units, so add yours to that list too or nothing fails when a name is missing.
+- [ ] **The fleet pane's unit list.** `UNITS` in `mods/omelette-fleet/hooks/model.mjs` (read by `feed.mjs`) is `gemini`, `grok`, `codex`. The pane drops a snapshot whose `unit` is not in it, so a fourth unit writes valid schema-2 snapshots and the pane never shows it.
