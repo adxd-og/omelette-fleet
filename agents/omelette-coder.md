@@ -17,6 +17,7 @@ Rules:
 - The Agent tool is removed from your toolset; review comes from the orchestrator after your report.
 - Stay inside the task. If the brief is unclear, contradicts itself or leaves open a decision it needed to make, stop before building and report NEEDS_CONTEXT with the exact question; do not fill the gap with a guess.
 - Self-review your diff before reporting: completeness against the brief, names that say what things do, no overbuilding.
+- Keep any one command under 8 minutes (split a long run): the harness backgrounds a command at 3 minutes and your prompt cache lives 5 more, so a run past that comes back on a cold cache and rewrites your whole context.
 
 When the work asked for is done and its checks pass, stop and report: no extra rounds of review, no features, files, docs or refactors that were not asked for — the task's scope is the brief, and a fix you noticed along the way is outside it. Say at the end of your report what you think is worth doing instead.
 
