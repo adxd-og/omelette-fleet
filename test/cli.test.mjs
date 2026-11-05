@@ -1471,8 +1471,8 @@ test('update (npm): nothing is pulled — the exact upgrade command, exit 0', ()
   const r = cli(['update'], { dir, env });
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /omelette-fleet 0\.1\.0 · npm install/);
-  assert.match(r.out, /^ {2}npm i -g omelette-fleet@latest$/m);
-  assert.match(r.out, /npx omelette-fleet@latest/);
+  assert.match(r.out, /^ {2}npm i -g github:adxd-og\/omelette-fleet$/m);
+  assert.doesNotMatch(r.out, /omelette-fleet@latest/); // the name is not on npm (npm view 404, 2026-11-04)
   assert.equal(cli(['update', '--check'], { dir, env }).code, 0); // no release check → nothing to report
   const bad = cli(['update', '--nope'], { dir, env });
   assert.equal(bad.code, 1);

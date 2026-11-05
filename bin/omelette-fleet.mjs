@@ -1611,12 +1611,12 @@ async function cmdUpdate(argv) {
   if (checkOnly) rulesHints(current);
 
   if (kind === 'npm') {
-    out('Installed from npm — there is no checkout to pull. Upgrade with:');
+    out('Installed as a package, not a git checkout — there is nothing to pull. Reinstall from GitHub:');
     out();
-    out('  npm i -g omelette-fleet@latest');
+    out('  npm i -g github:adxd-og/omelette-fleet');
     out();
-    out('(Nothing to install if you run it through npx: `npx omelette-fleet@latest <command>`');
-    out(' always fetches the latest release.)');
+    out('(omelette-fleet is not published on npm: `npm i -g omelette-fleet` and `npx omelette-fleet`');
+    out(' find nothing there. A git clone updates itself with this command.)');
     if (!checkOnly) rulesHints(current);
     out('Restart Claude Code afterwards to load the new servers.');
     return checkOnly && remote && remote.behind ? 3 : 0;
@@ -1672,7 +1672,7 @@ async function cmdUpdate(argv) {
     err(`This checkout has diverged from origin/${branch} — a fast-forward is not possible, and`);
     err('nothing was changed. Inspect it and reconcile by hand:');
     err(`  git -C ${root} log --oneline HEAD...origin/${branch}`);
-    err('or install the released package instead: npm i -g omelette-fleet@latest');
+    err('or reinstall from GitHub instead: npm i -g github:adxd-og/omelette-fleet');
     return 1;
   }
 
