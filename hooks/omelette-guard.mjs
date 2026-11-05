@@ -6,8 +6,10 @@
  * file and PRINTS the settings.json snippet that calls it; Claude Code's
  * settings.json is read by this package and written by nobody but the operator.
  *
- * PreToolUse (matcher Bash) — the git guard on the sub-agent roles this package
- * ships. The operating model says "coder sub-agents never commit" and asks the
+ * PreToolUse on Bash — the git guard on the sub-agent roles this package
+ * ships (the snippet's matcher is `Bash|Write|Edit|NotebookEdit`: the other
+ * three serve the reviewer's fence and the curated files, below). The
+ * operating model says "coder sub-agents never commit" and asks the
  * same of the tester, which reports what it saw rather than moving the tree, and
  * of the reviewer, which reads and writes one report; a settings-level hook is
  * what MAKES that true for git: the stdin event carries `agent_type` for a
@@ -29,7 +31,8 @@
  * it does. A ledger the sweep found closed is finished work — archived, or held
  * in place by a collision — and nobody re-reads it.
  *
- * SessionStart — runs the ledger sweep on every source, so a ledger whose
+ * SessionStart — runs the ledger sweep on every source (where `.omelette/`
+ * holds a ledger; without one there is nothing to sweep), so a ledger whose
  * branch is gone is archived before a session reads it. Then, on `compact` and
  * `clear`, the other half, and the half that is PROMISED: Claude Code's hooks
  * reference says a SessionStart hook's stdout is added to the session's
