@@ -8,11 +8,12 @@
 // operator's ~/.vibe is never read or written.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import unit, { REVIEW_PREFIX, buildArgs } from '../units/mistral/adapter.mjs';
 import { MISTRAL_MODELS } from '../units/mistral/models.js';
+import { runsRoot } from '../units/mistral/repro.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
 const BASE = mkdtempSync(join(tmpdir(), 'omelette-mistral-t-'));
@@ -188,6 +189,24 @@ test('a run without the policy is refused naming the key', async () => {
     assert.match(r.text, new RegExp(`mistral: the run did not carry the unit's policy \\(${key}=${shown}\\) — VIBE_HOME was not honoured`));
     assert.equal(w.spawns().length, 1, `${key}: not retried`);
   }
+  // T3 addendum 2: review checks the shell as repro does — a run whose bash is not the home's wrapper is refused.
+  const shell = world({ edit: (s) => { s.export.config.tools.bash.shell = '/bin/bash'; } });
+  const r = await shell.review();
+  assert.equal(r.isError, true);
+  assert.match(r.text, /mistral: the run did not carry the unit's policy \(tools\.bash\.shell=\/bin\/bash\) — VIBE_HOME was not honoured/);
+  assert.equal(shell.spawns().length, 1);
+});
+
+// T3 addendum 1: `--trust` on the operator's tree honours a project .vibe/ over the home — refused before the paid run.
+test('a cwd holding .vibe (a directory, a file or a link) is refused before any spawn', async () => {
+  for (const plant of [(p) => mkdirSync(p), (p) => writeFileSync(p, ''), (p) => symlinkSync(join(p, '..', 'nowhere'), p)]) {
+    const w = world();
+    plant(join(w.work, '.vibe'));
+    const r = await w.review();
+    assert.equal(r.isError, true);
+    assert.equal(r.text, `Error: ${join(w.work, '.vibe')} exists — a project Vibe config would override the unit's policy for this run; remove it, or use mistral_security_repro, which clones HEAD and drops it`);
+    assert.equal(w.spawns().length, 0);
+  }
 });
 
 test('deadline: exit 3 + outcome deadline is a partial answer, not a failure', async () => {
@@ -219,6 +238,8 @@ test('MISTRAL_API_KEY never reaches the child, VIBE_HOME and TMPDIR do', async (
   assert.equal(env.VIBE_HOME, realpathSync(join(w.fleet, 'vibe', 'review')));
   // The spool tmp is gone after the call: its resolved path is its parent's, resolved, plus its name.
   assert.equal(env.TMPDIR, join(realpathSync(dirname(outDir)), basename(outDir)));
+  // T3 round 2, item 9: a review-* under runsRoot(), which the repro profile denies to every command.
+  assert.equal(dirname(env.TMPDIR), realpathSync(runsRoot()));
   assert.equal(env.OMELETTE_FLEET_HOME, realpathSync(w.fleet));
   assert.equal(env.HOME, w.home);
 });

@@ -57,7 +57,7 @@
  * what its adapter pins — while `ctx.model` stays the explicit or configured
  * one ('' when nothing named a model). Any other unit's unnamed model stays
  * `null` in the feed: the vendor's own default.
- * `ctx.spawn({ args, cwd?, stdinText?, extraEnv?, hardKillMs?, outputCap? })`
+ * `ctx.spawn({ args, cwd?, stdinText?, extraEnv?, hardKillMs?, outputCap?, killGroupOnExit? })`
  * resolves to core/spawn.mjs's result — `{ stdout, stderr, code, signal,
  * killed, capped }`. Both bounds come from the unit's config (`timeoutS`,
  * `outputCap`) unless the call passes its own. `capped: true` means the tail
@@ -365,7 +365,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
   const bootCfg = cfgFor();
   if (bootCfg.values.results) storeFor(bootCfg).prune();
 
-  function spawnFor(cfg, { args, cwd, stdinText, extraEnv, hardKillMs, outputCap }, signal) {
+  function spawnFor(cfg, { args, cwd, stdinText, extraEnv, hardKillMs, outputCap, killGroupOnExit }, signal) {
     const timeoutMs = hardKillMs ?? cfg.values.timeoutS * 1000;
     // Both bounds come from the unit's config unless this call knows better.
     // The config value is a validated posint; a call's is not, and `slice(-0)`
@@ -385,7 +385,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       bin: exe, args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
       scrubEnv: unit.riskEnv,
       hardKillMs: timeoutMs, signal, stdinText, outputCap: cap, log,
-      notFoundHelp,
+      notFoundHelp, killGroupOnExit,
     }).then((res) => {
       // Auth check ONLY on empty-stdout runs: a real answer that merely mentions
       // signing in must never false-positive.

@@ -25,7 +25,10 @@ const POLICY = [
   'outside_workdir = "deny"',
   'show_greeting = false',
 ];
-/** The probe profile (2026-11-06, probes 4 and 7), verbatim; the shipped one adds FLEET_DENY as its last line. */
+/**
+ * The probe profile (2026-11-06, probes 4 and 7), verbatim but for the six read-denies
+ * T3 round 2 appended to its list (~/.gnupg … ~/.git-credentials); FLEET_DENY follows it.
+ */
 const PROBE_SB = [
   "(version 1)",
   "; Seatbelt profile for the repro sandbox probe: everything the model runs goes",
@@ -46,9 +49,43 @@ const PROBE_SB = [
   "  (subpath (string-append (param \"HOME\") \"/.aws\"))",
   "  (subpath (string-append (param \"HOME\") \"/.omelette\"))",
   "  (subpath (string-append (param \"HOME\") \"/.vibe\"))",
-  "  (subpath (string-append (param \"HOME\") \"/.config\")))",
+  "  (subpath (string-append (param \"HOME\") \"/.config\"))",
+  "  (subpath (string-append (param \"HOME\") \"/.gnupg\"))",
+  "  (subpath (string-append (param \"HOME\") \"/.netrc\"))",
+  "  (subpath (string-append (param \"HOME\") \"/.kube\"))",
+  "  (subpath (string-append (param \"HOME\") \"/.docker\"))",
+  "  (subpath (string-append (param \"HOME\") \"/.npmrc\"))",
+  "  (subpath (string-append (param \"HOME\") \"/.git-credentials\")))",
 ].join('\n') + '\n';
 const FLEET_DENY = '(deny file-read* (subpath (param "FLEET")))\n';
+/** 1.9.0 T3 (ruling 2026-11-06): no hand-off to a process outside the profile; the run's OUT dir is Vibe's. */
+const T3_BLOCK = [
+  '; a command must not hand work to a process outside this profile',
+  '(deny appleevent-send)',
+  '(deny process-exec (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/automator") (literal "/usr/bin/security") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy"))',
+  '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb"))',
+  "; a command signals only processes of its own sandbox: not Vibe, not the operator's other processes",
+  '(deny signal)',
+  '(allow signal (target same-sandbox))',
+  "; the run's own output dir (export.json, session/meta.json, prompt.md) is Vibe's, not the model's",
+  '(deny file-read* (subpath (param "OUT")))',
+  '(deny file-write* (subpath (param "OUT")))',
+].join('\n') + '\n';
+/** T3 round 2: the fleet's temp dirs and every run denied, the walk down to the run kept, the run's clone and tmp re-allowed LAST. */
+const RUNS_BLOCK = [
+  "; the fleet's other temp dirs (every omelette-* under the OS temp root, another unit's included) are no command's either",
+  '(deny file-read* (regex (string-append "^" (param "TMPROOT") "/omelette-")))',
+  '(deny file-write* (regex (string-append "^" (param "TMPROOT") "/omelette-")))',
+  "; every run lives under RUNS: a command sees and writes its own clone and tmp (re-allowed last), never a sibling run's clone, tmp or out",
+  '(deny file-read* (subpath (param "RUNS")))',
+  '(deny file-write* (subpath (param "RUNS")))',
+  "; the path down to the run's own clone and tmp stays walkable (node and git lstat every component): RUNS and this run's dir, metadata only; listing stays denied, a sibling run dir is not even stat-able",
+  '(allow file-read-metadata (literal (param "RUNS")) (literal (param "RUN")))',
+  '(allow file-read* (subpath (param "CLONE")) (subpath (param "TMP")))',
+  '(allow file-write* (subpath (param "CLONE")) (subpath (param "TMP")))',
+  "; no immutable or append-only flag in the run's clone or tmp: the adapter must be able to remove the run",
+  '(deny file-write-flags (subpath (param "CLONE")) (subpath (param "TMP")))',
+].join('\n') + '\n';
 
 test('catalog head is mistral-large-4-0-3 and resolveAlias moves within a family', () => {
   const catalog = makeCatalog({ models: MISTRAL_MODELS, efforts: EFFORTS, guide: GUIDE });
@@ -108,7 +145,7 @@ test('ensureHome renders wx, re-renders on change, never follows a symlink', () 
 
     const repro = ensureHome({ home: fleet, profile: 'repro', models: MISTRAL_MODELS, version: '9.9.9' });
     assert.ok(readFileSync(join(repro.dir, 'repro.sb')).equals(readFileSync(join(ROOT, 'units', 'mistral', 'repro.sb'))));
-    assert.equal(readFileSync(join(ROOT, 'units', 'mistral', 'repro.sb'), 'utf8'), PROBE_SB + FLEET_DENY);
+    assert.equal(readFileSync(join(ROOT, 'units', 'mistral', 'repro.sb'), 'utf8'), PROBE_SB + FLEET_DENY + T3_BLOCK + RUNS_BLOCK);
 
     const changed = MISTRAL_MODELS.map((m, i) => (i === 1 ? { ...m, id: 'mistral-large-4-0-3-renamed' } : m));
     assert.equal(ensureHome({ home: fleet, profile: 'review', models: changed, version: '9.9.9' }).rendered, true);
@@ -200,17 +237,43 @@ test('the repro wrapper stops before sandbox-exec when HOME is unset: an empty H
   assert.equal(existsSync(join(clone, 'ran')), false);
 });
 
+// 1.9.0 T3 fix round (Q7): CLONE and TMP are required like HOME — an empty one would hand the profile `(subpath "")`;
+// round 2: RUNS and TMPROOT likewise, an empty one would deny nothing.
+test('the repro wrapper stops before sandbox-exec when OMELETTE_REPRO_CLONE, _TMP, _RUNS, _RUN or _TMPROOT is unset', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-mistral-noclone-'));
+  const [clone, tmpd, fleet, out, home] = ['clone', 'tmp', 'fleet', 'out', 'home'].map((n) => join(dir, n));
+  for (const d of [clone, tmpd, fleet, out, home]) mkdirSync(d);
+  const wrapper = join(dir, 'shell.sh');
+  writeFileSync(wrapper, renderWrapper({ profile: 'repro', home: fleet }));
+  chmodSync(wrapper, 0o700);
+  const full = {
+    PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out,
+    OMELETTE_REPRO_RUNS: dir, OMELETTE_REPRO_RUN: dir, OMELETTE_REPRO_TMPROOT: dir, T_MARK: join(dir, 'ran'),
+  };
+  for (const name of ['OMELETTE_REPRO_CLONE', 'OMELETTE_REPRO_TMP', 'OMELETTE_REPRO_RUNS', 'OMELETTE_REPRO_RUN', 'OMELETTE_REPRO_TMPROOT']) {
+    const env = { ...full };
+    delete env[name];
+    const run = spawnSync(wrapper, ['-c', 'touch "$T_MARK"'], { env });
+    assert.notEqual(run.status, 0, name);
+    assert.match(run.stderr.toString(), new RegExp(name), name);
+    assert.equal(existsSync(join(dir, 'ran')), false, `${name}: nothing executed`);
+  }
+});
+
 test('the repro profile read-denies the fleet home wherever OMELETTE_HOME put it; the clone stays readable', { skip: process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec') }, () => {
   // sandbox-exec cannot nest: inside a sandbox even an allow-everything profile fails, and only then is this skipped.
   if (spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true']).status !== 0) return;
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'omelette-mistral-fleetdeny-')));
   const fleet = join(base, 'relocated-fleet');
   const { dir } = ensureHome({ home: fleet, profile: 'repro' });
-  const [clone, tmpd, home] = ['clone', 'tmp', 'home'].map((n) => join(base, n));
-  for (const d of [clone, tmpd, home]) mkdirSync(d);
+  const [clone, tmpd, home, out] = ['clone', 'tmp', 'home', 'out'].map((n) => join(base, n));
+  for (const d of [clone, tmpd, home, out]) mkdirSync(d);
   writeFileSync(join(fleet, 'fleet.config.json'), 'fleet secret\n');
   writeFileSync(join(clone, 'readme'), 'in the clone\n');
-  const env = { PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet };
+  const env = {
+    PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out,
+    OMELETTE_REPRO_RUNS: join(base, 'runs'), OMELETTE_REPRO_RUN: base, OMELETTE_REPRO_TMPROOT: realpathSync(tmpdir()),
+  };
   const run = (cmd) => spawnSync(join(dir, 'shell.sh'), ['-c', cmd], { env });
   const denied = run('cat "$OMELETTE_FLEET_HOME/fleet.config.json"');
   assert.notEqual(denied.status, 0);

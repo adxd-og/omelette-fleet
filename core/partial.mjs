@@ -12,7 +12,8 @@
 /** kind → (detail) => text after `[<unit>: ` and before `]`. */
 const KINDS = {
   capped: ({ outputCap }) => `output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial`,
-  killed: ({ unit, after }) => `hard-killed after ${after}s — treat the answer as partial; raise ${unit}.timeoutS in the fleet config`,
+  // `key` as for deadline: mistral's repro passes `reproTimeoutS`; every other caller leaves the default.
+  killed: ({ unit, after, key = 'timeoutS' }) => `hard-killed after ${after}s — treat the answer as partial; raise ${unit}.${key} in the fleet config`,
   // mistral: Vibe stopped itself at `--time-limit` (exit 3, outcome deadline) and still wrote its answer; `key`
   // is the config key that set the limit (review `timeoutS`, repro `reproTimeoutS`).
   deadline: ({ unit, limit, key = 'timeoutS' }) => `stopped at the ${limit}s time limit — treat the answer as partial; raise ${unit}.${key} in the fleet config`,
@@ -46,7 +47,7 @@ export function partialMark(unit, kind, detail = {}) {
 export const PARTIAL_MARK_RE = new RegExp(
   '\\[(gemini|grok|codex|mistral): (' +
   'output capped at \\d+ chars — the beginning of the stream was dropped; treat the answer as partial' +
-  '|hard-killed after [\\d.?]+s — treat the answer as partial; raise \\1\\.timeoutS in the fleet config' +
+  '|hard-killed after [\\d.?]+s — treat the answer as partial; raise \\1\\.(?:timeoutS|reproTimeoutS) in the fleet config' +
   '|stopped at the \\d+s time limit — treat the answer as partial; raise \\1\\.(?:timeoutS|reproTimeoutS) in the fleet config' +
   '|cancelled by the client( — [^\\]]*)?' +
   '|CLI exited (-?\\d+|null) — treat the answer as partial' +

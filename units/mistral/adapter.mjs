@@ -1,8 +1,9 @@
 /**
  * omelette-fleet :: units/mistral/adapter.mjs
- * Mistral's Vibe CLI as a fleet unit — `mistral_security_review` and
- * `mistral_models`. Every call is one headless `vibe` run on the operator's
- * plan, signed in through the browser (the login lives in the Keychain).
+ * Mistral's Vibe CLI as a fleet unit — `mistral_security_review`,
+ * `mistral_security_repro` and `mistral_models`. Every call is one headless
+ * `vibe` run on the operator's plan, signed in through the browser (the login
+ * lives in the Keychain).
  *
  * READ-ONLY POSTURE (review) — policy, not a kernel, the same class as
  * Gemini's: `--enabled-tools read_file --enabled-tools grep` and nothing else
@@ -13,6 +14,16 @@
  * of it in `ps`), any `--dangerously-*` flag, any flag Vibe documents as
  * bypassing its policy. `--trust` trusts the workdir for this one invocation,
  * which a headless run in an untrusted folder requires.
+ *
+ * REPRO POSTURE — a kernel under every shell command, behind its own gate
+ * (`OMELETTE_ALLOW_REPRO`, never `OMELETTE_ALLOW_WRITE`): a HEAD-only clone
+ * under `<OS temp>/omelette-mistral-repro/`, Vibe given bash only there, every
+ * bash command run by the repro home's wrapper under Seatbelt (repro.sb), the
+ * clone's diff appended by the adapter under its own heading, nothing applied.
+ * No read_file or grep: they run in Vibe's own process, outside the kernel, and
+ * read_file follows a symlink out of the workdir despite `outside_workdir =
+ * "deny"` (probe 2026-11-06) — one a bash command may plant in the clone.
+ * Never retried. The clone, the gate and the diff: units/mistral/repro.mjs.
  *
  * HOMES — `VIBE_HOME` is `<fleet home>/vibe/review/`, rendered by
  * units/mistral/home.mjs before every spawn (the policy block, the catalog as
@@ -41,9 +52,12 @@
  * line (spec, probe 5). After the run the adapter checks `export.json`
  * `config.active_model` — probe 5's fallback left it `""`, which is refused —
  * and withholds the answer when it is not the requested alias; it then checks
- * that the run carried the unit's policy (`outside_workdir`, MCP, connectors),
- * the proof that `VIBE_HOME` was honoured. Both refusals are deterministic: no
- * retry. A session record (`<output dir>/session/meta.json`, whose
+ * that the run carried the unit's policy (`outside_workdir`, MCP, connectors,
+ * `tools.bash.shell` = the home's wrapper), the proof that `VIBE_HOME` was
+ * honoured. A project `.vibe/` in the reviewed tree would override that
+ * policy before the run (Vibe ranks a project config over its home), so review
+ * refuses such a `cwd` before any spawn; repro drops it from its clone. Both
+ * refusals are deterministic: no retry. A session record (`<output dir>/session/meta.json`, whose
  * `config.model_name` is the vendor name Vibe sent) is a second source when
  * present — on Vibe 3.1.0 the journal's assistant entries carry no model — but
  * the homes turn session logging off, which also keeps `session/` out of the
@@ -85,6 +99,9 @@ import { partialMark, withPartial } from '../../core/partial.mjs';
 import { readRegularFile } from '../../core/status.mjs';
 import { ensureHome, resolveAlias } from './home.mjs';
 import { EFFORTS, GUIDE, MISTRAL_MODELS } from './models.js';
+import {
+  appendPatch, cloneDiff, fixModes, neutraliseModelText, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
+} from './repro.mjs';
 
 export const catalog = makeCatalog({
   models: MISTRAL_MODELS,
@@ -96,6 +113,8 @@ export const catalog = makeCatalog({
 
 /** The only tools a review run hands Vibe. */
 const REVIEW_TOOLS = ['read_file', 'grep'];
+/** The only tool a repro run hands Vibe: its read_file and grep run outside the sandbox and follow links out of the clone. */
+const REPRO_TOOLS = ['bash'];
 
 export const REVIEW_PREFIX =
   'You are a read-only security reviewer. You read files with read_file and grep inside the directory you are ' +
@@ -103,6 +122,20 @@ export const REVIEW_PREFIX =
   'publish. For each finding say what an attacker gains, in four parts — location · scenario · consequence · how ' +
   'to confirm — with the location as a path:line pointer relative to the working directory. Answer in plain text, ' +
   'findings only, no praise, and end with a `total: <n> findings` line.\n\n';
+
+export const REPRO_PREFIX =
+  'You are a security reviewer who reproduces. The directory you are in is a disposable clone of the repository\'s ' +
+  'HEAD; nothing you change here reaches the real tree. Confirm each finding by running it. You have bash only: ' +
+  'read with cat and grep; every command runs under a kernel sandbox that refuses the network, writes outside this ' +
+  'clone and its temp dir, and reads of the operator\'s secret dirs (~/.ssh, ~/.aws, ~/.config, ~/.vibe, ~/.gnupg ' +
+  'and the fleet home among them). Propose a fix by editing the files in place — the adapter appends the diff of ' +
+  'the clone to your answer, so do not paste a patch yourself. Never git commit, never push, never reach the ' +
+  'network (it is refused anyway). For each finding say what an attacker gains, in four parts — location · ' +
+  'scenario · consequence · how to confirm (the command you ran and what it printed) — with the location as a ' +
+  'path:line pointer relative to the working directory. Answer in plain text, findings only, no praise, and end ' +
+  'with a `total: <n> findings` line.\n\n';
+
+const REPRO_CLOSED = 'Error: mistral_security_repro is closed — set OMELETTE_ALLOW_REPRO=1 on the unit\'s registration to let the model execute code in a disposable clone (OMELETTE_ALLOW_WRITE does not open it)';
 
 const AUTH_RE = /not logged in|sign in|login required|\b401\b/i;
 const AUTH_HELP = 'run `vibe` once in a terminal and sign in through the browser; the login lives in the Keychain';
@@ -212,12 +245,13 @@ const show = (v) => (typeof v === 'string' ? v : String(JSON.stringify(v)));
 /**
  * Turn a finished run and its export into `{ text, usage, partial?, footer }`,
  * or throw a refusal: the fallback (export or session record names another
- * model), the policy echo (the run did not carry the home's policy), then an
- * empty answer. `text` is the answer, the footer after a blank line, then any
- * marker (core/partial.mjs). Pure; exported for tests and the repro profile.
+ * model), the policy echo (the run did not carry the home's policy, the
+ * home's wrapper as the bash shell included), then an empty answer. `text` is
+ * the answer, the footer after a blank line, then any marker
+ * (core/partial.mjs). Pure; exported for tests and the repro profile.
  * @param {{stdout:string, code:number|null, killed:boolean, capped?:boolean, cancelled?:boolean}} res
  * @param {object} exp the parsed export.json
- * @param {{requested:string, profile?:'review'|'repro', timeoutS:number, wrapper?:string,
+ * @param {{requested:string, profile?:'review'|'repro', timeoutS:number, wrapper:string,
  *          journal?:{model:string}|null, exportPath?:string, outputCap?:number}} o
  */
 export function extractResult(res, exp, { requested, profile = 'review', timeoutS, wrapper = '', journal = null, exportPath = '', outputCap } = {}) {
@@ -236,7 +270,7 @@ export function extractResult(res, exp, { requested, profile = 'review', timeout
     ['outside_workdir', config.outside_workdir, 'deny'],
     ['enable_mcp', config.enable_mcp, false],
     ['enable_connectors', config.enable_connectors, false],
-    ...(profile === 'repro' ? [['tools.bash.shell', shell, wrapper]] : []),
+    ['tools.bash.shell', shell, wrapper],
   ];
   for (const [key, value, want] of policy) {
     if (value !== want) throw new Error(`mistral: the run did not carry the unit's policy (${key}=${show(value)}) — VIBE_HOME was not honoured`);
@@ -250,10 +284,12 @@ export function extractResult(res, exp, { requested, profile = 'review', timeout
   const u = exp.usage && typeof exp.usage === 'object' ? exp.usage : null;
   const usage = u ? { input: u.input_tokens ?? null, output: u.output_tokens ?? null, cachedInput: u.cached_input_tokens ?? null, reasoning: null } : null;
   let r = { text: `${answer}\n\n${footer}`, usage, footer };
+  // Repro's limits come from reproTimeoutS: its markers say which key to raise.
+  const key = profile === 'repro' ? { key: 'reproTimeoutS' } : {};
   if (res.cancelled) r = withPartial(r, partialMark('mistral', 'cancelled'));
-  else if (res.killed) r = withPartial(r, partialMark('mistral', 'killed', { after: timeoutS ?? '?' }));
+  else if (res.killed) r = withPartial(r, partialMark('mistral', 'killed', { after: timeoutS ?? '?', ...key }));
   else if (exp.outcome === 'deadline') {
-    r = withPartial(r, partialMark('mistral', 'deadline', { limit: timeoutS - 15, ...(profile === 'repro' ? { key: 'reproTimeoutS' } : {}) }));
+    r = withPartial(r, partialMark('mistral', 'deadline', { limit: timeoutS - 15, ...key }));
   } else if (res.code !== 0) r = withPartial(r, partialMark('mistral', 'exited', { code: res.code }));
   if (res.capped) r = withPartial(r, partialMark('mistral', 'capped', { outputCap }));
   return r;
@@ -378,12 +414,16 @@ export function capVibeLogs(vibeHome, { maxBytes = VIBE_LOGS_CAP, liveS, log = (
   log(`removed ${removed} old session log(s), kept ${live} live, under ${unified} — logs/ now ${total} bytes (cap ${maxBytes})`);
 }
 
-/** One review run, in a spool tmp of its own that holds the prompt and receives the output; removed after. */
+/**
+ * One review run, in a spool tmp of its own that holds the prompt and receives
+ * the output; removed after. The spool is a `review-*` under runsRoot(), so a
+ * repro command running meanwhile (the profile's RUNS deny) cannot reach it.
+ */
 async function reviewOnce(ctx, { prompt, workdir, requested }) {
   const { dir: vibeHome } = ensureHome({ home: ctx.home, profile: 'review', log: ctx.log });
   // A run of either profile lasts at most its timeout: a session younger than the longer one, plus a minute, may be live.
   capVibeLogs(vibeHome, { liveS: Math.max(ctx.cfg.timeoutS, ctx.cfg.reproTimeoutS) + 60, log: ctx.log });
-  const outDir = mkdtempSync(join(tmpdir(), 'omelette-mistral-'));
+  const outDir = mkdtempSync(join(runsRoot(), 'review-'));
   try {
     const promptFile = join(outDir, 'prompt.md');
     writeFileSync(promptFile, REVIEW_PREFIX + prompt, { flag: 'wx', mode: 0o600 });
@@ -401,6 +441,83 @@ async function reviewOnce(ctx, { prompt, workdir, requested }) {
     return answerFrom(ctx, res, { outDir, requested, profile: 'review', timeoutS: ctx.cfg.timeoutS, wrapper: join(vibeHome, 'shell.sh') });
   } finally {
     rmSync(outDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * One repro run, never retried: a HEAD-only clone of `cwd` under runsRoot(),
+ * Vibe in it with bash only, through the repro home's wrapper (Seatbelt under
+ * every command); what a command left in the process group is killed when Vibe
+ * exits. The answer — the model's text unable to pass for the adapter's lines
+ * (neutraliseModelText) — then the clone's diff under the adapter's own
+ * heading, taken once the clone is made the adapter's own again (fixModes); a
+ * diff that fails is one line, never the answer's loss. The run's directory
+ * goes afterwards unless `reproKeep`, and then the answer's last line names
+ * the clone; a removal that fails is a log line.
+ */
+async function reproOnce(ctx, { prompt, cwd, requested }) {
+  const { dir: vibeHome } = ensureHome({ home: ctx.home, profile: 'repro', log: ctx.log });
+  capVibeLogs(vibeHome, { liveS: Math.max(ctx.cfg.timeoutS, ctx.cfg.reproTimeoutS) + 60, log: ctx.log });
+  const run = prepareClone({ cwd, log: ctx.log });
+  const keep = ctx.cfg.reproKeep === true;
+  const kept = keep ? `\n\n_(clone kept: ${run.clone})_` : '';
+  let fix = null;
+  try {
+    const dirtyLine = run.dirty ? `_(the clone is HEAD ${run.head}; uncommitted changes in ${cwd} were not in it)_\n\n` : '';
+    const promptFile = join(run.out, 'prompt.md');
+    writeFileSync(promptFile, REPRO_PREFIX + dirtyLine + prompt, { flag: 'wx', mode: 0o600 });
+    const timeLimitS = ctx.cfg.reproTimeoutS - 15;
+    const args = buildArgs({
+      profile: 'repro', workdir: run.clone, model: requested, tools: REPRO_TOOLS,
+      maxTurns: ctx.cfg.maxTurns, maxPrice: ctx.cfg.reproMaxPrice, timeLimitS, outDir: run.out, promptFile,
+    });
+    ctx.log(`vibe · profile=repro · model=${requested} · tools=bash · max-turns=${ctx.cfg.maxTurns} · max-price=$${ctx.cfg.reproMaxPrice} · time-limit=${timeLimitS}s · workdir=${run.clone}`);
+    // Seatbelt matches resolved paths: every path the wrapper and the profile read is resolved here.
+    const extraEnv = {
+      ...Object.fromEntries(Object.entries({
+        VIBE_HOME: vibeHome,
+        TMPDIR: run.tmp,
+        OMELETTE_FLEET_HOME: ctx.home,
+        OMELETTE_REPRO_CLONE: run.clone,
+        OMELETTE_REPRO_TMP: run.tmp,
+        OMELETTE_REPRO_OUT: run.out,
+        OMELETTE_REPRO_RUNS: runsRoot(),
+        OMELETTE_REPRO_RUN: run.runDir,
+      }).map(([k, v]) => [k, realpathSync(v)])),
+      // The profile reads TMPROOT only inside a regex: the resolved temp root, its metacharacters escaped.
+      OMELETTE_REPRO_TMPROOT: regexLiteral(realpathSync(tmpdir())),
+    };
+    // The env of the wrapper's chmod -R: the spawn's (HOME is the operator's), so the same profile stands.
+    const childEnv = { ...process.env, ...extraEnv };
+    fix = () => fixModes({ wrapper: join(vibeHome, 'shell.sh'), env: childEnv, paths: [run.clone, run.tmp], log: ctx.log });
+    // A process a command backgrounded must not outlive the call and wait for the next run.
+    const res = await ctx.spawn({ args, cwd: run.clone, extraEnv, hardKillMs: ctx.cfg.reproTimeoutS * 1000, killGroupOnExit: true });
+    // Before answerFrom: the real footer and markers come after the model's text, which can pass for none of them.
+    const r = answerFrom(ctx, { ...res, stdout: neutraliseModelText(res.stdout) }, { outDir: run.out, requested, profile: 'repro', timeoutS: ctx.cfg.reproTimeoutS, wrapper: join(vibeHome, 'shell.sh') });
+    fix();
+    let text;
+    try {
+      text = appendPatch(dirtyLine + r.text, cloneDiff(run.clone));
+    } catch (e) {
+      const why = String((e && e.message) || e).trim().split(/\r\n|\r|\n/).pop().slice(-200);
+      text = `${dirtyLine}${r.text}\n\n_(diff unavailable: ${why}; set mistral.reproKeep=true to inspect the clone)_`;
+    }
+    return { ...r, text: text + kept };
+  } catch (e) {
+    if (keep) throw new Error(`${(e && e.message) || e}${kept}`);
+    throw e;
+  } finally {
+    if (!keep) removeRun(run.runDir, { log: ctx.log, fix });
+  }
+}
+
+/** `<dir>/.vibe` is there, whatever it is (a file, a link, a directory) — or cannot be ruled out. */
+function projectVibe(dir) {
+  try {
+    lstatSync(join(dir, '.vibe'));
+    return true;
+  } catch (e) {
+    return !(e && e.code === 'ENOENT');
   }
 }
 
@@ -434,7 +551,6 @@ export default defineUnit({
     maxPrice: { type: 'posint', default: 1 },
     reproMaxPrice: { type: 'posint', default: 3 },
     reproKeep: { type: 'boolean', default: false },
-    reproTools: { type: 'string', default: 'bash,read_file,grep' },
   },
   supportedModes: { 'read-only': true, 'workspace-write': null },
   auth: { detect: (stderr) => AUTH_RE.test(stderr), help: AUTH_HELP },
@@ -472,8 +588,51 @@ export default defineUnit({
         // Vibe 3.1.0 refuses --time-limit <= 0 and writes no export: refused here, never clamped.
         if (ctx.cfg.timeoutS <= 15) return { text: `Error: mistral.timeoutS must be above 15 — Vibe's --time-limit is timeoutS − 15 s (configured: ${ctx.cfg.timeoutS})`, isError: true };
         const workdir = c.cwd || process.cwd();
+        if (projectVibe(workdir)) {
+          return { text: `Error: ${join(workdir, '.vibe')} exists — a project Vibe config would override the unit's policy for this run; remove it, or use mistral_security_repro, which clones HEAD and drops it`, isError: true };
+        }
         const requested = pickAlias(ctx);
         return ctx.retry(() => reviewOnce(ctx, { prompt, workdir, requested }), { skipIf: isDeterministic });
+      },
+    },
+    {
+      name: 'mistral_security_repro',
+      kind: 'review',
+      description:
+        'Ask Mistral Large 4 to REPRODUCE its security findings: the same brief as mistral_security_review, executed ' +
+        'in a disposable HEAD-only clone of `cwd` (uncommitted changes are not in it, the answer says so; LFS files ' +
+        'are pointers, not content). Vibe gets bash only (its read_file and grep run outside the kernel sandbox and ' +
+        'follow symlinks out of the clone, so they are not given); every bash command runs under a macOS kernel ' +
+        'sandbox (Seatbelt) that refuses the network, writes outside the clone and its temp dir, and reads of ~/.ssh, ' +
+        '~/.aws, ~/.config, ~/.vibe, ~/.gnupg and the fleet home. Closed unless the unit\'s registration sets OMELETTE_ALLOW_REPRO=1 (OMELETTE_ALLOW_WRITE does not ' +
+        'open it); macOS only. Nothing is applied to your tree: when the clone changed, the adapter appends its diff ' +
+        'under `## proposed patch (not applied)` for you to review. Never retried; a run that hit its time limit ' +
+        'comes back marked partial. Verify every finding.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'What to reproduce and what to look for.' },
+          cwd: {
+            type: 'string',
+            description: 'Optional ABSOLUTE path inside the git work tree to reproduce in (its HEAD is cloned). Defaults to the MCP server\'s process cwd.',
+          },
+          effort: EFFORT_PROP,
+          model: MODEL_PROP,
+        },
+        required: ['prompt'],
+      },
+      async run(args, ctx) {
+        if (!reproAllowed()) return { text: REPRO_CLOSED, isError: true };
+        const supported = reproSupported();
+        if (!supported.ok) return { text: `Error: ${supported.reason}`, isError: true };
+        const prompt = String(args.prompt || '').trim();
+        if (!prompt) return { text: 'Error: "prompt" is required.', isError: true };
+        const c = checkCwd(args.cwd);
+        if (c.error) return { text: c.error, isError: true };
+        if (ctx.cfg.reproTimeoutS <= 15) return { text: `Error: mistral.reproTimeoutS must be above 15 — Vibe's --time-limit is reproTimeoutS − 15 s (configured: ${ctx.cfg.reproTimeoutS})`, isError: true };
+        const requested = pickAlias(ctx);
+        // No ctx.retry: a second run would execute the model's commands again.
+        return reproOnce(ctx, { prompt, cwd: c.cwd || process.cwd(), requested });
       },
     },
     {

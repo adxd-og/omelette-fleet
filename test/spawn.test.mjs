@@ -300,6 +300,19 @@ test('…and the same fixture left alone DOES write the marker — the guard abo
   await until(() => existsSync(fx.marker), 'the grandchild to write its marker');
 });
 
+// The test above is the control: without the option, the grandchild outlives the call.
+test('killGroupOnExit: what the child left in its group is killed once the child closes', async () => {
+  const fx = groupFixture({ exits: true });
+  const r = await runProcess({ bin: node, args: [fx.script], killGroupOnExit: true });
+  assert.equal(r.killed, false, 'the child ended on its own: no hard kill, no partial marker');
+  const pid = Number(readFileSync(fx.ready, 'utf8'));
+  try {
+    await until(() => !alive(pid), 'the grandchild to die with the group', 2000);
+  } finally {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* gone, as it should be */ }
+  }
+});
+
 test('a signal that is already aborted kills at once; one that never fires changes nothing', async () => {
   const fired = new AbortController();
   fired.abort();

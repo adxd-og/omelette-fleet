@@ -25,13 +25,30 @@
  *                plain bash; repro runs bash under `sandbox-exec -f repro.sb`,
  *                the clone, the run's tmp and the fleet home read per run from
  *                OMELETTE_REPRO_CLONE / OMELETTE_REPRO_TMP / OMELETTE_FLEET_HOME
- *                (one wrapper serves every clone). An unset or empty HOME or
- *                OMELETTE_FLEET_HOME stops the wrapper before sandbox-exec
- *                (`${…:?}`): an empty HOME would turn every `$HOME/.ssh`-class
- *                read-deny into `/.ssh`, and fail open.
+ *                (one wrapper serves every clone), the run's output dir from
+ *                OMELETTE_REPRO_OUT, the parent of every run from
+ *                OMELETTE_REPRO_RUNS, the run's own dir from
+ *                OMELETTE_REPRO_RUN and the OS temp root, regex-escaped, from
+ *                OMELETTE_REPRO_TMPROOT. Any of these or HOME unset or empty
+ *                stops the wrapper before sandbox-exec (`${…:?}`): an empty
+ *                HOME would turn every `$HOME/.ssh`-class read-deny into
+ *                `/.ssh`, and fail open.
  *   repro.sb     repro only: units/mistral/repro.sb, byte for byte — the probe
- *                profile plus one last line read-denying the fleet home
- *                (FLEET), which OMELETTE_HOME may move out of `$HOME/.omelette`.
+ *                profile (its read-deny list grown by ~/.gnupg, ~/.netrc,
+ *                ~/.kube, ~/.docker, ~/.npmrc, ~/.git-credentials), a line
+ *                read-denying the fleet home (FLEET), which OMELETTE_HOME may
+ *                move out of `$HOME/.omelette`, then the 1.9.0 T3 block: no
+ *                hand-off to a process outside the profile (Apple events, open /
+ *                osascript / launchctl / automator, LaunchServices, a signal to
+ *                a process outside its sandbox) and no reach into the Keychain
+ *                or the clipboard (security, pbpaste, pbcopy); the run's output
+ *                dir (OUT) neither readable nor writable; every `omelette-*`
+ *                under the OS temp root (TMPROOT) and every run under RUNS
+ *                denied, RUNS and the run's own dir (RUN) stat-able but not
+ *                listable, the run's own clone and tmp re-allowed last —
+ *                Seatbelt's last matching rule wins, so a command never reaches
+ *                a sibling run or another unit's temp dir — and no file flag
+ *                (uchg, uappnd) set there, so the run can always be removed.
  *
  * Rendering is `ensureHome`: before every spawn, a file whose bytes differ (a
  * changed catalog, a new package version in the marker) is rewritten through
@@ -131,8 +148,9 @@ export function renderVibeConfig({ models, profile, home, version }) {
 export function renderWrapper({ profile, home }) {
   checkProfile(profile);
   const run = profile === 'repro'
-    ? 'exec /usr/bin/sandbox-exec -D CLONE="$OMELETTE_REPRO_CLONE" -D TMP="$OMELETTE_REPRO_TMP" -D HOME="${HOME:?}" '
-      + `-D FLEET="\${OMELETTE_FLEET_HOME:?}" -f ${shWord(join(homeDir(home, 'repro'), 'repro.sb'))} /bin/bash "$@"`
+    ? 'exec /usr/bin/sandbox-exec -D CLONE="${OMELETTE_REPRO_CLONE:?}" -D TMP="${OMELETTE_REPRO_TMP:?}" -D HOME="${HOME:?}" '
+      + `-D FLEET="\${OMELETTE_FLEET_HOME:?}" -D OUT="\${OMELETTE_REPRO_OUT:?}" -D RUNS="\${OMELETTE_REPRO_RUNS:?}" -D RUN="\${OMELETTE_REPRO_RUN:?}" `
+      + `-D TMPROOT="\${OMELETTE_REPRO_TMPROOT:?}" -f ${shWord(join(homeDir(home, 'repro'), 'repro.sb'))} /bin/bash "$@"`
     // Review has no shell tool by policy (`--enabled-tools read_file grep`): a
     // command reaching this wrapper is an anomaly, refused, never run unsandboxed.
     : 'echo "omelette-fleet mistral/review: the review profile has no shell — command refused" >&2; exit 126';

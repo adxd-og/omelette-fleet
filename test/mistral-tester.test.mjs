@@ -254,7 +254,7 @@ test('extractResult: cancelled wins over killed, carries no hard-kill marker, an
   const exp = realExport('/f');
   exp.config.active_model = 'mistral-large-4-0-3';
   const base = { stdout: 'answer', stderr: '', code: null };
-  const c = extractResult({ ...base, killed: true, cancelled: true }, exp, { requested: 'mistral-large-4-0-3', timeoutS: 1500 });
+  const c = extractResult({ ...base, killed: true, cancelled: true }, exp, { requested: 'mistral-large-4-0-3', timeoutS: 1500, wrapper: exp.config.tools.bash.shell });
   assert.ok(c.partial);
   assert.match(c.text, /\[mistral: cancelled by the client — treat the answer as partial\]$/);
   assert.doesNotMatch(c.text, /hard-killed/);
@@ -262,15 +262,17 @@ test('extractResult: cancelled wins over killed, carries no hard-kill marker, an
   const d = extractResult({ ...base, code: 3, killed: false }, dl, { requested: 'mistral-large-4-0-3', timeoutS: 2400, profile: 'repro', wrapper: exp.config.tools.bash.shell });
   assert.ok(d.text.endsWith('[mistral: stopped at the 2385s time limit — treat the answer as partial; raise mistral.reproTimeoutS in the fleet config]'), d.text);
   // a capped deadline run carries both marks, the cap last
-  const both = extractResult({ ...base, code: 3, killed: false, capped: true }, dl, { requested: 'mistral-large-4-0-3', timeoutS: 1500, outputCap: 1000 });
+  const both = extractResult({ ...base, code: 3, killed: false, capped: true }, dl, { requested: 'mistral-large-4-0-3', timeoutS: 1500, outputCap: 1000, wrapper: exp.config.tools.bash.shell });
   assert.match(both.text, /time limit[^\n]*\]\n\n\[mistral: output capped at 1000 chars/);
 });
 
-test('extractResult: the repro profile refuses a run whose bash shell is not the wrapper, the review profile does not look', () => {
+// T3 addendum 2: the review profile checks the shell too (it was "does not look" through T2).
+test('extractResult: both profiles refuse a run whose bash shell is not the home\'s wrapper', () => {
   const exp = realExport('/f');
   exp.config.active_model = 'mistral-large-4-0-3';
   const res = { stdout: 'a', stderr: '', code: 0, killed: false };
-  assert.doesNotThrow(() => extractResult(res, exp, { requested: 'mistral-large-4-0-3', timeoutS: 1500, profile: 'review', wrapper: '/other' }));
+  assert.doesNotThrow(() => extractResult(res, exp, { requested: 'mistral-large-4-0-3', timeoutS: 1500, profile: 'review', wrapper: exp.config.tools.bash.shell }));
+  assert.throws(() => extractResult(res, exp, { requested: 'mistral-large-4-0-3', timeoutS: 1500, profile: 'review', wrapper: '/other' }), /policy \(tools\.bash\.shell=/);
   assert.throws(() => extractResult(res, exp, { requested: 'mistral-large-4-0-3', timeoutS: 1500, profile: 'repro', wrapper: '/other' }), /policy \(tools\.bash\.shell=/);
   assert.throws(() => extractResult(res, { ...exp, config: { ...exp.config, tools: {} } }, { requested: 'mistral-large-4-0-3', timeoutS: 1500, profile: 'repro', wrapper: '/other' }), /tools\.bash\.shell=undefined/);
 });

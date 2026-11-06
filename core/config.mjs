@@ -85,7 +85,8 @@ export function configPath(env = process.env) {
 /** A plain object — the shape every nested block of this file has to have. */
 const isObj = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
 
-const TRUE_WORDS = new Set(['1', 'true', 'on', 'yes']);
+/** The words read as true: a boolean config value, ORION_ALLOW_GEMINI_MUTATE, and OMELETTE_ALLOW_REPRO (units/mistral/repro.mjs). */
+export const TRUE_WORDS = new Set(['1', 'true', 'on', 'yes']);
 const FALSE_WORDS = new Set(['0', 'false', 'off', 'no']);
 
 /** Coerce one raw value against a key spec. Strings are accepted for booleans/ints so env vars work. */

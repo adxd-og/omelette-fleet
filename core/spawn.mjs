@@ -234,12 +234,15 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
  * @param {{bin:string, args:string[], cwd?:string, env?:object, envPassthrough?:string[],
  *          extraEnv?:object, scrubEnv?:string[], inheritEnv?:boolean, hardKillMs?:number,
  *          outputCap?:number, stdinText?:string, notFoundHelp?:string, log?:(m:string)=>void,
- *          signal?:AbortSignal}} o
+ *          signal?:AbortSignal, killGroupOnExit?:boolean}} o
  *   env is the PARENT environment to select from — never the child env itself.
  *   inheritEnv: hand the parent env over, PATH's relative entries removed (operator tools only, see header).
  *   outputCap: tail-keeping cap on stdout — the unit's `outputCap` config value.
  *   signal: when it aborts, the process GROUP is SIGKILLed exactly as the
  *     hard-kill timeout does, and the result carries `cancelled: true`.
+ *   killGroupOnExit: when the child closes, SIGKILL whatever is left in its
+ *     group — a process it backgrounded must not outlive the call. Off by
+ *     default: only a caller whose child runs a model's commands asks for it.
  * @returns {Promise<{stdout:string, stderr:string, code:number|null, signal:string|null,
  *                    killed:boolean, capped:boolean, cancelled:boolean}>}
  *   capped: the cap dropped characters, so `stdout` starts mid-stream.
@@ -247,7 +250,7 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
  */
 export function runProcess({
   bin, args, cwd, env = process.env, envPassthrough = [], extraEnv, scrubEnv = [], inheritEnv = false,
-  hardKillMs = 0, outputCap = OUTPUT_CAP, stdinText, notFoundHelp, log = () => {}, signal,
+  hardKillMs = 0, outputCap = OUTPUT_CAP, stdinText, notFoundHelp, log = () => {}, signal, killGroupOnExit = false,
 }) {
   return new Promise((resolve, reject) => {
     const childEnv = inheritEnv
@@ -354,6 +357,8 @@ export function runProcess({
       if (timer) clearTimeout(timer);
       detachAbort();
       LIVE.delete(child);
+      // The leader is gone; the signal reaches what stayed in its group (ESRCH when nothing did).
+      if (killGroupOnExit) killGroup();
       if (settled) return;
       settled = true;
       // `capped` counts characters DROPPED, not slices attempted: output that

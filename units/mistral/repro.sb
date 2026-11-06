@@ -17,5 +17,33 @@
   (subpath (string-append (param "HOME") "/.aws"))
   (subpath (string-append (param "HOME") "/.omelette"))
   (subpath (string-append (param "HOME") "/.vibe"))
-  (subpath (string-append (param "HOME") "/.config")))
+  (subpath (string-append (param "HOME") "/.config"))
+  (subpath (string-append (param "HOME") "/.gnupg"))
+  (subpath (string-append (param "HOME") "/.netrc"))
+  (subpath (string-append (param "HOME") "/.kube"))
+  (subpath (string-append (param "HOME") "/.docker"))
+  (subpath (string-append (param "HOME") "/.npmrc"))
+  (subpath (string-append (param "HOME") "/.git-credentials")))
 (deny file-read* (subpath (param "FLEET")))
+; a command must not hand work to a process outside this profile
+(deny appleevent-send)
+(deny process-exec (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/automator") (literal "/usr/bin/security") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy"))
+(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb"))
+; a command signals only processes of its own sandbox: not Vibe, not the operator's other processes
+(deny signal)
+(allow signal (target same-sandbox))
+; the run's own output dir (export.json, session/meta.json, prompt.md) is Vibe's, not the model's
+(deny file-read* (subpath (param "OUT")))
+(deny file-write* (subpath (param "OUT")))
+; the fleet's other temp dirs (every omelette-* under the OS temp root, another unit's included) are no command's either
+(deny file-read* (regex (string-append "^" (param "TMPROOT") "/omelette-")))
+(deny file-write* (regex (string-append "^" (param "TMPROOT") "/omelette-")))
+; every run lives under RUNS: a command sees and writes its own clone and tmp (re-allowed last), never a sibling run's clone, tmp or out
+(deny file-read* (subpath (param "RUNS")))
+(deny file-write* (subpath (param "RUNS")))
+; the path down to the run's own clone and tmp stays walkable (node and git lstat every component): RUNS and this run's dir, metadata only; listing stays denied, a sibling run dir is not even stat-able
+(allow file-read-metadata (literal (param "RUNS")) (literal (param "RUN")))
+(allow file-read* (subpath (param "CLONE")) (subpath (param "TMP")))
+(allow file-write* (subpath (param "CLONE")) (subpath (param "TMP")))
+; no immutable or append-only flag in the run's clone or tmp: the adapter must be able to remove the run
+(deny file-write-flags (subpath (param "CLONE")) (subpath (param "TMP")))

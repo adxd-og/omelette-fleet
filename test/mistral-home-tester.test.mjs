@@ -130,9 +130,11 @@ test('the repro wrapper runs bash under the kernel profile: a write in the clone
   const { dir } = ensureHome({ home: fleet, profile: 'repro' });
   const clone = join(base, 'clone');
   const tmpd = join(base, 'tmp');
+  const out = join(base, 'out');
   const home = join(base, 'h');
   mkdirSync(clone);
   mkdirSync(tmpd);
+  mkdirSync(out);
   mkdirSync(join(home, '.ssh'), { recursive: true });
   writeFileSync(join(home, '.ssh', 'id'), 'secret\n');
   // /private/var/folders (the OS temp root, where `base` lives) is writable by design: the outside is /private/tmp.
@@ -142,7 +144,7 @@ test('the repro wrapper runs bash under the kernel profile: a write in the clone
   await new Promise((r) => server.once('listening', r));
   const port = server.address().port;
   try {
-    const env = { PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, T_OUT: outside };
+    const env = { PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out, OMELETTE_REPRO_RUNS: join(base, 'runs'), OMELETTE_REPRO_RUN: base, OMELETTE_REPRO_TMPROOT: realpathSync(tmpdir()), T_OUT: outside };
     const run = (cmd) => new Promise((resolve) => execFile(join(dir, 'shell.sh'), ['-c', cmd], { env }, (err, stdout, stderr) => resolve({ status: err ? (err.code ?? 1) : 0, stdout, stderr })));
     assert.equal((await run('echo hi')).stdout, 'hi\n');
     assert.equal((await run('echo x > "$OMELETTE_REPRO_CLONE/in"')).status, 0);

@@ -177,8 +177,8 @@
   {
     "id": "partial-killed-text",
     "file": "core/partial.mjs",
-    "find": "raise ${unit}.timeoutS in the fleet config",
-    "replace": "raise timeoutS in the fleet config",
+    "find": "hard-killed after ${after}s — treat the answer as partial; raise ${unit}.${key}",
+    "replace": "hard-killed after ${after}s — treat the answer as partial; raise ${key}",
     "breaks": "the hard-kill marker no longer names the unit key, so PARTIAL_MARK_RE stops matching it"
   },
   {
