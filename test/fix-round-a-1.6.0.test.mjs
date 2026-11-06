@@ -223,7 +223,7 @@ test('A3: a hard-kill marker must name the unit its prefix names', () => {
 });
 
 test('A3: every partialMark output, every kind for every unit, still matches', () => {
-  const detail = { outputCap: 400000, after: 360, code: 1, stopReason: 'max_tokens', status: 'TIMEOUT', n: 1, m: 4, subs: 'why; how' };
+  const detail = { outputCap: 400000, after: 360, code: 1, stopReason: 'max_tokens', status: 'TIMEOUT', n: 1, m: 4, subs: 'why; how', limit: 1485 };
   for (const unit of UNITS) {
     for (const kind of MARK_KINDS) {
       const mark = partialMark(unit, kind, detail);

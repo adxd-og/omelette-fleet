@@ -13,6 +13,9 @@
 const KINDS = {
   capped: ({ outputCap }) => `output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial`,
   killed: ({ unit, after }) => `hard-killed after ${after}s — treat the answer as partial; raise ${unit}.timeoutS in the fleet config`,
+  // mistral: Vibe stopped itself at `--time-limit` (exit 3, outcome deadline) and still wrote its answer; `key`
+  // is the config key that set the limit (review `timeoutS`, repro `reproTimeoutS`).
+  deadline: ({ unit, limit, key = 'timeoutS' }) => `stopped at the ${limit}s time limit — treat the answer as partial; raise ${unit}.${key} in the fleet config`,
   // grok appends what the CLI had reported instead of the standard tail (adapter.mjs `cancelTail`).
   cancelled: ({ tail } = {}) => `cancelled by the client${tail || ' — treat the answer as partial'}`,
   exited: ({ code }) => `CLI exited ${code} — treat the answer as partial`,
@@ -32,18 +35,19 @@ export function partialMark(unit, kind, detail = {}) {
 }
 
 /**
- * Matches every marker above for the three units, and nothing else the
+ * Matches every marker above for the four units, and nothing else the
  * adapters print (`_(gather failed: …)_`, the degraded banner and the
  * cancellation notes are prose, not markers; the flag on a cancelled deep
  * research report comes from the `cancelled` marker appended after its note).
  * `after` may be `?` (codex with no timeoutS) and `code` may be `null` (a
- * vendor child that died by an outside signal). A hard-kill marker names the
- * config key of the unit its prefix names (`\1`).
+ * vendor child that died by an outside signal). A hard-kill or deadline marker
+ * names a config key of the unit its prefix names (`\1`).
  */
 export const PARTIAL_MARK_RE = new RegExp(
-  '\\[(gemini|grok|codex): (' +
+  '\\[(gemini|grok|codex|mistral): (' +
   'output capped at \\d+ chars — the beginning of the stream was dropped; treat the answer as partial' +
   '|hard-killed after [\\d.?]+s — treat the answer as partial; raise \\1\\.timeoutS in the fleet config' +
+  '|stopped at the \\d+s time limit — treat the answer as partial; raise \\1\\.(?:timeoutS|reproTimeoutS) in the fleet config' +
   '|cancelled by the client( — [^\\]]*)?' +
   '|CLI exited (-?\\d+|null) — treat the answer as partial' +
   '|run ended early — stopReason=[^\\]]*' +

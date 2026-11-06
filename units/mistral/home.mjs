@@ -9,7 +9,10 @@
  *   config.toml  the policy block (telemetry, update checks, auto-update,
  *                subagents, MCP, connectors off; `outside_workdir = "deny"`),
  *                `active_model` = the catalog head, the catalog as Vibe
- *                `models` entries, and `[tools.bash] shell` = this home's
+ *                `models` entries, session logging off (`[session_logging]
+ *                enabled = false`: Vibe would otherwise keep every session —
+ *                the caller's prompt and what the model read — under this
+ *                home's logs/), and `[tools.bash] shell` = this home's
  *                shell.sh. Without the `models` list Vibe silently runs its own
  *                default (spec, probe 5).
  *   shell.sh     the shell every `bash` command runs through. It answers Vibe's
@@ -61,6 +64,15 @@ const POLICY = [
 ];
 
 /**
+ * Vibe's own session log, off in both homes (SessionLoggingConfig.enabled,
+ * default true). On, one run left its whole session — the prompt, the files the
+ * model read — under `<home>/logs/session/unified/<session id>/` (2026-11-06,
+ * Vibe 3.1.0). Off, nothing lands there; it also takes the `session/` copy out
+ * of `--output-dir`, so the fallback check rests on export.json alone.
+ */
+const SESSION_LOGGING_OFF = ['[session_logging]', 'enabled = false'];
+
+/**
  * The alias of the same family at `effort`, else `modelId` unchanged (the
  * caller logs the miss).
  */
@@ -106,6 +118,8 @@ export function renderVibeConfig({ models, profile, home, version }) {
     'models = [',
     ...models.map(entry),
     ']',
+    '',
+    ...SESSION_LOGGING_OFF,
     '',
     '[tools.bash]',
     `shell = ${tomlString(join(homeDir(home, profile), 'shell.sh'))}`,

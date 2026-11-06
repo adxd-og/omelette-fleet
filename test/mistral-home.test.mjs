@@ -82,6 +82,15 @@ test('renderVibeConfig carries the policy block, every alias and the wrapper pat
   assert.match(entry('mistral-large-4-0-3'), /temperature = 1\.0/);
   assert.ok(lines.includes('[tools.bash]'));
   assert.ok(lines.includes(`shell = "${home}/vibe/review/shell.sh"`));
+  // 1.9.0 T2 round 3: Vibe's session log is off in both homes — on, a run left its
+  // prompt and the files the model read under <home>/logs/session/unified/.
+  for (const profile of ['review', 'repro']) {
+    const l = renderVibeConfig({ models: MISTRAL_MODELS, profile, home, version: '9.9.9' }).split('\n');
+    const at = l.indexOf('[session_logging]');
+    assert.ok(at > 0, `${profile}: [session_logging] rendered`);
+    assert.equal(l[at + 1], 'enabled = false', `${profile}: logging off, inside its table`);
+    assert.ok(at < l.indexOf('[tools.bash]'), `${profile}: before [tools.bash]`);
+  }
 });
 
 test('ensureHome renders wx, re-renders on change, never follows a symlink', () => {

@@ -22,8 +22,20 @@ test('partialMark spells every 1.5.0 marker byte for byte', () => {
   assert.equal(partialMark('codex', 'unfinished'), '[codex: run ended before turn.completed — treat as partial]');
   assert.equal(partialMark('gemini', 'stages', { n: 1, m: 4 }), '[gemini: 1 of 4 stages returned partial answers]');
   assert.equal(partialMark('gemini', 'gathers', { n: 1, m: 3, subs: 'why; how' }), '[gemini: 1 of 3 gathers failed: why; how]');
-  for (const k of MARK_KINDS) assert.match(partialMark('grok', k, { outputCap: 1, after: 1, code: 1, stopReason: 'x', n: 1, m: 2, subs: 's' }), PARTIAL_MARK_RE);
+  for (const k of MARK_KINDS) assert.match(partialMark('grok', k, { outputCap: 1, after: 1, code: 1, stopReason: 'x', n: 1, m: 2, subs: 's', limit: 1 }), PARTIAL_MARK_RE);
   assert.throws(() => partialMark('grok', 'nope'), /unknown kind/);
+});
+
+// 1.9.0: Vibe stops itself at --time-limit (timeoutS − 15) and exits 3 with outcome deadline;
+// the marker names the config key that sets the limit (review timeoutS, repro reproTimeoutS).
+test('mistral: the deadline marker names its key, and every kind matches for the fourth unit', () => {
+  const review = partialMark('mistral', 'deadline', { limit: 1485 });
+  assert.equal(review, '[mistral: stopped at the 1485s time limit — treat the answer as partial; raise mistral.timeoutS in the fleet config]');
+  assert.match(review, PARTIAL_MARK_RE);
+  assert.match(partialMark('mistral', 'deadline', { limit: 2385, key: 'reproTimeoutS' }), PARTIAL_MARK_RE);
+  assert.doesNotMatch('[grok: stopped at the 1485s time limit — treat the answer as partial; raise mistral.timeoutS in the fleet config]', PARTIAL_MARK_RE);
+  assert.doesNotMatch('[mistral: stopped at the 1485s time limit — treat the answer as partial; raise mistral.maxTurns in the fleet config]', PARTIAL_MARK_RE);
+  for (const k of MARK_KINDS) assert.match(partialMark('mistral', k, { outputCap: 1, after: 1, code: 1, stopReason: 'x', status: 'x', n: 1, m: 2, subs: 's', limit: 1 }), PARTIAL_MARK_RE, k);
 });
 
 test('withPartial keeps the shape and never marks an empty text', () => {

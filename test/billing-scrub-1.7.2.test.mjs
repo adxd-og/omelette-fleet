@@ -10,6 +10,7 @@ import { BILLING_ENV, VENDOR_CREDENTIALS, buildChildEnv } from '../core/spawn.mj
 import grok from '../units/grok/adapter.mjs';
 import codex from '../units/codex/adapter.mjs';
 import gemini from '../units/gemini/adapter.mjs';
+import mistral from '../units/mistral/adapter.mjs';
 
 test('buildChildEnv: a passthrough pattern never admits another vendor\'s billing key, even with an empty scrub', () => {
   const out = buildChildEnv({
@@ -28,7 +29,7 @@ test('buildChildEnv: a passthrough pattern never admits another vendor\'s billin
 });
 
 test('BILLING_ENV holds every adapter\'s riskEnv — a key added to an adapter alone fails here', () => {
-  for (const unit of [codex, grok, gemini]) {
+  for (const unit of [codex, grok, gemini, mistral]) {
     const missing = unit.riskEnv.filter((name) => !BILLING_ENV.includes(name));
     assert.deepEqual(missing, [], `${unit.name}: riskEnv names missing from BILLING_ENV`);
   }
