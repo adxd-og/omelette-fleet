@@ -155,7 +155,7 @@ function around(agent, orch, unit, level, sides, width) {
 
 /**
  * The fleet as one SVG document: the agent row (six boxes at most, the rest
- * folded into `+K more`), the orchestrator, the three units; a line per link —
+ * folded into `+K more`), the orchestrator, the four units; a line per link —
  * each shown agent to its parent (an arc to a parent agent, the fold box
  * standing in for a folded one), the fold to the orchestrator, each caller
  * whose call is in flight to its unit (the orchestrator straight down, an

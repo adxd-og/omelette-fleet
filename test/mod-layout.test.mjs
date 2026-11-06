@@ -1,7 +1,7 @@
 /**
  * omelette-fleet :: test/mod-layout.test.mjs
  * The fleet pane's terminal drawing (1.7.0, Task 3): mods/omelette-fleet/hooks/layout.mjs
- * turns the fleet model into rows of toned segments — the graph from 53 cells,
+ * turns the fleet model into rows of toned segments — the graph from 71 cells,
  * the tree below that or on a short pane, the history under either, the ASCII
  * form — and the status-line text. Ids and times are made up.
  */
@@ -16,7 +16,7 @@ const HOUR = 60 * MIN;
 const NOW = Date.UTC(2026, 9, 8, 9, 6, 0);
 const UTC = () => 0;
 
-/** The plan's golden state: three agents, grok running from the orchestrator, gemini idle 12 minutes, codex never ran. */
+/** The plan's golden state: three agents, grok running from the orchestrator, gemini idle 12 minutes, codex and mistral never ran. */
 function golden() {
   return {
     now: NOW,
@@ -32,9 +32,10 @@ function golden() {
         openCalls: [{ callId: 'toolu_g1', callerId: 'main', tool: 'code_review', since: NOW - (2 * MIN + 17 * SEC) }],
       },
       { id: 'unit:codex', kind: 'unit', role: 'codex', status: 'idle', since: NOW - HOUR, feed: 'ok', order: 3 },
-      { id: 'a-coder', kind: 'agent', role: 'omelette-coder-medium', parentId: 'main', model: 'claude-opus-5-5', effort: 'medium', status: 'running', activity: 'Bash: npm test', activityCallId: 'toolu_c1', since: NOW - MIN, order: 4 },
-      { id: 'a-tester', kind: 'agent', role: 'omelette-tester', parentId: 'main', model: 'claude-sonnet-5-5', effort: 'high', status: 'reported', since: NOW - (3 * MIN + 10 * SEC), order: 5 },
-      { id: 'a-reviewer', kind: 'agent', role: 'omelette-reviewer', parentId: 'main', model: 'claude-opus-5-5', effort: 'xhigh', status: 'running', activity: 'Read models.js', activityCallId: 'toolu_r1', since: NOW - 30 * SEC, order: 6 },
+      { id: 'unit:mistral', kind: 'unit', role: 'mistral', status: 'idle', since: NOW - HOUR, feed: 'ok', order: 4 },
+      { id: 'a-coder', kind: 'agent', role: 'omelette-coder-medium', parentId: 'main', model: 'claude-opus-5-5', effort: 'medium', status: 'running', activity: 'Bash: npm test', activityCallId: 'toolu_c1', since: NOW - MIN, order: 5 },
+      { id: 'a-tester', kind: 'agent', role: 'omelette-tester', parentId: 'main', model: 'claude-sonnet-5-5', effort: 'high', status: 'reported', since: NOW - (3 * MIN + 10 * SEC), order: 6 },
+      { id: 'a-reviewer', kind: 'agent', role: 'omelette-reviewer', parentId: 'main', model: 'claude-opus-5-5', effort: 'xhigh', status: 'running', activity: 'Read models.js', activityCallId: 'toolu_r1', since: NOW - 30 * SEC, order: 7 },
     ],
   };
 }
@@ -62,35 +63,35 @@ function toneAt(row, col) {
   return undefined;
 }
 
-/** Hand-built states for the motion tests: the orchestrator, the three units (`units` patches them by name), `agents`. */
+/** Hand-built states for the motion tests: the orchestrator, the four units (`units` patches them by name), `agents`. */
 const unitNode = (name, order, fields = {}) => ({ id: `unit:${name}`, kind: 'unit', role: name, status: 'idle', since: NOW - MIN, feed: 'ok', order, ...fields });
 const agent = (id, fields = {}) => ({ id, kind: 'agent', role: `omelette-${id}`, parentId: 'main', status: 'running', since: NOW - MIN, order: 10 + Number(id.replace(/\D/g, '') || 0), ...fields });
 const call = (callerId, callId = `${callerId}:c`) => ({ callId, callerId, tool: 'review', since: NOW - MIN });
 const running = (...callers) => ({ status: 'running', callerId: callers.at(-1), activity: 'review', openCalls: callers.map((c, i) => call(c, `c${i}`)) });
 const stateOf = (agents = [], units = {}) => ({
   now: NOW, isOpen: true, usage: {}, history: [],
-  nodes: [{ id: 'main', kind: 'orchestrator', role: 'orchestrator', status: 'running', since: NOW - MIN, order: 0 }, ...['gemini', 'grok', 'codex'].map((name, i) => unitNode(name, i + 1, units[name])), ...agents],
+  nodes: [{ id: 'main', kind: 'orchestrator', role: 'orchestrator', status: 'running', since: NOW - MIN, order: 0 }, ...['gemini', 'grok', 'codex', 'mistral'].map((name, i) => unitNode(name, i + 1, units[name])), ...agents],
 });
 
-const GOLDEN_53 = [
+const GOLDEN_71 = [
   'ctx 31% · 5h 11% · 7d 71%',
   '',
-  '┌───────────────┐ ┌───────────────┐ ┌───────────────┐',
-  '│ ▶ coder-medium│ │ · tester      │ │ ▶ reviewer    │',
-  '│ opus · medium │ │ sonnet · high │ │ opus · xhigh  │',
-  '│ Bash: npm test│ │ reported 3:10 │ │ Read models.js│',
-  '└───────┬───────┘ └───────┬───────┘ └───────┬───────┘',
-  '        └─────────────────┼─────────────────┘',
-  '             ┌────────────┴────────────┐',
-  '             │ ● orchestrator          │',
-  '             │ fable-5-1 · high · 31%  │',
-  '             └────────────┬────────────┘',
-  '        ┌─────────────────┼─────────────────┐',
-  '┌───────┴───────┐ ┌───────┴───────┐ ┌───────┴───────┐',
-  '│ · gemini      │ │ ▶ grok        │ │ · codex       │',
-  '│ idle 12m      │ │ code_review   │ │ idle          │',
-  '│               │ │ grok-4.7 2:17 │ │               │',
-  '└───────────────┘ └───────────────┘ └───────────────┘',
+  '         ┌───────────────┐ ┌───────────────┐ ┌───────────────┐',
+  '         │ ▶ coder-medium│ │ · tester      │ │ ▶ reviewer    │',
+  '         │ opus · medium │ │ sonnet · high │ │ opus · xhigh  │',
+  '         │ Bash: npm test│ │ reported 3:10 │ │ Read models.js│',
+  '         └───────┬───────┘ └───────┬───────┘ └───────┬───────┘',
+  '                 └─────────────────┼─────────────────┘',
+  '                      ┌────────────┴────────────┐',
+  '                      │ ● orchestrator          │',
+  '                      │ fable-5-1 · high · 31%  │',
+  '                      └────────────┬────────────┘',
+  '        ┌─────────────────┬────────┴────────┬─────────────────┐',
+  '┌───────┴───────┐ ┌───────┴───────┐ ┌───────┴───────┐ ┌───────┴───────┐',
+  '│ · gemini      │ │ ▶ grok        │ │ · codex       │ │ · mistral     │',
+  '│ idle 12m      │ │ code_review   │ │ idle          │ │ idle          │',
+  '│               │ │ grok-4.7 2:17 │ │               │ │               │',
+  '└───────────────┘ └───────────────┘ └───────────────┘ └───────────────┘',
 ];
 
 const TREE_35 = [
@@ -106,7 +107,8 @@ const TREE_35 = [
   '├ · gemini  idle 12m',
   '├ ▶ grok  code_review',
   '│   grok-4.7 2:17',
-  '└ · codex  idle',
+  '├ · codex  idle',
+  '└ · mistral  idle',
 ];
 
 const TREE_20 = [
@@ -122,16 +124,18 @@ const TREE_20 = [
   '├ · gemini  idle 12m',
   '├ ▶ grok  code_revi…',
   '│   grok-4.7 2:17',
-  '└ · codex  idle',
+  '├ · codex  idle',
+  '└ · mistral  idle',
 ];
 
-test('the golden at 53 columns: the first 18 rows are the plan\'s drawing, the spinner\'s first frame in place of ▶', () => {
-  const rows = layout(golden(), { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC, animate: true });
-  assert.deepEqual(plainRows(rows).slice(0, 18), GOLDEN_53.map((row) => row.replaceAll('▶', '⠋')));
+test('the golden at 71 columns: the first 18 rows are the plan\'s drawing, the spinner\'s first frame in place of ▶; at 53 the tree', () => {
+  const rows = layout(golden(), { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC, animate: true });
+  assert.deepEqual(plainRows(rows).slice(0, 18), GOLDEN_71.map((row) => row.replaceAll('▶', '⠋')));
+  assert.equal(plainRows(layout(golden(), { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }))[2], TREE_35[2], 'four units do not fit 53 cells');
 });
 
 test('with animate, a running box\'s glyph is the spinner\'s frame for the model\'s clock: 250 ms on, the next frame; one of ten, ASCII one of four', () => {
-  const glyphAt = (now, isAscii) => plainRows(layout({ ...golden(), now }, { columns: 53, rows: 30, isAscii, tzOffsetAt: UTC, animate: true }))[3][2];
+  const glyphAt = (now, isAscii) => plainRows(layout({ ...golden(), now }, { columns: 71, rows: 30, isAscii, tzOffsetAt: UTC, animate: true }))[3][11];
   for (const [isAscii, frames] of [[false, [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏']], [true, [...'|/-\\']]]) {
     assert.notEqual(glyphAt(NOW, isAscii), glyphAt(NOW + 250, isAscii), `ascii=${isAscii}`);
     for (const now of [NOW, NOW + 250, NOW + 1234]) assert.ok(frames.includes(glyphAt(now, isAscii)), `ascii=${isAscii} @${now}: ${glyphAt(now, isAscii)}`);
@@ -140,7 +144,7 @@ test('with animate, a running box\'s glyph is the spinner\'s frame for the model
 
 test('the spinner frame is exactly floor(now / 250) % n of the ten glyphs (ASCII four): 249 ms is still the same frame, a full cycle returns to it', () => {
   const state = stateOf([agent('a1')]);
-  const glyphAt = (now, isAscii) => plainRows(layout({ ...state, now }, { columns: 53, rows: 30, isAscii, animate: true, tzOffsetAt: UTC })).join('\n').match(/(\S) a1/)[1];
+  const glyphAt = (now, isAscii) => plainRows(layout({ ...state, now }, { columns: 71, rows: 30, isAscii, animate: true, tzOffsetAt: UTC })).join('\n').match(/(\S) a1/)[1];
   for (const [isAscii, frames] of [[false, [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏']], [true, [...'|/-\\']]]) {
     for (const now of [0, 249, 250, 499, 500, 2499, 2500, 12_345_678, NOW, NOW + 249, NOW + 250, NOW + 251, NOW + 1000, NOW + 2750]) {
       assert.equal(glyphAt(now, isAscii), frames[Math.floor(now / 250) % frames.length], `ascii=${isAscii} now=${now}`);
@@ -158,16 +162,16 @@ test('with animate the tree form (narrow pane) shows the spinner as well, the st
 
 test('units and agents appear in `order`, whatever the order of the nodes array', () => {
   const state = golden();
-  assert.deepEqual(plainRows(layout({ ...state, nodes: [...state.nodes].reverse() }, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC })).slice(0, 18), GOLDEN_53);
+  assert.deepEqual(plainRows(layout({ ...state, nodes: [...state.nodes].reverse() }, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC })).slice(0, 18), GOLDEN_71);
 });
 
 test('plainRows joins a row\'s segments and trims its right end', () => {
   assert.deepEqual(plainRows([[{ text: 'ab ', tone: 'plain' }, { text: 'c  ', tone: 'dim' }], []]), ['ab c', '']);
 });
 
-test('71 columns with a fourth agent: four boxes, the junction under the orchestrator is ┬ and the unit bus\'s is ┼', () => {
+test('71 columns with a fourth agent: four boxes, the junction under the orchestrator is ┬, the unit bus\'s is ┴ between the four units', () => {
   const state = golden();
-  state.nodes.push({ id: 'a-fourth', kind: 'agent', role: 'omelette-coder', parentId: 'main', model: 'claude-opus-5-5', effort: 'xhigh', status: 'waiting', since: NOW - 5 * SEC, order: 7 });
+  state.nodes.push({ id: 'a-fourth', kind: 'agent', role: 'omelette-coder', parentId: 'main', model: 'claude-opus-5-5', effort: 'xhigh', status: 'waiting', since: NOW - 5 * SEC, order: 8 });
   const rows = plainRows(layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
   assert.equal(rows[2], '┌───────────────┐ ┌───────────────┐ ┌───────────────┐ ┌───────────────┐');
   assert.equal(rows[3], '│ ▶ coder-medium│ │ · tester      │ │ ▶ reviewer    │ │ ◌ coder       │');
@@ -175,39 +179,40 @@ test('71 columns with a fourth agent: four boxes, the junction under the orchest
   assert.equal(rows[7], `${' '.repeat(8)}└${'─'.repeat(17)}┴${'─'.repeat(8)}┬${'─'.repeat(8)}┴${'─'.repeat(17)}┘`);
   assert.equal(rows[7][35], '┬', 'the column under the orchestrator\'s centre');
   assert.equal(rows[8], `${' '.repeat(22)}┌${'─'.repeat(12)}┴${'─'.repeat(12)}┐`);
-  assert.equal(rows[12], `${' '.repeat(17)}┌${'─'.repeat(17)}┼${'─'.repeat(17)}┐`);
-  assert.equal(rows[13], `${' '.repeat(9)}┌───────┴───────┐ ┌───────┴───────┐ ┌───────┴───────┐`);
+  assert.equal(rows[12], `${' '.repeat(8)}┌${'─'.repeat(17)}┬${'─'.repeat(8)}┴${'─'.repeat(8)}┬${'─'.repeat(17)}┐`);
+  assert.equal(rows[12][35], '┴', 'no unit under the orchestrator\'s centre');
+  assert.equal(rows[13], '┌───────┴───────┐ ┌───────┴───────┐ ┌───────┴───────┐ ┌───────┴───────┐');
 });
 
 test('two agents: the bus reads └────────┬────────┘ under them', () => {
   const state = { ...golden(), nodes: golden().nodes.filter((n) => n.id !== 'a-reviewer') };
-  const rows = plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  assert.equal(rows[2], `${' '.repeat(9)}┌───────────────┐ ┌───────────────┐`);
-  assert.equal(rows[7], `${' '.repeat(17)}└────────┬────────┘`);
-  assert.equal(rows[8], '             ┌────────────┴────────────┐');
+  const rows = plainRows(layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  assert.equal(rows[2], `${' '.repeat(18)}┌───────────────┐ ┌───────────────┐`);
+  assert.equal(rows[7], `${' '.repeat(26)}└────────┬────────┘`);
+  assert.equal(rows[8], `${' '.repeat(22)}┌────────────┴────────────┐`);
 });
 
 test('one agent: the bus row is a single │ between its box and the orchestrator', () => {
   const state = { ...golden(), nodes: golden().nodes.filter((n) => n.id !== 'a-reviewer' && n.id !== 'a-tester') };
-  const rows = plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  assert.equal(rows[6], `${' '.repeat(18)}└───────┬───────┘`);
-  assert.equal(rows[7], `${' '.repeat(26)}│`);
+  const rows = plainRows(layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  assert.equal(rows[6], `${' '.repeat(27)}└───────┬───────┘`);
+  assert.equal(rows[7], `${' '.repeat(35)}│`);
 });
 
 test('no agents: no agent row and no upper bus; the orchestrator\'s top frame has no junction', () => {
   const state = { ...golden(), nodes: golden().nodes.filter((n) => n.kind !== 'agent') };
-  const rows = plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  assert.deepEqual(rows.slice(0, 12), ['ctx 31% · 5h 11% · 7d 71%', '', ...GOLDEN_53.slice(8, 18)].map((row, i) =>
-    (i === 2 ? '             ┌─────────────────────────┐' : row)));
+  const rows = plainRows(layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  assert.deepEqual(rows.slice(0, 12), ['ctx 31% · 5h 11% · 7d 71%', '', ...GOLDEN_71.slice(8, 18)].map((row, i) =>
+    (i === 2 ? `${' '.repeat(22)}┌─────────────────────────┐` : row)));
   assert.equal(rows.length, 12, 'no history, no blank row after the graph');
 });
 
-test('seven agents at 53 columns, the two running ones the oldest: both shown, the third box +5 more', () => {
+test('seven agents at 71 columns, the two running ones the oldest: both shown, then the newest reported, the fourth box +4 more', () => {
   const state = withAgents(golden(), 7, 2);
-  const rows = plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  assert.equal(rows[3], '│ ▶ role0       │ │ ▶ role1       │ │ +5 more       │');
-  assert.equal(rows[4].slice(36), '│               │', 'no hidden one runs: line two blank');
-  assert.equal(rows[5], '│               │ │               │ │               │', 'running with no call out: line three blank');
+  const rows = plainRows(layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  assert.equal(rows[3], '│ ▶ role0       │ │ ▶ role1       │ │ · role6       │ │ +4 more       │');
+  assert.equal(rows[4].slice(54), '│               │', 'no hidden one runs: line two blank');
+  assert.equal(rows[5].slice(0, 35), '│               │ │               │', 'running with no call out: line three blank');
 });
 
 test('the fold keeps running and waiting ones first, then the newest reported; within the row boxes keep their order', () => {
@@ -220,13 +225,13 @@ test('the fold keeps running and waiting ones first, then the newest reported; w
 });
 
 test('a hidden running agent: the +N more box says how many run, and its link is live', () => {
-  const state = withAgents(golden(), 7, 3);
-  const laid = layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
+  const state = withAgents(golden(), 7, 4);
+  const laid = layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC });
   const rows = plainRows(laid);
-  assert.equal(rows[3], '│ ▶ role0       │ │ ▶ role1       │ │ +5 more       │');
-  assert.equal(rows[4].slice(36), '│ 1 running     │');
-  assert.equal(toneAt(laid[6], 44), 'live', 'the more box\'s junction');
-  for (let col = 26; col <= 44; col++) assert.equal(toneAt(laid[7], col), 'live', `bus col ${col}`);
+  assert.equal(rows[3], '│ ▶ role0       │ │ ▶ role1       │ │ ▶ role2       │ │ +4 more       │');
+  assert.equal(rows[4].slice(54), '│ 1 running     │');
+  assert.equal(toneAt(laid[6], 62), 'live', 'the more box\'s junction');
+  for (let col = 35; col <= 62; col++) assert.equal(toneAt(laid[7], col), 'live', `bus col ${col}`);
 });
 
 test('the tree golden at 35 columns', () => {
@@ -250,51 +255,52 @@ test('a pane of 8 rows at 80 columns: the tree, not the graph, eight rows, the l
     '│   Bash: npm test',
     '├ · tester  sonnet · high',
     '│   reported 3:10',
-    '… +4',
+    '… +5',
   ]);
 });
 
-test('the graph needs room for one history row: 19 rows at 53 columns draw the tree, 20 the graph', () => {
-  assert.equal(plainRows(layout(golden(), { columns: 53, rows: 19, isAscii: false, tzOffsetAt: UTC }))[2], TREE_35[2]);
-  assert.equal(plainRows(layout(golden(), { columns: 53, rows: 20, isAscii: false, tzOffsetAt: UTC }))[2], GOLDEN_53[2]);
+test('the graph needs room for one history row: 19 rows at 71 columns draw the tree, 20 the graph', () => {
+  assert.equal(plainRows(layout(golden(), { columns: 71, rows: 19, isAscii: false, tzOffsetAt: UTC }))[2], TREE_35[2]);
+  assert.equal(plainRows(layout(golden(), { columns: 71, rows: 20, isAscii: false, tzOffsetAt: UTC }))[2], GOLDEN_71[2]);
 });
 
 test('tones: with only the coder running, the upper bus is live from its centre to the orchestrator\'s and dim beyond; gemini\'s box is dim', () => {
   let state = patch(golden(), 'a-reviewer', { status: 'reported', activity: undefined, activityCallId: undefined });
   state = patch(state, 'unit:grok', { status: 'idle', callerId: undefined, activity: undefined, activityCallId: undefined, openCalls: undefined });
-  const rows = layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
-  for (let col = 8; col <= 26; col++) assert.equal(toneAt(rows[7], col), 'live', `upper bus col ${col}`);
-  for (let col = 27; col <= 44; col++) assert.equal(toneAt(rows[7], col), 'dim', `upper bus col ${col}`);
-  assert.equal(toneAt(rows[6], 8), 'live', 'the coder\'s frame junction');
-  assert.equal(toneAt(rows[6], 26), 'dim', 'the reported tester\'s junction');
-  assert.equal(toneAt(rows[8], 26), 'live', 'the orchestrator\'s top junction');
-  assert.equal(toneAt(rows[3], 0), 'live', 'a running box\'s frame is live');
-  assert.equal(toneAt(rows[2], 4), 'live');
-  assert.equal(toneAt(rows[3], 4), 'plain', 'its lines are not');
-  assert.equal(toneAt(rows[3], 20), 'dim', 'a reported box is dim');
+  const rows = layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC });
+  for (let col = 17; col <= 35; col++) assert.equal(toneAt(rows[7], col), 'live', `upper bus col ${col}`);
+  for (let col = 36; col <= 53; col++) assert.equal(toneAt(rows[7], col), 'dim', `upper bus col ${col}`);
+  assert.equal(toneAt(rows[6], 17), 'live', 'the coder\'s frame junction');
+  assert.equal(toneAt(rows[6], 35), 'dim', 'the reported tester\'s junction');
+  assert.equal(toneAt(rows[8], 35), 'live', 'the orchestrator\'s top junction');
+  assert.equal(toneAt(rows[3], 9), 'live', 'a running box\'s frame is live');
+  assert.equal(toneAt(rows[2], 13), 'live');
+  assert.equal(toneAt(rows[3], 13), 'plain', 'its lines are not');
+  assert.equal(toneAt(rows[3], 29), 'dim', 'a reported box is dim');
   for (let row = 13; row <= 17; row++) for (const col of [0, 2, 8, 16]) assert.equal(toneAt(rows[row], col), 'dim', `gemini row ${row} col ${col}`);
-  for (let col = 8; col <= 44; col++) assert.equal(toneAt(rows[12], col), 'dim', `lower bus col ${col}: no unit runs`);
-  assert.equal(toneAt(rows[11], 26), 'plain', 'the orchestrator\'s bottom junction, no live unit link');
+  for (let col = 8; col <= 62; col++) assert.equal(toneAt(rows[12], col), 'dim', `lower bus col ${col}: no unit runs`);
+  assert.equal(toneAt(rows[11], 35), 'plain', 'the orchestrator\'s bottom junction, no live unit link');
 });
 
 test('tones: a unit the orchestrator calls has a live link; one a sub-agent calls shows ← its role and no live line', () => {
-  const live = layout(golden(), { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
-  assert.equal(toneAt(live[11], 26), 'live', 'orchestrator bottom junction');
-  assert.equal(toneAt(live[12], 26), 'live', 'lower bus under the orchestrator');
+  const live = layout(golden(), { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC });
+  assert.equal(toneAt(live[11], 35), 'live', 'orchestrator bottom junction');
+  for (let col = 26; col <= 35; col++) assert.equal(toneAt(live[12], col), 'live', `lower bus col ${col}, grok to the orchestrator`);
   assert.equal(toneAt(live[12], 25), 'dim');
+  assert.equal(toneAt(live[12], 36), 'dim');
   assert.equal(toneAt(live[13], 26), 'live', 'grok\'s top junction');
   assert.equal(toneAt(live[14], 20), 'plain', 'a running unit\'s box is plain');
 
   const state = patch(golden(), 'unit:grok', { callerId: 'a-coder', openCalls: [{ callId: 'toolu_g1', callerId: 'a-coder', tool: 'code_review', since: NOW - MIN }] });
-  const rows = layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
-  assert.equal(plainRows(rows)[16], '│               │ │ ← coder-medium│ │               │');
-  for (let col = 8; col <= 44; col++) assert.notEqual(toneAt(rows[12], col), 'live', `lower bus col ${col}`);
+  const rows = layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC });
+  assert.equal(plainRows(rows)[16], '│               │ │ ← coder-medium│ │               │ │               │');
+  for (let col = 8; col <= 62; col++) assert.notEqual(toneAt(rows[12], col), 'live', `lower bus col ${col}`);
   assert.notEqual(toneAt(rows[13], 26), 'live');
-  assert.notEqual(toneAt(rows[11], 26), 'live');
+  assert.notEqual(toneAt(rows[11], 35), 'live');
 
   const other = patch(golden(), 'unit:grok', { callerId: 'other', openCalls: undefined });
-  assert.equal(plainRows(layout(other, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }))[16], '│               │ │ ← other       │ │               │');
-  assert.equal(plainRows(layout(other, { columns: 53, rows: 30, isAscii: true, tzOffsetAt: UTC }))[16], '|               | | <- other      | |               |');
+  assert.equal(plainRows(layout(other, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }))[16], '│               │ │ ← other       │ │               │ │               │');
+  assert.equal(plainRows(layout(other, { columns: 71, rows: 30, isAscii: true, tzOffsetAt: UTC }))[16], '|               | | <- other      | |               | |               |');
   assert.equal(plainRows(layout(other, { columns: 35, rows: 40, isAscii: false, tzOffsetAt: UTC }))[11], '│   ← other', 'the tree says the same');
   assert.equal(plainRows(layout(other, { columns: 35, rows: 40, isAscii: true, tzOffsetAt: UTC }))[11], '|   <- other');
 });
@@ -307,14 +313,14 @@ test('a unit\'s link is live when any of its open calls is the orchestrator\'s, 
       { callId: 'toolu_g1', callerId: 'a-coder', tool: 'code_review', since: NOW - MIN },
     ],
   });
-  const rows = layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
-  assert.equal(plainRows(rows)[16], '│               │ │ ← coder-medium│ │               │', 'the newest caller is still the one named');
-  for (const [row, what] of [[11, 'the orchestrator\'s bottom junction'], [12, 'the bus under it'], [13, 'grok\'s top junction']]) assert.equal(toneAt(rows[row], 26), 'live', what);
+  const rows = layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC });
+  assert.equal(plainRows(rows)[16], '│               │ │ ← coder-medium│ │               │ │               │', 'the newest caller is still the one named');
+  for (const [row, col, what] of [[11, 35, 'the orchestrator\'s bottom junction'], [12, 35, 'the bus under it'], [12, 26, 'the bus over grok'], [13, 26, 'grok\'s top junction']]) assert.equal(toneAt(rows[row], col), 'live', what);
 });
 
 test('a unit\'s link is live when ANY open call is the orchestrator\'s, even if the first listed is another caller\'s', () => {
   const state = stateOf([], { grok: { status: 'running', callerId: 'main', activity: 'review', openCalls: [call('a-x', 'c0'), call('main', 'c1')] } });
-  const rows = layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC });
+  const rows = layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC });
   const top = plainRows(rows).findIndex((row, i) => i > 4 && row.startsWith('┌'));
   assert.equal(toneAt(rows[top], 26), 'live', 'grok\'s top junction');
 });
@@ -322,7 +328,7 @@ test('a unit\'s link is live when ANY open call is the orchestrator\'s, even if 
 test('a running unit\'s frame is live with or without motion, whoever calls it; an idle unit\'s is dim; a waiting agent\'s is not live', () => {
   for (const animate of [false, true]) {
     for (const caller of ['main', 'other']) {
-      const rows = layout(stateOf([agent('a1', { status: 'waiting' })], { grok: running(caller) }), { columns: 53, rows: 30, isAscii: false, animate, tzOffsetAt: UTC });
+      const rows = layout(stateOf([agent('a1', { status: 'waiting' })], { grok: running(caller) }), { columns: 71, rows: 30, isAscii: false, animate, tzOffsetAt: UTC });
       const grokTop = plainRows(rows).findIndex((row, i) => i > 4 && row.startsWith('┌'));
       assert.ok(grokTop > 0, 'the units\' row');
       assert.equal(toneAt(rows[grokTop + 1], 18), 'live', `animate=${animate} caller=${caller}: grok's left frame`);
@@ -342,46 +348,46 @@ test('a unit with two open calls may show the count; the line is still one box l
       { callId: 'toolu_g1', callerId: 'main', tool: 'code_review', since: NOW - (2 * MIN + 17 * SEC) },
     ],
   });
-  assert.equal(plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }))[15], '│ idle 12m      │ │ code_review ×2│ │ idle          │');
+  assert.equal(plainRows(layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }))[15], '│ idle 12m      │ │ code_review ×2│ │ idle          │ │ idle          │');
 });
 
 test('a unit with no feed and no call says no feed; one that ended a call says idle with its duration', () => {
   let state = patch(golden(), 'unit:codex', { feed: 'none' });
   state = patch(state, 'unit:gemini', { feed: 'none' });
-  const rows = plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  assert.equal(rows[15], '│ idle 12m      │ │ code_review   │ │ no feed       │');
+  const rows = plainRows(layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  assert.equal(rows[15], '│ idle 12m      │ │ code_review   │ │ no feed       │ │ idle          │');
 });
 
 test('a role or a tool name longer than its box is cut with an ellipsis; the box keeps its 17 cells', () => {
   let state = patch(golden(), 'a-coder', { role: 'omelette-a-role-far-longer-than-the-box', activity: 'Edit 日本語のファイル名.mjs' });
   state = patch(state, 'unit:grok', { activity: 'a_tool_name_longer_than_the_box' });
-  const rows = plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  assert.equal(rows[3].slice(0, 17), '│ ▶ a-role-far-…│');
-  assert.equal(rows[5], '│ Edit 日本語の…│ │ reported 3:10 │ │ Read models.js│');
-  assert.equal(cells(rows[5]), 53);
-  assert.equal(rows[15], '│ idle 12m      │ │ a_tool_name_l…│ │ idle          │');
+  const rows = plainRows(layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  assert.equal(rows[3].slice(9, 26), '│ ▶ a-role-far-…│');
+  assert.equal(rows[5], `${' '.repeat(9)}│ Edit 日本語の…│ │ reported 3:10 │ │ Read models.js│`);
+  assert.equal(cells(rows[5]), 62);
+  assert.equal(rows[15], '│ idle 12m      │ │ a_tool_name_l…│ │ idle          │ │ idle          │');
 });
 
 test('the orchestrator without a model yet, and a header with figures missing; the header never shows the cost', () => {
   let state = patch(golden(), 'main', { model: undefined, effort: undefined });
   state = { ...state, usage: { sevenDay: 71.4, costUsd: 3.456 } };
-  const rows = plainRows(layout(state, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  const rows = plainRows(layout(state, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
   assert.equal(rows[0], '7d 71%');
   assert.doesNotMatch(plainRows(layout(golden(), { columns: 80, rows: 30, isAscii: false, tzOffsetAt: UTC }))[0], /\$/);
-  assert.equal(rows[10], '             │                         │');
-  assert.equal(plainRows(layout({ ...state, usage: {} }, { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }))[0], '');
+  assert.equal(rows[10], `${' '.repeat(22)}│                         │`);
+  assert.equal(plainRows(layout({ ...state, usage: {} }, { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }))[0], '');
 });
 
-test('the ASCII form of the 53-column golden holds printable ASCII only', () => {
-  const rows = plainRows(layout(golden(), { columns: 53, rows: 30, isAscii: true, tzOffsetAt: UTC }));
+test('the ASCII form of the 71-column golden holds printable ASCII only', () => {
+  const rows = plainRows(layout(golden(), { columns: 71, rows: 30, isAscii: true, tzOffsetAt: UTC }));
   for (const row of rows) assert.match(row, /^[\x20-\x7e]*$/, row);
   assert.equal(rows[0], 'ctx 31% - 5h 11% - 7d 71%');
-  assert.equal(rows[2], '+---------------+ +---------------+ +---------------+');
-  assert.equal(rows[3], '| > coder-medium| | . tester      | | > reviewer    |');
-  assert.equal(rows[4], '| opus - medium | | sonnet - high | | opus - xhigh  |');
-  assert.equal(rows[7], '        +-----------------+-----------------+');
-  assert.equal(rows[9], '             | * orchestrator          |');
-  assert.equal(rows[13], '+-------+-------+ +-------+-------+ +-------+-------+');
+  assert.equal(rows[2], `${' '.repeat(9)}+---------------+ +---------------+ +---------------+`);
+  assert.equal(rows[3], `${' '.repeat(9)}| > coder-medium| | . tester      | | > reviewer    |`);
+  assert.equal(rows[4], `${' '.repeat(9)}| opus - medium | | sonnet - high | | opus - xhigh  |`);
+  assert.equal(rows[7], `${' '.repeat(17)}+-----------------+-----------------+`);
+  assert.equal(rows[9], `${' '.repeat(22)}| * orchestrator          |`);
+  assert.equal(rows[13], '+-------+-------+ +-------+-------+ +-------+-------+ +-------+-------+');
 });
 
 test('the ASCII tree: connectors +, the spine |, the cut ~, arrows ->', () => {
@@ -391,7 +397,8 @@ test('the ASCII tree: connectors +, the spine |, the cut ~, arrows ->', () => {
   assert.equal(rows[3], '+ > coder-medium  o~');
   assert.equal(rows[4], '|   Bash: npm test');
   assert.equal(rows[12], '+ . codex  idle');
-  assert.equal(rows[14], '09:06:00 orchestrat~');
+  assert.equal(rows[13], '+ . mistral  idle');
+  assert.equal(rows[15], '09:06:00 orchestrat~');
 });
 
 test('history: newest first, HH:MM:SS from → to · label, each link with its own zone offset', () => {
@@ -409,7 +416,7 @@ test('history: newest first, HH:MM:SS from → to · label, each link with its o
     asked.push(when);
     return -180;
   };
-  const rows = plainRows(layout(state, { columns: 53, rows: 40, isAscii: false, tzOffsetAt }));
+  const rows = plainRows(layout(state, { columns: 71, rows: 40, isAscii: false, tzOffsetAt }));
   assert.deepEqual(rows.slice(18), [
     '',
     '12:05:40 orchestrator → grok · code_review',
@@ -418,7 +425,7 @@ test('history: newest first, HH:MM:SS from → to · label, each link with its o
   ]);
   assert.deepEqual(asked.sort(), [at(9, 4, 10), at(9, 4, 52), at(9, 5, 40)].sort());
 
-  const dst = plainRows(layout(state, { columns: 53, rows: 40, isAscii: false, tzOffsetAt: (when) => (when < at(9, 5, 0) ? -120 : -180) }));
+  const dst = plainRows(layout(state, { columns: 71, rows: 40, isAscii: false, tzOffsetAt: (when) => (when < at(9, 5, 0) ? -120 : -180) }));
   assert.deepEqual(dst.slice(19), [
     '12:05:40 orchestrator → grok · code_review',
     '11:04:52 coder-medium → orchestrator · report',
@@ -430,15 +437,15 @@ test('history fills the remaining rows and never exceeds them; a raw SendMessage
   const links = Array.from({ length: 30 }, (_, i) => ({ at: NOW - (30 - i) * SEC, from: 'main', to: i === 29 ? 'helper@team' : 'a-coder', label: i === 29 ? 'SendMessage' : 'Agent' }));
   const state = { ...golden(), history: links };
   for (const height of [20, 21, 24, 48]) {
-    const rows = plainRows(layout(state, { columns: 53, rows: height, isAscii: false, tzOffsetAt: UTC }));
+    const rows = plainRows(layout(state, { columns: 71, rows: height, isAscii: false, tzOffsetAt: UTC }));
     assert.equal(rows.length, height, `height ${height}`);
     assert.equal(rows[18], '');
     assert.equal(rows[19], '09:05:59 orchestrator → helper@team · SendMessage');
   }
   const tree = plainRows(layout(state, { columns: 40, rows: 16, isAscii: false, tzOffsetAt: UTC }));
   assert.equal(tree.length, 16);
-  assert.equal(tree[13], '');
-  assert.equal(tree[14], '09:05:59 orchestrator → helper@team · S…');
+  assert.equal(tree[14], '');
+  assert.equal(tree[15], '09:05:59 orchestrator → helper@team · S…');
 });
 
 test('no row is wider than the pane and no pane taller than asked, for every width from 1 to 120', () => {
@@ -489,11 +496,12 @@ test('strings from outside are cleaned before they are measured: no ESC, BEL or 
       }
     }
   }
-  const rows = plainRows(layout(state, { columns: 53, rows: 40, isAscii: false, tzOffsetAt: UTC }));
-  assert.equal(rows[3].slice(0, 17), '│ ▶ [2J]0;pwned…│');
-  assert.equal(rows[5].slice(0, 17), '│ Edit [2J]0;pw…│');
+  const rows = plainRows(layout(state, { columns: 71, rows: 40, isAscii: false, tzOffsetAt: UTC }));
+  assert.equal(rows[3].slice(9, 26), '│ ▶ [2J]0;pwned…│');
+  assert.equal(rows[5].slice(9, 26), '│ Edit [2J]0;pw…│');
   assert.equal(rows[19], '09:06:00 orchestrator → [2J]0;pwnedx.mjs · Agent');
-  assert.equal(rows[20], '09:06:00 [2J]0;pwnedx.mjs → name]8;;x@team · SendMes…', 'cut at 53 cells');
+  assert.equal(rows[20], '09:06:00 [2J]0;pwnedx.mjs → name]8;;x@team · SendMessage');
+  assert.equal(plainRows(layout(state, { columns: 50, rows: 40, isAscii: false, tzOffsetAt: UTC })).at(-1), '09:06:00 [2J]0;pwnedx.mjs → name]8;;x@team · Send…', 'cut at 50 cells');
   assert.equal(statusLine(state, NOW), 'fleet: [2J]0;pwnedx.mjs, reviewer, grok 2:17');
 });
 
@@ -523,12 +531,12 @@ test('cut keeps at most 4 × cells + 1 code points, so a role of zero-width mark
   assert.ok(line.startsWith('fleet: a\u0301'), line.slice(0, 12));
 });
 
-test('a one-cell code point and its VS16 take two columns: a role ☀\ufe0f coder leaves every row of the 53-column graph as wide as the golden\'s', () => {
-  const sunny = plainRows(layout(patch(golden(), 'a-coder', { role: '☀\ufe0f coder' }), { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  const plain = plainRows(layout(golden(), { columns: 53, rows: 30, isAscii: false, tzOffsetAt: UTC }));
-  assert.equal(sunny[3], '│ ▶ ☀\ufe0f coder    │ │ · tester      │ │ ▶ reviewer    │');
+test('a one-cell code point and its VS16 take two columns: a role ☀\ufe0f coder leaves every row of the 71-column graph as wide as the golden\'s', () => {
+  const sunny = plainRows(layout(patch(golden(), 'a-coder', { role: '☀\ufe0f coder' }), { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  const plain = plainRows(layout(golden(), { columns: 71, rows: 30, isAscii: false, tzOffsetAt: UTC }));
+  assert.equal(sunny[3], `${' '.repeat(9)}│ ▶ ☀\ufe0f coder    │ │ · tester      │ │ ▶ reviewer    │`);
   assert.deepEqual(sunny.map(cells), plain.map(cells));
-  for (const row of sunny.slice(2, 7)) assert.equal(cells(row), 53, row);
+  for (const row of sunny.slice(2, 7)) assert.equal(cells(row), 62, row);
 });
 
 test('a run of zero-width marks cannot make a row or the alt unbounded: at most four code points per cell', async () => {

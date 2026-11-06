@@ -48,7 +48,7 @@
  *   | { type: 'tick' | 'open' | 'close', at: number }} FleetEvent
  */
 
-export const UNITS = Object.freeze(['gemini', 'grok', 'codex']);
+export const UNITS = Object.freeze(['gemini', 'grok', 'codex', 'mistral']);
 export const MAIN = 'main';
 
 /** The newest links kept. */
@@ -88,7 +88,7 @@ const AGENT_STATUS = Object.freeze({
 const unitId = (unit) => `unit:${unit}`;
 
 /**
- * The orchestrator (id 'main') and the three units (ids 'unit:<name>'), all idle,
+ * The orchestrator (id 'main') and the four units (ids 'unit:<name>'), all idle,
  * the units without a feed; no agents, no history.
  * @param {number} now
  * @returns {FleetState}

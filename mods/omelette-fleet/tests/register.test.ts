@@ -132,7 +132,7 @@ const PANE: RenderInput<'Pane'> = {
   surface: 'terminal',
   requestId: 'omelette-fleet',
   viewport: { columns: 180, rows: 48, isFullscreen: true },
-  props: { title: 'Fleet', isFocused: false, bodyColumns: 53, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  props: { title: 'Fleet', isFocused: false, bodyColumns: 71, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
 }
 
 const SPAWN = {
@@ -190,7 +190,7 @@ describe('the session start and the command', () => {
 
     const state = world.fleet
 
-    expect(state?.nodes.map(node => node.id)).toEqual(['main', 'unit:gemini', 'unit:grok', 'unit:codex'])
+    expect(state?.nodes.map(node => node.id)).toEqual(['main', 'unit:gemini', 'unit:grok', 'unit:codex', 'unit:mistral'])
     expect(state?.usage, 'the cost is not kept: the pane draws none').toEqual({ contextPercent: 31, fiveHour: 11, sevenDay: 71 })
   })
 
@@ -1026,7 +1026,7 @@ describe('motion', () => {
 })
 
 describe('the pane', () => {
-  test('mounted on the terminal at 53 columns it draws the frames, in the terminal\'s own elements', async ($, on) => {
+  test('mounted on the terminal at 71 columns it draws the frames, in the terminal\'s own elements', async ($, on) => {
     worldOf(on)
     mock.clock(on, { now: NOW })
     mock.env(on, { HOME })
@@ -1036,9 +1036,9 @@ describe('the pane', () => {
 
     const pane = await $.ui.mount({ ...PANE, plugin: PLUGIN })
 
-    expect(await pane.find({ type: 'Text', text: `${' '.repeat(18)}┌───────────────┐` }), 'the agent\'s box').toBeDefined()
+    expect(await pane.find({ type: 'Text', text: `${' '.repeat(27)}┌───────────────┐` }), 'the agent\'s box').toBeDefined()
     expect(await pane.find({ type: 'Text', text: '│ ⠋ coder-medium│' }), 'the spinner\'s first frame').toBeDefined()
-    expect(await pane.find({ type: 'Text', text: '└───────────────┘ └───────────────┘ └───────────────┘' }), 'the units\' frames').toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '└───────────────┘ └───────────────┘ └───────────────┘ └───────────────┘' }), 'the four units\' frames').toBeDefined()
     expect(await pane.find({ type: 'Text', text: '● orchestrator' })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: 'ctx 31% · 5h 11% · 7d 71%' })).toBeDefined()
     await pane.unmount()

@@ -1,8 +1,8 @@
 /**
  * omelette-fleet :: mods/omelette-fleet/hooks/layout.mjs
  * The pane's terminal drawing (1.7.0): the fleet model as rows of toned
- * segments. From 53 cells, and with room for the graph and one history row,
- * the graph — sub-agents above, the orchestrator, the three units below, bus
+ * segments. From 71 cells, and with room for the graph and one history row,
+ * the graph — sub-agents above, the orchestrator, the four units below, bus
  * rows between them; below that the same actors as an indented tree. Under
  * either, the history, newest first. Also the status-line text for a closed
  * pane; the graph's boxes, the header and the history rows serve the other
@@ -19,8 +19,8 @@ import { cells, clean, clock, cut, duration, familyOf, shortModel, shortRole } f
 /** @typedef {{ text: string, tone: Tone }} Segment */
 /** @typedef {{ columns: number, rows: number, isAscii?: boolean, tzOffsetAt?: (at: number) => number, animate?: boolean }} LayoutOptions */
 
-/** The narrowest pane the graph is drawn on: three units side by side. */
-const GRAPH_MIN = 53;
+/** The narrowest pane the graph is drawn on: four units side by side (4 × 18 − 1). */
+const GRAPH_MIN = 71;
 /** An agent's or a unit's box: 17 cells wide, frame + three lines + frame. */
 const BOX = 17;
 /** A box and the one cell between it and the next. */
@@ -334,7 +334,7 @@ export function graphBoxes(state, perRow = ROW_MAX, sym = SYMBOLS.unicode) {
 
 /**
  * The cells across the graph needs to draw `boxes` boxes in its agent row: the
- * three units' 53 at least. (The SVG's alt is the terminal drawing at this
+ * four units' 71 at least. (The SVG's alt is the terminal drawing at this
  * width, so every box the image shows is in it.)
  * @param {number} boxes
  * @returns {number}

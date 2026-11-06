@@ -122,7 +122,9 @@ test('the terminal draws a reported agent\'s touched line as one dim row under t
   assert.ok(at > plainRows(wide).findIndex((row) => row.includes('gemini')), 'under the graph');
   assert.ok(at < plainRows(wide).findIndex((row) => / → /.test(row)), 'above the history');
 
-  assert.deepEqual(touchedRowsOf(drawn(stoppedCoder(TOUCHED), 53)), [[{ text: SHORT, tone: 'dim' }]]);
+  // TOUCHED is 71 cells, the narrowest graph: one more file and it no longer fits.
+  const longer = TOUCHED.replace('— 2 files', '— 12 files');
+  assert.deepEqual(touchedRowsOf(drawn(stoppedCoder(longer), 71)), [[{ text: SHORT.replace('— 2 files', '— 12 files'), tone: 'dim' }]]);
   assert.deepEqual(touchedRowsOf(drawn(stoppedCoder(undefined), 100)), [], 'no record, no row');
   const resumed = reduce(stoppedCoder(TOUCHED), { type: 'step', at: T0 + 300, agentId: 'a1b2c3d4e5f6', model: 'claude-opus-5-5' });
   assert.deepEqual(touchedRowsOf(drawn(resumed, 100)), [], 'running again: the line is the last run\'s, not drawn');
@@ -140,9 +142,11 @@ test('the Svg draws the touched line dim under the units and grows by its row; t
   const bare = svgOf(stoppedCoder(undefined));
   const with1 = svgOf(stoppedCoder(TOUCHED));
   assert.equal(bare.source.includes('touched'), false);
-  assert.match(with1.source, new RegExp(`<g opacity="0\\.5"><text x="\\d+" y="\\d+">${SHORT}</text></g></svg>$`));
+  // The Svg is drawn at 71 cells, where TOUCHED (71 cells) fits whole.
+  const whole = TOUCHED.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  assert.match(with1.source, new RegExp(`<g opacity="0\\.5"><text x="\\d+" y="\\d+">${whole}</text></g></svg>$`));
   assert.equal(with1.height, bare.height + 16 + 10);
-  assert.ok(with1.alt.split('\n').includes(SHORT));
+  assert.ok(with1.alt.split('\n').includes(TOUCHED));
 });
 
 test('past six notes the graph and the Svg show the newest six under a "+K more notes" line', () => {

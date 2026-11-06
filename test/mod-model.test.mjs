@@ -38,9 +38,9 @@ function deepFreeze(value) {
   return value;
 }
 
-test('initialState: the orchestrator and the three units, all idle, the units without a feed, nothing in history', () => {
+test('initialState: the orchestrator and the four units, all idle, the units without a feed, nothing in history', () => {
   const s = initialState(T0);
-  assert.deepEqual(s.nodes.map((n) => n.id), ['main', 'unit:gemini', 'unit:grok', 'unit:codex']);
+  assert.deepEqual(s.nodes.map((n) => n.id), ['main', 'unit:gemini', 'unit:grok', 'unit:codex', 'unit:mistral']);
   assert.deepEqual(node(s, MAIN), { id: 'main', kind: 'orchestrator', role: 'orchestrator', status: 'idle', since: T0, order: 0 });
   assert.deepEqual(node(s, 'unit:grok'), { id: 'unit:grok', kind: 'unit', role: 'grok', status: 'idle', since: T0, feed: 'none', order: 2 });
   for (const unit of UNITS) assert.equal(node(s, `unit:${unit}`).feed, 'none');
@@ -72,18 +72,18 @@ test('spawn: adds a running agent under the main loop, with its role and model, 
   const s = reduce(initialState(T0), spawn(T0 + SEC, CODER, 'omelette-coder-medium', { model: 'claude-opus-5-5' }));
   assert.deepEqual(node(s, CODER), {
     id: CODER, kind: 'agent', role: 'omelette-coder-medium', parentId: 'main', model: 'claude-opus-5-5',
-    status: 'running', since: T0 + SEC, order: 4,
+    status: 'running', since: T0 + SEC, order: 5,
   });
   assert.deepEqual(s.history, [{ at: T0 + SEC, from: 'main', to: CODER, label: 'Agent' }]);
   const second = reduce(s, spawn(T0 + 2 * SEC, TESTER, 'omelette-tester', { model: 'claude-sonnet-5-5', parentId: '' }));
-  assert.equal(node(second, TESTER).order, 5, 'order is the spawn sequence');
+  assert.equal(node(second, TESTER).order, 6, 'order is the spawn sequence');
   assert.equal(node(second, TESTER).parentId, 'main', 'an empty parentId is the main loop');
 });
 
 test('spawn of an agent the model already holds updates it in place, keeping its order', () => {
   const listed = reduce(initialState(T0), { type: 'agents', at: T0, list: [{ id: CODER, type: 'omelette-coder', status: 'running' }] });
   const s = reduce(listed, spawn(T0 + SEC, CODER, 'omelette-coder', { model: 'claude-opus-5-5' }));
-  assert.equal(s.nodes.length, 5);
+  assert.equal(s.nodes.length, 6);
   assert.equal(node(s, CODER).model, 'claude-opus-5-5');
   assert.equal(node(s, CODER).order, node(listed, CODER).order);
   assert.equal(node(s, CODER).status, 'running');
@@ -446,8 +446,8 @@ test('agents (Review Focus 1): agents the model never saw spawn appear with role
       { id: HELPER, type: 'Explore', status: 'running', parentId: CODER },
     ],
   });
-  assert.deepEqual(node(s, CODER), { id: CODER, kind: 'agent', role: 'omelette-coder-medium', parentId: 'main', status: 'running', since: T0 + MIN, order: 4 });
-  assert.deepEqual(node(s, TESTER), { id: TESTER, kind: 'agent', role: 'omelette-tester', parentId: 'main', status: 'waiting', since: T0 + MIN, order: 5 });
+  assert.deepEqual(node(s, CODER), { id: CODER, kind: 'agent', role: 'omelette-coder-medium', parentId: 'main', status: 'running', since: T0 + MIN, order: 5 });
+  assert.deepEqual(node(s, TESTER), { id: TESTER, kind: 'agent', role: 'omelette-tester', parentId: 'main', status: 'waiting', since: T0 + MIN, order: 6 });
   assert.equal(node(s, HELPER).parentId, CODER);
   assert.equal(node(s, HELPER).status, 'running');
   assert.deepEqual(s.history, [], 'a listed agent is not a spawn the session saw');
@@ -480,7 +480,7 @@ test('agents: a known agent takes the engine\'s status, except that a reported o
   ] });
   assert.equal(node(s, CODER).status, 'running');
   assert.equal(node(s, TESTER).status, 'running', 'resumed');
-  assert.equal(s.nodes.length, 6, 'nothing added');
+  assert.equal(s.nodes.length, 7, 'nothing added');
   const again = reduce(s, { type: 'agents', at: T0 + 9 * MIN, list: [{ id: CODER, type: 'omelette-coder', status: 'running' }] });
   assert.deepEqual(node(again, CODER), node(s, CODER), 'an unchanged status keeps its since');
 });
@@ -488,7 +488,7 @@ test('agents: a known agent takes the engine\'s status, except that a reported o
 test('agents: the orchestrator\'s or a unit\'s id in the list stays what it is, and malformed entries are skipped', () => {
   const s = reduce(initialState(T0), { type: 'agents', at: T0, list: [{ id: 'main', type: 'x', status: 'completed' }, { id: 'unit:grok', type: 'x', status: 'running' }, null, {}, { id: '', type: 'x', status: 'running' }, { id: 'ok', type: 'x', status: 'running' }] });
   assert.deepEqual([node(s, MAIN).status, node(s, 'unit:grok').status, node(s, 'unit:grok').kind], ['idle', 'idle', 'unit']);
-  assert.deepEqual(s.nodes.map((n) => n.id), ['main', 'unit:gemini', 'unit:grok', 'unit:codex', 'ok']);
+  assert.deepEqual(s.nodes.map((n) => n.id), ['main', 'unit:gemini', 'unit:grok', 'unit:codex', 'unit:mistral', 'ok']);
 });
 
 test('agents: an ended agent (completed, failed, killed) reads as reported; one the engine holds reads as waiting; one not yet started reads as running', () => {
@@ -573,8 +573,8 @@ test('feed: a unit whose snapshot is gone loses its feed, and another session\'s
   assert.equal(node(s, 'unit:gemini').feed, 'none');
   assert.equal(node(s, 'unit:gemini').status, 'idle');
   // A snapshot of a unit the model does not have, or no snapshots field at all, adds nothing.
-  assert.equal(reduce(s, { type: 'feed', at: T0, snapshots: [{ unit: 'jaravis', pid: 1, active: [], updatedAt: T0, isStale: false }] }).nodes.length, 4);
-  assert.equal(reduce(s, { type: 'feed', at: T0 }).nodes.length, 4);
+  assert.equal(reduce(s, { type: 'feed', at: T0, snapshots: [{ unit: 'jaravis', pid: 1, active: [], updatedAt: T0, isStale: false }] }).nodes.length, 5);
+  assert.equal(reduce(s, { type: 'feed', at: T0 }).nodes.length, 5);
 });
 
 const snap = (unit, active = [], extra = {}) => ({ unit, pid: 4242, active, updatedAt: T0, isStale: false, ...extra });

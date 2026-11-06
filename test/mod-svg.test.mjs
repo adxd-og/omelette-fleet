@@ -32,9 +32,10 @@ function golden() {
         openCalls: [{ callId: 'toolu_g1', callerId: 'main', tool: 'code_review', since: NOW - (2 * MIN + 17 * SEC) }],
       },
       { id: 'unit:codex', kind: 'unit', role: 'codex', status: 'idle', since: NOW - HOUR, feed: 'ok', order: 3 },
-      { id: 'a-coder', kind: 'agent', role: 'omelette-coder-medium', parentId: 'main', model: 'claude-opus-5-5', effort: 'medium', status: 'running', activity: 'Bash: npm test', activityCallId: 'toolu_c1', since: NOW - MIN, order: 4 },
-      { id: 'a-tester', kind: 'agent', role: 'omelette-tester', parentId: 'main', model: 'claude-sonnet-5-5', effort: 'high', status: 'reported', since: NOW - (3 * MIN + 10 * SEC), order: 5 },
-      { id: 'a-reviewer', kind: 'agent', role: 'omelette-reviewer', parentId: 'main', model: 'claude-opus-5-5', effort: 'xhigh', status: 'running', activity: 'Read models.js', activityCallId: 'toolu_r1', since: NOW - 30 * SEC, order: 6 },
+      { id: 'unit:mistral', kind: 'unit', role: 'mistral', status: 'idle', since: NOW - HOUR, feed: 'ok', order: 4 },
+      { id: 'a-coder', kind: 'agent', role: 'omelette-coder-medium', parentId: 'main', model: 'claude-opus-5-5', effort: 'medium', status: 'running', activity: 'Bash: npm test', activityCallId: 'toolu_c1', since: NOW - MIN, order: 5 },
+      { id: 'a-tester', kind: 'agent', role: 'omelette-tester', parentId: 'main', model: 'claude-sonnet-5-5', effort: 'high', status: 'reported', since: NOW - (3 * MIN + 10 * SEC), order: 6 },
+      { id: 'a-reviewer', kind: 'agent', role: 'omelette-reviewer', parentId: 'main', model: 'claude-opus-5-5', effort: 'xhigh', status: 'running', activity: 'Read models.js', activityCallId: 'toolu_r1', since: NOW - 30 * SEC, order: 7 },
     ],
   };
 }
@@ -93,7 +94,7 @@ function linksOf(source) {
 }
 
 
-/** Hand-built states: the orchestrator, the three units (`units` patches them by name), `agents`. */
+/** Hand-built states: the orchestrator, the four units (`units` patches them by name), `agents`. */
 const unitNode = (name, order, fields = {}) => ({ id: `unit:${name}`, kind: 'unit', role: name, status: 'idle', since: NOW, feed: 'ok', order, ...fields });
 const agent = (id, fields = {}) => ({ id, kind: 'agent', role: `omelette-${id}`, parentId: 'main', status: 'running', since: NOW - MIN, order: 10 + Number(id.replace(/\D/g, '') || 0), ...fields });
 const call = (callerId, tool = 'review', callId = `${callerId}:${tool}`) => ({ callId, callerId, tool, since: NOW - MIN });
@@ -103,7 +104,7 @@ function stateOf(agents = [], units = {}, extra = {}) {
     now: NOW, isOpen: true, usage: {}, history: [], ...extra,
     nodes: [
       { id: 'main', kind: 'orchestrator', role: 'orchestrator', status: 'running', since: NOW, order: 0 },
-      ...['gemini', 'grok', 'codex'].map((name, i) => unitNode(name, i + 1, units[name])),
+      ...['gemini', 'grok', 'codex', 'mistral'].map((name, i) => unitNode(name, i + 1, units[name])),
       ...agents,
     ],
   };
@@ -177,11 +178,11 @@ test('forty agents, each role a run of 30 000 combining marks: at most six agent
   const { source } = svgOf(state, { tzOffsetAt: UTC });
   assert.ok(source.length < 131_072, `${source.length} characters`);
   const boxes = boxesOf(source);
-  assert.equal(boxes.length, 1 + 3 + 6);
+  assert.equal(boxes.length, 1 + 4 + 6);
   assert.ok(boxes.some((b) => b.lines[0] === '+35 more'));
 });
 
-test('alt is the terminal drawing at 53 columns and 40 rows, history included, each time in the zone it fell in', () => {
+test('alt is the terminal drawing at 71 columns and 40 rows, history included, each time in the zone it fell in', () => {
   const state = {
     ...golden(),
     history: [
@@ -191,7 +192,7 @@ test('alt is the terminal drawing at 53 columns and 40 rows, history included, e
   };
   const tzOffsetAt = (at) => (at < NOW - 2 * MIN ? -180 : -120);
   const { alt } = svgOf(state, { tzOffsetAt });
-  assert.equal(alt, plainRows(layout(state, { columns: 53, rows: 40, isAscii: false, tzOffsetAt })).join('\n'));
+  assert.equal(alt, plainRows(layout(state, { columns: 71, rows: 40, isAscii: false, tzOffsetAt })).join('\n'));
   assert.ok(alt.includes('12:01:00 orchestrator → coder-medium · Agent'), alt);
   assert.ok(alt.includes('11:05:00 orchestrator → grok · code_review'), alt);
 });
@@ -352,14 +353,14 @@ function segmentsOf(pts) {
 test('sub-agent call paths: every link and box lies inside the viewBox, each path runs down the page, and no two paths share a middle segment', () => {
   const agents = [agent('a1'), agent('a2'), agent('a3', { parentId: 'a1' }), agent('a4', { parentId: 'a3' }), agent('a5'), agent('a6', { status: 'reported' })];
   const all = ['a1', 'a2', 'a3', 'a4', 'a5'];
-  const state = stateOf(agents, { gemini: running('a1', ...all), grok: running('a2', ...all, 'main'), codex: running('a3', ...all) });
+  const state = stateOf(agents, { gemini: running('a1', ...all), grok: running('a2', ...all, 'main'), codex: running('a3', ...all), mistral: running('a4', ...all) });
   const { source, width, height } = svgOf(state, { tzOffsetAt: UTC });
   const view = source.match(/viewBox="0 0 (\d+) (\d+)"/);
   assert.deepEqual(view.slice(1).map(Number), [width, height]);
   for (const b of boxesOf(source)) assert.ok(b.x >= 0 && b.y >= 0 && b.x + b.w <= width && b.y + b.h <= height, `box ${b.name} outside`);
 
   const links = linksOf(source);
-  assert.ok(links.filter((l) => l.kind === 'path' && l.to && ['gemini', 'grok', 'codex'].includes(l.to)).length >= 15, 'a path per (agent, unit)');
+  assert.ok(links.filter((l) => l.kind === 'path' && l.to && ['gemini', 'grok', 'codex', 'mistral'].includes(l.to)).length >= 20, 'a path per (agent, unit)');
   for (const l of links) {
     for (const p of l.pts) assert.ok(p.x >= 0 && p.x <= width && p.y >= 0 && p.y <= height, `${l.pair}: point ${p.x},${p.y} outside`);
     // a quadratic's peak is a quarter of the ends plus half the control.
@@ -390,7 +391,7 @@ test('sub-agent call paths: every link and box lies inside the viewBox, each pat
 test('no link passes through the inside of a box, with the most sub-agent calls the fold allows', () => {
   const agents = [agent('a1'), agent('a2'), agent('a3', { parentId: 'a1' }), agent('a4', { parentId: 'a3' }), agent('a5'), agent('a6', { status: 'reported' })];
   const all = ['a1', 'a2', 'a3', 'a4', 'a5'];
-  const state = stateOf(agents, { gemini: running('a1', ...all, 'main'), grok: running('a2', ...all, 'main'), codex: running('a3', ...all, 'main') });
+  const state = stateOf(agents, { gemini: running('a1', ...all, 'main'), grok: running('a2', ...all, 'main'), codex: running('a3', ...all, 'main'), mistral: running('a4', ...all, 'main') });
   const { source } = svgOf(state, { tzOffsetAt: UTC });
   const boxes = boxesOf(source);
   for (const l of linksOf(source)) {
@@ -423,9 +424,9 @@ test('a running agent\'s and a running unit\'s frame carry the accent, with moti
   for (const animate of [false, true]) {
     const { source } = svgOf(state, { tzOffsetAt: UTC, animate });
     const accent = rectsOf(source).filter((r) => r.stroke === ACCENT);
-    // a1, grok, codex run; the orchestrator, a2 and gemini do not
+    // a1, grok, codex run; the orchestrator, a2, gemini and mistral do not
     assert.equal(accent.length, 3, `animate=${animate}`);
-    assert.equal(rectsOf(source).length, 6);
+    assert.equal(rectsOf(source).length, 7);
   }
 });
 
@@ -464,17 +465,17 @@ test('the motion CSS is coherent: the flow targets the class the live links carr
   assert.equal(rectsOf(source).filter((r) => r.stroke === accent).length, 2, 'the agent and the unit that run');
 });
 
-test('the alt is drawn at the SVG\'s own width whatever the agents: none, one or two (53 cells), four and five with a long history label (no cell lost to the width), ten (the fold is in it)', () => {
+test('the alt is drawn at the SVG\'s own width whatever the agents: none, one, two or four (71 cells), five with a long history label (no cell lost to the width), ten (the fold is in it)', () => {
   const label = 'a history label far too long to fit any pane at all, so the width it is cut at shows';
   for (const count of [0, 1, 2, 4, 5, 10]) {
     const agents = Array.from({ length: count }, (_, i) => agent(`a${i + 1}`));
     const state = stateOf(agents, {}, { history: [{ at: NOW - MIN, from: 'main', to: 'unit:grok', label }] });
     const { source, alt } = svgOf(state, { tzOffsetAt: UTC });
     const shown = Math.min(count, count > 6 ? 6 : count);
-    const width = Math.max(53, shown * 18 - 1);
+    const width = Math.max(71, shown * 18 - 1);
     assert.equal(alt, plainRows(layout(state, { columns: width, rows: 40, isAscii: false, tzOffsetAt: UTC })).join('\n'), `${count} agents`);
     assert.ok(alt.length > 0);
-    const imageAgents = rectsOf(source).length - 4;
+    const imageAgents = rectsOf(source).length - 5;
     const altTops = (alt.split('\n').find((row) => row.includes('┌')) ?? '').split('┌').length - 1;
     if (count > 0) assert.equal(altTops, imageAgents, `${count} agents: as many boxes in the alt as in the image`);
   }
