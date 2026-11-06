@@ -1,0 +1,21 @@
+(version 1)
+; Seatbelt profile for the repro sandbox probe: everything the model runs goes
+; through this. Allow by default, then take away writes outside the clone and
+; the temp dir, all network, and reads of the operator's secret dirs.
+(allow default)
+(deny network*)
+(deny file-write*)
+(allow file-write*
+  (subpath (param "CLONE"))
+  (subpath (param "TMP"))
+  (subpath "/private/var/folders")
+  (literal "/dev/null")
+  (regex #"^/dev/tty")
+  (regex #"^/dev/fd/"))
+(deny file-read*
+  (subpath (string-append (param "HOME") "/.ssh"))
+  (subpath (string-append (param "HOME") "/.aws"))
+  (subpath (string-append (param "HOME") "/.omelette"))
+  (subpath (string-append (param "HOME") "/.vibe"))
+  (subpath (string-append (param "HOME") "/.config")))
+(deny file-read* (subpath (param "FLEET")))
