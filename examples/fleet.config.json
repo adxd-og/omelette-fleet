@@ -21,6 +21,10 @@
       "mode": "read-only",
       "webSearch": true,
       "timeoutS": 600
+    },
+    "mistral": {
+      "timeoutS": 1500,
+      "reproKeep": false
     }
   }
 }

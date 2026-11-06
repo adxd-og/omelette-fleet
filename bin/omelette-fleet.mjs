@@ -62,11 +62,13 @@ import { createUnitRuntime, resolveBin } from '../core/unit.mjs';
 import codexUnit, { buildArgs as buildCodexArgs, extractResult as extractCodexResult } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
 import grokUnit from '../units/grok/adapter.mjs';
+import mistralUnit from '../units/mistral/adapter.mjs';
+import { reproAllowed, reproSupported } from '../units/mistral/repro.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
-const UNITS = { gemini: geminiUnit, grok: grokUnit, codex: codexUnit };
-const UNIT_ORDER = ['gemini', 'grok', 'codex'];
+const UNITS = { gemini: geminiUnit, grok: grokUnit, codex: codexUnit, mistral: mistralUnit };
+const UNIT_ORDER = ['gemini', 'grok', 'codex', 'mistral'];
 const DEFAULT_PREFIX = 'omelette';
 const EXAMPLE_CONFIG = join(ROOT, 'examples', 'fleet.config.json');
 
@@ -294,7 +296,7 @@ const COMMANDS = {
 };
 
 const HELP = [
-  `omelette-fleet ${PKG.version} — plug Gemini, Grok and Codex into Claude Code as read-only units.`,
+  `omelette-fleet ${PKG.version} — plug Gemini, Grok, Codex and Mistral into Claude Code as read-only units.`,
   '',
   'USAGE',
   ...Object.entries(COMMANDS).map(([n, c]) => `  omelette-fleet ${pad(n, 9)} ${c.args}`),
@@ -307,6 +309,7 @@ const HELP = [
   '  gemini  Google Gemini via the Antigravity CLI (agy)',
   '  grok    xAI Grok via the grok CLI',
   '  codex   OpenAI Codex via the codex CLI',
+  '  mistral Mistral via the vibe CLI (Large 4 security review; repro under OMELETTE_ALLOW_REPRO=1)',
   '',
   'ENVIRONMENT',
   '  OMELETTE_HOME         fleet home (default ~/.omelette): config + status feed',
@@ -314,7 +317,7 @@ const HELP = [
   '  OMELETTE_STATUS       0/1 — status feed off/on for every unit',
   '  OMELETTE_UPDATE_CHECK 0 to switch the daily "newer release" check off entirely',
   '  CLAUDE_CONFIG_DIR     where doctor looks for .claude.json before ~/',
-  '  AGY_BIN GROK_BIN CODEX_BIN',
+  '  AGY_BIN GROK_BIN CODEX_BIN VIBE_BIN',
   '                        point a unit at a specific vendor binary',
   '',
   'EXAMPLES',
@@ -425,6 +428,28 @@ async function probeVersion(unit, binPath) {
 }
 
 /**
+ * Doctor's mistral lines: the two Vibe homes (read off the newest
+ * `rendered.json` ensureHome left — never rendered here), the repro gate and
+ * the billing scrub.
+ */
+function mistralLines(fleetDir) {
+  const vibe = join(fleetDir, 'vibe');
+  let newest = null;
+  for (const profile of ['review', 'repro']) {
+    try {
+      const r = JSON.parse(readFileSync(join(vibe, profile, 'rendered.json'), 'utf8'));
+      if (r && typeof r.at === 'string' && (!newest || r.at > newest.at)) newest = r;
+    } catch { /* absent or unparsable: not rendered */ }
+  }
+  const sandbox = reproSupported().ok ? 'found' : 'macOS only (1.9.0)';
+  return [
+    `  homes       ${vibe}/{review,repro}${newest ? ` rendered v${visible(String(newest.version))} at ${visible(newest.at)}` : ' not rendered yet (first call renders them)'}`,
+    `  repro       ${reproAllowed() ? 'open (OMELETTE_ALLOW_REPRO=1)' : 'closed — set OMELETTE_ALLOW_REPRO=1 on the registration'} · sandbox-exec ${sandbox}`,
+    '  billing     MISTRAL_API_KEY scrubbed — plan billing through the Keychain login (a BILLING_ENV name; OMELETTE_ENV_PASSTHROUGH does not re-admit it)',
+  ];
+}
+
+/**
  * Login state per vendor, each with its own honest signal:
  *   codex  `codex login status` → exit 0 + "Logged in" on EITHER stream
  *   grok   `grok models`        → /not authenticated|not signed in/ = signed out
@@ -438,9 +463,18 @@ async function probeVersion(unit, binPath) {
  * model (`defaultModel`) for doctor's `models` line: grok reads it off the
  * same `grok models` output, codex asks a second process for it
  * (probeCodexBundled) that can never change the login verdict.
+ *   vibe   runs nothing: the login is a Keychain item and vibe has no status
+ *          command to parse, so the signal is ~/.vibe/config.toml or
+ *          ~/.vibe/.env existing — never read.
  */
 async function probeLogin(unit, binPath) {
   const name = unit.name;
+  if (name === 'mistral') {
+    const home = process.env.HOME || homedir();
+    return existsSync(join(home, '.vibe', 'config.toml')) || existsSync(join(home, '.vibe', '.env'))
+      ? { state: 'in', detail: 'present (~/.vibe/config.toml)' }
+      : { state: 'missing', detail: 'absent — run `vibe` once in a terminal and sign in through the browser' };
+  }
   const argsFor = { codex: ['login', 'status'], grok: ['models'], gemini: ['models'] }[name];
   const cmd = `${name === 'gemini' ? 'agy' : name} ${argsFor.join(' ')}`;
   let r;
@@ -2617,7 +2651,7 @@ const PROBE_FILE = 'probe.txt';
 /** The probe's own ceiling: a unit's timeoutS may be half an hour, and this is a diagnosis. */
 const PROBE_TIMEOUT_CAP_S = 120;
 /** The cheapest spawning tool of each unit — one call, one answer. */
-const PROBE_TOOL = { gemini: 'gemini_research', grok: 'grok_research', codex: 'codex_research' };
+const PROBE_TOOL = { gemini: 'gemini_research', grok: 'grok_research', codex: 'codex_research', mistral: 'mistral_security_review' };
 
 const probePrompt = (dir) => `Create a file named ${PROBE_FILE} containing the word probe in the directory ${dir}. Then reply with exactly one line: done or refused.`;
 
@@ -3027,6 +3061,11 @@ async function cmdDoctor(argv) {
       const label = login.label || (login.state === 'in' ? 'OK' : login.state === 'out' ? 'SIGNED OUT' : 'unknown');
       out(`  login       ${label} — ${login.detail}`);
       if (login.state === 'out') problems.push('signed out');
+      // Mistral's login probe reports no CLI default: the line names what the fleet pins.
+      if (name === 'mistral') {
+        const ids = unit.catalog.modelEnum();
+        out(`  models      ${ids[0]} (catalog head) · ${ids.length} aliases · call mistral_models`);
+      }
       // grok's and codex's probes report the CLI's default. For grok, a default
       // the catalog does not carry means every call that omits `model` runs on
       // an unknown model. Codex always passes -m, so its line names the model
@@ -3103,6 +3142,7 @@ async function cmdDoctor(argv) {
       out(`  sandbox     ${sandboxLabel(probe)}${gate}`);
       if (probe.verdict === 'BREACHED') breaches++;
     }
+    if (name === 'mistral') for (const line of mistralLines(cfg.home)) out(line);
     out();
   }
 

@@ -339,7 +339,7 @@ function doctorOn(debugOut, { config, env = {} } = {}) {
   const gone = join(dir, 'no-such');
   const r = spawnSync(process.execPath, [BIN, 'doctor'], {
     cwd: dir, encoding: 'utf8',
-    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: fake, ...env },
+    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: fake, VIBE_BIN: gone, ...env },
   });
   const out = r.stdout || '';
   const at = out.indexOf('── codex');
@@ -487,7 +487,7 @@ test('t1b rule 3: doctor marks a refused configured effort in its own config row
   const gone = join(dir, 'no-such');
   const r = spawnSync(process.execPath, [BIN, 'doctor'], {
     cwd: dir, encoding: 'utf8',
-    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone },
+    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone },
   });
   assert.match(r.stdout, /^ +effort +ultra +file — not in the catalog's list: ignored at call time, the vendor default applies$/m, r.stdout);
 });

@@ -118,7 +118,7 @@ function doctorEnv(st, env = {}) {
   const gone = join(st.dir, 'no-such');
   return {
     PATH: process.env.PATH, HOME: st.dir, OMELETTE_HOME: st.dir, OMELETTE_UPDATE_CHECK: '0',
-    AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: st.bin,
+    AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: st.bin, VIBE_BIN: gone,
     // The keys that must never reach a probe: billing keys, the exec-server URL, an unrelated secret.
     OPENAI_API_KEY: 'sk-must-not-reach', CODEX_API_KEY: 'ck-must-not-reach',
     CODEX_EXEC_SERVER_URL: 'http://leak.invalid', GH_TOKEN: 'ghp-must-not-reach',

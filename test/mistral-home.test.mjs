@@ -197,6 +197,18 @@ test('ensureHome renders wx, re-renders on change, never follows a symlink', () 
   }
 });
 
+test('ensureHome leaves rendered.json with the version when it renders; a call that renders nothing keeps its time', () => {
+  const fleet = mkdtempSync(join(tmpdir(), 'omelette-mistral-sidecar-'));
+  const first = ensureHome({ home: fleet, profile: 'review', models: MISTRAL_MODELS, version: '9.9.9' });
+  const sidecar = join(first.dir, 'rendered.json');
+  const written = JSON.parse(readFileSync(sidecar, 'utf8'));
+  assert.equal(written.version, '9.9.9');
+  assert.ok(!Number.isNaN(Date.parse(written.at)));
+  assert.equal(statSync(sidecar).mode & 0o777, 0o600);
+  assert.equal(ensureHome({ home: fleet, profile: 'review', models: MISTRAL_MODELS, version: '9.9.9' }).rendered, false);
+  assert.equal(JSON.parse(readFileSync(sidecar, 'utf8')).at, written.at);
+});
+
 test('the wrapper answers the login-env probe with env -0 and no login shell', () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-mistral-wrap-'));
   const home = join(dir, 'home');

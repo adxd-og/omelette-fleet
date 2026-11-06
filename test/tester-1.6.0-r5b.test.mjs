@@ -48,7 +48,7 @@ function doctorWith(modelsOut) {
   const r = spawnSync(process.execPath, [BIN, 'doctor'], {
     cwd: dir,
     encoding: 'utf8',
-    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone },
+    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, VIBE_BIN: gone },
   });
   const out = r.stdout || '';
   const grok = out.slice(out.indexOf('── grok'), out.indexOf('── codex'));

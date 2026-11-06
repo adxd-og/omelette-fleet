@@ -57,7 +57,7 @@ function doctor({ dir, proj }, { args = [], env = {} } = {}) {
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0',
-      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, ...env,
+      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone, ...env,
     },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
@@ -84,7 +84,7 @@ const said = (path) => `settings: ${path} unreadable — its values were not con
 
 test('a value found in a higher-precedence file stops the scan — a broken file AFTER it is never opened by readClientEnv, only named by hookWiringAt', () => {
   const s = sandbox();
-  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 600 } } });
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 600 }, mistral: { enabled: false } } });
 
   mkdirSync(join(s.proj, '.claude'), { recursive: true });
   // settings.local.json is scanned BEFORE settings.json at the same scope
@@ -122,7 +122,7 @@ test('a value found in a higher-precedence file stops the scan — a broken file
 
 test('a settings file that is a directory, not a file, is "unreadable" — unlike one that is simply absent — and doctor never crashes over it', () => {
   const s = sandbox();
-  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 600 } } });
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 600 }, mistral: { enabled: false } } });
 
   mkdirSync(join(s.proj, '.claude'), { recursive: true });
   // A directory sits where Claude Code (and this reader) expect a file:

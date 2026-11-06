@@ -16,9 +16,9 @@ import { makeLog, visible } from '../core/log.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
-const UNITS = ['gemini', 'grok', 'codex'];
+const UNITS = ['gemini', 'grok', 'codex', 'mistral'];
 
-function sandbox(config = { version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } } }) {
+function sandbox(config = { version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } } }) {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-d2-'));
   const proj = join(dir, 'proj');
   mkdirSync(proj, { recursive: true });
@@ -33,7 +33,7 @@ function run(s, args, env = {}) {
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH, HOME: s.dir, OMELETTE_HOME: s.dir, OMELETTE_UPDATE_CHECK: '0',
-      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, ...env,
+      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone, ...env,
     },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };

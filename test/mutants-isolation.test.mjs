@@ -121,7 +121,7 @@ test('a suite child gets HOME and OMELETTE_HOME on <scratch>/home, emptied befor
   const io = capture();
   const code = await withEnv({
     MUT_ENVFILE: envfile, GIT_DIR: '/nonexistent/.git', GIT_WORK_TREE: '/nonexistent', GIT_INDEX_FILE: '/nonexistent/index',
-    OMELETTE_ALLOW_WRITE: 'gemini,grok,codex', ORION_ALLOW_GEMINI_MUTATE: '1', OMELETTE_ENV_PASSTHROUGH: 'SOMETHING',
+    OMELETTE_ALLOW_WRITE: 'gemini,grok,codex,mistral', ORION_ALLOW_GEMINI_MUTATE: '1', OMELETTE_ENV_PASSTHROUGH: 'SOMETHING',
   }, () => main(['--scratch', scratch, '--out', join(sb.dir, 'report.json')], { root: sb.root, cataloguePath, entries: ENTRIES, out: io.out, err: io.err }));
   assert.equal(code, 0, io.lines.err.join('\n'));
   assert.equal(process.env.MUT_ENVFILE, undefined, 'the runner does not touch its own environment');

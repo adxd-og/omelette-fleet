@@ -4,7 +4,7 @@
  * block only, and the notice is never a problem — it does not make a healthy,
  * registered gemini a FAULT and does not change the exit code.
  *
- * doctor has no per-unit filter (it always reports gemini, grok and codex), so
+ * doctor has no per-unit filter (it always reports gemini, grok, codex and mistral), so
  * "gemini absent" is checked as: the notice is in no other unit's block.
  * Same harness as test/cli.test.mjs: the CLI runs as a child process under a
  * temp HOME / OMELETTE_HOME with a fake vendor binary; nothing real is touched.
@@ -54,7 +54,7 @@ function block(out, name) {
 test('doctor: the grey-zone notice is printed once, in the gemini block, after the warnings and before mcp', () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-grey-'));
   const fake = fakeBin(dir);
-  const r = cli(['doctor'], dir, { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake });
+  const r = cli(['doctor'], dir, { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake, VIBE_BIN: join(dir, 'no-such-vibe') });
   assert.equal(r.code, 0, r.out + r.err);
   const lines = r.out.split('\n');
   assert.equal(lines.filter((l) => l === NOTICE).length, 1, r.out);
@@ -65,11 +65,11 @@ test('doctor: the grey-zone notice is printed once, in the gemini block, after t
   assert.match(gemini[at - 1], /^ {2}(config|warning) |^ {14}/);
 });
 
-test('doctor: grok and codex blocks carry no grey-zone notice', () => {
+test('doctor: grok, codex and mistral blocks carry no grey-zone notice', () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-grey-'));
   const fake = fakeBin(dir);
-  const r = cli(['doctor'], dir, { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake });
-  for (const name of ['grok', 'codex']) assert.doesNotMatch(block(r.out, name), /notice|grey zone/);
+  const r = cli(['doctor'], dir, { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake, VIBE_BIN: join(dir, 'no-such-vibe') });
+  for (const name of ['grok', 'codex', 'mistral']) assert.doesNotMatch(block(r.out, name), /notice|grey zone/);
 });
 
 test('doctor: the notice is not a problem — a registered, healthy gemini is no FAULT and exits 0', () => {
@@ -78,7 +78,7 @@ test('doctor: the notice is not a problem — a registered, healthy gemini is no
   writeFileSync(join(dir, '.claude.json'), JSON.stringify({
     mcpServers: { 'omelette-gemini': { command: 'node', args: [join(ROOT, 'servers', 'gemini.mjs')] } },
   }));
-  const r = cli(['doctor'], dir, { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake });
+  const r = cli(['doctor'], dir, { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake, VIBE_BIN: join(dir, 'no-such-vibe') });
   assert.match(r.out, /omelette-gemini registered \(user\) → node .*servers.*gemini\.mjs \[file exists\]/);
   assert.ok(r.out.includes(NOTICE), r.out);
   assert.equal(r.code, 0, r.out + r.err);
@@ -89,7 +89,7 @@ test('doctor: the notice is not a problem — a registered, healthy gemini is no
 test('doctor: no gemini binary and no gemini registration — no grey-zone notice', () => {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-grey-'));
   const fake = fakeBin(dir);
-  const r = cli(['doctor'], dir, { AGY_BIN: join(dir, 'no-such-agy'), GROK_BIN: fake, CODEX_BIN: fake });
+  const r = cli(['doctor'], dir, { AGY_BIN: join(dir, 'no-such-agy'), GROK_BIN: fake, CODEX_BIN: fake, VIBE_BIN: join(dir, 'no-such-vibe') });
   assert.match(block(r.out, 'gemini'), /not found in PATH/);
   assert.doesNotMatch(r.out, /notice|grey zone/);
 });

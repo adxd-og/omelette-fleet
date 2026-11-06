@@ -5,6 +5,7 @@ import { defineUnit } from '../core/unit.mjs';
 import grok from '../units/grok/adapter.mjs';
 import codex from '../units/codex/adapter.mjs';
 import gemini from '../units/gemini/adapter.mjs';
+import mistral from '../units/mistral/adapter.mjs';
 
 const childOf = (unit, parent) => buildChildEnv({ env: { PATH: '/usr/bin', HOME: '/h', ...parent }, passthrough: unit.envPassthrough, scrub: unit.riskEnv });
 
@@ -46,19 +47,21 @@ const GROK_PASSTHROUGH = [
   'OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE', 'OTEL_METRICS_INCLUDE_VERSION',
 ];
 
-test('every adapter declares exact names only, and the three lists are the inventory\'s', () => {
+test('every adapter declares exact names only, and the four lists are the inventory\'s', () => {
   const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-  for (const u of [grok, codex, gemini]) for (const n of u.envPassthrough) assert.match(n, NAME, `${u.name}: ${n}`);
+  for (const u of [grok, codex, gemini, mistral]) for (const n of u.envPassthrough) assert.match(n, NAME, `${u.name}: ${n}`);
   assert.equal(GROK_PASSTHROUGH.length, 58);
   assert.deepEqual(grok.envPassthrough, GROK_PASSTHROUGH);
   assert.deepEqual(codex.envPassthrough, ['CODEX_HOME', 'CODEX_ACCESS_TOKEN', 'RUST_LOG', 'CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE']);
   assert.deepEqual(gemini.envPassthrough, ['AGY_ADC_AUTH', 'AGY_CLI_DISABLE_AUTO_UPDATE', 'AGY_CLI_HIDE_LOGO', 'AGY_CLI_HIDE_ACCOUNT_INFO', 'AGY_CLI_DISABLE_LATEX', 'AGY_CLI_DISABLE_ESCAPE_SEQUENCE_OPTIMIZATIONS', 'AGY_CLI_CMD_OUTPUT_PERCENTAGE']);
   assert.ok(grok.riskEnv.includes('GROK_CODE_XAI_API_KEY'));
   assert.ok(grok.riskEnv.includes('XAI_API_KEY'));
+  assert.deepEqual(mistral.envPassthrough, []);
+  assert.deepEqual(mistral.riskEnv, ['MISTRAL_API_KEY']);
 });
 
 test('OMELETTE_ENV_PASSTHROUGH still admits a pattern, for every unit', () => {
-  for (const u of [grok, codex, gemini]) {
+  for (const u of [grok, codex, gemini, mistral]) {
     const child = buildChildEnv({ env: { PATH: '/usr/bin', OMELETTE_ENV_PASSTHROUGH: 'GROK_*', GROK_MODELS_BASE_URL: 'u' }, passthrough: u.envPassthrough, scrub: u.riskEnv });
     assert.equal(child.GROK_MODELS_BASE_URL, 'u', u.name);
   }

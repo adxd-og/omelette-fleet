@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
-const UNITS = ['gemini', 'grok', 'codex'];
+const UNITS = ['gemini', 'grok', 'codex', 'mistral'];
 const server = (unit) => join(ROOT, 'servers', `${unit}.mjs`);
 
 function sandbox() {
@@ -31,7 +31,7 @@ function sandbox() {
   const proj = join(dir, 'proj');
   mkdirSync(proj, { recursive: true });
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({
-    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } },
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } },
   }));
   return { dir, proj };
 }
@@ -43,7 +43,7 @@ function run(s, args, env = {}) {
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH, HOME: s.dir, OMELETTE_HOME: s.dir, OMELETTE_UPDATE_CHECK: '0',
-      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, ...env,
+      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone, ...env,
     },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
@@ -104,7 +104,7 @@ test('adoptPrefix: the ambiguous multi-prefix line escapes a control character i
 test('a "timeout" value holding DEL in .mcp.json is escaped (JSON.stringify alone leaves DEL raw)', () => {
   const s = sandbox();
   writeFileSync(join(s.dir, 'fleet.config.json'), JSON.stringify({
-    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 } },
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 }, mistral: { enabled: false } },
   }));
   writeClaudeJson(s, {
     mcpServers: { 'omelette-codex': { type: 'stdio', command: 'node', args: [server('codex')], timeout: 'bad\u007f' } },
@@ -117,7 +117,7 @@ test('a "timeout" value holding DEL in .mcp.json is escaped (JSON.stringify alon
 test('the "registered server file is missing" FAULT line escapes a control character in the target', () => {
   const s = sandbox();
   writeFileSync(join(s.dir, 'fleet.config.json'), JSON.stringify({
-    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 } },
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 }, mistral: { enabled: false } },
   }));
   const missingTarget = join(s.dir, '\u009bmissing', 'codex.mjs');
   writeClaudeJson(s, {

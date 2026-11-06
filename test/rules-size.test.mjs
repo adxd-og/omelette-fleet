@@ -71,10 +71,11 @@ const DUTIES = [
 // 1.7.3: 14 700 -> 15 750 — the ledger lifecycle: `ledger open`, the binding mark, the read order after a /clear, the close by sweep (+1 004: 15 647 / 15 615), plus headroom.
 // docs-2c p21: 15 750 -> 16 400 — the superpowers paragraph in the operating model: this file wins, five conflicts resolved (+518: 16 188 / 16 156), plus headroom.
 // 1.8.0: 16 400 -> 18 850 — the review brief (the plan header, the touched record, BASE and base..HEAD, no pre-judging, what a coder fixes, the yield split), the handoff's six fields, tried:, the gate's HH:MM, the curated files and the guard's two deliveries (+2 512: 18 700 / 18 668), plus headroom.
-test('the rendered rules file is at most 18 850 characters under either merge policy', () => {
+// 1.9.0: 18 850 -> 19 403 — the Mistral routing row and its "never a sole source" bullet (+410: 19 253 / 19 221), plus headroom.
+test('the rendered rules file is at most 19 403 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 18850, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 19403, `${merge}: ${text.length} characters`);
   }
 });
 

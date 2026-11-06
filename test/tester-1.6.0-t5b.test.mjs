@@ -76,7 +76,7 @@ test('doctor: a CLI default holding control characters is printed through visibl
   const value = 'grok-4.7\u001b[31m';
   const grok = fakeBin(dir, 'fake-grok', { modelsOut: `Default model: ${value}\n\nAvailable models:\n  * ${value} (default)\n` });
   const gone = join(dir, 'no-such');
-  const r = runDoctor({ AGY_BIN: gone, GROK_BIN: grok, CODEX_BIN: gone });
+  const r = runDoctor({ AGY_BIN: gone, GROK_BIN: grok, CODEX_BIN: gone, VIBE_BIN: gone });
   assert.ok(r.grok.includes(`CLI default ${visible(value)} — NOT in the catalog`), r.grok);
   assert.ok(!r.out.includes('\u001b['), 'doctor must never print a raw ANSI escape to the terminal');
 });
@@ -88,7 +88,7 @@ test('doctor: a grok "models" call that exits non-zero (even with a Default mode
     modelsCode: 1,
   });
   const gone = join(dir, 'no-such');
-  const r = runDoctor({ AGY_BIN: gone, GROK_BIN: grok, CODEX_BIN: gone });
+  const r = runDoctor({ AGY_BIN: gone, GROK_BIN: grok, CODEX_BIN: gone, VIBE_BIN: gone });
   assert.doesNotMatch(r.grok, /^  models /m, r.grok);
 });
 
@@ -101,7 +101,7 @@ test('doctor: gemini never prints a models line; codex prints one only when `deb
   const agy = fakeBin(dir, 'fake-agy', { modelsOut: `model-a\n${sneaky}` });
   const codex = fakeBin(dir, 'fake-codex', { loginOut: `Logged in using ChatGPT\n${sneaky}`, loginStream: 'stderr' });
   const grokGone = join(dir, 'no-such-grok');
-  const r = runDoctor({ AGY_BIN: agy, GROK_BIN: grokGone, CODEX_BIN: codex });
+  const r = runDoctor({ AGY_BIN: agy, GROK_BIN: grokGone, CODEX_BIN: codex, VIBE_BIN: join(dir, 'no-such-vibe') });
   assert.doesNotMatch(r.gemini, /^  models /m, r.gemini);
   assert.doesNotMatch(r.codex, /^  models /m, r.codex);
 });

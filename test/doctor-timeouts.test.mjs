@@ -58,7 +58,7 @@ function doctor({ dir, proj }, { args = [], env = {} } = {}) {
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0',
-      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, ...env,
+      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone, ...env,
     },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
@@ -97,7 +97,7 @@ test('doctor reads a client env var in Claude Code\'s own precedence: process en
   const s = sandbox();
   // grok at 600 s so no state below trips the "reaches it" clause and the line
   // stays about the SOURCE, which is what this test is for.
-  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 600 } } });
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 600 }, mistral: { enabled: false } } });
 
   // Nothing anywhere: the documented default, and no source to name.
   assert.equal(
@@ -149,7 +149,7 @@ test('doctor reads a client env var in Claude Code\'s own precedence: process en
 test('doctor: the idle wall has four states — unset, 0, an explicit window, and a value that is not milliseconds', () => {
   const s = sandbox();
   // grok at 1800 s reaches the 30 min default exactly; that is the incident case.
-  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 1800 } } });
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 1800 }, mistral: { enabled: false } } });
   const reaches = `${IDLE}=0 or a per-server "timeout"`;
 
   assert.equal(
@@ -182,7 +182,7 @@ test('doctor: the idle wall has four states — unset, 0, an explicit window, an
 
 test('doctor: the timeout block is informational — exit code unchanged, and nothing at all with every unit disabled', () => {
   const s = sandbox();
-  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { timeoutS: 1800 }, codex: { timeoutS: 600 } } });
+  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { timeoutS: 1800 }, codex: { timeoutS: 600 }, mistral: { enabled: false } } });
 
   const on = doctor(s, { env: { [IDLE]: '60000' } });
   assert.equal(on.code, 0, on.out);
@@ -191,7 +191,7 @@ test('doctor: the timeout block is informational — exit code unchanged, and no
   assert.match(on.out, /No faults in units that are both enabled and registered\./);
 
   // No enabled unit, no call to bound: the block is absent rather than empty.
-  writeConfig(s.dir, { units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } } });
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } } });
   const off = doctor(s);
   assert.equal(off.code, 0, off.out);
   assert.deepEqual(timeoutBlock(off.out), []);
@@ -204,7 +204,7 @@ test('doctor: the wall-clock line compares MCP_TOOL_TIMEOUT with what the longes
   const s = sandbox();
   // grok 1800 s is the largest bound; gemini's 300 s counts as 360 s because
   // its hard kill sits 60 s above the timeout it hands agy.
-  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { timeoutS: 1800 }, codex: { timeoutS: 600 } } });
+  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { timeoutS: 1800 }, codex: { timeoutS: 600 }, mistral: { enabled: false } } });
 
   // Unset: the client's documented default, which nothing here reaches.
   assert.equal(
@@ -238,7 +238,7 @@ test('doctor: the wall-clock line compares MCP_TOOL_TIMEOUT with what the longes
   );
 
   // gemini alone: the +60 s hard-kill margin is what a gemini call can reach.
-  writeConfig(s.dir, { units: { gemini: { timeoutS: 900 }, grok: { enabled: false }, codex: { enabled: false } } });
+  writeConfig(s.dir, { units: { gemini: { timeoutS: 900 }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } } });
   assert.equal(
     lineStartingWith(doctor(s, { env: { [WALL]: '900000' } }).out, 'wall-clock:'),
     `wall-clock: ${WALL}=900000 ms (process env) < 960000 needed (gemini.timeoutS=900 s + 60 s hard kill) · TOO LOW`,
@@ -247,7 +247,7 @@ test('doctor: the wall-clock line compares MCP_TOOL_TIMEOUT with what the longes
 
 test('doctor: a per-server "timeout" on our registration overrides the env for that server', () => {
   const s = sandbox();
-  writeConfig(s.dir, { units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 } } });
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 }, mistral: { enabled: false } } });
   // codex is enabled AND registered here, so it needs a binary that answers or
   // the run is a FAULT and exits 1 for a reason that is not the wall.
   const bin = fakeBin(s.dir, 'fake-codex');
@@ -298,7 +298,7 @@ test('doctor: a per-server "timeout" on our registration overrides the env for t
 
 test('doctor: the deep-research bound is reported while gemini is enabled, and only then', () => {
   const s = sandbox();
-  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { enabled: false }, codex: { enabled: false } } });
+  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } } });
   assert.equal(
     lineStartingWith(doctor(s).out, 'deep research:'),
     'deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · within the wall-clock limit',
@@ -313,7 +313,7 @@ test('doctor: the deep-research bound is reported while gemini is enabled, and o
     'deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · ABOVE the wall-clock limit (1000000 ms) — run it deliberately',
   );
 
-  writeConfig(s.dir, { units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 } } });
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 }, mistral: { enabled: false } } });
   assert.equal(lineStartingWith(doctor(s).out, 'deep research:'), undefined);
 });
 
@@ -324,7 +324,7 @@ function wiredProject(s) {
   writeFileSync(join(s.dir, '.claude.json'), JSON.stringify({
     mcpServers: { 'omelette-codex': { command: 'node', args: [join(ROOT, 'servers', 'codex.mjs')] } },
   }));
-  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { timeoutS: 1800 }, codex: { enabled: false } } });
+  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { timeoutS: 1800 }, codex: { enabled: false }, mistral: { enabled: false } } });
   const rules = spawnSync(process.execPath, [BIN, 'rules', '--agents', '--hooks'], {
     cwd: s.proj, encoding: 'utf8',
     env: { PATH: process.env.PATH, HOME: s.dir, OMELETTE_HOME: s.dir, OMELETTE_UPDATE_CHECK: '0' },
@@ -376,7 +376,7 @@ test('doctor: the timeout next waits for the first-run steps, and never changes 
 
 test('doctor: the whole mcp timeout block, in the order the spec sets', () => {
   const s = sandbox();
-  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { timeoutS: 1800 }, codex: { timeoutS: 600 } } });
+  writeConfig(s.dir, { units: { gemini: { timeoutS: 300 }, grok: { timeoutS: 1800 }, codex: { timeoutS: 600 }, mistral: { enabled: false } } });
   assert.deepEqual(timeoutBlock(doctor(s).out), [
     `wall-clock: ${WALL} unset (default ~28 h) ≥ 1800000 needed · ok`,
     'deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · within the wall-clock limit',
@@ -404,7 +404,7 @@ const said = (path) => `settings: ${path} unreadable — its values were not con
 
 test('doctor names a settings file that exists and cannot be parsed — once, however many readers opened it', () => {
   const s = sandbox();
-  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 600 } } });
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, codex: { enabled: false }, grok: { timeoutS: 600 }, mistral: { enabled: false } } });
 
   // Nothing broken: nothing said.
   assert.deepEqual(unreadableLines(doctor(s).out), []);
@@ -448,7 +448,7 @@ test('doctor names the unreadable file even when there is no wall to report', ()
   // No enabled unit: `timeoutWalls` answers with an empty report and prints no
   // block at all. The file is still named, because the hook-wiring reader
   // opened it too — which is the whole point of merging the two lists.
-  writeConfig(s.dir, { units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } } });
+  writeConfig(s.dir, { units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } } });
   mkdirSync(join(s.proj, '.claude'), { recursive: true });
   writeFileSync(join(s.proj, '.claude', 'settings.local.json'), 'not json at all');
   const project = join(realpathSync(s.proj), '.claude', 'settings.local.json');

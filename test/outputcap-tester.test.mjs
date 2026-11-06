@@ -28,6 +28,7 @@ import { unitConfig } from '../core/config.mjs';
 import grokUnit, { interpretGrok, GROK_OUTPUT_CAP } from '../units/grok/adapter.mjs';
 import codexUnit, { CODEX_OUTPUT_CAP } from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
+import mistralUnit from '../units/mistral/adapter.mjs';
 
 const node = process.execPath;
 const ok = (over = {}) => ({ stdout: '', stderr: '', code: 0, killed: false, capped: false, ...over });
@@ -110,6 +111,13 @@ test('unitConfig resolves outputCap through the REAL adapter objects: grok and c
   });
   assert.equal(geminiCfg.values.outputCap, 400000, 'gemini declares no outputCap builtin — it stays at the fleet default');
   assert.equal('outputCap' in geminiUnit.builtin, false);
+
+  const mistralCfg = unitConfig({
+    unit: mistralUnit.name, envMap: mistralUnit.envMap, builtin: mistralUnit.builtin, extraSchema: mistralUnit.extraSchema,
+    supportedModes: mistralUnit.supportedModes, env,
+  });
+  assert.equal(mistralCfg.values.outputCap, 400000);
+  assert.equal(mistralCfg.sources.outputCap, 'default');
 });
 
 test('unitConfig: a fleet-wide `defaults.outputCap` still narrows codex even though grok raised its own builtin', () => {
@@ -159,6 +167,7 @@ test('CLI show: grok and codex report their raised built-ins; gemini reports the
   assert.match(codex.out, new RegExp(`^\\s+outputCap\\s+${CODEX_OUTPUT_CAP}\\s+default$`, 'm'));
   const gemini = cli(['show', 'gemini'], { dir });
   assert.match(gemini.out, /^\s+outputCap\s+400000\s+default$/m);
+  assert.match(cli(['show', 'mistral'], { dir }).out, /^\s+outputCap\s+400000\s+default$/m);
 });
 
 test('CLI set: grok.outputCap=1000 is accepted, persisted, and read back by show', () => {

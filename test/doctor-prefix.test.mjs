@@ -19,7 +19,7 @@ import { HOOK_EVENTS } from '../core/rules.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
-const UNITS = ['gemini', 'grok', 'codex'];
+const UNITS = ['gemini', 'grok', 'codex', 'mistral'];
 const server = (unit) => join(ROOT, 'servers', `${unit}.mjs`);
 
 function sandbox() {
@@ -30,7 +30,7 @@ function sandbox() {
   // vendor binaries, and an enabled-and-registered unit whose binary is missing
   // is a FAULT and an exit 1 — which would be about the binary, not the scan.
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({
-    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } },
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } },
   }));
   return { dir, proj };
 }
@@ -42,7 +42,7 @@ function run(s, args, env = {}) {
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH, HOME: s.dir, OMELETTE_HOME: s.dir, OMELETTE_UPDATE_CHECK: '0',
-      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, ...env,
+      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone, ...env,
     },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
@@ -171,7 +171,7 @@ test('doctor reads the scopes in Claude Code\'s precedence: the project entry in
   // codex enabled, with a binary that answers, so the per-server timeout line
   // is printed and the run is not a fault about a missing CLI.
   writeFileSync(join(s.dir, 'fleet.config.json'), JSON.stringify({
-    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 } },
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 }, mistral: { enabled: false } },
   }));
   const codex = (timeout) => ({ 'omelette-codex': { type: 'stdio', command: 'node', args: [server('codex')], timeout } });
   const run3 = () => run(s, ['doctor'], { CODEX_BIN: fakeBin(s.dir, 'fake-codex') });
@@ -336,7 +336,7 @@ test('doctor prints a settings env value that is not a number as its escape, in 
   const s = sandbox();
   // codex enabled with a binary that answers: the timeout lines are printed for enabled units only.
   writeFileSync(join(s.dir, 'fleet.config.json'), JSON.stringify({
-    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 } },
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { timeoutS: 600 }, mistral: { enabled: false } },
   }));
   mkdirSync(join(s.proj, '.claude'), { recursive: true });
   writeFileSync(join(s.proj, '.claude', 'settings.json'), JSON.stringify({

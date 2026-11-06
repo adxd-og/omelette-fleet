@@ -1,6 +1,6 @@
 ---
 name: Unit regression
-about: A unit stopped working after a vendor CLI updated itself — agy, grok or codex
+about: A unit stopped working after a vendor CLI updated itself — agy, grok, codex or mistral (vibe)
 title: ''
 labels: unit-regression
 assignees: ''
@@ -18,11 +18,11 @@ prompts containing private code. Redact before pasting.
 
 ## Unit
 
-<!-- gemini (agy) / grok / codex -->
+<!-- gemini (agy) / grok / codex / mistral (vibe) -->
 
 ## Vendor CLI version
 
-<!-- `agy --version`, `grok --version` or `codex --version`, verbatim -->
+<!-- `agy --version`, `grok --version`, `codex --version` or `vibe --version` (mistral), verbatim -->
 
 ```console
 $

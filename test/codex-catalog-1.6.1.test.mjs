@@ -155,7 +155,7 @@ function doctorWith(fakeOpts, { config, env = {} } = {}) {
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0',
-      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: fake, OPENAI_API_KEY: 'sk-must-not-reach', ...env,
+      AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: fake, VIBE_BIN: gone, OPENAI_API_KEY: 'sk-must-not-reach', ...env,
     },
   });
   const out = r.stdout || '';

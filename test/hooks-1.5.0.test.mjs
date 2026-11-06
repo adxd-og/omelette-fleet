@@ -191,14 +191,14 @@ function finishedProject() {
   const proj = join(dir, 'proj'); mkdirSync(proj);
   const gone = join(dir, 'no-such-cli');
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({
-    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } },
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } },
   }));
   writeFileSync(join(dir, '.claude.json'), JSON.stringify({
     mcpServers: { 'omelette-codex': { command: 'node', args: [join(ROOT, 'servers', 'codex.mjs')] } },
   }));
   const written = cli(['rules', '--agents', '--hooks'], { dir, cwd: proj });
   assert.equal(written.code, 0, written.err);
-  const env = { AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone };
+  const env = { AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone };
   return { dir, proj, env, guard: join(proj, '.claude', 'hooks', HOOK_FILES[0]) };
 }
 

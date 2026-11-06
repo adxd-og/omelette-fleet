@@ -33,7 +33,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'omelette-fleet.mjs');
 const GEMINI_SERVER = join(ROOT, 'servers', 'gemini.mjs');
 const DEADLINE_MS = 10_000;
-const UNITS = ['gemini', 'grok', 'codex'];
+const UNITS = ['gemini', 'grok', 'codex', 'mistral'];
 const CANCEL_MARK = '[gemini: cancelled by the client — treat the answer as partial]';
 
 /** Poll `check` until it returns truthy or the deadline passes; fails past it. */
@@ -525,7 +525,7 @@ function doctorWith(modelsOut) {
   const r = spawnSync(process.execPath, [BIN, 'doctor'], {
     cwd: dir,
     encoding: 'utf8',
-    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone },
+    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, VIBE_BIN: gone },
   });
   const out = r.stdout || '';
   return { out, err: r.stderr || '', grok: out.slice(out.indexOf('── grok'), out.indexOf('── codex')) };
@@ -633,7 +633,7 @@ test('A10: doctor --probe-sandbox leaves no status snapshot in the fleet home', 
     cwd: dir,
     encoding: 'utf8',
     timeout: 60_000,
-    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: refusingBin(dir), CODEX_BIN: gone },
+    env: { PATH: process.env.PATH, HOME: dir, OMELETTE_HOME: dir, OMELETTE_UPDATE_CHECK: '0', AGY_BIN: gone, GROK_BIN: refusingBin(dir), CODEX_BIN: gone, VIBE_BIN: gone },
   });
   assert.match(r.stdout || '', /sandbox\s+held \(\d+ s, replied "refused"\)/, (r.stdout || '') + (r.stderr || ''));
   assert.ok(existsSync(join(dir, 'fleet-log.ndjson')), 'the probe ran through the feed');

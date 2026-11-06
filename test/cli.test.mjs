@@ -128,12 +128,12 @@ const pkgVersion = (root) => JSON.parse(readFileSync(join(root, 'package.json'),
  * default because that is where the real codex CLI puts it — reading only
  * stdout is what once made doctor report a logged-in account as "unknown".
  */
-function fakeBin(dir, { name = 'fake-cli', login = 'Logged in using ChatGPT', loginStream = 'stderr', loginCode = 0 } = {}) {
+function fakeBin(dir, { name = 'fake-cli', version = 'fake-cli 9.9.9', login = 'Logged in using ChatGPT', loginStream = 'stderr', loginCode = 0 } = {}) {
   const p = join(dir, name);
   writeFileSync(p, [
     `#!${process.execPath}`,
     'const a = process.argv.slice(2);',
-    "if (a[0] === '--version') { console.log('fake-cli 9.9.9'); process.exit(0); }",
+    `if (a[0] === '--version') { console.log(${JSON.stringify(version)}); process.exit(0); }`,
     "if (a[0] === 'models') { console.log('model-a'); console.log('model-b'); process.exit(0); }",
     `if (a[0] === 'login' && a[1] === 'status') { process.${loginStream}.write(${JSON.stringify(login + '\n')}); process.exit(${loginCode}); }`,
     "console.error('unexpected argv: ' + a.join(' '));",
@@ -209,7 +209,7 @@ test('show on an empty home: every unit at its built-in defaults, read-only, not
   const r = cli(['show'], { dir });
   assert.equal(r.code, 0);
   assert.match(r.out, /absent — built-in defaults in force/);
-  for (const unit of ['gemini', 'grok', 'codex']) assert.match(r.out, new RegExp(`^${unit}$`, 'm'));
+  for (const unit of ['gemini', 'grok', 'codex', 'mistral']) assert.match(r.out, new RegExp(`^${unit}$`, 'm'));
   assert.match(r.out, /^\s+mode\s+read-only\s+default$/m);
   assert.match(r.out, /ceiling\s+closed — OMELETTE_ALLOW_WRITE does not list "codex"/);
   assert.match(r.out, /grok[\s\S]*imageMaxTurns\s+8\s+default/); // the unit's extraSchema key is listed too
@@ -269,10 +269,10 @@ test('set mode=workspace-write prints the ceiling reminder (and grok says it ref
 test('install --dry-run prints the exact claude commands with absolute server paths and runs nothing', () => {
   const dir = home();
   const fake = fakeBin(dir);
-  const env = { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake };
+  const env = { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake, VIBE_BIN: fakeBin(dir, { name: 'vibe', version: 'vibe 3.1.0' }) };
   const r = cli(['install', '--dry-run', '--prefix', 'test'], { dir, env });
   assert.equal(r.code, 0);
-  for (const unit of ['gemini', 'grok', 'codex']) {
+  for (const unit of ['gemini', 'grok', 'codex', 'mistral']) {
     const server = join(ROOT, 'servers', `${unit}.mjs`);
     // Through the helper install prints with: bare here, quoted in a checkout whose path holds a space.
     assert.ok(r.out.includes(`claude mcp add -s user test-${unit} -- node ${shellWord(server)}`), `missing add line for ${unit}`);
@@ -387,18 +387,57 @@ test('uninstall --dry-run prints one remove per unit and promises to keep the co
   const dir = home();
   const r = cli(['uninstall', '--dry-run', '--prefix', 'test'], { dir });
   assert.equal(r.code, 0);
-  for (const unit of ['gemini', 'grok', 'codex']) assert.ok(r.out.includes(`claude mcp remove -s user test-${unit}`));
+  for (const unit of ['gemini', 'grok', 'codex', 'mistral']) assert.ok(r.out.includes(`claude mcp remove -s user test-${unit}`));
   assert.ok(!r.out.includes('mcp add'));
   assert.match(r.out, /config and the status files were not touched/);
+});
+
+test('doctor prints the mistral block: login by file presence, the homes, the repro gate and the billing line', () => {
+  const dir = home();
+  mkdirSync(join(dir, 'bin'));
+  const vibe = fakeBin(join(dir, 'bin'), { name: 'vibe', version: 'vibe 3.1.0' });
+  const gone = join(dir, 'no-such-cli');
+  const env = { AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: vibe };
+  const block = (out) => out.slice(out.indexOf('── mistral ('));
+
+  const bare = block(cli(['doctor'], { dir, env }).out);
+  assert.match(bare, /^ {2}login {7}unknown — absent — run `vibe` once in a terminal and sign in through the browser$/m);
+  assert.ok(bare.includes(`\n  homes       ${join(dir, 'vibe')}/{review,repro} not rendered yet (first call renders them)\n`), bare);
+  assert.match(bare, /^ {2}repro {7}closed — set OMELETTE_ALLOW_REPRO=1 on the registration · sandbox-exec (found|macOS only \(1\.9\.0\))$/m);
+  assert.match(bare, /^ {2}billing {5}MISTRAL_API_KEY scrubbed — plan billing through the Keychain login \(a BILLING_ENV name; OMELETTE_ENV_PASSTHROUGH does not re-admit it\)$/m);
+  assert.match(bare, /^ {2}models {6}mistral-large-4-0-3 \(catalog head\) · 11 aliases · call mistral_models$/m);
+  for (const profile of ['review', 'repro']) assert.equal(existsSync(join(dir, 'vibe', profile)), false); // doctor reads the homes, never renders them
+
+  mkdirSync(join(dir, '.vibe'));
+  writeFileSync(join(dir, '.vibe', 'config.toml'), '');
+  mkdirSync(join(dir, 'vibe', 'review'), { recursive: true });
+  writeFileSync(join(dir, 'vibe', 'review', 'rendered.json'), JSON.stringify({ version: '1.9.0', at: '2026-11-07T10:00:00.000Z' }));
+  const signed = block(cli(['doctor'], { dir, env: { ...env, OMELETTE_ALLOW_REPRO: '1' } }).out);
+  assert.match(signed, /^ {2}login {7}OK — present \(~\/\.vibe\/config\.toml\)$/m);
+  assert.match(signed, /\{review,repro\} rendered v1\.9\.0 at 2026-11-07T10:00:00\.000Z$/m);
+  assert.match(signed, /^ {2}repro {7}open \(OMELETTE_ALLOW_REPRO=1\) · sandbox-exec /m);
+});
+
+test('set mistral.reproKeep=true and mistral.maxPrice=2 validate; mistral.repro.keep is refused as not unit.key=value', () => {
+  const dir = home();
+  const ok = cli(['set', 'mistral.reproKeep=true', 'mistral.maxPrice=2'], { dir });
+  assert.equal(ok.code, 0, ok.err);
+  const written = JSON.parse(readFileSync(join(dir, 'fleet.config.json'), 'utf8'));
+  assert.deepEqual(written.units.mistral, { reproKeep: true, maxPrice: 2 });
+  const nested = cli(['set', 'mistral.repro.keep=true'], { dir });
+  assert.equal(nested.code, 1);
+  assert.match(nested.err, /"mistral\.repro\.keep=true" is not .*<unit>\.<key>=<value>/);
 });
 
 test('doctor with fake vendor binaries: one block per unit, everything resolved, exit 0', () => {
   const dir = home();
   const fake = fakeBin(dir);
-  const r = cli(['doctor', '--prefix', 'zzz-test'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake } });
+  const vibe = fakeBin(dir, { name: 'vibe', version: 'vibe 3.1.0' });
+  const r = cli(['doctor', '--prefix', 'zzz-test'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake, VIBE_BIN: vibe } });
   assert.equal(r.code, 0, r.out + r.err);
-  for (const unit of ['gemini', 'grok', 'codex']) assert.match(r.out, new RegExp(`── ${unit} \\(`));
-  assert.equal(r.out.match(/fake-cli 9\.9\.9/g).length, 3); // version probe answered for all three
+  for (const unit of ['gemini', 'grok', 'codex', 'mistral']) assert.match(r.out, new RegExp(`── ${unit} \\(`));
+  assert.equal(r.out.match(/fake-cli 9\.9\.9/g).length, 3); // version probe answered for the three
+  assert.match(r.out, /^\s+version\s+vibe 3\.1\.0$/m);
   assert.match(r.out, /login\s+OK — Logged in using ChatGPT/); // codex answers on stderr, like the real CLI
   assert.match(r.out, /login\s+OK — grok models listed 2 line\(s\)/);
   assert.match(r.out, /login\s+OK — agy models listed 2 line\(s\)/);
@@ -579,7 +618,7 @@ test('doctor --probe-sandbox: a unit that writes into the probe directory is BRE
   const gone = join(dir, 'no-such');
   const fake = probeBin(dir, { mode: 'write' });
   registerOurs(dir, ['grok']);
-  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone } });
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake.path, CODEX_BIN: gone, VIBE_BIN: gone } });
   const m = /sandbox\s+BREACHED — (\S+) was created \(\d+ s\)/.exec(r.out);
   assert.ok(m, r.out + r.err);
   // The path named is the file inside the probe directory the CLI created…
@@ -589,8 +628,8 @@ test('doctor --probe-sandbox: a unit that writes into the probe directory is BRE
   assert.equal(existsSync(dirname(m[1])), false);
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /1 unit\(s\) BREACHED the sandbox probe — see the sandbox lines above\./);
-  // The other two could not be asked at all — and were not spawned.
-  assert.equal(r.out.match(/sandbox\s+skipped \(not registered\)/g).length, 2);
+  // The other three could not be asked at all — and were not spawned.
+  assert.equal(r.out.match(/sandbox\s+skipped \(not registered\)/g).length, 3);
 });
 
 test('doctor --probe-sandbox: a unit that only replies holds, and the answer is spooled like any call', () => {
@@ -688,8 +727,8 @@ test('doctor --probe-sandbox: disabled, unregistered and binary-less units are s
 test('doctor without --probe-sandbox prints no sandbox line and spawns no unit', () => {
   const dir = home();
   const fake = probeBin(dir, { mode: 'write' });
-  registerOurs(dir, ['gemini', 'grok', 'codex']);
-  const r = cli(['doctor'], { dir, env: { AGY_BIN: fake.path, GROK_BIN: fake.path, CODEX_BIN: fake.path } });
+  registerOurs(dir, ['gemini', 'grok', 'codex', 'mistral']);
+  const r = cli(['doctor'], { dir, env: { AGY_BIN: fake.path, GROK_BIN: fake.path, CODEX_BIN: fake.path, VIBE_BIN: fake.path } });
   assert.equal(r.code, 0, r.out + r.err);
   assert.doesNotMatch(r.out, /^\s+sandbox\s/m);
   // --version, models, login status and codex's debug models only: the marker file was never touched.
@@ -1055,7 +1094,7 @@ test('call drives a real server over stdio and maps the answer to an exit code',
 
 test('every unit advertises <unit>_result, and it answers over real stdio with no vendor CLI', () => {
   const dir = home();
-  for (const unit of ['gemini', 'grok', 'codex']) {
+  for (const unit of ['gemini', 'grok', 'codex', 'mistral']) {
     // The client refuses a tool that is not in tools/list, so exit 2 — "the
     // tool answered with an error" — is proof it is advertised AND local.
     const r = cli(['call', unit, `${unit}_result`, '{}'], { dir });
@@ -1123,7 +1162,7 @@ test('every unit server returns the fleet contract plus its own line from initia
   // A project with no rules file of ours in either scope (HOME is `dir` too):
   // the full contract, which is what a fleet without the rules delivered gets.
   const proj = join(dir, 'proj'); mkdirSync(proj);
-  for (const unit of ['gemini', 'grok', 'codex']) {
+  for (const unit of ['gemini', 'grok', 'codex', 'mistral']) {
     const res = await initializeServer(join(ROOT, 'servers', `${unit}.mjs`), { dir }, { cwd: proj });
     assert.ok(res.instructions.startsWith('omelette-fleet: this server is one read-only unit'), `${unit}: contract first`);
     assert.match(res.instructions, /run `omelette-fleet rules`/);
@@ -2323,9 +2362,9 @@ test('doctor prints ONE next step — install, then the project files, then the 
   // Every unit disabled and no vendor binary anywhere: the units cannot be a
   // fault, so the exit code and the FAULT lines are only ever about `next`.
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({
-    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } },
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } },
   }));
-  const doctor = () => cliIn(proj, dir, ['doctor'], { AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone });
+  const doctor = () => cliIn(proj, dir, ['doctor'], { AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone });
   const nextLines = (out) => out.split('\n').filter((l) => l.startsWith('next'));
 
   // Nothing registered anywhere: the first thing to do is register the servers.
@@ -2389,9 +2428,9 @@ test('doctor: the next step carries the prefix it was asked about, and a FOREIGN
   const proj = join(dir, 'proj'); mkdirSync(proj);
   const gone = join(dir, 'no-such-cli');
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({
-    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false } },
+    version: 1, units: { gemini: { enabled: false }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } },
   }));
-  const doctor = (args = []) => cliIn(proj, dir, ['doctor', ...args], { AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone });
+  const doctor = (args = []) => cliIn(proj, dir, ['doctor', ...args], { AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone });
   const nextLines = (out) => out.split('\n').filter((l) => l.startsWith('next'));
 
   // A non-default prefix is what doctor LOOKED for, so it has to be what the
@@ -2673,9 +2712,9 @@ test('results: the model the runtime filed a result under survives the read, par
 test('doctor prints the results budget in the unit it was written in — B, KB, MB', () => {
   const dir = home();
   const fake = fakeBin(dir);
-  const vendors = { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake };
-  // The last `results` line is codex's — UNIT_ORDER ends there.
-  const budget = () => cli(['doctor'], { dir, env: vendors }).out.split('\n').filter((l) => l.startsWith('  results     ')).pop();
+  const vendors = { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake, VIBE_BIN: join(dir, 'no-such-vibe') };
+  // codex's `results` line, the one its spool path names.
+  const budget = () => cli(['doctor'], { dir, env: vendors }).out.split('\n').find((l) => l.startsWith('  results     ') && l.includes(join('results', 'codex')));
 
   assert.match(budget(), / · max 50 MB$/, 'the default, unchanged');
   for (const [bytes, shown] of [[1048576, '1 MB'], [524288, '512 KB'], [1024, '1 KB'], [1000, '1000 B'], [1, '1 B']]) {

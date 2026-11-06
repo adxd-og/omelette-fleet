@@ -53,7 +53,9 @@
  * Rendering is `ensureHome`: before every spawn, a file whose bytes differ (a
  * changed catalog, a new package version in the marker) is rewritten through
  * an O_EXCL temporary name and a rename; a symlink anywhere on the way is
- * refused, never followed.
+ * refused, never followed. Whenever it rendered a file it also writes
+ * `rendered.json` = { version, at } beside them (0600, same path): doctor reads
+ * it, because Vibe rewrites config.toml on every run and drops the marker line.
  *
  * Zero deps.
  */
@@ -224,7 +226,7 @@ function writeThroughTmp(path, bytes, mode) {
  * files whose bytes differ; a file with the right bytes and a looser mode gets
  * its mode back (logged, not counted as rendered). Throws, naming the path, on
  * a symlink.
- * @returns {{ dir: string, rendered: boolean }} rendered: some file was written
+ * @returns {{ dir: string, rendered: boolean }} rendered: some file was written (and rendered.json with it)
  */
 export function ensureHome({ home = fleetHome(), profile, models = MISTRAL_MODELS, version = VERSION, log } = {}) {
   checkProfile(profile);
@@ -252,5 +254,6 @@ export function ensureHome({ home = fleetHome(), profile, models = MISTRAL_MODEL
     rendered = true;
     if (typeof log === 'function') log(`mistral: rendered ${path}`);
   }
+  if (rendered) writeThroughTmp(join(dir, 'rendered.json'), Buffer.from(`${JSON.stringify({ version, at: new Date().toISOString() })}\n`), 0o600);
   return { dir, rendered };
 }

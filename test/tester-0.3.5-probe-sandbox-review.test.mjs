@@ -137,7 +137,7 @@ test('doctor --probe-sandbox: the probe directory is 0700 while the vendor CLI r
   const modeMarker = join(dir, 'modes.log');
   const fake = probeFake(dir, { recordModeTo: modeMarker });
   registerOurs(dir, ['grok']);
-  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, VIBE_BIN: gone } });
   assert.match(r.out, /sandbox\s+held/, r.out + r.err);
   const modes = readFileSync(modeMarker, 'utf8').trim().split('\n').filter(Boolean);
   assert.equal(modes.length, 1, modes.join(','));
@@ -151,7 +151,7 @@ test('doctor --probe-sandbox: a file with ANY OTHER NAME in the probe directory 
   const gone = join(dir, 'no-such');
   const fake = probeFake(dir, { writeFile: 'not-probe-dot-txt.log', reply: 'done' });
   registerOurs(dir, ['grok']);
-  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, VIBE_BIN: gone } });
   const m = /sandbox\s+BREACHED — (\S+) was created \(\d+ s\)/.exec(r.out);
   assert.ok(m, r.out + r.err);
   assert.match(m[1], /not-probe-dot-txt\.log$/);
@@ -167,7 +167,7 @@ test('doctor --probe-sandbox: a held reply is shown as its first line only, capp
   const longLine = 'A'.repeat(120);
   const fake = probeFake(dir, { reply: `${longLine}\nsecond line never shown` });
   registerOurs(dir, ['grok']);
-  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, VIBE_BIN: gone } });
   const m = /sandbox\s+held \(\d+ s, replied "([^"]*)"\)/.exec(r.out);
   assert.ok(m, r.out + r.err);
   assert.equal(m[1], 'A'.repeat(80));
@@ -179,12 +179,12 @@ test('doctor --probe-sandbox: a held reply is shown as its first line only, capp
 test('doctor --probe-sandbox: gemini and codex are probed through gemini_research/codex_research, and every BREACHED unit is counted', () => {
   const dir = home();
   const fake = probeFake(dir, { writeFile: 'probe.txt', reply: 'done' });
-  registerOurs(dir, ['gemini', 'grok', 'codex']);
-  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake } });
+  registerOurs(dir, ['gemini', 'grok', 'codex', 'mistral']);
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: fake, GROK_BIN: fake, CODEX_BIN: fake, VIBE_BIN: fake } });
   assert.equal(r.code, 1, r.out + r.err);
-  assert.equal((r.out.match(/sandbox\s+BREACHED/g) || []).length, 3, r.out);
-  assert.match(r.out, /3 unit\(s\) BREACHED the sandbox probe — see the sandbox lines above\./);
-  for (const [unit, tool] of [['gemini', 'gemini_research'], ['grok', 'grok_research'], ['codex', 'codex_research']]) {
+  assert.equal((r.out.match(/sandbox\s+BREACHED/g) || []).length, 4, r.out);
+  assert.match(r.out, /4 unit\(s\) BREACHED the sandbox probe — see the sandbox lines above\./);
+  for (const [unit, tool] of [['gemini', 'gemini_research'], ['grok', 'grok_research'], ['codex', 'codex_research'], ['mistral', 'mistral_security_review']]) {
     const spoolDir = join(dir, 'results', unit);
     const files = readdirSync(spoolDir).filter((f) => f.endsWith('.md'));
     assert.equal(files.length, 1, `${unit} spool: ${files.join(',')}`);
@@ -202,7 +202,7 @@ test('doctor --probe-sandbox: an open write gate is named on a BREACHED line too
   registerOurs(dir, ['grok']);
   const r = cli(['doctor', '--probe-sandbox'], {
     dir,
-    env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, OMELETTE_ALLOW_WRITE: 'grok' },
+    env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, VIBE_BIN: gone, OMELETTE_ALLOW_WRITE: 'grok' },
   });
   assert.match(r.out, /sandbox\s+BREACHED — \S+ was created \(\d+ s\) \(write gate open: OMELETTE_ALLOW_WRITE\)/, r.out);
 });
@@ -220,7 +220,7 @@ test("doctor --probe-sandbox: the probe's 120s cap overrides a larger configured
   // (the adapter lists exact names since 1.5.0 and this is not one of them), so
   // the env the runtime built (with the cap already applied) reaches the fake
   // CLI's own process.env.
-  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, OMELETTE_ENV_PASSTHROUGH: 'GROK_TIMEOUT_S' } });
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, VIBE_BIN: gone, OMELETTE_ENV_PASSTHROUGH: 'GROK_TIMEOUT_S' } });
   assert.match(r.out, /sandbox\s+held/, r.out + r.err);
   const seen = readFileSync(envMarker, 'utf8').trim().split('\n').filter(Boolean);
   assert.equal(seen.length, 1, seen.join(','));
@@ -234,7 +234,7 @@ test('doctor --probe-sandbox: the spec prompt, naming the probe directory, is wh
   const gone = join(dir, 'no-such');
   const fake = probeFake(dir);
   registerOurs(dir, ['grok']);
-  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone } });
+  const r = cli(['doctor', '--probe-sandbox'], { dir, env: { AGY_BIN: gone, GROK_BIN: fake, CODEX_BIN: gone, VIBE_BIN: gone } });
   assert.match(r.out, /sandbox\s+held/, r.out + r.err);
   const spoolDir = join(dir, 'results', 'grok');
   const file = readdirSync(spoolDir).find((f) => f.endsWith('.md'));
