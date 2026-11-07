@@ -539,7 +539,7 @@ test('runsRoot throws when it cannot restore 0700', { skip: !DARWIN }, () => {
 // fixModes runs chmod THROUGH the wrapper, so a path outside the clone and tmp is refused by the kernel: the adapter's own chmod is no wider than the model's.
 test('fixModes cannot change a mode outside the clone and tmp: a 444 file outside them keeps its mode and the call reports failure', { skip: !KERNEL }, () => {
   const w = profileWorld();
-  // Outside every writable root of the profile (/private/var/folders is one): under /private/tmp.
+  // Outside every writable root of the profile (the clone and its tmp): under /private/tmp.
   const outDir = realpathSync(mkdtempSync(join(HOMES, 'omelette-mistral-t3t-fixout-')));
   made.push(outDir);
   const outside = join(outDir, 'outside');

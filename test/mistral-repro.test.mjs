@@ -14,14 +14,14 @@ import assert from 'node:assert/strict';
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import unit, { REPRO_PREFIX } from '../units/mistral/adapter.mjs';
 import { PARTIAL_MARK_RE } from '../core/partial.mjs';
 import { ensureHome } from '../units/mistral/home.mjs';
 import {
-  cloneDiff, fixModes, neutraliseModelText, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
+  assertRun, cloneDiff, fixModes, neutraliseModelText, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
 } from '../units/mistral/repro.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
@@ -39,7 +39,7 @@ const RESOLVED_ENV = ['VIBE_HOME', 'TMPDIR', 'OMELETTE_FLEET_HOME', 'OMELETTE_RE
 
 const FAKE = join(BASE, 'fake-vibe.mjs');
 writeFileSync(FAKE, [
-  'import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";',
+  'import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";',
   'import { spawnSync } from "node:child_process";',
   'import { join } from "node:path";',
   'const [scenarioPath, ...argv] = process.argv.slice(2);',
@@ -62,6 +62,8 @@ writeFileSync(FAKE, [
   '  files: readdirSync(workdir),',
   '  ran: ran && { status: ran.status, stdout: ran.stdout, stderr: ran.stderr },',
   '}) + "\\n");',
+  // The clone swapped for a link from outside the sandbox: what the kernel refuses a command, the adapter must still catch.
+  'if (sc.swap) { rmSync(workdir, { recursive: true, force: true }); symlinkSync(sc.swap, workdir); }',
   'if (sc.export) writeFileSync(join(outDir, "export.json"), JSON.stringify(fill(sc.export), null, 2));',
   'process.stdout.write(sc.answer);',
   'process.exitCode = sc.code;',
@@ -817,4 +819,117 @@ test('removeRun with fix removes a run whose clone holds a 000 directory', { ski
   assert.equal(removeRun(run.runDir, { log: (m) => logs.push(m), fix }), true, logs.join('\n'));
   assert.equal(existsSync(run.runDir), false);
   assert.deepEqual(logs, []);
+});
+
+/* ── T3c: the clone and tmp directories themselves cannot be unlinked or replaced ── */
+
+test('a clone swapped for a link during the run: the answer is withheld, no byte behind the link reaches the patch, the run dir goes and the link\'s target stays', { skip: !DARWIN }, async () => {
+  const target = join(BASE, 'swap-target');
+  mkdirSync(target);
+  writeFileSync(join(target, 'SECRET'), 'operator-secret-bytes\n');
+  const w = world({ edit: (s) => { s.swap = target; s.answer = 'finding: x'; } });
+  const r = await w.repro();
+  assert.equal(r.isError, true, r.text);
+  assert.match(r.text, /mistral: the clone or its tmp directory was replaced during the run — the answer is withheld/);
+  assert.doesNotMatch(r.text, /SECRET|operator-secret-bytes|finding: x/);
+  assert.equal(w.retries(), 0);
+  assert.equal(existsSync(dirname(w.spawns()[0].workdir)), false, 'the run directory is removed');
+  assert.equal(readFileSync(join(target, 'SECRET'), 'utf8'), 'operator-secret-bytes\n', 'the removal did not follow the link');
+});
+
+test('assertRun passes an untouched run and throws on a clone replaced by a fresh directory or a tmp replaced by a link', { skip: !DARWIN }, () => {
+  const d = join(BASE, 'assert-run');
+  gitRepo(d);
+  const run = prepareClone({ cwd: d });
+  const refused = { message: 'mistral: the clone or its tmp directory was replaced during the run — the answer is withheld' };
+  try {
+    assertRun(run);
+    rmSync(run.tmp, { recursive: true });
+    symlinkSync(run.clone, run.tmp);
+    assert.throws(() => assertRun(run), refused);
+    unlinkSync(run.tmp);
+    mkdirSync(run.tmp);
+    const { dev, ino } = lstatSync(run.tmp);
+    const fresh = { ...run, ids: { ...run.ids, tmp: { dev, ino } } };
+    assertRun(fresh);
+    rmSync(run.clone, { recursive: true });
+    mkdirSync(run.clone);
+    assert.throws(() => assertRun(fresh), refused);
+  } finally {
+    removeRun(run.runDir);
+  }
+});
+
+test('the kernel keeps the clone dir: rmdir, rm -rf and mv of it are refused; files, subdirs, chmod of a subdir, git and node --test still work', { skip: !KERNEL }, async () => {
+  const w = world({
+    edit: (s) => {
+      s.shell = [
+        'touch "$OMELETTE_REPRO_CLONE/f"; echo touch=$?',
+        'mkdir sub; echo mkdir=$?', '/bin/chmod 000 sub; echo chmod=$?', '/bin/chmod 700 sub; rmdir sub; echo rmdirsub=$?',
+        'git init -q; echo gitinit=$?', 'git add f; echo gitadd=$?', 'git status --porcelain >/dev/null; echo gitstatus=$?',
+        `${sq(process.execPath)} --test t.test.mjs >/dev/null 2>&1; echo node=$?`,
+        'cd "$OMELETTE_REPRO_TMP"',
+        'rm -rf "$OMELETTE_REPRO_CLONE"; echo rmrf=$?',
+        'rmdir "$OMELETTE_REPRO_CLONE"; echo rmdir=$?',
+        'mv "$OMELETTE_REPRO_CLONE" "$OMELETTE_REPRO_TMP/x"; echo mv=$?',
+        'test -d "$OMELETTE_REPRO_CLONE" && test ! -L "$OMELETTE_REPRO_CLONE"; echo still=$?',
+      ].join('; ');
+    },
+  });
+  const r = await w.repro();
+  assert.equal(r.isError, undefined, r.text);
+  const { ran } = w.spawns()[0];
+  for (const [k, v] of [['touch', 0], ['mkdir', 0], ['chmod', 0], ['rmdirsub', 0], ['gitinit', 0], ['gitadd', 0], ['gitstatus', 0], ['node', 0], ['rmrf', 1], ['rmdir', 1], ['mv', 1], ['still', 0]]) {
+    assert.match(ran.stdout, new RegExp(`^${k}=${v}$`, 'm'), ran.stdout + ran.stderr);
+  }
+});
+
+/* ── T3c round 2: no blanket write under /private/var/folders — the clone and its tmp only ── */
+
+const REAL_T = realpathSync(tmpdir());
+test('the PROBE: the temp root cannot be renamed, replaced or written; the run\'s tmp can; node, git and python3 run with the run\'s tmp as theirs', { skip: !KERNEL || !/^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/.test(REAL_T) }, () => {
+  const { run, wrapper, env } = sandboxedRun('probe-tmproot', BASE);
+  const T = REAL_T;
+  // reproOnce sets TMPDIR to the run's tmp; the probe does the same.
+  const probeEnv = { ...env, TMPDIR: run.tmp, T, NODE: process.execPath };
+  const script = [
+    'mv "$T" "$T.x"; echo mv=$?', 'test -d "$T" && test ! -L "$T"; echo still=$?',
+    'touch "$T/x-probe-$$"; echo touchT=$?', 'ln -s /tmp "$T.y"; echo ln=$?',
+    'touch "$OMELETTE_REPRO_TMP/x"; echo tmp=$?',
+    '"$NODE" --test t.test.mjs >/dev/null 2>&1; echo node=$?',
+    'git init -q p; echo gitinit=$?', 'echo a > p/a; git -C p add a; echo gitadd=$?', 'git -C p status --porcelain >/dev/null; echo gitstatus=$?',
+    'git clone -q "file://$OMELETTE_REPRO_CLONE" "$OMELETTE_REPRO_CLONE/copy"; echo gitclone=$?',
+    "echo py=$(python3 -c 'import tempfile; print(tempfile.mkstemp()[1])')",
+    'echo nodetmp=$("$NODE" -e "console.log(require(\'os\').tmpdir())")',
+  ].join('\n');
+  try {
+    const r = spawnSync(wrapper, ['-c', script], { env: probeEnv, cwd: run.clone, encoding: 'utf8' });
+    const out = r.stdout + r.stderr;
+    for (const [k, v] of [['mv', 1], ['still', 0], ['touchT', 1], ['ln', 1], ['tmp', 0], ['node', 0], ['gitinit', 0], ['gitadd', 0], ['gitstatus', 0], ['gitclone', 0]]) {
+      assert.match(r.stdout, new RegExp(`^${k}=${v}$`, 'm'), out);
+    }
+    assert.match(r.stdout, new RegExp(`^py=${regexLiteral(run.tmp)}/tmp`, 'm'), out);
+    assert.match(r.stdout, new RegExp(`^nodetmp=${regexLiteral(run.tmp)}$`, 'm'), out);
+    assert.ok(existsSync(join(run.clone, 'copy', 't.test.mjs')), out);
+    // The wrapper puts the developer dir ahead of the /usr/bin shims, whose xcrun cache the profile does not let them write: no noise.
+    for (const cmd of ['git status --porcelain', 'python3 -c pass']) {
+      const q = spawnSync(wrapper, ['-c', cmd], { env: probeEnv, cwd: run.clone, encoding: 'utf8' });
+      assert.equal(q.status, 0, cmd + q.stderr);
+      assert.equal(q.stderr, '', cmd);
+    }
+    const dev = spawnSync('/usr/bin/xcode-select', ['-p'], { encoding: 'utf8' }).stdout.trim();
+    if (dev && existsSync(join(dev, 'usr/bin/git'))) {
+      const where = spawnSync(wrapper, ['-c', 'command -v git'], { env: probeEnv, encoding: 'utf8' });
+      assert.equal(where.stdout.trim(), join(dev, 'usr/bin/git'));
+      // The residual: the shim called by its path still finds its cache unwritable, and still runs.
+      const shim = spawnSync(wrapper, ['-c', '/usr/bin/git status --porcelain >/dev/null'], { env: probeEnv, cwd: run.clone, encoding: 'utf8' });
+      assert.equal(shim.status, 0, shim.stderr);
+      assert.match(shim.stderr, /xcrun_db/);
+    }
+  } finally {
+    // Only ever reached if the kernel let the probe through: put the operator's temp root back.
+    if (!existsSync(T) && existsSync(`${T}.x`)) renameSync(`${T}.x`, T);
+    try { lstatSync(`${T}.y`); unlinkSync(`${T}.y`); } catch { /* not made: the kernel refused it */ }
+    removeRun(run.runDir);
+  }
 });

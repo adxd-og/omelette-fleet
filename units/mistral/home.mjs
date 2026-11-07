@@ -48,7 +48,9 @@
  *                listable, the run's own clone and tmp re-allowed last —
  *                Seatbelt's last matching rule wins, so a command never reaches
  *                a sibling run or another unit's temp dir — and no file flag
- *                (uchg, uappnd) set there, so the run can always be removed.
+ *                (uchg, uappnd) set there, so the run can always be removed;
+ *                the clone and tmp directories themselves never unlinked,
+ *                renamed or replaced.
  *
  * Rendering is `ensureHome`: before every spawn, a file whose bytes differ (a
  * changed catalog, a new package version in the marker) is rewritten through
@@ -150,7 +152,8 @@ export function renderVibeConfig({ models, profile, home, version }) {
 export function renderWrapper({ profile, home }) {
   checkProfile(profile);
   const run = profile === 'repro'
-    ? 'exec /usr/bin/sandbox-exec -D CLONE="${OMELETTE_REPRO_CLONE:?}" -D TMP="${OMELETTE_REPRO_TMP:?}" -D HOME="${HOME:?}" '
+    ? 'd="$(/usr/bin/xcode-select -p 2>/dev/null)"; [ -n "$d" ] && [ -d "$d/usr/bin" ] && export PATH="$d/usr/bin:$PATH"\n'
+      + 'exec /usr/bin/sandbox-exec -D CLONE="${OMELETTE_REPRO_CLONE:?}" -D TMP="${OMELETTE_REPRO_TMP:?}" -D HOME="${HOME:?}" '
       + `-D FLEET="\${OMELETTE_FLEET_HOME:?}" -D OUT="\${OMELETTE_REPRO_OUT:?}" -D RUNS="\${OMELETTE_REPRO_RUNS:?}" -D RUN="\${OMELETTE_REPRO_RUN:?}" `
       + `-D TMPROOT="\${OMELETTE_REPRO_TMPROOT:?}" -f ${shWord(join(homeDir(home, 'repro'), 'repro.sb'))} /bin/bash "$@"`
     // Review has no shell tool by policy (`--enabled-tools read_file grep`): a

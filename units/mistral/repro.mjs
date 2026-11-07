@@ -27,7 +27,8 @@
  * listable, so node and git can walk down to the clone; it also
  * read-denies ~/.gnupg, ~/.netrc, ~/.kube, ~/.docker, ~/.npmrc and
  * ~/.git-credentials, refuses security, pbpaste and pbcopy, a signal to any
- * process outside the sandbox and a file flag in the clone (repro.sb).
+ * process outside the sandbox, a file flag in the clone and the unlink,
+ * rename or replacement of the clone and tmp directories themselves (repro.sb).
  *
  * THE DIFF — taken by the adapter, outside the sandbox, against a copy of the
  * clone's fresh `.git` kept in the run's OUT dir (the profile denies every
@@ -158,7 +159,8 @@ export function runsRoot() {
  * The run's directories and a HEAD-only clone of the work tree at `cwd`:
  * `runDir` (mkdtemp `run-*` under runsRoot(), resolved), `clone`, `tmp` (the
  * run's TMPDIR, 0700), `out` (Vibe's output dir and the prompt, 0700), the
- * clone's short `head`, and `dirty` — the work tree had uncommitted changes.
+ * clone's short `head`, `dirty` — the work tree had uncommitted changes —
+ * and `ids`, the lstat `{ dev, ino }` of the clone and tmp dirs (assertRun).
  * Throws, before making anything, when `cwd` is not inside a git work tree.
  */
 export function prepareClone({ cwd, log = () => {} }) {
@@ -189,11 +191,33 @@ export function prepareClone({ cwd, log = () => {} }) {
     // The diff is taken against this copy of the fresh .git, in OUT, which no sandboxed command can read or write.
     cpSync(join(clone, '.git'), join(out, 'git'), { recursive: true });
     const head = git([...CLONE_CONFIG, '-C', clone, 'rev-parse', '--short', 'HEAD'], { env }).trim();
+    const idOf = (p) => { const st = lstatSync(p); return { dev: st.dev, ino: st.ino }; };
+    const ids = { clone: idOf(clone), tmp: idOf(tmp) };
     log(`repro clone of ${top} at ${head}${dirty ? ' (the work tree had uncommitted changes, not in the clone)' : ''}: ${clone} — LFS files are pointers, not content`);
-    return { runDir, clone, tmp, out, head, dirty };
+    return { runDir, clone, tmp, out, head, dirty, ids };
   } catch (e) {
     removeRun(runDir);
     throw e;
+  }
+}
+
+/**
+ * The run's clone and tmp are still the directories prepareClone made: each,
+ * lstat'ed (a link is a link), a directory with the recorded `dev` and `ino`.
+ * Otherwise throws — the adapter's git and chmod would run on whatever now
+ * stands at that path. The refusal is never retried: the repro tool never
+ * retries.
+ * @param {{clone: string, tmp: string, ids: {clone: {dev: number, ino: number}, tmp: {dev: number, ino: number}}}} run
+ */
+export function assertRun(run) {
+  const same = (p, id) => {
+    try {
+      const st = lstatSync(p);
+      return st.isDirectory() && st.dev === id.dev && st.ino === id.ino;
+    } catch { return false; }
+  };
+  if (!same(run.clone, run.ids.clone) || !same(run.tmp, run.ids.tmp)) {
+    throw new Error('mistral: the clone or its tmp directory was replaced during the run — the answer is withheld');
   }
 }
 

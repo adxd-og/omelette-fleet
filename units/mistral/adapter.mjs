@@ -100,7 +100,7 @@ import { readRegularFile } from '../../core/status.mjs';
 import { ensureHome, resolveAlias } from './home.mjs';
 import { EFFORTS, GUIDE, MISTRAL_MODELS } from './models.js';
 import {
-  appendPatch, cloneDiff, fixModes, neutraliseModelText, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
+  appendPatch, assertRun, cloneDiff, fixModes, neutraliseModelText, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
 } from './repro.mjs';
 
 export const catalog = makeCatalog({
@@ -492,6 +492,8 @@ async function reproOnce(ctx, { prompt, cwd, requested }) {
     fix = () => fixModes({ wrapper: join(vibeHome, 'shell.sh'), env: childEnv, paths: [run.clone, run.tmp], log: ctx.log });
     // A process a command backgrounded must not outlive the call and wait for the next run.
     const res = await ctx.spawn({ args, cwd: run.clone, extraEnv, hardKillMs: ctx.cfg.reproTimeoutS * 1000, killGroupOnExit: true });
+    // A command that swapped the clone or tmp for a link would point the adapter's chmod and git at the operator's files.
+    assertRun(run);
     // Before answerFrom: the real footer and markers come after the model's text, which can pass for none of them.
     const r = answerFrom(ctx, { ...res, stdout: neutraliseModelText(res.stdout) }, { outDir: run.out, requested, profile: 'repro', timeoutS: ctx.cfg.reproTimeoutS, wrapper: join(vibeHome, 'shell.sh') });
     fix();

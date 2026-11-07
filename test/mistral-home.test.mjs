@@ -31,16 +31,19 @@ const POLICY = [
  */
 const PROBE_SB = [
   "(version 1)",
-  "; Seatbelt profile for the repro sandbox probe: everything the model runs goes",
-  "; through this. Allow by default, then take away writes outside the clone and",
-  "; the temp dir, all network, and reads of the operator's secret dirs.",
+  "; Seatbelt profile for the repro sandbox: everything the model runs goes",
+  "; through this. Allow by default, then take away all network, reads of the",
+  "; operator's secret dirs, and every write but those under the run's clone and",
+  "; tmp. The temp root T and every ancestor of the runs root are unwritable to a",
+  "; command: no rename, no replacement, no symlink at any of them. The wrapper",
+  "; prefers the developer dir's binaries; the shims under /usr/bin keep no cache",
+  "; inside the sandbox.",
   "(allow default)",
   "(deny network*)",
   "(deny file-write*)",
   "(allow file-write*",
   "  (subpath (param \"CLONE\"))",
   "  (subpath (param \"TMP\"))",
-  "  (subpath \"/private/var/folders\")",
   "  (literal \"/dev/null\")",
   "  (regex #\"^/dev/tty\")",
   "  (regex #\"^/dev/fd/\"))",
@@ -85,6 +88,8 @@ const RUNS_BLOCK = [
   '(allow file-write* (subpath (param "CLONE")) (subpath (param "TMP")))',
   "; no immutable or append-only flag in the run's clone or tmp: the adapter must be able to remove the run",
   '(deny file-write-flags (subpath (param "CLONE")) (subpath (param "TMP")))',
+  "; the clone and tmp directories themselves stay what the adapter made: a command may not unlink, rename or replace them (the adapter's git and chmod run on those paths)",
+  '(deny file-write-unlink (literal (param "CLONE")) (literal (param "TMP")))',
 ].join('\n') + '\n';
 
 test('catalog head is mistral-large-4-0-3 and resolveAlias moves within a family', () => {
@@ -233,6 +238,15 @@ test('the wrapper answers the login-env probe with env -0 and no login shell', (
   assert.equal(refused.status, 126);
   assert.equal(refused.stdout.toString(), '');
   assert.match(refused.stderr.toString(), /review profile has no shell/);
+});
+
+test('the repro wrapper puts the developer dir ahead of the /usr/bin shims before sandbox-exec; the review wrapper has no such line', () => {
+  const line = 'd="$(/usr/bin/xcode-select -p 2>/dev/null)"; [ -n "$d" ] && [ -d "$d/usr/bin" ] && export PATH="$d/usr/bin:$PATH"';
+  const repro = renderWrapper({ profile: 'repro', home: '/x' }).split('\n');
+  const at = repro.indexOf(line);
+  assert.ok(at > 0, 'the xcode-select line');
+  assert.match(repro[at + 1], /^exec \/usr\/bin\/sandbox-exec /);
+  assert.ok(!renderWrapper({ profile: 'review', home: '/x' }).includes('xcode-select'));
 });
 
 test('the repro wrapper stops before sandbox-exec when HOME is unset: an empty HOME would turn the ~/.ssh read-denies into /.ssh', () => {

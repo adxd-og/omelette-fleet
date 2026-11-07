@@ -487,7 +487,7 @@ test('the profile read-denies ~/.ssh, ~/.aws, ~/.config, ~/.vibe and the fleet h
 
 // The adapter diffs a run's clone outside the sandbox, against a copy of the fresh .git in the run's OUT,
 // "which no sandboxed command can read or write". The profile denies the run's OWN out; a sibling run's
-// (another call in flight, here a second prepared run) sits under the writable /private/var/folders.
+// (another call in flight, here a second prepared run) sits under RUNS, which the profile denies; /private/var/folders is no longer writable.
 test('a command in one run cannot plant a filter in a sibling run\'s out/git and have it run when that run\'s diff is taken', { skip: !KERNEL }, async () => {
   const control = prepareClone({ cwd: world().work });
   try {
@@ -523,8 +523,8 @@ test('a command in one run cannot plant a filter in a sibling run\'s out/git and
 });
 
 // Found while building this file: the runtime kills the child's process group only on a timeout or a cancel, so a
-// command the model backgrounds (`nohup … &`) outlives the call — still under the profile, which lets it write
-// anywhere under /private/var/folders. Together with the sibling-out/git test above, it turns that cross-run write
+// command the model backgrounds (`nohup … &`) outlives the call — still under the profile, which once let it write
+// anywhere under /private/var/folders (now only its clone and tmp). Together with the sibling-out/git test above, it turns that cross-run write
 // from "needs two calls in flight" into "any later call": the leftover can wait for the next run's directory.
 test('a process the model backgrounds does not outlive the call', { skip: !KERNEL }, async () => {
   const tag = String(4000000 + (process.pid % 100000)); // a sleep length no other process uses

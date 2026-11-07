@@ -137,7 +137,7 @@ test('the repro wrapper runs bash under the kernel profile: a write in the clone
   mkdirSync(out);
   mkdirSync(join(home, '.ssh'), { recursive: true });
   writeFileSync(join(home, '.ssh', 'id'), 'secret\n');
-  // /private/var/folders (the OS temp root, where `base` lives) is writable by design: the outside is /private/tmp.
+  // Writable to a command: only the clone and its tmp (the profile no longer opens /private/var/folders); the outside is /private/tmp.
   const outside = `/private/tmp/omelette-mistral-t-outside-${process.pid}`;
   // A listener that works, so a refused connect is the kernel's doing and not a dead network.
   const server = createServer((req, res) => res.end('reachable')).listen(0, '127.0.0.1');

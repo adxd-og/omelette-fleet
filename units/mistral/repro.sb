@@ -1,14 +1,17 @@
 (version 1)
-; Seatbelt profile for the repro sandbox probe: everything the model runs goes
-; through this. Allow by default, then take away writes outside the clone and
-; the temp dir, all network, and reads of the operator's secret dirs.
+; Seatbelt profile for the repro sandbox: everything the model runs goes
+; through this. Allow by default, then take away all network, reads of the
+; operator's secret dirs, and every write but those under the run's clone and
+; tmp. The temp root T and every ancestor of the runs root are unwritable to a
+; command: no rename, no replacement, no symlink at any of them. The wrapper
+; prefers the developer dir's binaries; the shims under /usr/bin keep no cache
+; inside the sandbox.
 (allow default)
 (deny network*)
 (deny file-write*)
 (allow file-write*
   (subpath (param "CLONE"))
   (subpath (param "TMP"))
-  (subpath "/private/var/folders")
   (literal "/dev/null")
   (regex #"^/dev/tty")
   (regex #"^/dev/fd/"))
@@ -47,3 +50,5 @@
 (allow file-write* (subpath (param "CLONE")) (subpath (param "TMP")))
 ; no immutable or append-only flag in the run's clone or tmp: the adapter must be able to remove the run
 (deny file-write-flags (subpath (param "CLONE")) (subpath (param "TMP")))
+; the clone and tmp directories themselves stay what the adapter made: a command may not unlink, rename or replace them (the adapter's git and chmod run on those paths)
+(deny file-write-unlink (literal (param "CLONE")) (literal (param "TMP")))
