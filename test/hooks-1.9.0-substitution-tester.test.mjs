@@ -107,6 +107,19 @@ test('expansion: a value that can still vanish or split is not a value (glued sh
   ].map((c) => [c, 2, UNREAD]));
 });
 
+test('expansion: `"${@…}"` and `"${!prefix@}"` split inside double quotes as `"$@"` does; `"${!prefix*}"` joins into one', () => {
+  check([
+    'git -C "${@:2}" status',
+    'git -C "${@}" status',
+    'git -C "${!pre@}" status',
+    'git --git-dir="$@" status',
+  ].map((c) => [c, 2, UNREAD]));
+  check([
+    ['git -C "${!pre*}" status', 0, ''],
+    ['git -C "${*}" status', 0, ''],
+  ]);
+});
+
 test('substitution: quoting and nesting inside and around the substitution do not hide it', () => {
   check([
     'git \\\n$(echo) commit -m x',

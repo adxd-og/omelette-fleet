@@ -157,3 +157,14 @@ test('expansion: a value quoted whole is a value, and an expansion after the sub
 test('expansion: the main thread is not guarded', () => {
   check([...EXPANSION_UNREAD, ...EXPANSION_PLAIN].map((command) => [command, 0, '']), null);
 });
+
+test('expansion: `"$@"` and `"${a[@]}"` split inside double quotes and are no value; `"$*"` and `"${a[*]}"` join into one', () => {
+  check([
+    // `set -- . commit; git -C "$@" -m x` runs `git -C . commit -m x`.
+    ['git -C "$@" -m x', 2, UNREAD('omelette-reviewer')],
+    ['git -C "${a[@]}" status', 2, UNREAD('omelette-reviewer')],
+    ['git "$@"', 2, UNREAD('omelette-reviewer')],
+    ['git -C "$*" status', 0, ''],
+    ['git -C "${a[*]}" status', 0, ''],
+  ]);
+});

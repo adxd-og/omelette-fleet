@@ -757,9 +757,18 @@ const LITERAL_MARK = '\u0002';
 const MARKS = /[\u0000-\u0002]/g;
 
 /**
+ * An expansion that is still several words inside double quotes: its parameter is `@` (`"$@"`, `"${@:2}"`), or its
+ * brace form holds `[@]` (`"${a[@]}"`, `"${!a[@]}"`) or ends with `@}` (`"${!prefix@}"`) — `set -- . commit; git -C
+ * "$@" -m x` runs `git -C . commit -m x`. `"$*"` and `"${a[*]}"` join into one word and are none.
+ */
+const splitsInQuotes = (expansion) => expansion === '$@'
+  || (expansion.startsWith('${') && (expansion.startsWith('${@') || expansion.includes('[@]') || expansion.endsWith('@}')));
+
+/**
  * A word with its quotes off (unquote) and each substitution or expansion SUBSTITUTED finds in it as ONE mark:
- * QUOTED_MARK inside double quotes, where it is one piece of the word whatever it holds, and UNQUOTED_MARK outside
- * quotes — where an empty one vanishes and a blank in one splits the word — an escaped one (`\$x`) included. A
+ * QUOTED_MARK inside double quotes, where it is one piece of the word whatever it holds — save one that
+ * splitsInQuotes — and UNQUOTED_MARK outside quotes — where an empty one vanishes and a blank in one splits the
+ * word — an escaped one (`\$x`) included. A
  * single-quoted or ANSI-C span the shell hands over literally is one LITERAL_MARK whole when SUBSTITUTED reads one in
  * it, as SUBSTITUTED reads the word. One that never closes is UNQUOTED_MARK: what it holds is not known.
  * `g$(echo)it` is `g` + UNQUOTED_MARK + `it`, `-C"$DIR"` is `-C` + QUOTED_MARK, `-C'$DIR'` is `-C` + LITERAL_MARK.
@@ -773,7 +782,7 @@ function withExpansionsMarked(text) {
     const c = text[i];
     const end = expansionEnd(text, i);
     if (end >= 0) {
-      out += double && end < text.length ? QUOTED_MARK : UNQUOTED_MARK;
+      out += double && end < text.length && !splitsInQuotes(text.slice(i, end + 1)) ? QUOTED_MARK : UNQUOTED_MARK;
       i = end;
       continue;
     }
