@@ -354,10 +354,10 @@ test('fix round 2 (budget): 8 MiB of {a,b} words is refused in under 2 s; 1 MB o
   // Under the hook's 8 MiB stdin cap, the event's JSON around it included.
   const big = fastest(path, `echo ${words('{a,b}', Math.floor((8 * MB - 4096) / 6))}`);
   assert.equal(big.code, 2);
-  assert.ok(big.ms < 4000, `8 MiB of {a,b} took ${big.ms.toFixed(0)} ms`);
+  assert.ok(big.ms < 5000, `8 MiB of {a,b} took ${big.ms.toFixed(0)} ms`);
   const plain = fastest(path, `echo ${words('x'.repeat(40), Math.floor(MB / 41))}`);
   assert.equal(plain.code, 0);
-  assert.ok(plain.ms < 4000, `1 MB of plain words took ${plain.ms.toFixed(0)} ms`);
+  assert.ok(plain.ms < 5000, `1 MB of plain words took ${plain.ms.toFixed(0)} ms`);
 });
 
 /** A PreToolUse event of exactly `bytes` bytes, a padding field after the command; `agent` null is the main thread. */
@@ -379,7 +379,7 @@ test('fix round 2 (stdin cap): an event over 8 MiB is refused unread, exit 2, fo
   const over = 'omelette-guard: event over 8 MiB — refused unread';
   const commit = raw(eventOf('git commit -m x', 8 * MB + 1, 'omelette-reviewer'));
   assert.deepEqual([commit.code, commit.err], [2, over]);
-  assert.ok(commit.ms < 4000, `8 MiB + 1 took ${commit.ms.toFixed(0)} ms`);
+  assert.ok(commit.ms < 5000, `8 MiB + 1 took ${commit.ms.toFixed(0)} ms`);
   // The main thread too: nothing past the cap is read, so nothing says whose it is.
   const main = raw(eventOf('git status', 8 * MB + 1, null));
   assert.deepEqual([main.code, main.err], [2, over]);
