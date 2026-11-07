@@ -13,7 +13,7 @@ import unit from '../units/mistral/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
 import { ensureHome } from '../units/mistral/home.mjs';
-import { NODEUP_NONE, clearRun, fixModes, nodeUp, prepareClone, regexLiteral, removeRun, runsRoot } from '../units/mistral/repro.mjs';
+import { NODEUP_NONE, clearRun, fixModes, nodeEnv, nodeReach, nodeUp, prepareClone, regexLiteral, removeRun, runsRoot } from '../units/mistral/repro.mjs';
 
 const DARWIN = process.platform === 'darwin';
 // sandbox-exec cannot nest: inside a sandbox even an allow-everything profile fails, and the kernel rows skip.
@@ -54,7 +54,7 @@ function sandboxedRun({ home, node }) {
     PATH: '/usr/bin:/bin', HOME: home, OMELETTE_FLEET_HOME: realpathSync(fleet), OMELETTE_REPRO_CLONE: run.clone, OMELETTE_REPRO_TMP: run.tmp,
     OMELETTE_REPRO_OUT: run.out, OMELETTE_REPRO_RUNS: realpathSync(runsRoot()), OMELETTE_REPRO_RUN: run.runDir,
     OMELETTE_REPRO_TMPROOT: regexLiteral(realpathSync(tmpdir())), OMELETTE_REPRO_SRC: realpathSync(run.top),
-    OMELETTE_REPRO_NODE: node, OMELETTE_REPRO_NODEUP: nodeUp({ home, node }), TMPDIR: run.tmp, T_HOME: home, NODE: process.execPath,
+    ...nodeEnv({ home, prefix: node, binary: join(node, 'bin', 'node') }), TMPDIR: run.tmp, T_HOME: home, NODE: process.execPath,
   };
   const wrapper = join(dir, 'shell.sh');
   const sh = (script, extra = {}) => spawnSync(wrapper, ['-c', script], { env: { ...env, ...extra }, cwd: run.clone, encoding: 'utf8', timeout: 120_000 });
@@ -251,8 +251,8 @@ test('adapter: NODEUP is built from the resolved HOME — a HOME spelled through
       `/usr/bin/stat -f %N ${sq(join(real, '.nvmX'))} >/dev/null 2>&1; echo shared_prefix=$?`,
     ].join('\n'),
   });
-  assert.equal(seen.node, prefix);
-  assert.equal(seen.nodeup, nodeUp({ home: real, node: prefix }));
+  // A prefix under the home: its bin, npm and corepack, and the chain down to lib/node_modules (nodeReach).
+  assert.deepEqual({ node: seen.node, up: seen.nodeup }, nodeReach({ home: real, prefix, binary: fakeNode }));
   assert.deepEqual(rowsOf(seen.ran.stdout), { home: 0, nvm: 0, nodes: 0, lshome: 1, shared_prefix: 1 }, seen.ran.stdout + seen.ran.stderr);
 });
 
@@ -462,4 +462,30 @@ test('guard: the QUOTE_DEPTH cutoff fails closed — a git word spelled with bra
     [sqn(`{g,x}it ${C}`, 6), REFUSED],
     [sqn(`'g'it ${C}`, 6), REFUSED],
   ]);
+});
+
+/* ── NODE under the home is an anchored list of subpaths (nodeReach) ───────────────────────────────────── */
+
+test('NODE under the home: bin, npm and corepack are readable as paths and as directories, a name that only starts like one (binX, npmX, corepack-x, a prefix v20X) and the rest of the prefix are not', { skip: !KERNEL }, () => {
+  const home = tempHome('reach');
+  const P = '.nvm/versions/node/v20';
+  const M = `${P}/lib/node_modules`;
+  for (const f of [`${P}/bin/tool`, `${P}/binX/tool`, `${M}/npm/package.json`, `${M}/npmX/package.json`, `${M}/npm-extra/package.json`, `${M}/corepack-x/package.json`, `${M}/corepack/package.json`,
+    `${P}/lib/loose`, `${P}/include/h`, `${P}X/bin/tool`, `${P}X/lib/node_modules/npm/package.json`]) touch(join(home, f));
+  const s = sandboxedRun({ home, node: join(home, P) });
+  try {
+    const cat = (name, p) => `cat "$T_HOME/${p}" >/dev/null 2>&1; echo ${name}=$?`;
+    const r = s.sh([
+      cat('bin', `${P}/bin/tool`), cat('npm', `${M}/npm/package.json`), cat('corepack', `${M}/corepack/package.json`),
+      `ls "$T_HOME/${P}/bin" >/dev/null 2>&1; echo ls_bin=$?`, `ls "$T_HOME/${M}/npm" >/dev/null 2>&1; echo ls_npm=$?`,
+      cat('binX', `${P}/binX/tool`), cat('npmX', `${M}/npmX/package.json`), cat('npm_extra', `${M}/npm-extra/package.json`), cat('corepack_x', `${M}/corepack-x/package.json`),
+      cat('loose', `${P}/lib/loose`), cat('include', `${P}/include/h`), cat('prefix_x', `${P}X/bin/tool`), cat('prefix_x_npm', `${P}X/lib/node_modules/npm/package.json`),
+      `/usr/bin/stat -f %N "$T_HOME/${P}/binX" >/dev/null 2>&1; echo stat_binX=$?`,
+      `ls "$T_HOME/${M}" >/dev/null 2>&1; echo ls_modules=$?`, `ls "$T_HOME/${P}" >/dev/null 2>&1; echo ls_prefix=$?`,
+    ].join('\n'));
+    assert.deepEqual(rowsOf(r.stdout), {
+      bin: 0, npm: 0, corepack: 0, ls_bin: 0, ls_npm: 0,
+      binX: 1, npmX: 1, npm_extra: 1, corepack_x: 1, loose: 1, include: 1, prefix_x: 1, prefix_x_npm: 1, stat_binX: 1, ls_modules: 1, ls_prefix: 1,
+    }, r.stdout + r.stderr);
+  } finally { s.cleanup(); }
 });

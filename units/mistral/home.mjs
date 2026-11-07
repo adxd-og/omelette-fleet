@@ -30,9 +30,10 @@
  *                OMELETTE_REPRO_RUNS, the run's own dir from
  *                OMELETTE_REPRO_RUN, the OS temp root, regex-escaped, from
  *                OMELETTE_REPRO_TMPROOT, the reviewed work tree's top from
- *                OMELETTE_REPRO_SRC, the adapter's node prefix from
- *                OMELETTE_REPRO_NODE and the regex of the directories from
- *                HOME down to it from OMELETTE_REPRO_NODEUP. Any of these or
+ *                OMELETTE_REPRO_SRC, the regex of what the profile re-allows
+ *                of the adapter's node from OMELETTE_REPRO_NODE and the regex
+ *                of the directories from HOME down to it from
+ *                OMELETTE_REPRO_NODEUP. Any of these or
  *                HOME unset or empty stops
  *                the wrapper before sandbox-exec (`${…:?}`): an empty HOME or
  *                SRC would hand the profile `(subpath "")` in place of the

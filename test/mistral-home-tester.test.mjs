@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { MISTRAL_MODELS } from '../units/mistral/models.js';
 import { ensureHome, renderVibeConfig, renderWrapper, resolveAlias } from '../units/mistral/home.mjs';
-import { nodeUp } from '../units/mistral/repro.mjs';
+import { nodeEnv } from '../units/mistral/repro.mjs';
 import { layout, plainRows } from '../mods/omelette-fleet/hooks/layout.mjs';
 
 const tmp = (p) => realpathSync(mkdtempSync(join(tmpdir(), p)));
@@ -145,7 +145,7 @@ test('the repro wrapper runs bash under the kernel profile: a write in the clone
   await new Promise((r) => server.once('listening', r));
   const port = server.address().port;
   try {
-    const env = { PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out, OMELETTE_REPRO_RUNS: join(base, 'runs'), OMELETTE_REPRO_RUN: base, OMELETTE_REPRO_TMPROOT: realpathSync(tmpdir()), OMELETTE_REPRO_SRC: join(base, 'src'), OMELETTE_REPRO_NODE: realpathSync(dirname(dirname(process.execPath))), OMELETTE_REPRO_NODEUP: nodeUp({ home, node: realpathSync(dirname(dirname(process.execPath))) }), T_HOME: home, T_OUT: outside };
+    const env = { PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out, OMELETTE_REPRO_RUNS: join(base, 'runs'), OMELETTE_REPRO_RUN: base, OMELETTE_REPRO_TMPROOT: realpathSync(tmpdir()), OMELETTE_REPRO_SRC: join(base, 'src'), ...nodeEnv({ home }), T_HOME: home, T_OUT: outside };
     const run = (cmd) => new Promise((resolve) => execFile(join(dir, 'shell.sh'), ['-c', cmd], { env }, (err, stdout, stderr) => resolve({ status: err ? (err.code ?? 1) : 0, stdout, stderr })));
     assert.equal((await run('echo hi')).stdout, 'hi\n');
     assert.equal((await run('echo x > "$OMELETTE_REPRO_CLONE/in"')).status, 0);

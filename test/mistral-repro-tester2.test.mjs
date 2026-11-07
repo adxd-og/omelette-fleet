@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import unit from '../units/mistral/adapter.mjs';
 import { ensureHome } from '../units/mistral/home.mjs';
-import { cloneDiff, fixModes, neutraliseModelText, nodeUp, prepareClone, regexLiteral, removeRun, runsRoot } from '../units/mistral/repro.mjs';
+import { cloneDiff, fixModes, neutraliseModelText, nodeEnv, prepareClone, regexLiteral, removeRun, runsRoot } from '../units/mistral/repro.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
 const DARWIN = process.platform === 'darwin';
@@ -192,7 +192,7 @@ function profileWorld(over = {}) {
   const [a, b] = runs;
   const env = {
     PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: join(a, 'clone'), OMELETTE_REPRO_TMP: join(a, 'tmp'), OMELETTE_FLEET_HOME: fleet,
-    OMELETTE_REPRO_OUT: join(a, 'out'), OMELETTE_REPRO_RUNS: root, OMELETTE_REPRO_RUN: a, OMELETTE_REPRO_TMPROOT: regexLiteral(base), OMELETTE_REPRO_SRC: join(base, 'src'), OMELETTE_REPRO_NODE: realpathSync(dirname(dirname(process.execPath))), OMELETTE_REPRO_NODEUP: nodeUp({ home, node: realpathSync(dirname(dirname(process.execPath))) }), T_HOME: home, ...over,
+    OMELETTE_REPRO_OUT: join(a, 'out'), OMELETTE_REPRO_RUNS: root, OMELETTE_REPRO_RUN: a, OMELETTE_REPRO_TMPROOT: regexLiteral(base), OMELETTE_REPRO_SRC: join(base, 'src'), ...nodeEnv({ home }), T_HOME: home, ...over,
   };
   const run = (cmd) => spawnSync(join(dir, 'shell.sh'), ['-c', cmd], { env, encoding: 'utf8', cwd: join(a, 'clone') });
   return { base, home, root, a, b, other, run, env, wrapper: join(dir, 'shell.sh') };

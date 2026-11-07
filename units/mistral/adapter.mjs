@@ -91,7 +91,7 @@
  */
 import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
 import { checkCwd } from '../../core/cwd.mjs';
@@ -100,7 +100,7 @@ import { readRegularFile } from '../../core/status.mjs';
 import { ensureHome, resolveAlias } from './home.mjs';
 import { EFFORTS, GUIDE, MISTRAL_MODELS } from './models.js';
 import {
-  appendPatch, assertRun, clearRun, cloneDiff, fixModes, neutraliseModelText, nodeUp, outsideLinks, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
+  appendPatch, assertRun, clearRun, cloneDiff, fixModes, neutraliseModelText, nodeEnv, outsideLinks, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
 } from './repro.mjs';
 
 export const catalog = makeCatalog({
@@ -486,7 +486,6 @@ async function reproOnce(ctx, { prompt, cwd, requested }) {
     // Seatbelt matches resolved paths: every path the wrapper and the profile read is resolved here — HOME too, which
     // the wrapper hands the profile as it stands in Vibe's env (a HOME spelled through a symlink would deny nothing).
     const home = operatorHome();
-    const node = nodePrefix();
     const extraEnv = {
       HOME: home,
       ...Object.fromEntries(Object.entries({
@@ -502,9 +501,8 @@ async function reproOnce(ctx, { prompt, cwd, requested }) {
       }).map(([k, v]) => [k, realpathSync(v)])),
       // The profile reads TMPROOT only inside a regex: the resolved temp root, its metacharacters escaped.
       OMELETTE_REPRO_TMPROOT: regexLiteral(realpathSync(tmpdir())),
-      OMELETTE_REPRO_NODE: node,
-      // The directories from HOME down to the node prefix's parent, stat-able past the HOME deny (npm lstats them).
-      OMELETTE_REPRO_NODEUP: nodeUp({ home, node }),
+      // What the profile re-allows of the adapter's node past the HOME deny, and the directories stat-able on the way.
+      ...nodeEnv({ home }),
     };
     // The env of the wrapper's chmod -R and rm -rf: the spawn's (HOME is the operator's), so the same profile stands.
     const childEnv = { ...process.env, ...extraEnv };
@@ -533,19 +531,7 @@ async function reproOnce(ctx, { prompt, cwd, requested }) {
   }
 }
 
-/**
- * The install prefix of the node the adapter runs on (its bin's parent, resolved), which the repro profile re-allows
- * past its HOME deny (NODE), so a node under ~/.nvm still runs. Never the operator's home or an ancestor of it — a
- * node in `~/bin` would re-open the whole home — then the binary alone.
- */
-function nodePrefix() {
-  const prefix = realpathSync(dirname(dirname(process.execPath)));
-  const home = operatorHome();
-  const covers = home === prefix || home.startsWith(prefix === sep ? sep : prefix + sep);
-  return covers ? realpathSync(process.execPath) : prefix;
-}
-
-/** The operator's home, resolved: the HOME Vibe runs with and the repro profile denies, and the one nodePrefix keeps clear of. */
+/** The operator's home, resolved: the HOME Vibe runs with and the repro profile denies, and the one nodeReach keeps clear of. */
 function operatorHome() {
   return realpathSync(process.env.HOME || homedir());
 }

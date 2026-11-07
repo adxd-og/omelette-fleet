@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import unit from '../units/mistral/adapter.mjs';
 import { ensureHome, renderWrapper } from '../units/mistral/home.mjs';
-import { DIFF_CAP, appendPatch, cloneDiff, nodeUp, prepareClone, removeRun, reproAllowed, reproSupported } from '../units/mistral/repro.mjs';
+import { DIFF_CAP, appendPatch, cloneDiff, nodeEnv, prepareClone, removeRun, reproAllowed, reproSupported } from '../units/mistral/repro.mjs';
 import { PARTIAL_MARK_RE, partialMark } from '../core/partial.mjs';
 import { ALLOWED_ENV } from '../core/spawn.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
@@ -635,7 +635,7 @@ test('the profile refuses /usr/bin/automator, and denies $HOME/.omelette on its 
   const [clone, tmpd, home, out] = ['clone', 'tmp', 'home', 'out'].map((n) => join(base, n));
   for (const d of [clone, tmpd, home, out, join(home, '.omelette')]) mkdirSync(d);
   writeFileSync(join(home, '.omelette', 'fleet.config.json'), 'secret-in-home-omelette\n');
-  const env = { PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out, OMELETTE_REPRO_RUNS: join(base, 'runs'), OMELETTE_REPRO_RUN: base, OMELETTE_REPRO_TMPROOT: realpathSync(tmpdir()), OMELETTE_REPRO_SRC: join(base, 'src'), OMELETTE_REPRO_NODE: realpathSync(dirname(dirname(process.execPath))), OMELETTE_REPRO_NODEUP: nodeUp({ home, node: realpathSync(dirname(dirname(process.execPath))) }), T_HOME: home };
+  const env = { PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out, OMELETTE_REPRO_RUNS: join(base, 'runs'), OMELETTE_REPRO_RUN: base, OMELETTE_REPRO_TMPROOT: realpathSync(tmpdir()), OMELETTE_REPRO_SRC: join(base, 'src'), ...nodeEnv({ home }), T_HOME: home };
   const run = (cmd) => spawnSync(join(dir, 'shell.sh'), ['-c', cmd], { env, encoding: 'utf8' });
   const cat = run('cat "$T_HOME/.omelette/fleet.config.json"');
   assert.notEqual(cat.status, 0);

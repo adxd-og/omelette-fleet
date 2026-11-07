@@ -445,3 +445,32 @@ test('final round (escaped quote): `\'\\\'\'` re-reads as the quote it stands fo
     ["echo 'git commit'", 2, REFUSAL('omelette-reviewer')],
   ]);
 });
+
+test('review fix (shells): csh, tcsh, ash, yash, posh, fish and busybox feed a shell; so does a program word that holds an expansion or a substitution', () => {
+  const body = "\ngit commit -m x\nEOF";
+  check([
+    ...['csh', 'tcsh', 'ash', 'yash', 'posh', 'fish', 'busybox sh', '$SHELL', '$(which bash)', '"$sh"', 'x=1 $SHELL', 'echo hi; $SHELL']
+      .map((program) => [`${program} <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')]),
+    // A substitution that prints the command is the program word: what it prints runs.
+    [`$(cat <<'EOF'${body}\n)`, 2, REFUSAL('omelette-reviewer')],
+    // …and so is a quoted word a shell runs; one echo prints is text.
+    [`bash -c "$SHELL <<'EOF'${body}"`, 2, REFUSAL('omelette-reviewer')],
+    [`echo "$($SHELL <<'EOF'${body}\n)"`, 2, REFUSAL('omelette-reviewer')],
+    [`echo "$(cat <<'EOF'${body}\n)"`, 0, ''],
+    [`cat <<'EOF'${body}`, 0, ''],
+    [`$SHELL <<'EOF'\ngit status\nEOF`, 0, ''],
+    [`echo $HOME <<'EOF'${body}`, 0, ''],
+  ]);
+});
+
+test('review fix (shells): a program word whose name only the shell\'s expansion settles — a brace group, a glob, a backslash — feeds a shell too', () => {
+  const body = "\ngit commit -m x\nEOF";
+  check([
+    ...['ba{sh,x}', '{ba,x}sh', '/bin/ba?h', '/bin/ba*', 'ba[s]h', 'b\\ash']
+      .map((program) => [`${program} <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')]),
+    [`cat <<'EOF'${body}`, 0, ''],
+    [`echo "$(cat <<'EOF'${body}\n)"`, 0, ''],
+    // The test builtin's `[` is no glob.
+    [`[ -f x ] && cat <<'EOF'${body}`, 0, ''],
+  ]);
+});

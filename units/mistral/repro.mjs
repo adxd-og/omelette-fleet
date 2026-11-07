@@ -149,6 +149,34 @@ export function nodeUp({ home, node }) {
   return `^(${chain.map(regexLiteral).join('|')})$`;
 }
 
+/**
+ * What the repro profile re-allows of the node the adapter runs on, past its HOME deny, as two anchored regexes:
+ * `node` (NODE: these paths and everything under them) and `up` (NODEUP: nodeUp's chain, metadata only).
+ *   - A prefix outside the home: the whole prefix; nothing in the home.
+ *   - A prefix under the home (`~/.nvm/versions/node/v20`): its `bin`, `lib/node_modules/npm` and
+ *     `lib/node_modules/corepack` only, so the operator's other global packages stay unreadable, and the directories
+ *     from the home down to `lib/node_modules` stat-able, which node walks to npm's script.
+ *   - A prefix that is the home or an ancestor of it (a node in `~/bin`): the binary alone.
+ * All three paths come resolved.
+ */
+export function nodeReach({ home, prefix, binary }) {
+  const subpaths = (paths) => `^(${paths.map(regexLiteral).join('|')})(/|$)`;
+  const covers = home === prefix || home.startsWith(prefix === sep ? sep : prefix + sep);
+  if (covers) return { node: subpaths([binary]), up: nodeUp({ home, node: binary }) };
+  if (!prefix.startsWith(home === sep ? sep : home + sep)) return { node: subpaths([prefix]), up: NODEUP_NONE };
+  const modules = join(prefix, 'lib', 'node_modules');
+  return { node: subpaths([join(prefix, 'bin'), join(modules, 'npm'), join(modules, 'corepack')]), up: nodeUp({ home, node: join(modules, 'npm') }) };
+}
+
+/**
+ * The wrapper's OMELETTE_REPRO_NODE and OMELETTE_REPRO_NODEUP for the node at `prefix` (`binary` its executable,
+ * both resolved; by default the node this process runs on), as reproOnce hands them on (nodeReach).
+ */
+export function nodeEnv({ home, prefix = realpathSync(dirname(dirname(process.execPath))), binary = realpathSync(process.execPath) }) {
+  const { node, up } = nodeReach({ home, prefix, binary });
+  return { OMELETTE_REPRO_NODE: node, OMELETTE_REPRO_NODEUP: up };
+}
+
 /** A path on one line: JSON-quoted when it holds a control character (a newline would forge a diff line). */
 const oneLine = (p) => (/[\u0000-\u001f\u007f]/.test(p) ? JSON.stringify(p) : p);
 

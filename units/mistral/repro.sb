@@ -5,9 +5,10 @@
 ; command's own terminal and its fd devices — with these changes:
 ;   - no blanket write allow on /private/var/folders; the temp root and every
 ;     ancestor of the runs root stay unwritable (no rename, no replacement);
-;   - no read of the operator's home (HOME) — but the prefix of the node the
-;     adapter runs on (NODE), and the metadata of the directories from HOME
-;     down to it (NODEUP) — or of the reviewed work tree (SRC), nor of the
+;   - no read of the operator's home (HOME) — but what the adapter's node
+;     needs (NODE: its prefix, or under HOME only its bin, npm and corepack),
+;     and the metadata of the directories from HOME down to it (NODEUP) — or of
+;     the reviewed work tree (SRC), nor of the
 ;     fleet home (FLEET), the run's output dir (OUT), any
 ;     omelette-* dir under the OS temp root (TMPROOT) or any run (RUNS) but its
 ;     own clone and tmp, re-allowed last;
@@ -37,8 +38,8 @@
 (deny file-read* (subpath (param "HOME")))
 ; …but the metadata of the directories from HOME down to the node prefix's parent: node lstats each on its way to a script under it (npm in ~/.nvm); none is listable
 (allow file-read-metadata (regex (param "NODEUP")))
-; the node the adapter runs on stays runnable: its install prefix, wherever it lives (~/.nvm included)
-(allow file-read* (subpath (param "NODE")))
+; the node the adapter runs on stays runnable: its install prefix, or under HOME (~/.nvm) only its bin, npm and corepack — never the operator's other global packages
+(allow file-read* (regex (param "NODE")))
 (deny file-read* (subpath (param "SRC")))
 (deny file-read* (subpath (param "FLEET")))
 ; a command must not hand work to a process outside this profile

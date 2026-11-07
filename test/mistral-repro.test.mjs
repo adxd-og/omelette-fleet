@@ -21,7 +21,7 @@ import unit, { REPRO_PREFIX } from '../units/mistral/adapter.mjs';
 import { PARTIAL_MARK_RE } from '../core/partial.mjs';
 import { ensureHome } from '../units/mistral/home.mjs';
 import {
-  NODEUP_NONE, appendPatch, assertRun, clearRun, cloneDiff, fixModes, neutraliseModelText, nodeUp, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
+  NODEUP_NONE, appendPatch, assertRun, clearRun, cloneDiff, fixModes, neutraliseModelText, nodeEnv, nodeReach, nodeUp, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
 } from '../units/mistral/repro.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
@@ -35,7 +35,7 @@ const made = [BASE];
 after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 
 const CLOSED = 'Error: mistral_security_repro is closed — set OMELETTE_ALLOW_REPRO=1 on the unit\'s registration to let the model execute code in a disposable clone (OMELETTE_ALLOW_WRITE does not open it)';
-const RESOLVED_ENV = ['VIBE_HOME', 'TMPDIR', 'OMELETTE_FLEET_HOME', 'OMELETTE_REPRO_CLONE', 'OMELETTE_REPRO_TMP', 'OMELETTE_REPRO_OUT', 'OMELETTE_REPRO_RUNS', 'OMELETTE_REPRO_RUN', 'OMELETTE_REPRO_SRC', 'OMELETTE_REPRO_NODE'];
+const RESOLVED_ENV = ['VIBE_HOME', 'TMPDIR', 'OMELETTE_FLEET_HOME', 'OMELETTE_REPRO_CLONE', 'OMELETTE_REPRO_TMP', 'OMELETTE_REPRO_OUT', 'OMELETTE_REPRO_RUNS', 'OMELETTE_REPRO_RUN', 'OMELETTE_REPRO_SRC'];
 
 const FAKE = join(BASE, 'fake-vibe.mjs');
 writeFileSync(FAKE, [
@@ -283,8 +283,9 @@ test('every path in the child\'s env is resolved; TMPROOT is the resolved temp r
   // HOME, which the wrapper hands the profile as it stands: the adapter's /tmp/… reaches Vibe as /private/tmp/….
   assert.ok(w.home.startsWith('/tmp/'), w.home);
   assert.equal(s.env.HOME, realpathSync(w.home));
-  // NODEUP is built from the same two resolved paths.
-  assert.equal(s.env.OMELETTE_REPRO_NODEUP, nodeUp({ home: s.env.HOME, node: s.env.OMELETTE_REPRO_NODE }));
+  // NODE and NODEUP are built from the resolved HOME and the node this process runs on.
+  assert.deepEqual({ node: s.env.OMELETTE_REPRO_NODE, up: s.env.OMELETTE_REPRO_NODEUP },
+    nodeReach({ home: s.env.HOME, prefix: realpathSync(dirname(dirname(process.execPath))), binary: realpathSync(process.execPath) }));
   assert.ok(s.env.OMELETTE_REPRO_CLONE.startsWith(`${real}/`), 'the clone went under the symlinked temp root');
   assert.ok(s.env.OMELETTE_FLEET_HOME.startsWith('/private/tmp/'), s.env.OMELETTE_FLEET_HOME);
   // The profile reads TMPROOT inside a regex: the `.` of real.tmp reaches it escaped.
@@ -811,7 +812,7 @@ function sandboxedRun(name, home) {
     PATH: '/usr/bin:/bin', HOME: home, OMELETTE_FLEET_HOME: realpathSync(fleet), OMELETTE_REPRO_CLONE: run.clone, OMELETTE_REPRO_TMP: run.tmp,
     OMELETTE_REPRO_OUT: run.out, OMELETTE_REPRO_RUNS: realpathSync(runsRoot()), OMELETTE_REPRO_RUN: run.runDir,
     OMELETTE_REPRO_TMPROOT: regexLiteral(realpathSync(tmpdir())), OMELETTE_REPRO_SRC: realpathSync(run.top),
-    OMELETTE_REPRO_NODE: realpathSync(dirname(dirname(process.execPath))), OMELETTE_REPRO_NODEUP: nodeUp({ home, node: realpathSync(dirname(dirname(process.execPath))) }),
+    ...nodeEnv({ home }),
   };
   return { run, wrapper: join(dir, 'shell.sh'), env };
 }
@@ -824,34 +825,50 @@ test('nodeUp: the directories from HOME down to the node prefix\'s parent, regex
   for (const node of ['/opt/node', '/hx/node', '/h']) assert.equal(nodeUp({ home: '/h', node }), NODEUP_NONE, node);
 });
 
-test('NODEUP: the directories from HOME down to the node prefix are stat-able and never listable; nothing beside them is', { skip: !KERNEL }, () => {
+test('nodeReach: outside the home the whole prefix; under it its bin, npm and corepack and the chain to lib/node_modules; at or above it the binary alone', () => {
+  assert.deepEqual(nodeReach({ home: '/h', prefix: '/opt/node', binary: '/opt/node/bin/node' }), { node: '^(/opt/node)(/|$)', up: NODEUP_NONE });
+  assert.deepEqual(nodeReach({ home: '/h', prefix: '/h/.nvm/v20', binary: '/h/.nvm/v20/bin/node' }), {
+    node: '^(/h/\\.nvm/v20/bin|/h/\\.nvm/v20/lib/node_modules/npm|/h/\\.nvm/v20/lib/node_modules/corepack)(/|$)',
+    up: '^(/h|/h/\\.nvm|/h/\\.nvm/v20|/h/\\.nvm/v20/lib|/h/\\.nvm/v20/lib/node_modules)$',
+  });
+  assert.deepEqual(nodeReach({ home: '/h', prefix: '/h', binary: '/h/bin/node' }), { node: '^(/h/bin/node)(/|$)', up: '^(/h|/h/bin)$' });
+  assert.deepEqual(nodeReach({ home: '/h/deep', prefix: '/h', binary: '/h/bin/node' }), { node: '^(/h/bin/node)(/|$)', up: NODEUP_NONE });
+});
+
+test('NODE and NODEUP under the home: bin, npm and corepack readable, the other global packages and the rest of the prefix not; the directories down to lib/node_modules stat-able, none listable', { skip: !KERNEL }, () => {
   const home = realpathSync(mkdtempSync(join(HOMES, 'omelette-mistral-t3-nodeup-')));
   made.push(home);
   const node = join(home, 'nvm', 'versions', 'node', 'v20');
-  for (const d of [join(node, 'bin'), join(home, 'nvm', 'versions', 'node', 'v18'), join(home, 'other')]) mkdirSync(d, { recursive: true });
-  writeFileSync(join(home, 'other', 'note'), 'operator note\n');
+  const modules = join(node, 'lib', 'node_modules');
+  for (const d of [join(node, 'bin'), join(node, 'include'), join(modules, 'npm'), join(modules, 'corepack'), join(modules, 'other'), join(home, 'nvm', 'versions', 'node', 'v18'), join(home, 'other')]) mkdirSync(d, { recursive: true });
+  for (const f of [join(node, 'bin', 'tool'), join(node, 'include', 'h'), join(modules, 'npm', 'package.json'), join(modules, 'corepack', 'package.json'), join(modules, 'other', 'package.json'), join(home, 'other', 'note')]) writeFileSync(f, 'x\n');
   writeFileSync(join(home, '.zsh_history'), 'operator history\n');
   const { run, wrapper, env } = sandboxedRun('nodeup', home);
   try {
+    const P = 'nvm/versions/node/v20';
     const stat = (name, p) => `/usr/bin/stat -f %N "$T_HOME/${p}" >/dev/null 2>&1; echo ${name}=$?`;
+    const cat = (name, p) => `cat "$T_HOME/${p}" >/dev/null 2>&1; echo ${name}=$?`;
     const r = spawnSync(wrapper, ['-c', [
-      stat('home', '.'), stat('nvm', 'nvm'), stat('versions', 'nvm/versions'), stat('nodes', 'nvm/versions/node'),
+      stat('home', '.'), stat('nvm', 'nvm'), stat('nodes', 'nvm/versions/node'), stat('prefix', P), stat('lib', `${P}/lib`), stat('modules', `${P}/lib/node_modules`),
       stat('sibling', 'nvm/versions/node/v18'), stat('other', 'other'), stat('history', '.zsh_history'),
+      cat('bin', `${P}/bin/tool`), cat('npm', `${P}/lib/node_modules/npm/package.json`), cat('corepack', `${P}/lib/node_modules/corepack/package.json`),
+      cat('globalpkg', `${P}/lib/node_modules/other/package.json`), cat('include', `${P}/include/h`), cat('cathistory', '.zsh_history'),
       'ls "$T_HOME" >/dev/null 2>&1; echo lshome=$?',
-      'ls "$T_HOME/nvm" >/dev/null 2>&1; echo lsnvm=$?',
-      'cat "$T_HOME/.zsh_history" >/dev/null 2>&1; echo cathistory=$?',
-    ].join('\n')], { env: { ...env, OMELETTE_REPRO_NODE: node, OMELETTE_REPRO_NODEUP: nodeUp({ home, node }), T_HOME: home }, cwd: run.clone, encoding: 'utf8' });
+      `ls "$T_HOME/${P}/lib/node_modules" >/dev/null 2>&1; echo lsmodules=$?`,
+    ].join('\n')], { env: { ...env, ...nodeEnv({ home, prefix: node, binary: join(node, 'bin', 'node') }), T_HOME: home }, cwd: run.clone, encoding: 'utf8' });
     const rows = Object.fromEntries([...r.stdout.matchAll(/^(\w+)=(\d+)$/gm)].map((m) => [m[1], Number(m[2])]));
-    assert.deepEqual(rows, { home: 0, nvm: 0, versions: 0, nodes: 0, sibling: 1, other: 1, history: 1, lshome: 1, lsnvm: 1, cathistory: 1 }, r.stdout + r.stderr);
+    assert.deepEqual(rows, {
+      home: 0, nvm: 0, nodes: 0, prefix: 0, lib: 0, modules: 0, sibling: 1, other: 1, history: 1,
+      bin: 0, npm: 0, corepack: 0, globalpkg: 1, include: 1, cathistory: 1, lshome: 1, lsmodules: 1,
+    }, r.stdout + r.stderr);
   } finally {
     removeRun(run.runDir);
   }
 });
 
 // The operator's real HOME, only for npm to run and `ls` of it to be refused; skipped where npm is not beside the node.
-test('npm runs in the clone under the real HOME, a node under it included (NODEUP); the home stays unlistable', { skip: !KERNEL || !existsSync(join(dirname(process.execPath), 'npm')) }, () => {
+test('npm runs in the clone under the real HOME, a node under it included (NODE, NODEUP); the home stays unlistable', { skip: !KERNEL || !existsSync(join(dirname(process.execPath), 'npm')) }, () => {
   const home = realpathSync(homedir());
-  const node = realpathSync(dirname(dirname(process.execPath)));
   const { run, wrapper, env } = sandboxedRun('nodeup-npm', home);
   try {
     mkdirSync(join(run.clone, 'pkg'));
@@ -862,7 +879,7 @@ test('npm runs in the clone under the real HOME, a node under it included (NODEU
       'npm --version >/dev/null 2>&1; echo npmversion=$?',
       'npm test >/dev/null 2>&1; echo npmtest=$?',
       'ls "$T_HOME" >/dev/null 2>&1; echo lshome=$?',
-    ].join('\n')], { env: { ...env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, OMELETTE_REPRO_NODEUP: nodeUp({ home, node }), T_HOME: home }, cwd: run.clone, encoding: 'utf8', timeout: 120_000 });
+    ].join('\n')], { env: { ...env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, T_HOME: home }, cwd: run.clone, encoding: 'utf8', timeout: 120_000 });
     const rows = Object.fromEntries([...r.stdout.matchAll(/^(\w+)=(\d+)$/gm)].map((m) => [m[1], Number(m[2])]));
     assert.deepEqual(rows, { npmversion: 0, npmtest: 0, lshome: 1 }, r.stdout + r.stderr);
   } finally {

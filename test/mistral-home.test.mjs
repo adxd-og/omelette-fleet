@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { makeCatalog } from '../core/catalog.mjs';
 import { EFFORTS, GUIDE, MISTRAL_MODELS } from '../units/mistral/models.js';
 import { ensureHome, renderVibeConfig, renderWrapper, resolveAlias } from '../units/mistral/home.mjs';
-import { NODEUP_NONE, nodeUp } from '../units/mistral/repro.mjs';
+import { NODEUP_NONE, nodeEnv } from '../units/mistral/repro.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const POLICY = [
@@ -41,7 +41,7 @@ const SB_LINES = [
   '(deny file-write* (regex #"^/dev/ttys"))',
   '(deny file-read* (subpath (param "HOME")))',
   '(allow file-read-metadata (regex (param "NODEUP")))',
-  '(allow file-read* (subpath (param "NODE")))',
+  '(allow file-read* (regex (param "NODE")))',
   '(deny file-read* (subpath (param "SRC")))',
   '(deny file-read* (subpath (param "FLEET")))',
   '(deny appleevent-send)',
@@ -280,7 +280,7 @@ test('the repro profile read-denies the fleet home wherever OMELETTE_HOME put it
   const env = {
     PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out,
     OMELETTE_REPRO_RUNS: join(base, 'runs'), OMELETTE_REPRO_RUN: base, OMELETTE_REPRO_TMPROOT: realpathSync(tmpdir()), OMELETTE_REPRO_SRC: join(base, 'src'),
-    OMELETTE_REPRO_NODE: realpathSync(dirname(dirname(process.execPath))), OMELETTE_REPRO_NODEUP: nodeUp({ home, node: realpathSync(dirname(dirname(process.execPath))) }),
+    ...nodeEnv({ home }),
   };
   const run = (cmd) => spawnSync(join(dir, 'shell.sh'), ['-c', cmd], { env });
   const denied = run('cat "$OMELETTE_FLEET_HOME/fleet.config.json"');

@@ -15,7 +15,7 @@ import { createUnitRuntime } from '../core/unit.mjs';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
 import { ensureHome } from '../units/mistral/home.mjs';
 import {
-  LINKS_CAP, appendPatch, clearRun, fixModes, neutraliseModelText, nodeUp, outsideLinks, prepareClone, regexLiteral, removeRun, runsRoot,
+  LINKS_CAP, appendPatch, clearRun, fixModes, neutraliseModelText, nodeEnv, outsideLinks, prepareClone, regexLiteral, removeRun, runsRoot,
 } from '../units/mistral/repro.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -59,7 +59,7 @@ function sandboxedRun({ home, node, src, fleet: fleetDir } = {}) {
     PATH: '/usr/bin:/bin', HOME: home, OMELETTE_FLEET_HOME: realpathSync(fleet), OMELETTE_REPRO_CLONE: run.clone, OMELETTE_REPRO_TMP: run.tmp,
     OMELETTE_REPRO_OUT: run.out, OMELETTE_REPRO_RUNS: realpathSync(runsRoot()), OMELETTE_REPRO_RUN: run.runDir,
     OMELETTE_REPRO_TMPROOT: regexLiteral(realpathSync(tmpdir())), OMELETTE_REPRO_SRC: realpathSync(run.top),
-    OMELETTE_REPRO_NODE: node || realpathSync(dirname(dirname(process.execPath))), OMELETTE_REPRO_NODEUP: nodeUp({ home, node: node || realpathSync(dirname(dirname(process.execPath))) }), TMPDIR: run.tmp, T_HOME: home,
+    ...(node ? nodeEnv({ home, prefix: node, binary: join(node, 'bin', 'node') }) : nodeEnv({ home })), TMPDIR: run.tmp, T_HOME: home,
   };
   const wrapper = join(dir, 'shell.sh');
   const sh = (script, extra = {}) => spawnSync(wrapper, ['-c', script], { env: { ...env, ...extra }, cwd: run.clone, encoding: 'utf8', timeout: 120_000 });
@@ -351,25 +351,27 @@ test('profile: a HOME spelled through a symlink is denied by its real path too',
   assert.deepEqual(rowsOf(ran.stdout), { via_real: 1, via_link: 1 }, ran.stdout + ran.stderr);
 });
 
-test('nodePrefix: the install prefix is re-allowed unless it IS the operator\'s home or an ancestor of it — then the binary alone', { skip: !DARWIN }, async () => {
+test('NODE: the install prefix is re-allowed when it is outside the operator\'s home; under it only its bin, npm and corepack; when it IS the home or an ancestor of it, the binary alone', { skip: !DARWIN }, async () => {
   const fakeNode = (dir) => { mkdirSync(dir, { recursive: true }); const p = join(dir, 'node'); writeFileSync(p, '#!/bin/sh\n'); chmodSync(p, 0o755); return p; };
   const top = realpathSync(mkdtempSync(join(BASE, 'np-')));
+  // NODE is an anchored regex of subpaths (nodeReach): these paths and everything under them.
+  const subpaths = (...paths) => `^(${paths.map(regexLiteral).join('|')})(/|$)`;
   // A prefix elsewhere: the prefix.
   const elsewhere = join(top, 'elsewhere');
   const home = join(top, 'home');
   mkdirSync(home);
-  assert.equal(await nodeParamFor({ execPath: fakeNode(join(elsewhere, 'bin')), home }), elsewhere);
-  // A prefix inside the home (an nvm install): the prefix.
+  assert.equal(await nodeParamFor({ execPath: fakeNode(join(elsewhere, 'bin')), home }), subpaths(elsewhere));
+  // A prefix inside the home (an nvm install): its bin, npm and corepack — never its other global packages.
   const nvm = join(home, '.nvm', 'v1');
-  assert.equal(await nodeParamFor({ execPath: fakeNode(join(nvm, 'bin')), home }), nvm);
+  assert.equal(await nodeParamFor({ execPath: fakeNode(join(nvm, 'bin')), home }), subpaths(join(nvm, 'bin'), join(nvm, 'lib', 'node_modules', 'npm'), join(nvm, 'lib', 'node_modules', 'corepack')));
   // The prefix IS the home (node in ~/bin): the binary alone.
   const bin = fakeNode(join(home, 'bin'));
-  assert.equal(await nodeParamFor({ execPath: bin, home }), bin);
+  assert.equal(await nodeParamFor({ execPath: bin, home }), subpaths(bin));
   // The prefix is an ancestor of the home: the binary alone.
   const deep = join(top, 'deep');
   const ancestor = fakeNode(join(top, 'bin'));
   mkdirSync(deep);
-  assert.equal(await nodeParamFor({ execPath: ancestor, home: deep }), ancestor);
+  assert.equal(await nodeParamFor({ execPath: ancestor, home: deep }), subpaths(ancestor));
 });
 
 /* ── D. doctor ─────────────────────────────────────────────────────────────────────────────────────────── */

@@ -441,10 +441,10 @@ function opaqueEnd(command, start, kind, budget) {
 }
 
 /**
- * The programs that run a heredoc body as a script, by name or path: the shells, and `eval`, `source` and `.`
- * (source's POSIX spelling), which read one (`source /dev/stdin <<EOF`, `. <(cat <<EOF …)`).
+ * The programs that run a heredoc body as a script, by name or path: the shells (`busybox` for its `sh` applet), and
+ * `eval`, `source` and `.` (source's POSIX spelling), which read one (`source /dev/stdin <<EOF`, `. <(cat <<EOF …)`).
  */
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'eval', 'source', '.']);
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'csh', 'tcsh', 'ash', 'yash', 'posh', 'fish', 'busybox', 'eval', 'source', '.']);
 
 /**
  * How a text is read when a shell runs what it prints (tokenize, forbidden). `subs`: its substitutions' output is
@@ -456,16 +456,31 @@ const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'eval', 'sou
 const NOT_FED = Object.freeze({ subs: false, bodies: false });
 const FEEDS_SUBS = Object.freeze({ subs: true, bodies: false });
 const FEEDS_ALL = Object.freeze({ subs: true, bodies: true });
+/**
+ * …and a quoted word of a line that feeds no shell, re-read in case it is a script: its first word is no program
+ * word (`echo "$(cat <<'EOF' … EOF)"` runs echo), so feedsShell's program-word clause is off for it (`word`).
+ */
+const QUOTED_WORD = Object.freeze({ subs: false, bodies: false, word: true });
 
 /**
  * Does a shell read the heredoc bodies of the line whose words start at `from` (the newline that ends it the last
  * token, or the command's end)? Yes when any word of the line is one of SHELLS — `bash <<'EOF'`, `/bin/bash`, `env
  * bash`, `bash -s`, `cat <<'EOF' | sh` — or when a newline ends it right after a `|` or `&&`/`||`, whose next command
  * comes after the body. Any word, not only the program: a wrapper's options are not walked, and reading a body that
- * only names git costs a refusal of a git write, never a command that runs. tokenize asks it of every line that
- * holds a heredoc or a substitution: the line's substitutions are fed to that shell too (NOT_FED).
+ * only names git costs a refusal of a git write, never a command that runs. And yes when a command of the line has
+ * a program word that may name any program (mayBeAnyProgram: `$SHELL <<'EOF'`, `$(which bash) <<'EOF'`, `"$sh"`,
+ * `ba{sh,x}`, `/bin/ba?h`, `b\ash`): it may be a shell, so it fails closed (`programs`; off in the re-read of a quoted word no shell runs,
+ * QUOTED_WORD). tokenize asks it of every line that holds a heredoc or a substitution: the line's substitutions are
+ * fed to that shell too (NOT_FED).
  */
-function feedsShell(tokens, from) {
+/**
+ * A program word whose name is not known until the shell expands it: an expansion or a substitution, a brace group
+ * with a comma or `..`, a glob (`?`, `*`, a closed `[…]`, outside quotes) or a backslash escape (`b\ash` is
+ * `bash`). An unclosed `[` is no glob: the test builtin's `[`, and `a.b[` in `a.b[<<EOF]`.
+ */
+const mayBeAnyProgram = (text) => SUBSTITUTED.test(text) || text.includes('\\') || globbed(text, true) || braceScan(text) !== null;
+
+function feedsShell(tokens, from, programs = true) {
   const [before, last] = tokens.slice(-2);
   const endsInPipe = last && last.text === '\n' && tokens.length - 2 >= from && before.separator && (before.text === '|' || before.text === '&');
   if (endsInPipe) return true;
@@ -473,6 +488,11 @@ function feedsShell(tokens, from) {
     if (tokens[k].separator) continue;
     const word = unquote(tokens[k].text).replace(/^\(+|\)+$/g, '');
     if (SHELLS.has(word.slice(word.lastIndexOf('/') + 1))) return true;
+  }
+  for (let k = from; programs && k < tokens.length; k++) {
+    k = programWord(tokens, k);
+    if (k < tokens.length && !tokens[k].separator && mayBeAnyProgram(tokens[k].text)) return true;
+    while (k < tokens.length && !tokens[k].separator) k++;
   }
   return false;
 }
@@ -596,8 +616,11 @@ function tokenize(command, fed = NOT_FED) {
   // heredoc bodies of the commands inside them are commands too — and its quoted words with FEEDS_SUBS.
   const endLine = () => {
     if (spans.length === lineSpans && !pendingHeredocs.length) return false;
-    const shell = fed.bodies || feedsShell(tokens, lineStart);
-    if (shell || fed.subs) for (let k = lineSpans; k < spans.length; k++) feeds[k] = kinds[k] === 'sub' ? FEEDS_ALL : FEEDS_SUBS;
+    const shell = fed.bodies || feedsShell(tokens, lineStart, !fed.word);
+    for (let k = lineSpans; k < spans.length; k++) {
+      if (shell || fed.subs) feeds[k] = kinds[k] === 'sub' ? FEEDS_ALL : FEEDS_SUBS;
+      else if (kinds[k] === 'word') feeds[k] = QUOTED_WORD;
+    }
     return shell;
   };
   const budget = { left: OPAQUE_SCAN_BUDGET }; // shared by every opaqueEnd this command makes
@@ -1083,15 +1106,19 @@ function spliced(text, from, to, groups) {
   return words.map((w) => w + tail);
 }
 
-/** A word holding `?`, `*` or `[` outside quotes and escapes: a pathname expansion the shell may turn into any name. */
-function globbed(text) {
+/**
+ * A word holding `?`, `*` or `[` outside quotes and escapes: a pathname expansion the shell may turn into any name.
+ * `closed`: a `[` counts only with a `]` after it, the bracket expression it opens (`ba[s]h`); without one it is the
+ * character itself (`a.b[`, the test builtin's `[`).
+ */
+function globbed(text, closed = false) {
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (c === '\\') { i++; continue; }
     if (c === '$' && text[i + 1] === "'") { i = ansiC(text, i + 2).end; continue; }
     if (c === "'") { const e = text.indexOf("'", i + 1); if (e < 0) return false; i = e; continue; }
     if (c === '"') { for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++; continue; }
-    if (c === '?' || c === '*' || c === '[') return true;
+    if (c === '?' || c === '*' || (c === '[' && (!closed || text.indexOf(']', i + 1) > i))) return true;
   }
   return false;
 }
