@@ -120,6 +120,8 @@ test('an arm names a catalog model; Gemini carries its effort in the model id, C
   assert.deepEqual(parseArm('codex:gpt-6.1-sol'), { arm: 'codex:gpt-6.1-sol', unit: 'codex', model: 'gpt-6.1-sol', effort: null });
   assert.deepEqual(parseArm('codex:gpt-6-astra:xhigh'), { arm: 'codex:gpt-6-astra:xhigh', unit: 'codex', model: 'gpt-6-astra', effort: 'xhigh' });
   assert.deepEqual(parseArm('grok:grok-4.7'), { arm: 'grok:grok-4.7', unit: 'grok', model: 'grok-4.7', effort: null });
+  assert.deepEqual(parseArm('mistral:mistral-large-4-0-3:low'), { arm: 'mistral:mistral-large-4-0-3:low', unit: 'mistral', model: 'mistral-large-4-0-3', effort: 'low' });
+  assert.throws(() => parseArm('mistral:mistral-large-4-0-3:xhigh'), /effort/);
   assert.throws(() => parseArm('claude:opus'), /unit/);
   assert.throws(() => parseArm('codex:no-such-model'), /model/);
   assert.throws(() => parseArm('codex:gpt-6.1-sol:loud'), /effort/);
@@ -174,6 +176,16 @@ test('V: Codex and Grok review the snapshot as cwd; Gemini gets the file\'s text
   assert.ok(g.args.prompt.startsWith(task.prompt));
   assert.ok(g.args.prompt.includes(task.fileText));
   assert.ok(g.args.prompt.includes(task.file));
+});
+
+test('the mistral arm dispatches to mistral_security_review in both suites, the snapshot as cwd for V', () => {
+  const task = { id: 'v1', commit: 'abc1234', file: 'a.js', prompt: 'Invented brief.', snapshot: '/abs/snap', fileText: 'x' };
+  const arm = parseArm('mistral:mistral-large-4-0-3:low');
+  assert.deepEqual(planCalls({ suite: 'V', arm, tasks: [task] }),
+    [{ taskIds: ['v1'], tool: 'mistral_security_review', args: { prompt: task.prompt, model: 'mistral-large-4-0-3', effort: 'low', cwd: '/abs/snap' } }]);
+  const [r] = planCalls({ suite: 'R', arm, tasks: R_TASKS });
+  assert.equal(r.tool, 'mistral_security_review');
+  assert.ok(UNITS.mistral);
 });
 
 test('V has no batch form', () => {

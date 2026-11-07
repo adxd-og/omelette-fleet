@@ -49,13 +49,15 @@ import geminiUnit from '../units/gemini/adapter.mjs';
 import { GEMINI_MODELS } from '../units/gemini/models.js';
 import grokUnit from '../units/grok/adapter.mjs';
 import { GROK_MODELS } from '../units/grok/models.js';
+import mistralUnit from '../units/mistral/adapter.mjs';
+import { MISTRAL_MODELS } from '../units/mistral/models.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
 const USAGE = 'usage: node scripts/eval-blind.mjs --date YYYY-MM-DD [--dir D] [--seed N] | --date YYYY-MM-DD --aggregate [--dir D] [--merge YYYY-MM-DD]';
 
 /** The family words the plan names, beside the catalogs' own ids and labels. */
-export const FAMILY_WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra'];
+export const FAMILY_WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra', 'Mistral', 'Vibe', 'Large 4', 'GLM'];
 /** The vendors and the vendor tools an answer may name itself by. */
 export const VENDOR_WORDS = ['OpenAI', 'ChatGPT', 'Google', 'DeepMind', 'xAI', 'Antigravity', 'agy'];
 export const MASK = '[model]';
@@ -68,8 +70,8 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * date's run lines.
  */
 export function redactionTerms(extra = []) {
-  const catalog = [...GEMINI_MODELS, ...GROK_MODELS, ...CODEX_MODELS].flatMap((m) => [m.id, m.label]);
-  const tools = [geminiUnit, grokUnit, codexUnit].flatMap((u) => u.tools.map((t) => t.name));
+  const catalog = [...GEMINI_MODELS, ...GROK_MODELS, ...CODEX_MODELS, ...MISTRAL_MODELS].flatMap((m) => [m.id, m.label]);
+  const tools = [geminiUnit, grokUnit, codexUnit, mistralUnit].flatMap((u) => u.tools.map((t) => t.name));
   const seen = new Map();
   for (const t of [...catalog, ...FAMILY_WORDS, ...VENDOR_WORDS, ...tools, ...extra]) {
     const s = String(t ?? '').trim();

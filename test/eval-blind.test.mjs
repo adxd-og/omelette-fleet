@@ -14,8 +14,8 @@ import { aggregate, blind, redact, redactionTerms } from '../scripts/eval-blind.
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRIPT = join(ROOT, 'scripts', 'eval-blind.mjs');
-const WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra'];
-const TOOLS = ['gemini_research', 'gemini_deep_research', 'grok_research', 'grok_code_review', 'codex_research', 'codex_code_review'];
+const WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra', 'Mistral', 'Vibe', 'Large 4', 'GLM'];
+const TOOLS = ['gemini_research', 'gemini_deep_research', 'grok_research', 'grok_code_review', 'codex_research', 'codex_code_review', 'mistral_security_review', 'mistral_security_repro'];
 
 /** A name is gone when no letter-bounded occurrence of it is left, in any case. */
 const leftover = (text, name) => new RegExp(`(?<!\\p{L})${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')}(?!\\p{L})`, 'iu').test(text);

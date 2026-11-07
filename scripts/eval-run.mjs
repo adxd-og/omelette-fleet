@@ -52,16 +52,17 @@ import { locateBin, resolveBin } from '../core/unit.mjs';
 import codexUnit from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
 import grokUnit from '../units/grok/adapter.mjs';
+import mistralUnit from '../units/mistral/adapter.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
-export const UNITS = { gemini: geminiUnit, grok: grokUnit, codex: codexUnit };
+export const UNITS = { gemini: geminiUnit, grok: grokUnit, codex: codexUnit, mistral: mistralUnit };
 export const SUITES = ['R', 'V'];
 
 /** The tool each suite calls on each unit: the research tool for R; the review tool for V, Gemini having none. */
 export const TOOL_FOR = {
-  R: { gemini: 'gemini_research', grok: 'grok_research', codex: 'codex_research' },
-  V: { gemini: 'gemini_research', grok: 'grok_code_review', codex: 'codex_code_review' },
+  R: { gemini: 'gemini_research', grok: 'grok_research', codex: 'codex_research', mistral: 'mistral_security_review' },
+  V: { gemini: 'gemini_research', grok: 'grok_code_review', codex: 'codex_code_review', mistral: 'mistral_security_review' },
 };
 
 const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V --arm <unit>:<model>[:<effort>] [--arm …] [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]';

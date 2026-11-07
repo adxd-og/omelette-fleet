@@ -29,6 +29,7 @@ import { parseArgs } from 'node:util';
 import { CODEX_MODELS } from '../units/codex/models.js';
 import { GEMINI_MODELS } from '../units/gemini/models.js';
 import { GROK_MODELS } from '../units/grok/models.js';
+import { MISTRAL_MODELS } from '../units/mistral/models.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
@@ -60,7 +61,7 @@ const fmtCount = (v) => (v === null || v === undefined ? 'n/a' : String(r1(v)));
 const fmtPct = (v) => (v === null || v === undefined ? 'n/a' : `${Math.round(v)} %`);
 const textW = (s, size = 12) => String(s).length * size * 0.56;
 
-const CATALOG = new Map([...GEMINI_MODELS, ...GROK_MODELS, ...CODEX_MODELS].map((m) => [m.id, m.label]));
+const CATALOG = new Map([...GEMINI_MODELS, ...GROK_MODELS, ...CODEX_MODELS, ...MISTRAL_MODELS].map((m) => [m.id, m.label]));
 
 /** An arm as a reader names it: the catalog's label (or the id, its level after a middle dot), then the effort Codex or Grok used. */
 export function armLabel(a) {
@@ -69,8 +70,8 @@ export function armLabel(a) {
   return a.unit !== 'gemini' && a.effort ? `${base} · ${a.effort}` : base;
 }
 
-const UNIT_ORDER = ['gemini', 'grok', 'codex'];
-const CATALOG_ORDER = [...GEMINI_MODELS, ...GROK_MODELS, ...CODEX_MODELS].map((m) => m.id);
+const UNIT_ORDER = ['gemini', 'grok', 'codex', 'mistral'];
+const CATALOG_ORDER = [...GEMINI_MODELS, ...GROK_MODELS, ...CODEX_MODELS, ...MISTRAL_MODELS].map((m) => m.id);
 
 /** The order arms are drawn and keyed in: the fleet's unit order, then model family, level, catalog order. */
 function sortArms(arms) {
