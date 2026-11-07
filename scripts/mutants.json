@@ -464,8 +464,8 @@
   {
     "id": "guard-quoted-span-skipped",
     "file": "hooks/omelette-guard.mjs",
-    "find": "|| spans.some((span) => (depth < QUOTE_DEPTH ? forbidden(span, depth + 1) : /\\bgit\\b/.test(span)));",
-    "replace": "|| false;",
+    "find": "const verdict = depth < QUOTE_DEPTH ? forbidden(span, depth + 1) : /\\bgit\\b/.test(span);",
+    "replace": "const verdict = false;",
     "breaks": "git inside bash -c \"...\", $(...) or backticks passes the guard"
   },
   {

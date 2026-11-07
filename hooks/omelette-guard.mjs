@@ -124,7 +124,13 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  *   - and a longer word that merely starts like one of these is NOT it:
  *     `git commit-tree` writes an object and commits nothing, `merge-base`
  *     only computes, and `grep -c git commit.mjs` greps — SUBCOMMAND takes
- *     the whole word.
+ *     the whole word;
+ *   - a command substitution where `git`, a global option, its value or the
+ *     subcommand goes is not read but refused (1.9.0, subcommandAt): `git
+ *     $(echo) commit`, `git "$(printf commit)"` and `g$(echo)it commit` commit;
+ *     a variable expansion is read the same way (`git $x commit`), save a value
+ *     quoted whole, which can neither vanish nor split and is a value (`git -C
+ *     "$DIR" status` and `git -C '$DIR' status` run).
  *
  * NOT a security boundary: this is containment for a delegated agent that is
  * asked to behave, so an argv-array spawn, a backslash-escaped `g\it`, an alias
@@ -450,7 +456,9 @@ const ASSIGNMENT_WORD = /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/;
  * read as a command. So `git checkout $(git tag -l v1) -b new` is a checkout
  * whose start point comes from a listing, and `-b new` is the checkout's; `git
  * -C $(git rev-parse --show-toplevel) commit` commits. What a substitution
- * PRINTS is not known here and is not guessed at: it is one word, no flag. A
+ * PRINTS is not known here and is not guessed at: it is one word, no flag —
+ * which is why a word holding one where `git` or its subcommand goes is refused
+ * unread (subcommandAt). A
  * process substitution, `<(…)` or `>(…)`, is read exactly the same way — `diff
  * <(git tag -l) <(git branch -l)` is a diff of two listings — and so is one in
  * a redirection's target: `echo x > >(git commit -m y)` commits.
@@ -704,13 +712,128 @@ function tokenize(command) {
 }
 
 /**
+ * A word holding a command substitution, `$(…)` or backquotes, or a variable expansion — `${…}`, `$name`, and the
+ * one-character `$1`…`$9`, `$@`, `$*`, `$#`, `$?`, `$$`, `$!`, `$-` — as tokenize leaves it: a substitution unquoted
+ * as its bare delimiters (`$()`), everything else as written. Read on the word as written, so a single-quoted
+ * `'$(x)'` or `'$x'`, which the shell hands over literally, counts too: git refuses that word as no command of its
+ * own, so refusing it costs nothing. An arithmetic `$((…))` opens like a substitution and counts as one. A process
+ * substitution, `<(…)` or `>(…)`, is none: the shell hands it over as a path; nor are the quotes `$'…'` and `$"…"`.
+ */
+const SUBSTITUTED = /\$[({A-Za-z_0-9@*#?$!-]|`/;
+
+/** What subcommandAt names when a substitution stands where git or its subcommand goes: no subcommand, refused unread. */
+const UNREAD_SUBCOMMAND = Symbol('a command substitution where git or its subcommand goes');
+
+/**
+ * Where the substitution or expansion SUBSTITUTED finds at `i` of a word ends: the index of its last character, the
+ * word's length when it never closes, or -1 when none opens there. `$(…)` and backquotes end where substitutionEnd
+ * says, `${…}` at its matching brace (opaqueEnd), `$name` at its last name character, and a special parameter is
+ * one character.
+ */
+function expansionEnd(word, i) {
+  if (word[i] === '`') return substitutionEnd(word, i);
+  if (word[i] !== '$') return -1;
+  const next = word[i + 1] ?? '';
+  if (next === '(') return substitutionEnd(word, i);
+  if (next === '{') {
+    const end = opaqueEnd(word, i + 1, '{', { left: Infinity });
+    return end < 0 ? word.length : end;
+  }
+  if (/[A-Za-z_]/.test(next)) {
+    let end = i + 1;
+    while (/\w/.test(word[end + 1] ?? '')) end++;
+    return end;
+  }
+  return next && '0123456789@*#?$!-'.includes(next) ? i + 1 : -1;
+}
+
+/**
+ * One character standing for a substitution or expansion, in withExpansionsMarked: outside any quotes, inside double
+ * quotes, and inside single quotes, where the shell hands it over literally.
+ */
+const UNQUOTED_MARK = '\u0000';
+const QUOTED_MARK = '\u0001';
+const LITERAL_MARK = '\u0002';
+const MARKS = /[\u0000-\u0002]/g;
+
+/**
+ * A word with its quotes off (unquote) and each substitution or expansion SUBSTITUTED finds in it as ONE mark:
+ * QUOTED_MARK inside double quotes, where it is one piece of the word whatever it holds, and UNQUOTED_MARK outside
+ * quotes — where an empty one vanishes and a blank in one splits the word — an escaped one (`\$x`) included. A
+ * single-quoted or ANSI-C span the shell hands over literally is one LITERAL_MARK whole when SUBSTITUTED reads one in
+ * it, as SUBSTITUTED reads the word. One that never closes is UNQUOTED_MARK: what it holds is not known.
+ * `g$(echo)it` is `g` + UNQUOTED_MARK + `it`, `-C"$DIR"` is `-C` + QUOTED_MARK, `-C'$DIR'` is `-C` + LITERAL_MARK.
+ *
+ * Linear in the word: each expansion is skipped once it is scanned, a span once it is sliced.
+ */
+function withExpansionsMarked(text) {
+  let out = '';
+  let double = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const end = expansionEnd(text, i);
+    if (end >= 0) {
+      out += double && end < text.length ? QUOTED_MARK : UNQUOTED_MARK;
+      i = end;
+      continue;
+    }
+    if (c === '\\') {
+      // An escaped character is the word's — `\"` opens no quote — save an expansion, marked on the next turn.
+      out += c;
+      if (i + 1 < text.length && expansionEnd(text, i + 1) < 0) out += text[++i];
+      continue;
+    }
+    if (double) {
+      if (c === '"') double = false;
+      out += c;
+      continue;
+    }
+    if (c === "'" || (c === '$' && text[i + 1] === "'")) {
+      const open = c === "'" ? 1 : 2;
+      const stop = c === "'" ? text.indexOf("'", i + 1) : ansiC(text, i + 2).end;
+      const close = stop < 0 ? text.length : stop;
+      const body = text.slice(i + open, close);
+      out += text.slice(i, i + open) + (SUBSTITUTED.test(body) ? LITERAL_MARK : body) + (close < text.length ? "'" : '');
+      i = close;
+      continue;
+    }
+    if (c === '"') double = true;
+    out += c;
+  }
+  return unquote(out);
+}
+
+/**
+ * A global option with its value glued on, as withExpansionsMarked leaves it: `-C…`, `-c…`, or `--name=…` — its name
+ * plain, a mark only in its value. subcommandAt reads its value as it reads a detached one, and isGitWord never takes
+ * it for a program: `--git-dir=$(pwd)/.git` ends like a `.git` word and is an option.
+ */
+const GLUED_OPTION = /^(?:-[cC]|--[\w-]+=)./s;
+
+/**
+ * The global options that take the NEXT word as their value, known by name: their value quoted whole can neither
+ * vanish nor split, so `-C "$DIR"` is a directory and the word behind it is read on. An unlisted long option may take
+ * no value, so the word behind it may be the subcommand (subcommandAt's fallback), and a substitution or expansion
+ * there stays unread, quoted or not.
+ */
+const KNOWN_VALUED = new Set(['-C', '-c', '--git-dir', '--work-tree']);
+
+/**
  * A word that ends in `git` where a word begins — `git`, `/usr/bin/git`, `(git` — which is where an invocation can start.
  * Read with its quotes off: `"git"`, `g'it'` and `$'git'` are the word git runs as. A blank before `git` is inside
- * quotes, so the word is one argument (`"use git"`), never the program.
+ * quotes, so the word is one argument (`"use git"`), never the program. A substitution or expansion in it is read as an
+ * empty one, so `g$(echo)it`, `g${x}it` and `git$(echo)` are git words (subcommandAt refuses them unread), while a
+ * word that is only one, `$(date)`, `$(which git)` or `$GIT`, ends in nothing and is none — and so is a global option
+ * with its value glued on (GLUED_OPTION) that holds one, which the walk reads as an option.
  */
 const isGitWord = ({ text, separator }) => {
   if (separator) return false;
-  const word = unquote(text);
+  let word;
+  if (SUBSTITUTED.test(text)) {
+    const marked = withExpansionsMarked(text);
+    if (GLUED_OPTION.test(marked)) return false;
+    word = marked.replace(MARKS, '');
+  } else word = unquote(text);
   return word.endsWith('git') && !/[\w\s]/.test(word.charAt(word.length - 4));
 };
 
@@ -732,27 +855,63 @@ const isXargsWord = ({ text, separator }) => !separator && /(?:^|\/)xargs$/.test
  * subcommand behind it is missed, and no word is walked by two runs. Until
  * 1.3.0 a regex walked the run again from every `git` word inside it: `git -c `
  * ×4 000 took 2.4 s, and ×16 000 before a `; git commit` 8.9 s.
+ *
+ * A COMMAND SUBSTITUTION IS NOT READ HERE (1.9.0): what it prints may be the
+ * subcommand. Unquoted, an empty one vanishes and the word behind it moves up
+ * (`git $(echo) commit`, `git -C $(echo) . commit`); quoted, its output is the
+ * subcommand (`git "$(printf commit)"`); in the git word, its output is split
+ * into words of their own (`git$(printf ' commit')`). A word holding one
+ * (SUBSTITUTED) as the git word, a global option or the subcommand is
+ * UNREAD_SUBCOMMAND. As an option's value it marks the invocation `unread` and
+ * the walk goes on, so a subcommand behind it is still named and its refusal is
+ * its own (`git -C $(pwd) commit` commits); where none is, it is
+ * UNREAD_SUBCOMMAND. forbidden refuses both. After the subcommand a
+ * substitution is an argument like any other.
+ *
+ * A VARIABLE EXPANSION IS READ THE SAME WAY (SUBSTITUTED): `git $x commit`
+ * commits when `x` is empty, `git "$x" -m y` when it holds `commit`. Two values
+ * are read for what they are. One QUOTED WHOLE (withExpansionsMarked: no
+ * UNQUOTED_MARK) behind an option KNOWN_VALUED, or glued behind `=`, can
+ * neither vanish nor split: `-C "$DIR"`, `--git-dir="$D/.git"`, `-C
+ * "$(pwd)"` and the literal `-C '$DIR'` are values, no mark. A value GLUED to its option (GLUED_OPTION:
+ * `-C$(pwd)`, `-C$DIR`, `--git-dir=$(pwd)/.git`) is read as a detached one is,
+ * `unread` where it can vanish or split — and `-C"$x"` can: empty, it is `-C`,
+ * which takes the next word.
  */
 function subcommandAt(tokens, at) {
+  const holds = (k) => SUBSTITUTED.test(tokens[k].text);
+  const quotedWhole = (k) => !withExpansionsMarked(tokens[k].text).includes(UNQUOTED_MARK);
+  if (holds(at)) return { name: UNREAD_SUBCOMMAND, from: at + 1 };
   let j = at + 1;
   let fallback = -1;
+  let unread = false;
   const isWord = () => j < tokens.length && !tokens[j].separator && !isGitWord(tokens[j]);
   while (isWord()) {
+    if (holds(j)) {
+      const glued = withExpansionsMarked(tokens[j].text);
+      if (!GLUED_OPTION.test(glued)) return { name: UNREAD_SUBCOMMAND, from: j + 1 };
+      // Only a value behind `=` is held whole by its quotes: `-C"$x"` empty is a bare `-C`.
+      if (glued.includes(UNQUOTED_MARK) || !glued.startsWith('--')) unread = true;
+      j++;
+      continue;
+    }
     // Options and their values are read with the quotes off too: `git "-C" /x commit` is `git -C /x commit`.
     const text = unquote(tokens[j].text);
     if (GLOBAL_VALUED.test(text) && !GLOBAL_NO_VALUE.has(text)) {
       j++;
       // git takes the next word as the value whatever it opens with: `git -C -foo commit`.
       if (isWord()) {
-        if (subcommandOf(tokens[j])) fallback = j;
+        if (holds(j) && !(KNOWN_VALUED.has(text) && quotedWhole(j))) unread = true;
+        else if (subcommandOf(tokens[j])) fallback = j;
         j++;
       }
     } else if (GLOBAL_FLAG.test(text) || GLOBAL_NO_VALUE.has(text)) j++;
     else break;
   }
   const sub = isWord() ? subcommandOf(tokens[j]) : null;
-  if (sub) return { name: sub, from: j + 1 };
-  return fallback < 0 ? null : { name: subcommandOf(tokens[fallback]), from: fallback + 1 };
+  if (sub) return { name: sub, from: j + 1, unread };
+  if (fallback >= 0) return { name: subcommandOf(tokens[fallback]), from: fallback + 1, unread };
+  return unread ? { name: UNREAD_SUBCOMMAND, from: j } : null;
 }
 
 /**
@@ -782,7 +941,9 @@ function subcommandOf({ text }) {
  * words after that subcommand are the new invocation's alone.
  *
  * An invocation behind an `xargs` word in the same command is marked `xargs`:
- * the arguments that decide it arrive on xargs' input, not in the command.
+ * the arguments that decide it arrive on xargs' input, not in the command. One
+ * whose global option took a substitution as its value is marked `unread`
+ * (subcommandAt).
  *
  * That cut is what keeps the whole scan linear in the command's length however
  * many invocations it holds: every word is read at most twice, once by a
@@ -803,7 +964,7 @@ function invocations(tokens) {
     const found = isGitWord(tokens[i]) ? subcommandAt(tokens, i) : null;
     if (!found) { xargs = xargs || isXargsWord(tokens[i]); collect(i, i + 1); i++; continue; }
     collect(i, found.from); // the `git` word, its options and its subcommand
-    call = { name: found.name, args: [], xargs };
+    call = { name: found.name, args: [], xargs, unread: found.unread === true };
     calls.push(call);
     i = found.from;
   }
@@ -1263,13 +1424,23 @@ class TooDeep extends Error {}
  * command or process substitution is asked the same question, because `sh -c
  * 'git commit'`, `$(git commit)` and `>(git commit)` run it. Each step is a single pass and there are at most QUOTE_DEPTH + 1
  * levels, so a 10 KB command costs milliseconds and is never tiled.
+ *
+ * @returns {boolean|symbol} false when it may run; true when an invocation it
+ *   read writes; UNREAD_SUBCOMMAND when none does but one has a substitution
+ *   where git or its subcommand goes (subcommandAt) — its refusal says so
  */
 const forbidden = (raw, depth = 0) => {
   const { tokens, spans, exhausted } = tokenize(raw);
   if (exhausted) throw new TooDeep();
-  return invocations(tokens).some(({ name, args, xargs }) => WRITES_HISTORY.has(name)
-    || (xargs && FED_BY_XARGS_WRITES.has(name)) || WRITES_BY_ARGUMENTS.get(name)(args))
-    || spans.some((span) => (depth < QUOTE_DEPTH ? forbidden(span, depth + 1) : /\bgit\b/.test(span)));
+  const calls = invocations(tokens);
+  if (calls.some(({ name, args, xargs }) => name !== UNREAD_SUBCOMMAND && (WRITES_HISTORY.has(name)
+    || (xargs && FED_BY_XARGS_WRITES.has(name)) || WRITES_BY_ARGUMENTS.get(name)(args)))) return true;
+  if (calls.some(({ name, unread }) => unread || name === UNREAD_SUBCOMMAND)) return UNREAD_SUBCOMMAND;
+  for (const span of spans) {
+    const verdict = depth < QUOTE_DEPTH ? forbidden(span, depth + 1) : /\bgit\b/.test(span);
+    if (verdict) return verdict;
+  }
+  return false;
 };
 /**
  * THE ROLES THIS GUARD CONTAINS. Every shipped definition runs the same Bash
@@ -1298,6 +1469,7 @@ const forbidden = (raw, depth = 0) => {
  */
 const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer']);
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
+const UNREAD_REFUSAL = (agent) => `${REFUSAL(agent)} — a command substitution where git or its subcommand goes is not read`;
 const TOO_DEEP = (agent) => `${agent}: command too deep to read (over 1 MiB of bracket scanning) — split it, or write the file with Write`;
 const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
 
@@ -1974,7 +2146,9 @@ async function preToolUse(event) {
     if (!GUARDED_AGENTS.has(agent) || event.tool_name !== 'Bash') return;
     reason = REFUSAL(agent);
     try {
-      if (!forbidden(str(input.command))) return;
+      const verdict = forbidden(str(input.command));
+      if (!verdict) return;
+      if (verdict === UNREAD_SUBCOMMAND) reason = UNREAD_REFUSAL(agent);
     } catch (e) {
       if (!(e instanceof TooDeep)) throw e;
       reason = TOO_DEEP(agent);
