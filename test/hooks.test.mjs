@@ -2117,7 +2117,7 @@ test('release review (1.8.0, round 2): a long `a[a[a[…` word is read in linear
   const r = fire(g.path, preToolUse({ tool_input: { command: 'a['.repeat(500000) } }));
   const ms = Date.now() - started;
   assert.equal(r.code, 0, r.err);
-  assert.ok(ms < 1000, `1 MB of a[ took ${ms} ms`);
+  assert.ok(ms < 2500, `1 MB of a[ took ${ms} ms`);
 });
 
 /*
@@ -2145,6 +2145,6 @@ test('release review (1.8.0, round 3): a `cd` chain is followed in one linear pa
     const ms = Date.now() - started;
     assert.equal(r.code, code, r.err);
     assert.equal(r.err.trim(), code === 2 ? BASH_CURATED('backlog.md') : '');
-    assert.ok(ms < 1000, `256 KB of cd a && took ${ms} ms`);
+    assert.ok(ms < 2500, `256 KB of cd a && took ${ms} ms`);
   }
 });

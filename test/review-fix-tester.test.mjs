@@ -162,7 +162,11 @@ test('profile: no signal or descriptor listing of a process outside the sandbox 
       `defaults write ${domain} k v >/dev/null 2>&1; true`,
       'cp /bin/launchctl "$TMPDIR/l"; "$TMPDIR/l" submit -l com.omelette.rftest -- /usr/bin/true >/dev/null 2>&1; echo submit=$?',
     ].join('\n'), { NODE: process.execPath });
-    assert.deepEqual(rowsOf(r.stdout), { killout: 7, killown: 0, lsoflines: 0, submit: 137 }, r.stdout + r.stderr);
+    const { submit, ...rows } = rowsOf(r.stdout);
+    assert.deepEqual(rows, { killout: 7, killown: 0, lsoflines: 0 }, r.stdout + r.stderr);
+    // job-creation is denied: macOS 27 kills the copied launchctl (137), macOS 26 (CI) lets it exit 1 — either way no job exists, seen from outside.
+    assert.notEqual(submit, 0, `a copied launchctl submitted a job: ${r.stdout}`);
+    assert.notEqual(spawnSync('/bin/launchctl', ['list', 'com.omelette.rftest']).status, 0, 'the job a copied launchctl submitted exists outside the sandbox');
     // The preference write landed nowhere: read from outside, the domain does not exist.
     assert.notEqual(spawnSync('/usr/bin/defaults', ['read', domain]).status, 0, 'a defaults write from inside the sandbox reached the operator\'s preferences');
   } finally {
