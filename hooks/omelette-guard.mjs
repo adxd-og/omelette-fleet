@@ -136,9 +136,10 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  *   - and so is a brace expansion in the program word (`{git,x} commit`) or one
  *     the walk cannot place, and a glob where the subcommand goes (`git
  *     c?mmit`), while a braced subcommand is the one the shell makes of it
- *     (1.9.0 review fix round); a heredoc body on a line that runs a shell, or
- *     inside a substitution on such a line, is read as a command, and a git
- *     that xargs hands its subcommand is unread.
+ *     (1.9.0 review fix round); a heredoc body is read as a command unless its
+ *     line hands it to a program that runs nothing (NON_EXEC), and so is one
+ *     inside a substitution whose output runs; a git that xargs hands its
+ *     subcommand is unread.
  *
  * NOT a security boundary: this is containment for a delegated agent that is
  * asked to behave, so an argv-array spawn, a backslash-escaped `g\it`, an alias
@@ -344,11 +345,11 @@ function heredocDelimiter(command, from) {
  * one that IS its word (after leading tabs for `<<-`): `EOF text` or `  EOF` is
  * body, and a body that never terminates runs to the end. An unquoted body still
  * expands `$(…)` and backquotes, so what those run is handed back in `spans`.
- * UNLESS A SHELL READS IT (1.9.0 review fix round): when the operator's line runs
- * one (`shell`, feedsShell), or stands in a substitution such a line runs
- * (tokenize's `fed`), the body is a script — `bash <<'EOF'` + `git commit`
- * commits, quoted delimiter or not — and is handed back whole, to be read as a
- * command of its own.
+ * UNLESS IT MAY RUN (1.9.0): when the operator's line hands it to anything but
+ * a NON_EXEC program (`shell`, lineFeeds), or stands in a substitution whose
+ * output runs (tokenize's `fed`), the body is a script — `bash <<'EOF'` + `git
+ * commit` commits, quoted delimiter or not — and is handed back whole, to be
+ * read as a command of its own.
  *
  * @returns {number} the index just past the last terminator line
  */
@@ -441,10 +442,24 @@ function opaqueEnd(command, start, kind, budget) {
 }
 
 /**
- * The programs that run a heredoc body as a script, by name or path: the shells (`busybox` for its `sh` applet), and
- * `eval`, `source` and `.` (source's POSIX spelling), which read one (`source /dev/stdin <<EOF`, `. <(cat <<EOF …)`).
+ * THE HEREDOC RULE FAILS CLOSED (1.9.0). A heredoc body is data only when it is handed to a program that runs
+ * nothing it reads — NON_EXEC, by name or path, past the wrappers (programWord) — and is re-read as a command
+ * everywhere else: a shell under any name (`rbash`, `pwsh`, `toybox sh`), an interpreter (`python3`, `perl`, `node`),
+ * or a program that hands it to one (`ssh host`, `su -c`, `docker run -i`). Until 1.9.0 it was the other way round,
+ * a list of shells.
  */
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'csh', 'tcsh', 'ash', 'yash', 'posh', 'fish', 'busybox', 'eval', 'source', '.']);
+const NON_EXEC = new Set([
+  'cat', 'tee', 'head', 'tail', 'less', 'more', 'wc', 'grep', 'egrep', 'fgrep', 'sed', 'awk', 'sort', 'uniq', 'cut', 'tr',
+  'base64', 'xxd', 'od', 'hexdump', 'md5', 'md5sum', 'shasum', 'sha256sum', 'diff', 'cmp', 'jq', 'yq', 'column', 'fold',
+  'paste', 'tac', 'rev', 'nl', 'expand', 'fmt', 'pr', 'gzip', 'bzip2', 'xz', 'zstd', 'tar', 'cpio', 'echo', 'printf',
+  'true', ':',
+]);
+
+/** The program a word names, for NON_EXEC: its quotes, a subshell's parentheses and its path off. */
+const programName = (text) => {
+  const word = unquote(text).replace(/^\(+|\)+$/g, '');
+  return word.slice(word.lastIndexOf('/') + 1);
+};
 
 /**
  * How a text is read when a shell runs what it prints (tokenize, forbidden). `subs`: its substitutions' output is
@@ -457,44 +472,44 @@ const NOT_FED = Object.freeze({ subs: false, bodies: false });
 const FEEDS_SUBS = Object.freeze({ subs: true, bodies: false });
 const FEEDS_ALL = Object.freeze({ subs: true, bodies: true });
 /**
- * …and a quoted word of a line that feeds no shell, re-read in case it is a script: its first word is no program
- * word (`echo "$(cat <<'EOF' … EOF)"` runs echo), so feedsShell's program-word clause is off for it (`word`).
+ * …and a quoted word of a line whose programs are all NON_EXEC, re-read in case it is a script: nothing in it runs
+ * but its substitutions, whose output that program consumes (`echo "$(cat <<'EOF' … EOF)"` prints the body), so
+ * its lines feed nothing (`word`, lineFeeds is not asked).
  */
 const QUOTED_WORD = Object.freeze({ subs: false, bodies: false, word: true });
 
 /**
- * Does a shell read the heredoc bodies of the line whose words start at `from` (the newline that ends it the last
- * token, or the command's end)? Yes when any word of the line is one of SHELLS — `bash <<'EOF'`, `/bin/bash`, `env
- * bash`, `bash -s`, `cat <<'EOF' | sh` — or when a newline ends it right after a `|` or `&&`/`||`, whose next command
- * comes after the body. Any word, not only the program: a wrapper's options are not walked, and reading a body that
- * only names git costs a refusal of a git write, never a command that runs. And yes when a command of the line has
- * a program word that may name any program (mayBeAnyProgram: `$SHELL <<'EOF'`, `$(which bash) <<'EOF'`, `"$sh"`,
- * `ba{sh,x}`, `/bin/ba?h`, `b\ash`): it may be a shell, so it fails closed (`programs`; off in the re-read of a quoted word no shell runs,
- * QUOTED_WORD). tokenize asks it of every line that holds a heredoc or a substitution: the line's substitutions are
- * fed to that shell too (NOT_FED).
- */
-/**
- * A program word whose name is not known until the shell expands it: an expansion or a substitution, a brace group
- * with a comma or `..`, a glob (`?`, `*`, a closed `[…]`, outside quotes) or a backslash escape (`b\ash` is
+ * A word whose program is not known until the shell expands it: an expansion or a substitution, a brace group
+ * with a comma or `..`, a glob (`?`, `*`, a closed `[…]`, outside quotes) or a backslash escape (`b\\ash` is
  * `bash`). An unclosed `[` is no glob: the test builtin's `[`, and `a.b[` in `a.b[<<EOF]`.
  */
 const mayBeAnyProgram = (text) => SUBSTITUTED.test(text) || text.includes('\\') || globbed(text, true) || braceScan(text) !== null;
 
-function feedsShell(tokens, from, programs = true) {
+/**
+ * How the line whose words start at `from` (the newline that ends it the last token, or the command's end) treats
+ * what it is handed: `{ bodies, subs }` — are its heredoc bodies commands, and is what its substitutions print run?
+ *   - Both, when a command of the line runs a program outside NON_EXEC (past its wrappers; a command of assignments
+ *     alone runs none), or a newline ends the line right after `|` or `&&`/`||`, whose next command comes after the
+ *     body: `bash <<'EOF'`, `python3 <<'EOF'`, `ssh host <<'EOF'`, `cat <<'EOF' |` + `sh`.
+ *     A program word the shell must expand to name it (mayBeAnyProgram: `$SHELL`, `ba{sh,x}`, `b\\ash`) is outside
+ *     the set: `sudo -u x $SHELL <<'EOF'`, `env $SH <<'EOF'`.
+ *   - The bodies alone, when every program is NON_EXEC but a redirection target (`targets`, the heredoc's own word
+ *     not among them) may name any program, or the line holds a process substitution (`procSub`), which may hand
+ *     the body on: `cat <<'EOF' > $OUT` (an over-refusal, accepted), `tee >(sh) <<'EOF'`. An argument is not read
+ *     so (`echo $HOME <<'EOF'` passes), and a substitution of such a line is not run: `echo "$(cat <<'EOF' … EOF)"`
+ *     prints its body.
+ *   - Neither otherwise: `cat > f <<'EOF'`, `grep x <<'EOF'`, `sed s/a/b/ <<'EOF'`.
+ */
+function lineFeeds(tokens, from, targets, procSub) {
   const [before, last] = tokens.slice(-2);
-  const endsInPipe = last && last.text === '\n' && tokens.length - 2 >= from && before.separator && (before.text === '|' || before.text === '&');
-  if (endsInPipe) return true;
+  if (last && last.text === '\n' && tokens.length - 2 >= from && before.separator && (before.text === '|' || before.text === '&')) return { bodies: true, subs: true };
   for (let k = from; k < tokens.length; k++) {
-    if (tokens[k].separator) continue;
-    const word = unquote(tokens[k].text).replace(/^\(+|\)+$/g, '');
-    if (SHELLS.has(word.slice(word.lastIndexOf('/') + 1))) return true;
-  }
-  for (let k = from; programs && k < tokens.length; k++) {
     k = programWord(tokens, k);
-    if (k < tokens.length && !tokens[k].separator && mayBeAnyProgram(tokens[k].text)) return true;
+    if (k < tokens.length && !tokens[k].separator && !NON_EXEC.has(programName(tokens[k].text))) return { bodies: true, subs: true };
     while (k < tokens.length && !tokens[k].separator) k++;
   }
-  return false;
+  // A program word the shell must expand to name never spells a NON_EXEC name, so the loop above has fed it already.
+  return { bodies: procSub || targets.some(mayBeAnyProgram), subs: false };
 }
 
 /** Words after which bash is still at command position: the reserved words that open a command, `(` and `!` included. */
@@ -608,20 +623,24 @@ function tokenize(command, fed = NOT_FED) {
   let arrayDepth = 0;
   let skipBodies = true; //   false from the first heredoc the guard cannot place as both shells do
   const pendingHeredocs = []; // `<<`/`<<-` read on this line, their bodies start at the next newline
-  let lineStart = 0; //          the index of this line's first token: feedsShell reads the line's words
+  let lineStart = 0; //          the index of this line's first token: lineFeeds reads the line's words
   let lineSpans = 0; //          …and of the first span read on it
+  let lineTargets = []; //       …its redirection targets, its heredocs' words not among them (lineFeeds)
+  let lineProcSub = false; //    …and whether it holds a process substitution
   const span = (text, kind) => { spans.push(text); kinds.push(kind); };
-  // The line just read: does a shell read its heredoc bodies (feedsShell, or this text is one a shell's input
-  // holds)? Then, and when this text's substitutions are fed, the line's substitutions are read with FEEDS_ALL — the
-  // heredoc bodies of the commands inside them are commands too — and its quoted words with FEEDS_SUBS.
+  // The line just read: are its heredoc bodies commands, and is what its substitutions print run (lineFeeds, or this
+  // text is one whose output runs)? Then the line's substitutions are read with FEEDS_ALL — the heredoc bodies of the
+  // commands inside them are commands too — and its quoted words with FEEDS_SUBS; otherwise its quoted words with
+  // QUOTED_WORD.
   const endLine = () => {
     if (spans.length === lineSpans && !pendingHeredocs.length) return false;
-    const shell = fed.bodies || feedsShell(tokens, lineStart, !fed.word);
+    const line = fed.word ? { bodies: false, subs: false } : lineFeeds(tokens, lineStart, lineTargets, lineProcSub);
+    const subs = fed.bodies || fed.subs || line.subs;
     for (let k = lineSpans; k < spans.length; k++) {
-      if (shell || fed.subs) feeds[k] = kinds[k] === 'sub' ? FEEDS_ALL : FEEDS_SUBS;
+      if (subs) feeds[k] = kinds[k] === 'sub' ? FEEDS_ALL : FEEDS_SUBS;
       else if (kinds[k] === 'word') feeds[k] = QUOTED_WORD;
     }
-    return shell;
+    return fed.bodies || line.bodies;
   };
   const budget = { left: OPAQUE_SCAN_BUDGET }; // shared by every opaqueEnd this command makes
   // The index of the next character that is not a line continuation: both shells join `<\` + newline + `<` into `<<`.
@@ -636,6 +655,7 @@ function tokenize(command, fed = NOT_FED) {
     } else {
       const op = redirectOp === '>&' && !FD_DUPLICATE.test(plain) ? '&>' : redirectOp;
       if (WRITE_REDIRECTS.has(op)) targets.push({ path: plain, op, at: tokens.length });
+      if (redirectOp !== '<<' && redirectOp !== '<<-') lineTargets.push(text);
     }
     if (plain !== text) span(plain, 'word');
     text = '';
@@ -724,6 +744,7 @@ function tokenize(command, fed = NOT_FED) {
       const end = substitutionEnd(command, i);
       const open = c === '`' ? '`' : `${c}(`;
       span(command.slice(i + open.length, end), 'sub');
+      if (c !== '$' && c !== '`') lineProcSub = true;
       // Its bare delimiters, never longer than what they stand for, so a word
       // read again is never longer than the one it came from.
       text += end < command.length ? `${open}${c === '`' ? '`' : ')'}` : open;
@@ -765,6 +786,7 @@ function tokenize(command, fed = NOT_FED) {
         // `()`), what it runs is handed back.
         const end = substitutionEnd(command, i);
         span(command.slice(i + 2, end), 'sub');
+        lineProcSub = true;
         text += end < command.length ? '()' : '(';
         i = end;
       }
@@ -782,6 +804,8 @@ function tokenize(command, fed = NOT_FED) {
         kinds.length = spans.length;
         lineStart = tokens.length;
         lineSpans = spans.length;
+        lineTargets = [];
+        lineProcSub = false;
       }
       continue;
     }

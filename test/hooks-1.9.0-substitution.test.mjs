@@ -228,8 +228,8 @@ test('fix round (E2): a heredoc body on a line that runs a shell is read as a co
     [`bash <<EOF${body}`, 2, REFUSAL('omelette-reviewer')],
     [`cat <<'EOF' | sh${body}`, 2, REFUSAL('omelette-reviewer')],
     [`cat <<'EOF'${body}`, 0, ''],
-    // A body another interpreter runs is out of scope (SECURITY, residuals).
-    [`python3 <<'EOF'\nimport os; os.system("git commit -m x")\nEOF`, 0, ''],
+    // The heredoc rule fails closed (review of 5d01ec4): a body another interpreter reads is read as commands.
+    [`python3 <<'EOF'\nimport os; os.system("git commit -m x")\nEOF`, 2, REFUSAL('omelette-reviewer')],
   ]);
 });
 
@@ -459,7 +459,10 @@ test('review fix (shells): csh, tcsh, ash, yash, posh, fish and busybox feed a s
     [`echo "$(cat <<'EOF'${body}\n)"`, 0, ''],
     [`cat <<'EOF'${body}`, 0, ''],
     [`$SHELL <<'EOF'\ngit status\nEOF`, 0, ''],
+    // An argument's expansion feeds nothing: only a program word or a redirection target is read so.
     [`echo $HOME <<'EOF'${body}`, 0, ''],
+    ['echo ${x:-"}"}<<EOF\ngit commit\nEOF\n', 0, ''],
+    [`env $SH <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')],
   ]);
 });
 
@@ -470,7 +473,27 @@ test('review fix (shells): a program word whose name only the shell\'s expansion
       .map((program) => [`${program} <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')]),
     [`cat <<'EOF'${body}`, 0, ''],
     [`echo "$(cat <<'EOF'${body}\n)"`, 0, ''],
-    // The test builtin's `[` is no glob.
-    [`[ -f x ] && cat <<'EOF'${body}`, 0, ''],
+    // The test builtin's `[` is no glob, but it is no NON_EXEC program either: the line feeds (an over-refusal).
+    [`[ -f x ] && cat <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')],
+  ]);
+});
+
+test('review fix (heredoc fails closed): a body is data only when every program of its line is NON_EXEC and no word may name another', () => {
+  const body = "\ngit commit -m x\nEOF";
+  check([
+    ...['rbash', 'pwsh', 'nu', 'xonsh', 'toybox sh', 'python3', 'perl', 'node', 'ssh host', 'su -c', 'docker run -i img']
+      .map((program) => [`${program} <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')]),
+    ...['cat', 'tee f', 'grep x', 'sed s/a/b/', 'base64 -d', 'sudo cat', 'cat >f']
+      .map((program) => [`${program} <<'EOF'${body}`, 0, '']),
+    [`sudo -u x $SHELL <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')],
+    // An expansion in a redirection target feeds the body too: an over-refusal, accepted.
+    [`cat <<'EOF' > $OUT${body}`, 2, REFUSAL('omelette-reviewer')],
+    // A process substitution may hand the body on.
+    [`tee >(sh) <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')],
+    // The heredoc's own word is no word of the line; an assignment's subscript is no glob.
+    [`cat <<\\EOF${body}`, 0, ''],
+    [`a[1]=x; cat <<'EOF'${body}`, 0, ''],
+    // A quoted word of a NON_EXEC line feeds nothing: echo prints the body.
+    [`echo "$(cat <<'EOF'${body}\n)"`, 0, ''],
   ]);
 });

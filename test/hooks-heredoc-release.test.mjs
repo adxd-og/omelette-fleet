@@ -74,9 +74,11 @@ test('release (G4/F6): an opaque subscript leaves a later heredoc body skipped; 
 // (neither runs git). A subscript flag that is never cleared, or that starts on a digit, reads them wrong.
 test('release (round 2): only a plain name opens a subscript — `a.b[<<EOF]` is a heredoc, `a[<<EOF]` is not', () => {
   check([
-    [`a.b[<<EOF]\n${G}\nEOF]\n`, 0],
-    [`a-b[<<EOF]\n${G}\nEOF]\n`, 0],
-    [`1a[<<EOF]\n${G}\nEOF]\n`, 0],
+    // 1.9.0: the heredoc rule fails closed, so a body handed to an unknown program (`a.b[`) is read as commands
+    // and these exit 2 like the subscript rows below; the subscript parsing they pin is hidden by that rule.
+    [`a.b[<<EOF]\n${G}\nEOF]\n`, 2],
+    [`a-b[<<EOF]\n${G}\nEOF]\n`, 2],
+    [`1a[<<EOF]\n${G}\nEOF]\n`, 2],
     [`a[<<EOF]\n${G}\nEOF]\n`, 2], // bash: one word, the git line runs; zsh: bad pattern
     [`_a1[<<EOF]\n${G}\nEOF]\n`, 2],
   ]);
