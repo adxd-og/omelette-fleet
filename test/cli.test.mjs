@@ -403,7 +403,7 @@ test('doctor prints the mistral block: login by file presence, the homes, the re
   const bare = block(cli(['doctor'], { dir, env }).out);
   assert.match(bare, /^ {2}login {7}unknown — absent — run `vibe` once in a terminal and sign in through the browser$/m);
   assert.ok(bare.includes(`\n  homes       ${join(dir, 'vibe')}/{review,repro} not rendered yet (first call renders them)\n`), bare);
-  assert.match(bare, /^ {2}repro {7}closed — set OMELETTE_ALLOW_REPRO=1 on the registration · sandbox-exec (found|macOS only \(1\.9\.0\))$/m);
+  assert.match(bare, /^ {2}repro {7}closed in this shell — the registration's env decides; set OMELETTE_ALLOW_REPRO=1 there · sandbox-exec (found|macOS only \(1\.9\.0\))$/m);
   assert.match(bare, /^ {2}billing {5}MISTRAL_API_KEY scrubbed — plan billing through the Keychain login \(a BILLING_ENV name; OMELETTE_ENV_PASSTHROUGH does not re-admit it\)$/m);
   assert.match(bare, /^ {2}models {6}mistral-large-4-0-3 \(catalog head\) · 11 aliases · call mistral_models$/m);
   for (const profile of ['review', 'repro']) assert.equal(existsSync(join(dir, 'vibe', profile)), false); // doctor reads the homes, never renders them
@@ -415,7 +415,7 @@ test('doctor prints the mistral block: login by file presence, the homes, the re
   const signed = block(cli(['doctor'], { dir, env: { ...env, OMELETTE_ALLOW_REPRO: '1' } }).out);
   assert.match(signed, /^ {2}login {7}OK — present \(~\/\.vibe\/config\.toml\)$/m);
   assert.match(signed, /\{review,repro\} rendered v1\.9\.0 at 2026-11-07T10:00:00\.000Z$/m);
-  assert.match(signed, /^ {2}repro {7}open \(OMELETTE_ALLOW_REPRO=1\) · sandbox-exec /m);
+  assert.match(signed, /^ {2}repro {7}open in this shell \(OMELETTE_ALLOW_REPRO=1\) — the registration's env decides · sandbox-exec /m);
 });
 
 test('set mistral.reproKeep=true and mistral.maxPrice=2 validate; mistral.repro.keep is refused as not unit.key=value', () => {

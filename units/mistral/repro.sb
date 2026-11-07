@@ -1,11 +1,26 @@
 (version 1)
 ; Seatbelt profile for the repro sandbox: everything the model runs goes
-; through this. Allow by default, then take away all network, reads of the
-; operator's secret dirs, and every write but those under the run's clone and
-; tmp. The temp root T and every ancestor of the runs root are unwritable to a
-; command: no rename, no replacement, no symlink at any of them. The wrapper
-; prefers the developer dir's binaries; the shims under /usr/bin keep no cache
-; inside the sandbox.
+; through this. The skeleton is the probe-4 profile — allow by default, then
+; deny all network and every write but the run's clone and tmp, /dev/null, the
+; command's own terminal and its fd devices — with these changes:
+;   - no blanket write allow on /private/var/folders; the temp root and every
+;     ancestor of the runs root stay unwritable (no rename, no replacement);
+;   - no read of the operator's home (HOME) — but the prefix of the node the
+;     adapter runs on (NODE), and the metadata of the directories from HOME
+;     down to it (NODEUP) — or of the reviewed work tree (SRC), nor of the
+;     fleet home (FLEET), the run's output dir (OUT), any
+;     omelette-* dir under the OS temp root (TMPROOT) or any run (RUNS) but its
+;     own clone and tmp, re-allowed last;
+;   - no other terminal: no read or write of /dev/ttys*;
+;   - no hand-off to a process outside the profile: Apple events, open,
+;     osascript, launchctl, automator, security, pbpaste, pbcopy,
+;     LaunchServices, launchd job creation, a preference write;
+;   - no signal and no process info (argv, environment) outside its sandbox,
+;     nor the process list through sysmond (pgrep, pkill);
+;   - no file flag in the clone or tmp, no unlink, rename or replacement of the
+;     clone and tmp directories themselves, no write under the clone's .vibe.
+; The wrapper prefers the developer dir's binaries; the shims under /usr/bin
+; keep no cache inside the sandbox.
 (allow default)
 (deny network*)
 (deny file-write*)
@@ -13,28 +28,34 @@
   (subpath (param "CLONE"))
   (subpath (param "TMP"))
   (literal "/dev/null")
-  (regex #"^/dev/tty")
+  (literal "/dev/tty")
   (regex #"^/dev/fd/"))
-(deny file-read*
-  (subpath (string-append (param "HOME") "/.ssh"))
-  (subpath (string-append (param "HOME") "/.aws"))
-  (subpath (string-append (param "HOME") "/.omelette"))
-  (subpath (string-append (param "HOME") "/.vibe"))
-  (subpath (string-append (param "HOME") "/.config"))
-  (subpath (string-append (param "HOME") "/.gnupg"))
-  (subpath (string-append (param "HOME") "/.netrc"))
-  (subpath (string-append (param "HOME") "/.kube"))
-  (subpath (string-append (param "HOME") "/.docker"))
-  (subpath (string-append (param "HOME") "/.npmrc"))
-  (subpath (string-append (param "HOME") "/.git-credentials")))
+; no other terminal: the operator's ptys are neither read nor written
+(deny file-read* (regex #"^/dev/ttys"))
+(deny file-write* (regex #"^/dev/ttys"))
+; the operator's home and the work tree under review: the clone is the only copy a command reads
+(deny file-read* (subpath (param "HOME")))
+; …but the metadata of the directories from HOME down to the node prefix's parent: node lstats each on its way to a script under it (npm in ~/.nvm); none is listable
+(allow file-read-metadata (regex (param "NODEUP")))
+; the node the adapter runs on stays runnable: its install prefix, wherever it lives (~/.nvm included)
+(allow file-read* (subpath (param "NODE")))
+(deny file-read* (subpath (param "SRC")))
 (deny file-read* (subpath (param "FLEET")))
 ; a command must not hand work to a process outside this profile
 (deny appleevent-send)
 (deny process-exec (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/automator") (literal "/usr/bin/security") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy"))
 (deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb"))
+; pgrep and pkill get other processes' argv from the sysmond service (libsysmon), past the process-info deny below
+(deny mach-lookup (global-name "com.apple.sysmond"))
+(deny job-creation)
+(deny user-preference-write)
 ; a command signals only processes of its own sandbox: not Vibe, not the operator's other processes
 (deny signal)
 (allow signal (target same-sandbox))
+; nor reads another process's argv and environment
+(deny sysctl-read (sysctl-name-prefix "kern.procargs"))
+(deny process-info*)
+(allow process-info* (target same-sandbox))
 ; the run's own output dir (export.json, session/meta.json, prompt.md) is Vibe's, not the model's
 (deny file-read* (subpath (param "OUT")))
 (deny file-write* (subpath (param "OUT")))
@@ -52,3 +73,5 @@
 (deny file-write-flags (subpath (param "CLONE")) (subpath (param "TMP")))
 ; the clone and tmp directories themselves stay what the adapter made: a command may not unlink, rename or replace them (the adapter's git and chmod run on those paths)
 (deny file-write-unlink (literal (param "CLONE")) (literal (param "TMP")))
+; the clone's .vibe is the adapter's to drop, never the model's to write: Vibe ranks a project config over its home
+(deny file-write* (subpath (string-append (param "CLONE") "/.vibe")))

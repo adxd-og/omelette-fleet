@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import unit from '../units/mistral/adapter.mjs';
 import { ensureHome } from '../units/mistral/home.mjs';
-import { cloneDiff, fixModes, neutraliseModelText, prepareClone, regexLiteral, removeRun, runsRoot } from '../units/mistral/repro.mjs';
+import { cloneDiff, fixModes, neutraliseModelText, nodeUp, prepareClone, regexLiteral, removeRun, runsRoot } from '../units/mistral/repro.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
 const DARWIN = process.platform === 'darwin';
@@ -39,7 +39,7 @@ writeFileSync(FAKE, [
   'const workdir = opt("--workdir");',
   'const homeConfig = readFileSync(join(process.env.VIBE_HOME, "config.toml"), "utf8");',
   'const shell = JSON.parse(/^shell = (".*")$/m.exec(homeConfig)[1]);',
-  'const ran = sc.shell ? spawnSync(shell, ["-c", sc.shell], { cwd: workdir, env: process.env, encoding: "utf8" }) : null;',
+  'const ran = sc.shell ? spawnSync(shell, ["-c", sc.shell], { cwd: workdir, env: { ...process.env, T_HOME: process.env.HOME }, encoding: "utf8" }) : null;',
     'const esc = (s) => JSON.stringify(s).slice(1, -1);',
   'const fill = (v) => JSON.parse(JSON.stringify(v).replaceAll("$MODEL", esc(opt("--model"))).replaceAll("$SHELL", esc(shell)));',
   'appendFileSync(sc.record, JSON.stringify({',
@@ -140,8 +140,9 @@ function world({ config, edit = () => {}, files, uncommitted, homes = HOMES, har
   }, { env, onResult: (r) => records.push(r) });
   const spawns = () => (existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   const call = (args = {}) => rt.callTool('mistral_security_repro', { prompt: 'reproduce the auth bug', cwd: work, ...args });
-  const repro = (args = {}) => withEnv({ OMELETTE_ALLOW_REPRO: '1' }, () => call(args));
-  const review = () => rt.callTool('mistral_security_review', { prompt: 'find the auth bug', cwd: work });
+  // The adapter takes HOME from its own process (resolved): the world's home is that HOME for the call.
+  const repro = (args = {}) => withEnv({ OMELETTE_ALLOW_REPRO: '1', HOME: home }, () => call(args));
+  const review = () => withEnv({ HOME: home }, () => rt.callTool('mistral_security_review', { prompt: 'find the auth bug', cwd: work }));
   return { root, home, fleet, work, head, records, spawnOpts, spawns, retries: () => retries, call, repro, review };
 }
 
@@ -191,7 +192,7 @@ function profileWorld(over = {}) {
   const [a, b] = runs;
   const env = {
     PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: join(a, 'clone'), OMELETTE_REPRO_TMP: join(a, 'tmp'), OMELETTE_FLEET_HOME: fleet,
-    OMELETTE_REPRO_OUT: join(a, 'out'), OMELETTE_REPRO_RUNS: root, OMELETTE_REPRO_RUN: a, OMELETTE_REPRO_TMPROOT: regexLiteral(base), ...over,
+    OMELETTE_REPRO_OUT: join(a, 'out'), OMELETTE_REPRO_RUNS: root, OMELETTE_REPRO_RUN: a, OMELETTE_REPRO_TMPROOT: regexLiteral(base), OMELETTE_REPRO_SRC: join(base, 'src'), OMELETTE_REPRO_NODE: realpathSync(dirname(dirname(process.execPath))), OMELETTE_REPRO_NODEUP: nodeUp({ home, node: realpathSync(dirname(dirname(process.execPath))) }), T_HOME: home, ...over,
   };
   const run = (cmd) => spawnSync(join(dir, 'shell.sh'), ['-c', cmd], { env, encoding: 'utf8', cwd: join(a, 'clone') });
   return { base, home, root, a, b, other, run, env, wrapper: join(dir, 'shell.sh') };
@@ -236,15 +237,17 @@ test('the run\'s own clone and tmp stay readable and writable under RUNS and TMP
     'echo w > f2; cat f2; echo clonewrite=$?',
     'echo t > "$OMELETTE_REPRO_TMP/t"; cat "$OMELETTE_REPRO_TMP/t"; echo tmpwrite=$?',
     'git status --porcelain >/dev/null; echo git=$?',
-    'cat "$HOME/.ssh-control"; echo control=$?',
-    ...secrets.map((f) => `cat "$HOME/${f}"; echo "read-${f}=$?"`),
+    'cat "$T_HOME/.ssh-control"; echo control=$?',
+    ...secrets.map((f) => `cat "$T_HOME/${f}"; echo "read-${f}=$?"`),
     ...['/usr/bin/security', '/usr/bin/pbpaste', '/usr/bin/pbcopy'].map((x) => `${x} -h >/dev/null 2>&1; echo "exec-${x.slice(9)}=$?"`),
   ].join('; '));
   assert.doesNotMatch(r.stdout, /secret-in-/, r.stdout + r.stderr);
   assert.match(r.stdout, /^w\nclonewrite=0$/m, r.stdout + r.stderr);
   assert.match(r.stdout, /^t\ntmpwrite=0$/m, r.stdout + r.stderr);
   assert.match(r.stdout, /^git=0$/m, r.stdout + r.stderr);
-  assert.match(r.stdout, /^readable-control\ncontrol=0$/m, 'control: a $HOME file outside the deny list is readable');
+  // Review fix round (A1): the whole of $HOME is read-denied, a file outside the old per-directory list included.
+  assert.match(r.stdout, /^control=1$/m, 'a $HOME file outside the old deny list is unreadable');
+  assert.doesNotMatch(r.stdout, /readable-control/, r.stdout + r.stderr);
   for (const f of secrets) assert.match(r.stdout, new RegExp(`^read-${f.replace('.', '\\.')}=1$`, 'm'), `${f}\n${r.stdout}${r.stderr}`);
   for (const x of ['security', 'pbpaste', 'pbcopy']) assert.match(r.stdout, new RegExp(`^exec-${x}=126$`, 'm'), `${x}\n${r.stdout}${r.stderr}`);
 });
@@ -371,11 +374,12 @@ test('a committed .gitmodules (an ext:: url that would run a command) and its gi
 /* ── neutraliseModelText ────────────────────────────────────────────────────── */
 
 // A lone CR is a line end for a markdown renderer: a fence after one is a fence, and an open one must be closed.
+// Review fix round (E4/B5): CRs are normalised to LF first, and the closing fence outruns the longest backtick run.
 test('neutraliseModelText counts a fence that follows a lone CR, and one that follows CRLF', () => {
-  assert.equal(neutraliseModelText('a\r```\rx'), 'a\r```\rx\n```');
-  assert.equal(neutraliseModelText('a\r\n```\r\nx'), 'a\r\n```\r\nx\n```');
-  assert.equal(neutraliseModelText('a\r\n```\r\nx\r\n```\r\n'), 'a\r\n```\r\nx\r\n```\r\n');
-  assert.equal(neutraliseModelText('a\r\n_(clone unchanged)_\r\n'), 'a\r\n> (model-written, not the adapter\'s) _(clone unchanged)_\r\n');
+  assert.equal(neutraliseModelText('a\r```\rx'), 'a\n```\nx\n````');
+  assert.equal(neutraliseModelText('a\r\n```\r\nx'), 'a\n```\nx\n````');
+  assert.equal(neutraliseModelText('a\r\n```\r\nx\r\n```\r\n'), 'a\n```\nx\n```\n');
+  assert.equal(neutraliseModelText('a\r\n_(clone unchanged)_\r\n'), 'a\n> (model-written, not the adapter\'s) _(clone unchanged)_\n');
 });
 
 /* ── the clone is HEAD only; the diff is whole when the model locked its own files ── */

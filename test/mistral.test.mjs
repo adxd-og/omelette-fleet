@@ -8,6 +8,7 @@
 // operator's ~/.vibe is never read or written.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -19,10 +20,11 @@ import { createUnitRuntime } from '../core/unit.mjs';
 const BASE = mkdtempSync(join(tmpdir(), 'omelette-mistral-t-'));
 const FAKE = join(BASE, 'fake-vibe.mjs');
 writeFileSync(FAKE, [
-  'import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";',
+  'import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";',
   'import { join } from "node:path";',
   'const [scenarioPath, ...argv] = process.argv.slice(2);',
-  'const sc = JSON.parse(readFileSync(scenarioPath, "utf8"));',
+  'const all = JSON.parse(readFileSync(scenarioPath, "utf8"));',
+  'const sc = all.first && !existsSync(all.record) ? { ...all, ...all.first } : all;',
   'const opt = (f) => argv[argv.indexOf(f) + 1];',
   'const outDir = opt("--output-dir");',
   'const fill = (v) => JSON.parse(JSON.stringify(v).replaceAll("$MODEL", opt("--model")));',
@@ -230,9 +232,12 @@ test('max_price: exit 3 + outcome max_price is marked exited and not retried', a
   assert.ok(w.logs.some((l) => l.includes('outcome=max_price')), w.logs.join('\n'));
 });
 
-test('MISTRAL_API_KEY never reaches the child, VIBE_HOME and TMPDIR do', async () => {
+test('MISTRAL_API_KEY never reaches the child, VIBE_HOME and TMPDIR do; HOME is the adapter\'s, resolved', async () => {
   const w = world();
-  await w.review();
+  // The adapter's own HOME, here under the unresolved temp root (/var/folders is /private/var/folders on macOS).
+  const saved = process.env.HOME;
+  process.env.HOME = w.home;
+  try { await w.review(); } finally { if (saved === undefined) delete process.env.HOME; else process.env.HOME = saved; }
   const [{ env, outDir }] = w.spawns();
   assert.equal(env.MISTRAL_API_KEY, undefined);
   assert.equal(env.VIBE_HOME, realpathSync(join(w.fleet, 'vibe', 'review')));
@@ -241,7 +246,7 @@ test('MISTRAL_API_KEY never reaches the child, VIBE_HOME and TMPDIR do', async (
   // T3 round 2, item 9: a review-* under runsRoot(), which the repro profile denies to every command.
   assert.equal(dirname(env.TMPDIR), realpathSync(runsRoot()));
   assert.equal(env.OMELETTE_FLEET_HOME, realpathSync(w.fleet));
-  assert.equal(env.HOME, w.home);
+  assert.equal(env.HOME, realpathSync(w.home));
 });
 
 test('a stale home is re-rendered before the spawn', async () => {
@@ -355,4 +360,69 @@ test('a run killed after it wrote export.json returns its answer with the killed
   assert.ok(r.text.endsWith('\n\n[mistral: hard-killed after 1500s — treat the answer as partial; raise mistral.timeoutS in the fleet config]'), r.text);
   assert.equal(w.records[0].partial, true);
   assert.equal(w.spawns().length, 1);
+});
+
+/* ── 1.9.0 review fix round ─────────────────────────────────────────────── */
+
+const GIT_ID = ['-c', 'user.name=omelette test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false'];
+/** `w.work` as a git work tree with `links` ({ name: target }) committed beside auth.js. */
+function commitLinks(w, links) {
+  const git = (...a) => execFileSync('git', ['-C', w.work, ...a], { stdio: 'pipe' });
+  git('init', '-q');
+  for (const [name, target] of Object.entries(links)) symlinkSync(target, join(w.work, name));
+  git('add', '-A');
+  git(...GIT_ID, 'commit', '-qm', 'links');
+}
+
+// B3: Vibe's read_file follows a symlink out of its workdir, `outside_workdir = "deny"` or not.
+test('review refuses a cwd holding a symlink that resolves outside it, before any spawn; a link inside it runs', async () => {
+  const outside = join(BASE, 'outside-secret');
+  writeFileSync(outside, 'operator secret\n');
+  const w = world();
+  commitLinks(w, { 'docs-x': outside, 'in-tree': 'auth.js' });
+  const r = await w.review();
+  assert.equal(r.isError, true);
+  assert.equal(r.text, `Error: ${join(realpathSync(w.work), 'docs-x')} is a symlink to ${outside}, outside ${w.work} — Vibe's read_file would follow it; remove it, or review a copy without it`);
+  assert.equal(w.spawns().length, 0);
+
+  const ok = world();
+  commitLinks(ok, { 'in-tree': 'auth.js' });
+  const run = await ok.review();
+  assert.equal(run.isError, undefined, run.text);
+  assert.equal(ok.spawns().length, 1);
+
+  // An untracked link in a git work tree: Vibe reads the tree, not the index.
+  const untracked = world();
+  commitLinks(untracked, { 'in-tree': 'auth.js' });
+  symlinkSync(outside, join(untracked.work, 'wip-link'));
+  const loose = await untracked.review();
+  assert.equal(loose.isError, true);
+  assert.match(loose.text, /wip-link is a symlink to \S*outside-secret, outside /);
+  assert.equal(untracked.spawns().length, 0);
+
+  // Not a git work tree: the links are found by walking it.
+  const plain = world();
+  symlinkSync(join('..', '..', 'outside-secret'), join(plain.work, 'up'));
+  const refused = await plain.review();
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /up is a symlink to \.\.\/\.\.\/outside-secret, outside /);
+  assert.equal(plain.spawns().length, 0);
+});
+
+// B4: a backend failure is Vibe's infrastructure, not the run's content: review runs it once more.
+const BACKEND_FAILED = { outcome: 'infrastructure_failure', error: { code: 'backend_error', message: 'upstream 503' } };
+test('review: an export naming a backend failure is retried, and the second run\'s answer is returned', async () => {
+  const w = world({ edit: (s) => { s.first = { export: { ...s.export, ...BACKEND_FAILED }, answer: '' }; s.answer = 'finding: auth.js:2 · second run'; } });
+  const r = await w.review();
+  assert.equal(r.isError, undefined, r.text);
+  assert.match(r.text, /^finding: auth\.js:2 · second run/);
+  assert.equal(w.spawns().length, 2);
+});
+
+test('review: a backend failure on both runs is refused, naming Vibe\'s message', async () => {
+  const w = world({ edit: (s) => { Object.assign(s.export, BACKEND_FAILED); } });
+  const r = await w.review();
+  assert.equal(r.isError, true);
+  assert.equal(r.text, "Mistral error: mistral: Vibe's backend failed (upstream 503) — retried");
+  assert.equal(w.spawns().length, 2);
 });

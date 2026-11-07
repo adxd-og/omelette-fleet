@@ -67,7 +67,8 @@ test('doctor login line: ~/.vibe/config.toml or .env counts as present whatever 
   const envOnly = tmp();
   mkdirSync(join(envOnly, '.vibe'));
   writeFileSync(join(envOnly, '.vibe', '.env'), 'MISTRAL_API_KEY=never-read\n');
-  assert.equal(loginLine(mistralBlock({ dir: envOnly, vibe }).block), IN);
+  // The detail names the file that is there (1.9.0 review fix round).
+  assert.equal(loginLine(mistralBlock({ dir: envOnly, vibe }).block), 'OK — present (~/.vibe/.env)');
 
   // A directory, a mode-000 file and a FIFO named config.toml: a read would fail or hang; a stat does not.
   const odd = tmp();
@@ -93,8 +94,8 @@ test('doctor repro line: the gate follows OMELETTE_ALLOW_REPRO the way the unit 
     const env = value === undefined ? {} : { OMELETTE_ALLOW_REPRO: value };
     return /^ {2}repro {7}(.*)$/m.exec(mistralBlock({ dir, vibe, env }).block)[1];
   };
-  const CLOSED = /^closed — set OMELETTE_ALLOW_REPRO=1 on the registration · sandbox-exec (found|macOS only \(1\.9\.0\))$/;
-  const OPEN = /^open \(OMELETTE_ALLOW_REPRO=1\) · sandbox-exec (found|macOS only \(1\.9\.0\))$/;
+  const CLOSED = /^closed in this shell — the registration's env decides; set OMELETTE_ALLOW_REPRO=1 there · sandbox-exec (found|macOS only \(1\.9\.0\))$/;
+  const OPEN = /^open in this shell \(OMELETTE_ALLOW_REPRO=1\) — the registration's env decides · sandbox-exec (found|macOS only \(1\.9\.0\))$/;
   assert.match(repro(undefined), CLOSED);
   assert.match(repro('1'), OPEN);
   assert.match(repro('true'), OPEN);

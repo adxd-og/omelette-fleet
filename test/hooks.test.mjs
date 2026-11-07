@@ -495,17 +495,17 @@ test('the guard never throws: malformed, empty, hostile and unknown input all ex
   }
 });
 
-test('stdin over the 8 MiB cap is treated as malformed: the guard stops reading and exits 0', async () => {
+test('stdin over the 8 MiB cap is refused unread: the guard stops reading and exits 2 (1.9.0; exit 0 before)', async () => {
   const g = guard();
-  // The event WOULD block if it were read: the forbidden command is the first
-  // thing in it, and the 9 MiB of padding comes after. Exit 0 is the cap.
+  // The forbidden command is the first thing in the event and the 9 MiB of
+  // padding comes after: unread, it cannot be let through.
   const oversized = JSON.stringify(preToolUse({
     tool_input: { command: 'git push origin main' }, padding: 'x'.repeat(9 * 1024 * 1024),
   }));
   const r = await fireOpenStdin(g.path, { write: oversized });
-  assert.equal(r.code, 0, `${r.out}${r.err}`);
+  assert.equal(r.code, 2, `${r.out}${r.err}`);
   assert.equal(r.signal, null);
-  assert.equal(r.err, '', 'a capped read is silent, not a refusal');
+  assert.equal(r.err.trim(), 'omelette-guard: event over 8 MiB — refused unread');
   assert.ok(r.ms < 15000, `the guard should give up at once, took ${r.ms}ms`);
 
   // …and an event UNDER the cap is still read whole, however big it is: a

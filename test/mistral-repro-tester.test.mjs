@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import unit from '../units/mistral/adapter.mjs';
 import { ensureHome, renderWrapper } from '../units/mistral/home.mjs';
-import { DIFF_CAP, appendPatch, cloneDiff, prepareClone, removeRun, reproAllowed, reproSupported } from '../units/mistral/repro.mjs';
+import { DIFF_CAP, appendPatch, cloneDiff, nodeUp, prepareClone, removeRun, reproAllowed, reproSupported } from '../units/mistral/repro.mjs';
 import { PARTIAL_MARK_RE, partialMark } from '../core/partial.mjs';
 import { ALLOWED_ENV } from '../core/spawn.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
@@ -41,7 +41,7 @@ writeFileSync(FAKE, [
   'const workdir = opt("--workdir");',
   'const homeConfig = readFileSync(join(process.env.VIBE_HOME, "config.toml"), "utf8");',
   'const shell = JSON.parse(/^shell = (".*")$/m.exec(homeConfig)[1]);',
-  'const ran = sc.shell ? spawnSync(shell, ["-c", sc.shell], { cwd: workdir, env: process.env, encoding: "utf8" }) : null;',
+  'const ran = sc.shell ? spawnSync(shell, ["-c", sc.shell], { cwd: workdir, env: { ...process.env, T_HOME: process.env.HOME }, encoding: "utf8" }) : null;',
   'const resolved = {};',
   `for (const k of ${JSON.stringify(RESOLVED_ENV)}) resolved[k] = process.env[k] ? realpathSync(process.env[k]) : null;`,
   'const esc = (s) => JSON.stringify(s).slice(1, -1);',
@@ -144,8 +144,9 @@ function world({ config, edit = () => {}, files, uncommitted, homes = HOMES, har
   }, { env, onResult: (r) => records.push(r) });
   const spawns = () => (existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   const call = (args = {}) => rt.callTool('mistral_security_repro', { prompt: 'reproduce the auth bug', cwd: work, ...args });
-  const repro = (args = {}) => withEnv({ OMELETTE_ALLOW_REPRO: '1' }, () => call(args));
-  const review = () => rt.callTool('mistral_security_review', { prompt: 'find the auth bug', cwd: work });
+  // The adapter takes HOME from its own process (resolved): the world's home is that HOME for the call.
+  const repro = (args = {}) => withEnv({ OMELETTE_ALLOW_REPRO: '1', HOME: home }, () => call(args));
+  const review = () => withEnv({ HOME: home }, () => rt.callTool('mistral_security_review', { prompt: 'find the auth bug', cwd: work }));
   return { root, home, fleet, work, head, records, spawnOpts, spawns, retries: () => retries, call, repro, review };
 }
 
@@ -429,7 +430,7 @@ test('the child\'s env is the allowlist plus the six names the run sets; no key 
   const r = await w.repro();
   assert.equal(r.isError, undefined, r.text);
   const [s] = w.spawns();
-  const allowed = new Set([...ALLOWED_ENV, 'VIBE_HOME', 'TMPDIR', 'OMELETTE_FLEET_HOME', 'OMELETTE_REPRO_CLONE', 'OMELETTE_REPRO_TMP', 'OMELETTE_REPRO_OUT', 'OMELETTE_REPRO_RUNS', 'OMELETTE_REPRO_RUN', 'OMELETTE_REPRO_TMPROOT']);
+  const allowed = new Set([...ALLOWED_ENV, 'VIBE_HOME', 'TMPDIR', 'OMELETTE_FLEET_HOME', 'OMELETTE_REPRO_CLONE', 'OMELETTE_REPRO_TMP', 'OMELETTE_REPRO_OUT', 'OMELETTE_REPRO_RUNS', 'OMELETTE_REPRO_RUN', 'OMELETTE_REPRO_TMPROOT', 'OMELETTE_REPRO_SRC', 'OMELETTE_REPRO_NODE', 'OMELETTE_REPRO_NODEUP']);
   // __CF_USER_TEXT_ENCODING is put there by macOS for every process it starts, not by the fleet.
   assert.deepEqual(Object.keys(s.env).filter((k) => !allowed.has(k) && k !== '__CF_USER_TEXT_ENCODING'), []);
   for (const k of ['MISTRAL_API_KEY', 'OPENAI_API_KEY', 'AWS_SECRET_ACCESS_KEY', 'GITHUB_TOKEN', 'OMELETTE_PROBE_SECRET', 'SSH_AUTH_SOCK']) assert.equal(s.env[k], undefined, k);
@@ -461,10 +462,10 @@ test('the profile read-denies ~/.ssh, ~/.aws, ~/.config, ~/.vibe and the fleet h
   const w = world({
     edit: (s) => {
       s.shell = [
-        'for f in .ssh/id .aws/c .config/c .vibe/c .omelette/fleet.config.json; do cat "$HOME/$f"; echo "cat-$f=$?"; done',
+        'for f in .ssh/id .aws/c .config/c .vibe/c .omelette/fleet.config.json; do cat "$T_HOME/$f"; echo "cat-$f=$?"; done',
         'echo ok > "$TMPDIR/t" && cat "$TMPDIR/t"',
         'git init -q --bare "$OMELETTE_REPRO_TMP/r.git"; git -C "$OMELETTE_REPRO_TMP/r.git" config receive.shallowUpdate true; git push -q "file://$OMELETTE_REPRO_TMP/r.git" HEAD:refs/heads/ok 2>&1; echo ctl=$?',
-        'git push -q "file://$HOME/remote.git" HEAD:refs/heads/pwn 2>&1; echo push=$?',
+        'git push -q "file://$T_HOME/remote.git" HEAD:refs/heads/pwn 2>&1; echo push=$?',
       ].join('; ');
     },
   });
@@ -634,9 +635,9 @@ test('the profile refuses /usr/bin/automator, and denies $HOME/.omelette on its 
   const [clone, tmpd, home, out] = ['clone', 'tmp', 'home', 'out'].map((n) => join(base, n));
   for (const d of [clone, tmpd, home, out, join(home, '.omelette')]) mkdirSync(d);
   writeFileSync(join(home, '.omelette', 'fleet.config.json'), 'secret-in-home-omelette\n');
-  const env = { PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out, OMELETTE_REPRO_RUNS: join(base, 'runs'), OMELETTE_REPRO_RUN: base, OMELETTE_REPRO_TMPROOT: realpathSync(tmpdir()) };
+  const env = { PATH: '/usr/bin:/bin', HOME: home, OMELETTE_REPRO_CLONE: clone, OMELETTE_REPRO_TMP: tmpd, OMELETTE_FLEET_HOME: fleet, OMELETTE_REPRO_OUT: out, OMELETTE_REPRO_RUNS: join(base, 'runs'), OMELETTE_REPRO_RUN: base, OMELETTE_REPRO_TMPROOT: realpathSync(tmpdir()), OMELETTE_REPRO_SRC: join(base, 'src'), OMELETTE_REPRO_NODE: realpathSync(dirname(dirname(process.execPath))), OMELETTE_REPRO_NODEUP: nodeUp({ home, node: realpathSync(dirname(dirname(process.execPath))) }), T_HOME: home };
   const run = (cmd) => spawnSync(join(dir, 'shell.sh'), ['-c', cmd], { env, encoding: 'utf8' });
-  const cat = run('cat "$HOME/.omelette/fleet.config.json"');
+  const cat = run('cat "$T_HOME/.omelette/fleet.config.json"');
   assert.notEqual(cat.status, 0);
   assert.doesNotMatch(cat.stdout, /secret-in-home-omelette/);
   assert.match(cat.stderr, /Operation not permitted/);

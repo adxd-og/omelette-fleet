@@ -75,9 +75,11 @@
  * operator can remove it.
  *
  * IT NEVER THROWS AND IT NEVER BLOCKS ANYTHING ELSE. Malformed stdin, an
- * unknown event, a ledger it may not write, stdin past the cap, stdin that
- * never closes: exit 0. A hook that crashes is a session that stops working,
- * and this one guards exactly one thing.
+ * unknown event, a ledger it may not write, stdin that never closes: exit 0.
+ * A hook that crashes is a session that stops working, and this one guards
+ * exactly one thing. The one exception is stdin past the 8 MiB cap (1.9.0):
+ * it cannot be read, so it cannot be let through — exit 2, refused unread,
+ * whatever the event and the caller (MAX_STDIN).
  *
  * Zero dependencies, Node >= 20, ESM — it is spawned as `node <this file>`.
  */
@@ -128,9 +130,15 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  *   - a command substitution where `git`, a global option, its value or the
  *     subcommand goes is not read but refused (1.9.0, subcommandAt): `git
  *     $(echo) commit`, `git "$(printf commit)"` and `g$(echo)it commit` commit;
- *     a variable expansion is read the same way (`git $x commit`), save a value
- *     quoted whole, which can neither vanish nor split and is a value (`git -C
- *     "$DIR" status` and `git -C '$DIR' status` run).
+ *     a variable expansion is read the same way (`git $x commit`), zsh's `$=x`
+ *     included, save a value quoted whole in a form that stays one word in bash
+ *     and zsh (`git -C "$DIR" status` and `git -C '$DIR' status` run);
+ *   - and so is a brace expansion in the program word (`{git,x} commit`) or one
+ *     the walk cannot place, and a glob where the subcommand goes (`git
+ *     c?mmit`), while a braced subcommand is the one the shell makes of it
+ *     (1.9.0 review fix round); a heredoc body on a line that runs a shell, or
+ *     inside a substitution on such a line, is read as a command, and a git
+ *     that xargs hands its subcommand is unread.
  *
  * NOT a security boundary: this is containment for a delegated agent that is
  * asked to behave, so an argv-array spawn, a backslash-escaped `g\it`, an alias
@@ -336,10 +344,15 @@ function heredocDelimiter(command, from) {
  * one that IS its word (after leading tabs for `<<-`): `EOF text` or `  EOF` is
  * body, and a body that never terminates runs to the end. An unquoted body still
  * expands `$(…)` and backquotes, so what those run is handed back in `spans`.
+ * UNLESS A SHELL READS IT (1.9.0 review fix round): when the operator's line runs
+ * one (`shell`, feedsShell), or stands in a substitution such a line runs
+ * (tokenize's `fed`), the body is a script — `bash <<'EOF'` + `git commit`
+ * commits, quoted delimiter or not — and is handed back whole, to be read as a
+ * command of its own.
  *
  * @returns {number} the index just past the last terminator line
  */
-function skipHeredocBodies(command, pos, heredocs, spans) {
+function skipHeredocBodies(command, pos, heredocs, spans, shell = false) {
   for (const { word, quoted, stripTabs } of heredocs) {
     let body = '';
     while (pos < command.length) {
@@ -366,8 +379,9 @@ function skipHeredocBodies(command, pos, heredocs, spans) {
       // shell is no safer than closing later, since a `<<` read in the shell's
       // body would open one the shell never does.
       if ((stripTabs ? line.replace(/^\t+/, '') : line) === word) break;
-      if (!quoted) body += `${line}\n`;
+      if (!quoted || shell) body += `${line}\n`;
     }
+    if (shell) { spans.push(body); continue; }
     if (quoted) continue;
     for (let k = 0; k < body.length; k++) {
       if (body[k] === '\\') { k++; continue; } // `\$(` and `` \` `` are literal in a body
@@ -424,6 +438,43 @@ function opaqueEnd(command, start, kind, budget) {
     }
   }
   return -1;
+}
+
+/**
+ * The programs that run a heredoc body as a script, by name or path: the shells, and `eval`, `source` and `.`
+ * (source's POSIX spelling), which read one (`source /dev/stdin <<EOF`, `. <(cat <<EOF …)`).
+ */
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'eval', 'source', '.']);
+
+/**
+ * How a text is read when a shell runs what it prints (tokenize, forbidden). `subs`: its substitutions' output is
+ * run — a quoted word of a line that feeds a shell, `eval "$(…)"` — so they are read FEEDS_ALL; `bodies`: it is such a
+ * substitution, so the heredoc bodies of its commands are commands too — `eval "$(cat <<'EOF' … EOF)"` runs the
+ * body, and `x=$(cat <<'EOF' … EOF); eval "$x"` on one line does. A quoted word's own heredocs stay text: `bash -c
+ * 'cat <<EOF …'` prints its body.
+ */
+const NOT_FED = Object.freeze({ subs: false, bodies: false });
+const FEEDS_SUBS = Object.freeze({ subs: true, bodies: false });
+const FEEDS_ALL = Object.freeze({ subs: true, bodies: true });
+
+/**
+ * Does a shell read the heredoc bodies of the line whose words start at `from` (the newline that ends it the last
+ * token, or the command's end)? Yes when any word of the line is one of SHELLS — `bash <<'EOF'`, `/bin/bash`, `env
+ * bash`, `bash -s`, `cat <<'EOF' | sh` — or when a newline ends it right after a `|` or `&&`/`||`, whose next command
+ * comes after the body. Any word, not only the program: a wrapper's options are not walked, and reading a body that
+ * only names git costs a refusal of a git write, never a command that runs. tokenize asks it of every line that
+ * holds a heredoc or a substitution: the line's substitutions are fed to that shell too (NOT_FED).
+ */
+function feedsShell(tokens, from) {
+  const [before, last] = tokens.slice(-2);
+  const endsInPipe = last && last.text === '\n' && tokens.length - 2 >= from && before.separator && (before.text === '|' || before.text === '&');
+  if (endsInPipe) return true;
+  for (let k = from; k < tokens.length; k++) {
+    if (tokens[k].separator) continue;
+    const word = unquote(tokens[k].text).replace(/^\(+|\)+$/g, '');
+    if (SHELLS.has(word.slice(word.lastIndexOf('/') + 1))) return true;
+  }
+  return false;
 }
 
 /** Words after which bash is still at command position: the reserved words that open a command, `(` and `!` included. */
@@ -513,9 +564,11 @@ const ASSIGNMENT_WORD = /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/;
  *   true`, and nothing read past that point, when the brackets spent
  *   OPAQUE_SCAN_BUDGET
  */
-function tokenize(command) {
+function tokenize(command, fed = NOT_FED) {
   const tokens = [];
   const spans = [];
+  const kinds = []; // per span pushed here: 'word' (a quoted word) or 'sub' (what a substitution runs); a body has none
+  const feeds = []; // per span: how forbidden reads it (endLine), NOT_FED when unset
   const targets = [];
   let text = '';
   let quoted = false;
@@ -535,6 +588,18 @@ function tokenize(command) {
   let arrayDepth = 0;
   let skipBodies = true; //   false from the first heredoc the guard cannot place as both shells do
   const pendingHeredocs = []; // `<<`/`<<-` read on this line, their bodies start at the next newline
+  let lineStart = 0; //          the index of this line's first token: feedsShell reads the line's words
+  let lineSpans = 0; //          …and of the first span read on it
+  const span = (text, kind) => { spans.push(text); kinds.push(kind); };
+  // The line just read: does a shell read its heredoc bodies (feedsShell, or this text is one a shell's input
+  // holds)? Then, and when this text's substitutions are fed, the line's substitutions are read with FEEDS_ALL — the
+  // heredoc bodies of the commands inside them are commands too — and its quoted words with FEEDS_SUBS.
+  const endLine = () => {
+    if (spans.length === lineSpans && !pendingHeredocs.length) return false;
+    const shell = fed.bodies || feedsShell(tokens, lineStart);
+    if (shell || fed.subs) for (let k = lineSpans; k < spans.length; k++) feeds[k] = kinds[k] === 'sub' ? FEEDS_ALL : FEEDS_SUBS;
+    return shell;
+  };
   const budget = { left: OPAQUE_SCAN_BUDGET }; // shared by every opaqueEnd this command makes
   // The index of the next character that is not a line continuation: both shells join `<\` + newline + `<` into `<<`.
   const real = (j) => { while (command[j] === '\\' && command[j + 1] === '\n') j += 2; return j; };
@@ -549,7 +614,7 @@ function tokenize(command) {
       const op = redirectOp === '>&' && !FD_DUPLICATE.test(plain) ? '&>' : redirectOp;
       if (WRITE_REDIRECTS.has(op)) targets.push({ path: plain, op, at: tokens.length });
     }
-    if (plain !== text) spans.push(plain);
+    if (plain !== text) span(plain, 'word');
     text = '';
     quoted = false;
     redirect = false;
@@ -620,7 +685,7 @@ function tokenize(command) {
         if (ch === '\\') { text += command.slice(k, k + 2); k++; continue; }
         if ((ch === '$' && command[k + 1] === '(') || ch === '`') {
           const end = substitutionEnd(command, k);
-          spans.push(command.slice(k + (ch === '`' ? 1 : 2), end));
+          span(command.slice(k + (ch === '`' ? 1 : 2), end), 'sub');
           text += ch === '`' ? '``' : '$()';
           k = end;
           continue;
@@ -635,7 +700,7 @@ function tokenize(command) {
     if (((c === '$' || c === '<' || c === '>') && next === '(') || c === '`') {
       const end = substitutionEnd(command, i);
       const open = c === '`' ? '`' : `${c}(`;
-      spans.push(command.slice(i + open.length, end));
+      span(command.slice(i + open.length, end), 'sub');
       // Its bare delimiters, never longer than what they stand for, so a word
       // read again is never longer than the one it came from.
       text += end < command.length ? `${open}${c === '`' ? '`' : ')'}` : open;
@@ -676,7 +741,7 @@ function tokenize(command) {
         // inside it. Read as `>(…)` is above: the target word goes (its bare
         // `()`), what it runs is handed back.
         const end = substitutionEnd(command, i);
-        spans.push(command.slice(i + 2, end));
+        span(command.slice(i + 2, end), 'sub');
         text += end < command.length ? '()' : '(';
         i = end;
       }
@@ -687,8 +752,13 @@ function tokenize(command) {
       redirect = false;
       tokens.push({ text: c, quoted: false, separator: true });
       position = c === '\r' ? 'unknown' : 'command'; // bash separates nothing on a `\r`: the word it glues on is anywhere
-      if (c === '\n' && pendingHeredocs.length) {
-        i = skipHeredocBodies(command, i + 1, pendingHeredocs.splice(0), spans) - 1;
+      if (c === '\n') {
+        const shell = endLine();
+        // A body is a script or text of its own: its spans are read as any command is (no kind, NOT_FED).
+        if (pendingHeredocs.length) i = skipHeredocBodies(command, i + 1, pendingHeredocs.splice(0), spans, shell) - 1;
+        kinds.length = spans.length;
+        lineStart = tokens.length;
+        lineSpans = spans.length;
       }
       continue;
     }
@@ -708,18 +778,20 @@ function tokenize(command) {
     else if (wordShape === 1 && !/\w/.test(c)) wordShape = 2;
   }
   push(); // a quote the command never closed runs to its end, inside the last word
-  return { tokens, spans, targets };
+  endLine();
+  return { tokens, spans, feeds, targets };
 }
 
 /**
  * A word holding a command substitution, `$(…)` or backquotes, or a variable expansion — `${…}`, `$name`, and the
- * one-character `$1`…`$9`, `$@`, `$*`, `$#`, `$?`, `$$`, `$!`, `$-` — as tokenize leaves it: a substitution unquoted
+ * one-character `$1`…`$9`, `$@`, `$*`, `$#`, `$?`, `$$`, `$!`, `$-`, and zsh's `$=name`, `$~name` and `$^name`
+ * (split, glob, rc-expand: `x=commit; git $=x -m y` commits) — as tokenize leaves it: a substitution unquoted
  * as its bare delimiters (`$()`), everything else as written. Read on the word as written, so a single-quoted
  * `'$(x)'` or `'$x'`, which the shell hands over literally, counts too: git refuses that word as no command of its
  * own, so refusing it costs nothing. An arithmetic `$((…))` opens like a substitution and counts as one. A process
  * substitution, `<(…)` or `>(…)`, is none: the shell hands it over as a path; nor are the quotes `$'…'` and `$"…"`.
  */
-const SUBSTITUTED = /\$[({A-Za-z_0-9@*#?$!-]|`/;
+const SUBSTITUTED = /\$[=~^]*[({A-Za-z_0-9@*#?$!-]|`/;
 
 /** What subcommandAt names when a substitution stands where git or its subcommand goes: no subcommand, refused unread. */
 const UNREAD_SUBCOMMAND = Symbol('a command substitution where git or its subcommand goes');
@@ -727,24 +799,26 @@ const UNREAD_SUBCOMMAND = Symbol('a command substitution where git or its subcom
 /**
  * Where the substitution or expansion SUBSTITUTED finds at `i` of a word ends: the index of its last character, the
  * word's length when it never closes, or -1 when none opens there. `$(…)` and backquotes end where substitutionEnd
- * says, `${…}` at its matching brace (opaqueEnd), `$name` at its last name character, and a special parameter is
- * one character.
+ * says, `${…}` at its matching brace (opaqueEnd), `$name` at its last name character — zsh's `=`, `~` and `^` before
+ * the name included — and a special parameter is one character.
  */
 function expansionEnd(word, i) {
   if (word[i] === '`') return substitutionEnd(word, i);
   if (word[i] !== '$') return -1;
-  const next = word[i + 1] ?? '';
-  if (next === '(') return substitutionEnd(word, i);
-  if (next === '{') {
+  let k = i + 1;
+  while (/[=~^]/.test(word[k] ?? '')) k++; // zsh's `$=name`, `$~name`, `$^name`
+  const next = word[k] ?? '';
+  if (k === i + 1 && next === '(') return substitutionEnd(word, i);
+  if (k === i + 1 && next === '{') {
     const end = opaqueEnd(word, i + 1, '{', { left: Infinity });
     return end < 0 ? word.length : end;
   }
   if (/[A-Za-z_]/.test(next)) {
-    let end = i + 1;
+    let end = k;
     while (/\w/.test(word[end + 1] ?? '')) end++;
     return end;
   }
-  return next && '0123456789@*#?$!-'.includes(next) ? i + 1 : -1;
+  return next && '0123456789@*#?$!-'.includes(next) ? k : -1;
 }
 
 /**
@@ -757,18 +831,32 @@ const LITERAL_MARK = '\u0002';
 const MARKS = /[\u0000-\u0002]/g;
 
 /**
- * An expansion that is still several words inside double quotes: its parameter is `@` (`"$@"`, `"${@:2}"`), or its
- * brace form holds `[@]` (`"${a[@]}"`, `"${!a[@]}"`) or ends with `@}` (`"${!prefix@}"`) — `set -- . commit; git -C
- * "$@" -m x` runs `git -C . commit -m x`. `"$*"` and `"${a[*]}"` join into one word and are none.
+ * The parameter expansions that stay ONE word inside double quotes in bash and in zsh: `$name`, `${name}`, `$*`
+ * (and `${*}`), `${name[*]}`, a simple `${name<op>word}` whose word holds no `$`, no `@` and no `(`, and bash's
+ * `${!prefix*}` (one word in bash, a bad substitution in zsh). Everything else fails closed (1.9.0 review fix
+ * round): `"$@"`, `"${a[@]}"` and `"${@:2}"` split in both shells, zsh splits `"${(@)a}"`, `"${(f)y}"` and
+ * `"${=x}"`, and a nested `$` or a flag group is not read further — `set -- . commit; git -C "$@" -m x` runs `git
+ * -C . commit -m x`. A positional or special parameter other than `$*` fails closed too.
  */
-const splitsInQuotes = (expansion) => expansion === '$@'
-  || (expansion.startsWith('${') && (expansion.startsWith('${@') || expansion.includes('[@]') || expansion.endsWith('@}')));
+const ONE_WORD_IN_QUOTES = /^\$(?:[A-Za-z_]\w*|\*|\{(?:\*|![A-Za-z_]\w*\*|[A-Za-z_]\w*(?:\[\*\]|[-:=?+#%/^,][^$@(]*)?)\})$/;
+
+/**
+ * Does the expansion from `i` to `end` of `text` stay one word inside double quotes? A command substitution does
+ * (`"$(pwd)"`, an arithmetic `"$((…))"` too); a parameter expansion only in a ONE_WORD_IN_QUOTES form, and `$name`
+ * only when no `[` follows it: zsh reads `"$a[@]"` as a subscript, which splits.
+ */
+function oneWordInQuotes(text, i, end) {
+  const expansion = text.slice(i, end + 1);
+  if (expansion[0] === '`' || expansion.startsWith('$(')) return true;
+  if (!ONE_WORD_IN_QUOTES.test(expansion)) return false;
+  return !(/^\$[A-Za-z_]/.test(expansion) && text[end + 1] === '[');
+}
 
 /**
  * A word with its quotes off (unquote) and each substitution or expansion SUBSTITUTED finds in it as ONE mark:
- * QUOTED_MARK inside double quotes, where it is one piece of the word whatever it holds — save one that
- * splitsInQuotes — and UNQUOTED_MARK outside quotes — where an empty one vanishes and a blank in one splits the
- * word — an escaped one (`\$x`) included. A
+ * QUOTED_MARK inside double quotes, where it is one piece of the word — only for a form that stays one word there
+ * (oneWordInQuotes) — and UNQUOTED_MARK outside quotes — where an empty one vanishes and a blank in one splits the
+ * word — an escaped one (`\$x`) included, and for every other form inside double quotes. A
  * single-quoted or ANSI-C span the shell hands over literally is one LITERAL_MARK whole when SUBSTITUTED reads one in
  * it, as SUBSTITUTED reads the word. One that never closes is UNQUOTED_MARK: what it holds is not known.
  * `g$(echo)it` is `g` + UNQUOTED_MARK + `it`, `-C"$DIR"` is `-C` + QUOTED_MARK, `-C'$DIR'` is `-C` + LITERAL_MARK.
@@ -782,7 +870,7 @@ function withExpansionsMarked(text) {
     const c = text[i];
     const end = expansionEnd(text, i);
     if (end >= 0) {
-      out += double && end < text.length && !splitsInQuotes(text.slice(i, end + 1)) ? QUOTED_MARK : UNQUOTED_MARK;
+      out += double && end < text.length && oneWordInQuotes(text, i, end) ? QUOTED_MARK : UNQUOTED_MARK;
       i = end;
       continue;
     }
@@ -835,8 +923,7 @@ const KNOWN_VALUED = new Set(['-C', '-c', '--git-dir', '--work-tree']);
  * word that is only one, `$(date)`, `$(which git)` or `$GIT`, ends in nothing and is none — and so is a global option
  * with its value glued on (GLUED_OPTION) that holds one, which the walk reads as an option.
  */
-const isGitWord = ({ text, separator }) => {
-  if (separator) return false;
+const gitWordText = (text) => {
   let word;
   if (SUBSTITUTED.test(text)) {
     const marked = withExpansionsMarked(text);
@@ -846,8 +933,264 @@ const isGitWord = ({ text, separator }) => {
   return word.endsWith('git') && !/[\w\s]/.test(word.charAt(word.length - 4));
 };
 
+/**
+ * …or a word with a brace expansion any of whose words is one (1.9.0 review fix round): `{git,--no-pager}` is `git
+ * --no-pager`, `{echo,git}` is `echo git`, `/usr/bin/{git,x}` is `/usr/bin/git`. A word past BRACE_CAP words,
+ * BRACE_GROUPS groups or BRACE_TEXT characters may be anything: where the program goes (`program`, invocations) it
+ * is read as git, which subcommandAt refuses unread; anywhere else it is read as written — `echo {a..z}{a..z}{a..z}`
+ * names no git. Where an option or the subcommand goes, subcommandAt reads it unread on its own (braced,
+ * slotSubcommand).
+ */
+const isGitWord = (token, program = false) => {
+  const { text, separator } = token;
+  if (separator) return false;
+  const words = tokenBraces(token);
+  if (words === BRACE_OVERFLOW) return program || gitWordText(text);
+  return words ? words.some(gitWordText) : gitWordText(text);
+};
+
+/** The most words braceWords expands one word to; past it the word is BRACE_OVERFLOW, read as anything at all. */
+const BRACE_CAP = 256;
+/** …and the most brace groups it reads in one word, whatever their product. */
+const BRACE_GROUPS = 64;
+/** …and the most text they may hold together, counted as their number times the word's length (256 of 1 MB are 256 MB). */
+const BRACE_TEXT = 1 << 20;
+const BRACE_OVERFLOW = Symbol('a brace expansion past BRACE_CAP words, BRACE_GROUPS groups or BRACE_TEXT characters');
+/** The body of a sequence expression: `{1..9}`, `{a..e}`, with an optional `..step`. */
+const BRACE_RANGE = /^(?:(-?\d+)\.\.(-?\d+)|([^\\])\.\.([^\\]))(?:\.\.-?\d+)?$/s;
+/** A count of words, saturated one past BRACE_CAP: sizes are compared with the cap, never used past it. */
+const capped = (n) => Math.min(n, BRACE_CAP + 1);
+/**
+ * THE COMMAND'S BRACE BUDGET. Each word is bounded above; a command of many such words is not: 1 MB of 8-group words
+ * took 2 s, 8 MiB would take 16, and a hook past its time is a call that goes on. So the groups braceScan finds and
+ * the words they make (one past BRACE_CAP for a word past it) are counted across the whole command, every re-read
+ * span included (`braceSpent`, set by forbidden), each token once (tokenBraces); past BRACE_COMMAND_GROUPS groups or
+ * BRACE_COMMAND_WORDS words the scan stops and the command is refused whole, unread (TooWide, TOO_WIDE).
+ */
+const BRACE_COMMAND_GROUPS = 4096;
+const BRACE_COMMAND_WORDS = 65_536;
+let braceSpent = null;
+
+/** braceWords of a token, read once and counted against the command's brace budget: the walk asks again and again. */
+function tokenBraces(token) {
+  if (!Object.hasOwn(token, 'braces')) token.braces = braceWords(token.text, braceSpent);
+  return token.braces;
+}
+
+/**
+ * The brace groups of `text` the shell expands, as it parses them: null when there is none, BRACE_OVERFLOW when
+ * there are more than BRACE_GROUPS or they make more than BRACE_CAP words — the product of the group sizes, ranges
+ * included, counted before anything is expanded — or more than BRACE_TEXT characters, and otherwise `{ top, order }`:
+ * the groups at the word's own level,
+ * and every group in the order it closed (the groups inside one before it), which braceWords expands in that order.
+ *
+ * A group is `{a,b}` with a comma at its own level, or a sequence `{a..e}`; braces inside quotes, after a backslash
+ * or opening a `${…}` are none, and a comma inside a nested group or a `${…}` is not its own. The braces of a pair
+ * that is no group, or never closes, are text, and the groups inside it belong to the level around it. One pass and a
+ * stack of the open braces, no recursion: linear in the word, and it stops at the group past BRACE_GROUPS.
+ */
+function braceScan(text, spent = null) {
+  if (!text.includes('{') || !(text.includes(',') || text.includes('..'))) return null;
+  const open = [];
+  const top = [];
+  const order = [];
+  const level = () => (open.length ? open[open.length - 1].kids : top);
+  let dollar = -2; // where the last unescaped `$` stood: a `{` right behind it opens a `${…}`
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '\\') { i++; continue; }
+    if (c === '$' && text[i + 1] === "'") { i = ansiC(text, i + 2).end; continue; }
+    if (c === "'") { const e = text.indexOf("'", i + 1); if (e < 0) break; i = e; continue; }
+    if (c === '"') { for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++; continue; }
+    if (c === '$') { dollar = i; continue; }
+    if (c === '{') { open.push({ start: i, end: -1, param: dollar === i - 1, commas: [], kids: [] }); continue; }
+    if (c === ',' && open.length) { open[open.length - 1].commas.push(i); continue; }
+    if (c !== '}' || !open.length) continue;
+    const g = open.pop();
+    g.end = i;
+    if (g.param || !braceGroupSized(text, g)) { for (const kid of g.kids) level().push(kid); continue; }
+    if (spent && ++spent.groups > BRACE_COMMAND_GROUPS) throw new TooWide();
+    if (order.push(g) > BRACE_GROUPS) return BRACE_OVERFLOW;
+    level().push(g);
+  }
+  while (open.length) for (const kid of open.pop().kids) level().push(kid);
+  if (!order.length) return null;
+  const words = top.reduce((n, g) => capped(n * g.size), 1);
+  if (spent && (spent.words += words) > BRACE_COMMAND_WORDS) throw new TooWide();
+  return words > BRACE_CAP || words * text.length > BRACE_TEXT ? BRACE_OVERFLOW : { top, order };
+}
+
+/**
+ * Is the closed pair `g` a group, and how many words does it make (`g.size`)? A comma group's alternatives are the
+ * spans between its commas, each holding the groups inside it (`g.kids`, in order): an alternative makes the product
+ * of its groups' sizes, the group the sum. A character sequence makes one word per character; a number names no
+ * subcommand, so a numeric one makes two, its ends, which stand for it.
+ */
+function braceGroupSized(text, g) {
+  if (g.commas.length) {
+    g.alternatives = [];
+    let from = g.start + 1;
+    for (const at of [...g.commas, g.end]) { g.alternatives.push({ from, to: at, kids: [] }); from = at + 1; }
+    let a = 0;
+    for (const kid of g.kids) {
+      while (kid.start > g.alternatives[a].to) a++;
+      g.alternatives[a].kids.push(kid);
+    }
+    g.size = g.alternatives.reduce((n, alt) => capped(n + alt.kids.reduce((m, kid) => capped(m * kid.size), 1)), 0);
+    return true;
+  }
+  const m = BRACE_RANGE.exec(text.slice(g.start + 1, g.end));
+  if (!m) return false;
+  if (m[3] !== undefined) {
+    g.range = [m[3].codePointAt(0), m[4].codePointAt(0)];
+    g.size = capped(Math.abs(g.range[1] - g.range[0]) + 1);
+  } else {
+    g.literals = [m[1], m[2]];
+    g.size = 2;
+  }
+  return true;
+}
+
+/**
+ * The words a brace expansion makes of `text`, raw (quotes still on), in the shell's order — null when it holds
+ * none, BRACE_OVERFLOW as braceScan says. Every group is expanded once, after the groups inside it (braceScan's
+ * order), so nothing recurses and no word is built past BRACE_CAP.
+ */
+function braceWords(text, spent = null) {
+  const scan = braceScan(text, spent);
+  if (scan === null || scan === BRACE_OVERFLOW) return scan;
+  for (const g of scan.order) {
+    if (g.range) {
+      const [a, b] = g.range;
+      const step = a <= b ? 1 : -1;
+      g.words = [];
+      for (let k = a; ; k += step) { g.words.push(String.fromCodePoint(k)); if (k === b) break; }
+    } else g.words = g.literals || g.alternatives.flatMap((alt) => spliced(text, alt.from, alt.to, alt.kids));
+  }
+  return spliced(text, 0, text.length, scan.top);
+}
+
+/** The words of `text` from `from` to `to`, each group of `groups` (in order, inside that span) replaced by each of its words. */
+function spliced(text, from, to, groups) {
+  let words = [''];
+  let at = from;
+  for (const g of groups) {
+    const lead = text.slice(at, g.start);
+    words = words.flatMap((w) => g.words.map((x) => w + lead + x));
+    at = g.end + 1;
+  }
+  const tail = text.slice(at, to);
+  return words.map((w) => w + tail);
+}
+
+/** A word holding `?`, `*` or `[` outside quotes and escapes: a pathname expansion the shell may turn into any name. */
+function globbed(text) {
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '\\') { i++; continue; }
+    if (c === '$' && text[i + 1] === "'") { i = ansiC(text, i + 2).end; continue; }
+    if (c === "'") { const e = text.indexOf("'", i + 1); if (e < 0) return false; i = e; continue; }
+    if (c === '"') { for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++; continue; }
+    if (c === '?' || c === '*' || c === '[') return true;
+  }
+  return false;
+}
+
+/**
+ * What the word in the subcommand's place names: `{ name, lead }` — `lead` the words its brace expansion puts
+ * before the arguments (`tag{,x}` is `tag tagx`: `tagx` is the tag's first argument) — `{ unread: true }`, or `{}`
+ * for a word that names none. A glob there is unread (`git c?mmit` commits once a file `commit` exists); so is a
+ * brace expansion one of whose words is an option the walk never stepped over (`{-C,.}`), a glob, or a guarded
+ * subcommand behind the first; otherwise the first word of the expansion is the subcommand (`{c,c}ommit` and
+ * `com{m..m}it` are `commit`), an empty one dropped as bash drops it.
+ */
+function slotSubcommand(token) {
+  const words = tokenBraces(token);
+  if (words === BRACE_OVERFLOW) return { unread: true };
+  if (!words) return globbed(token.text) ? { unread: true } : { name: subcommandOf(token) };
+  const kept = words.filter((w) => unquote(w) !== '');
+  if (kept.some((w) => unquote(w).startsWith('-') || globbed(w))) return { unread: true };
+  const names = kept.map((w) => subcommandOf({ text: w }));
+  if (names[0]) return { name: names[0], lead: kept.slice(1).map((text) => ({ text, quoted: false, separator: false })) };
+  return names.some(Boolean) ? { unread: true } : {};
+}
+
 /** A word that runs `xargs`, which hands the command after it arguments this command does not show. */
 const isXargsWord = ({ text, separator }) => !separator && /(?:^|\/)xargs$/.test(unquote(text));
+
+/** xargs' short options that take a value, attached or as the next word (BSD and GNU); `-I` and `-J` name a placeholder. */
+const XARGS_VALUED = new Set([...'adEIJLnPRSs']);
+/** …and its long options that may take the next word as their value (GNU). */
+const XARGS_VALUED_LONG = new Set(['--arg-file', '--delimiter', '--max-args', '--max-chars', '--max-procs', '--process-slot-var']);
+
+/**
+ * The index of the word a run of wrappers at `j` runs — `env` and its `K=V` words, `command`, `nice` and its `-n N`,
+ * `sudo`, `exec`, `time`, `nohup`, `timeout` and its duration — or `j` itself: `xargs env git` and `nice git commit`
+ * run git. Any other option of theirs (`sudo -u x`, `nice -5`, `env -i`, `timeout -s KILL 5`) is where it stops.
+ */
+function pastWrappers(tokens, j) {
+  const word = (k) => (k < tokens.length && !tokens[k].separator ? unquote(tokens[k].text) : null);
+  for (;;) {
+    const name = word(j)?.replace(/^.*\//, '');
+    if (name === 'env') for (j++; /^[A-Za-z_]\w*=/.test(word(j) ?? ''); j++);
+    else if (name === 'nice') j += word(j + 1) === '-n' ? 3 : 1;
+    else if (name === 'timeout') j += word(j + 1)?.startsWith('-') ? 1 : 2;
+    else if (name === 'command' || name === 'sudo' || name === 'exec' || name === 'time' || name === 'nohup') j++;
+    else return Math.min(j, tokens.length);
+  }
+}
+
+/**
+ * Where git goes in the command whose words start at `at`: the index of its program word, past the words that leave
+ * bash at command position (LEADS_A_COMMAND, an assignment) and the wrappers that run the word after them.
+ */
+function programWord(tokens, at) {
+  let j = at;
+  for (;;) {
+    const lead = j < tokens.length && !tokens[j].separator ? unquote(tokens[j].text).replace(/^\(+/, '') : null;
+    if (lead !== null && (!lead || LEADS_A_COMMAND.has(lead) || ASSIGNMENT_WORD.test(lead))) { j++; continue; }
+    const k = pastWrappers(tokens, j);
+    if (k === j) return j;
+    j = k;
+  }
+}
+
+/**
+ * The command the xargs word at `at` runs: `{ program, replace }` — the index of its program word, past xargs' own
+ * options and their values and the wrappers before it (pastWrappers: `xargs env git`, `xargs -n1 command git`), and
+ * the placeholders xargs replaces in it (`-I {}`, `-J %`, GNU `-i` and `--replace`, `{}` by default). A wrapper with
+ * an option pastWrappers does not read (`xargs sudo -u x git`, `xargs timeout -s KILL 5 git`) runs whatever comes
+ * after it: the program is then the first git word after xargs, whatever precedes it.
+ */
+function xargsCommand(tokens, at) {
+  const replace = [];
+  let j = at + 1;
+  for (; j < tokens.length && !tokens[j].separator; j++) {
+    const t = unquote(tokens[j].text);
+    if (t === '--') { j++; break; }
+    if (t === '-' || !t.startsWith('-')) break;
+    if (t.startsWith('--')) {
+      if (t === '--replace' || t.startsWith('--replace=')) replace.push(t.slice(10) || '{}');
+      else if (XARGS_VALUED_LONG.has(t)) j++;
+      continue;
+    }
+    for (let k = 1; k < t.length; k++) {
+      const c = t[k];
+      if (c === 'i') { replace.push(t.slice(k + 1) || '{}'); break; }
+      if (c === 'e' || c === 'l') break; // a value attached or none
+      if (!XARGS_VALUED.has(c)) continue;
+      let value = t.slice(k + 1);
+      if (!value && j + 1 < tokens.length && !tokens[j + 1].separator) value = unquote(tokens[++j].text);
+      if (c === 'I' || c === 'J') replace.push(value);
+      break;
+    }
+  }
+  let program = pastWrappers(tokens, j);
+  if (program > j && program < tokens.length && !tokens[program].separator && unquote(tokens[program].text).startsWith('-')) {
+    for (let k = program; k < tokens.length && !tokens[k].separator; k++) if (isGitWord(tokens[k])) { program = k; break; }
+  }
+  return { program, replace: replace.filter(Boolean) };
+}
 
 /**
  * The subcommand of the `git` word at `at`, as `{ name, from }` — `from` is the
@@ -887,10 +1230,12 @@ const isXargsWord = ({ text, separator }) => !separator && /(?:^|\/)xargs$/.test
  * `unread` where it can vanish or split — and `-C"$x"` can: empty, it is `-C`,
  * which takes the next word.
  */
-function subcommandAt(tokens, at) {
+function subcommandAt(tokens, at, slot = {}) {
+  slot.at = -1;
   const holds = (k) => SUBSTITUTED.test(tokens[k].text);
+  const braced = (k) => tokenBraces(tokens[k]) !== null;
   const quotedWhole = (k) => !withExpansionsMarked(tokens[k].text).includes(UNQUOTED_MARK);
-  if (holds(at)) return { name: UNREAD_SUBCOMMAND, from: at + 1 };
+  if (holds(at) || braced(at)) return { name: UNREAD_SUBCOMMAND, from: at + 1 };
   let j = at + 1;
   let fallback = -1;
   let unread = false;
@@ -904,21 +1249,28 @@ function subcommandAt(tokens, at) {
       j++;
       continue;
     }
+    // A brace expansion before the subcommand may make several words of one: it is read in the subcommand's place.
+    if (braced(j)) break;
     // Options and their values are read with the quotes off too: `git "-C" /x commit` is `git -C /x commit`.
     const text = unquote(tokens[j].text);
     if (GLOBAL_VALUED.test(text) && !GLOBAL_NO_VALUE.has(text)) {
       j++;
       // git takes the next word as the value whatever it opens with: `git -C -foo commit`.
       if (isWord()) {
-        if (holds(j) && !(KNOWN_VALUED.has(text) && quotedWhole(j))) unread = true;
+        // A braced value may be several words, the subcommand among them: `git -C {.,commit} -m x`.
+        if ((holds(j) && !(KNOWN_VALUED.has(text) && quotedWhole(j))) || braced(j)) unread = true;
         else if (subcommandOf(tokens[j])) fallback = j;
         j++;
       }
     } else if (GLOBAL_FLAG.test(text) || GLOBAL_NO_VALUE.has(text)) j++;
     else break;
   }
-  const sub = isWord() ? subcommandOf(tokens[j]) : null;
-  if (sub) return { name: sub, from: j + 1, unread };
+  if (isWord()) {
+    slot.at = j;
+    const read = slotSubcommand(tokens[j]);
+    if (read.unread) return { name: UNREAD_SUBCOMMAND, from: j + 1 };
+    if (read.name) return { name: read.name, from: j + 1, unread, lead: read.lead };
+  }
   if (fallback >= 0) return { name: subcommandOf(tokens[fallback]), from: fallback + 1, unread };
   return unread ? { name: UNREAD_SUBCOMMAND, from: j } : null;
 }
@@ -965,15 +1317,29 @@ function invocations(tokens) {
   const calls = [];
   let call = null; //    the invocation whose arguments are being collected
   let xargs = false; //  an `xargs` word earlier in this command
+  let fed = null; //     the command that xargs word runs (xargsCommand)
+  let program = programWord(tokens, 0); // where git goes in this command (isGitWord)
   const collect = (from, to) => {
     for (let k = from; k < to; k++) if (call) call.args.push(tokens[k]);
   };
   for (let i = 0; i < tokens.length;) {
-    if (tokens[i].separator) { call = null; xargs = false; i++; continue; }
-    const found = isGitWord(tokens[i]) ? subcommandAt(tokens, i) : null;
-    if (!found) { xargs = xargs || isXargsWord(tokens[i]); collect(i, i + 1); i++; continue; }
+    if (tokens[i].separator) { call = null; xargs = false; fed = null; i++; program = programWord(tokens, i); continue; }
+    const slot = {};
+    const atProgram = i === program || (fed !== null && fed.program === i);
+    let found = isGitWord(tokens[i], atProgram) ? subcommandAt(tokens, i, slot) : null;
+    // The git xargs runs, with no subcommand of its own or the placeholder in its place: xargs hands it one.
+    if (!found && fed && fed.program === i && isGitWord(tokens[i], true)
+      && (slot.at < 0 || fed.replace.some((r) => unquote(tokens[slot.at].text).includes(r)))) {
+      found = { name: UNREAD_SUBCOMMAND, from: i + 1 };
+    }
+    if (!found) {
+      if (isXargsWord(tokens[i])) { xargs = true; fed = xargsCommand(tokens, i); }
+      collect(i, i + 1);
+      i++;
+      continue;
+    }
     collect(i, found.from); // the `git` word, its options and its subcommand
-    call = { name: found.name, args: [], xargs, unread: found.unread === true };
+    call = { name: found.name, args: [...(found.lead || [])], xargs, unread: found.unread === true };
     calls.push(call);
     i = found.from;
   }
@@ -1139,12 +1505,16 @@ const rebaseTakesValue = (name) => REBASE_VALUE_LONG.has(name)
  * backslash before `"`, `\`, `$` or a backquote is taken off, and a
  * backslash-newline goes whole. Outside quotes an escape stays as written — a
  * backslash-escaped `g\it` is out of scope — and opens nothing: `\"` is no quote.
+ * But an escaped QUOTE CHARACTER comes off (1.9.0): `\'` is `'` and `\"` is `"`,
+ * as the shell hands them on, so `'\''` — the standard way to put a quote in a
+ * single-quoted word — re-reads as the quote it stands for: `sh -c 'sh -c
+ * '\''git commit'\'''` runs `sh -c 'git commit'`.
  */
 function unquote(text) {
   let out = '';
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
-    if (c === '\\') { out += text.slice(i, i + 2); i++; continue; }
+    if (c === '\\') { out += text[i + 1] === "'" || text[i + 1] === '"' ? text[i + 1] : text.slice(i, i + 2); i++; continue; }
     if (c === '$' && text[i + 1] === '$') { out += '$$'; i++; continue; }
     if (c === '$' && text[i + 1] === "'") {
       const a = ansiC(text, i + 2);
@@ -1422,8 +1792,23 @@ const FED_BY_XARGS_WRITES = new Set(['branch', 'checkout', 'switch', 'symbolic-r
  */
 const QUOTE_DEPTH = 4;
 
+/**
+ * A span past QUOTE_DEPTH is not read again (forbidden). One that names `git` is refused; one that holds anything that
+ * could still make a git word — a git word its quotes or escapes join (`'g'it`, `g\it`), a brace group with a comma or
+ * `..`, an expansion, a command or process substitution — is refused unread (1.9.0: it fails closed; before,
+ * `{g,x}it commit` six levels down passed). Read with its quotes and escapes off, so plain words pass however they
+ * are quoted: `echo hi` six `$(…)` or six `sh -c "…"` levels down.
+ */
+const pastDepth = (span) => {
+  if (/\bgit\b/.test(span)) return true;
+  const joined = span.replace(/['"\\]/g, '');
+  return /\bgit\b/.test(joined) || SUBSTITUTED.test(joined) || /[<>]\(/.test(joined) || braceScan(joined) !== null ? UNREAD_SUBCOMMAND : false;
+};
+
 /** A command whose brackets spent OPAQUE_SCAN_BUDGET, at any level: refused unread, by TOO_DEEP. */
 class TooDeep extends Error {}
+/** A command past the brace budget (BRACE_COMMAND_GROUPS, BRACE_COMMAND_WORDS): refused whole and unread, by TOO_WIDE. */
+class TooWide extends TooDeep {}
 
 /**
  * Everything a guarded role may not run, in one question: the command is
@@ -1438,15 +1823,16 @@ class TooDeep extends Error {}
  *   read writes; UNREAD_SUBCOMMAND when none does but one has a substitution
  *   where git or its subcommand goes (subcommandAt) — its refusal says so
  */
-const forbidden = (raw, depth = 0) => {
-  const { tokens, spans, exhausted } = tokenize(raw);
+const forbidden = (raw, depth = 0, fed = NOT_FED) => {
+  if (depth === 0) braceSpent = { groups: 0, words: 0 };
+  const { tokens, spans, feeds, exhausted } = tokenize(raw, fed);
   if (exhausted) throw new TooDeep();
   const calls = invocations(tokens);
   if (calls.some(({ name, args, xargs }) => name !== UNREAD_SUBCOMMAND && (WRITES_HISTORY.has(name)
     || (xargs && FED_BY_XARGS_WRITES.has(name)) || WRITES_BY_ARGUMENTS.get(name)(args)))) return true;
   if (calls.some(({ name, unread }) => unread || name === UNREAD_SUBCOMMAND)) return UNREAD_SUBCOMMAND;
-  for (const span of spans) {
-    const verdict = depth < QUOTE_DEPTH ? forbidden(span, depth + 1) : /\bgit\b/.test(span);
+  for (let k = 0; k < spans.length; k++) {
+    const verdict = depth < QUOTE_DEPTH ? forbidden(spans[k], depth + 1, feeds[k]) : pastDepth(spans[k]);
     if (verdict) return verdict;
   }
   return false;
@@ -1480,6 +1866,7 @@ const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-coder-medium', 'omel
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
 const UNREAD_REFUSAL = (agent) => `${REFUSAL(agent)} — a command substitution where git or its subcommand goes is not read`;
 const TOO_DEEP = (agent) => `${agent}: command too deep to read (over 1 MiB of bracket scanning) — split it, or write the file with Write`;
+const TOO_WIDE = (agent) => `${agent}: command too wide to read (over 4096 brace groups or 65536 brace words) — split it, or write the file with Write`;
 const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
 
 /**
@@ -1998,9 +2385,13 @@ async function curatedRefusal(event, input, cwd) {
 
 /**
  * Stdin is somebody else's pipe: it can be far bigger than any real event and
- * it can simply never close. Both are answered the same way — stop, and exit 0
- * — because a guard that buffers without bound or waits without end is a
- * session that hangs on every tool call.
+ * it can simply never close. Both stop the read, because a guard that buffers
+ * without bound or waits without end is a session that hangs on every tool
+ * call. A pipe that never closes is let go (exit 0); an event past the cap is
+ * refused unread (exit 2, OVERSIZED_REFUSAL), for every event and every
+ * caller, the main thread included (1.9.0): before 1.9.0 it was exit 0, so a
+ * `git commit` padded past the cap went through unread. No real Bash command
+ * is 8 MiB long.
  *
  * The cap is 8 MiB rather than a tidier 1: stdin is read whole before the
  * event is named, and a settings file still wiring the retired `PostToolUse`
@@ -2011,6 +2402,9 @@ async function curatedRefusal(event, input, cwd) {
  */
 const MAX_STDIN = 8 * 1024 * 1024; // 8 MiB — well above a real hook event, and above a big one
 const STDIN_DEADLINE_MS = 5000;
+/** What readEvent answers for stdin past MAX_STDIN, and what the guard says when it refuses it. */
+const OVERSIZED = Symbol('stdin past MAX_STDIN');
+const OVERSIZED_REFUSAL = 'omelette-guard: event over 8 MiB — refused unread';
 
 const str = (v, fallback = '') => (typeof v === 'string' && v ? v : fallback);
 
@@ -2060,10 +2454,14 @@ const IMPORT_CLOCK_MS = 2000;
 /** A file name in a heading of the print: C0 and C1 controls, DEL and the line separators shown as `\xNN` / `\uNNNN`, never raw. */
 const clean = (name) => String(name).replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (c) => c.charCodeAt(0) < 0x100 ? `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}` : `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
-/** The whole event, or null: stdin that never arrives, never parses, never ends or never stops is not an error here. */
+/**
+ * The whole event, or null: stdin that never arrives, never parses or never ends is not an error here. Stdin that
+ * never stops is: OVERSIZED, the moment it passes MAX_STDIN.
+ */
 async function readEvent() {
   let raw = '';
   let gaveUp = false;
+  let oversized = false;
   const giveUp = () => { gaveUp = true; process.stdin.destroy(); };
   const deadline = setTimeout(giveUp, STDIN_DEADLINE_MS);
   try {
@@ -2071,11 +2469,12 @@ async function readEvent() {
     let size = 0;
     for await (const c of process.stdin) {
       size += c.length;
-      if (size > MAX_STDIN) { giveUp(); break; }
+      if (size > MAX_STDIN) { oversized = true; giveUp(); break; }
       chunks.push(c);
     }
     raw = Buffer.concat(chunks).toString('utf8');
-  } catch { return null; } finally { clearTimeout(deadline); }
+  } catch { return oversized ? OVERSIZED : null; } finally { clearTimeout(deadline); }
+  if (oversized) return OVERSIZED;
   if (gaveUp) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -2160,7 +2559,7 @@ async function preToolUse(event) {
       if (verdict === UNREAD_SUBCOMMAND) reason = UNREAD_REFUSAL(agent);
     } catch (e) {
       if (!(e instanceof TooDeep)) throw e;
-      reason = TOO_DEEP(agent);
+      reason = e instanceof TooWide ? TOO_WIDE(agent) : TOO_DEEP(agent);
     }
   }
   // exitCode, not exit(): the process leaves on its own once stderr is flushed.
@@ -2975,12 +3374,17 @@ function subagentStop(event) {
 }
 
 const event = await readEvent();
+if (event === OVERSIZED) {
+  // Set first, as preToolUse does: a stderr that cannot be written to still refuses.
+  process.exitCode = 2;
+  say(process.stderr, `${OVERSIZED_REFUSAL}\n`);
+}
 // Wrapped whole: nothing this guard reads — a cwd that is not a directory, a
 // ledger that changed under it, a stream that went away — may reach the harness
 // as a crash. A PreToolUse refusal is the ONE non-zero exit here, and it has
 // already set the code by the time anything can throw.
 try {
-  if (event) {
+  if (event && event !== OVERSIZED) {
     const name = str(event.hook_event_name);
     if (name === 'PreToolUse') await preToolUse(event);
     else if (name === 'PreCompact') await preCompact(event);

@@ -444,7 +444,8 @@ function mistralLines(fleetDir) {
   const sandbox = reproSupported().ok ? 'found' : 'macOS only (1.9.0)';
   return [
     `  homes       ${vibe}/{review,repro}${newest ? ` rendered v${visible(String(newest.version))} at ${visible(newest.at)}` : ' not rendered yet (first call renders them)'}`,
-    `  repro       ${reproAllowed() ? 'open (OMELETTE_ALLOW_REPRO=1)' : 'closed — set OMELETTE_ALLOW_REPRO=1 on the registration'} · sandbox-exec ${sandbox}`,
+    // The gate is read from the unit server's env, which its registration sets: doctor sees only its own shell's.
+    `  repro       ${reproAllowed() ? 'open in this shell (OMELETTE_ALLOW_REPRO=1) — the registration\'s env decides' : 'closed in this shell — the registration\'s env decides; set OMELETTE_ALLOW_REPRO=1 there'} · sandbox-exec ${sandbox}`,
     '  billing     MISTRAL_API_KEY scrubbed — plan billing through the Keychain login (a BILLING_ENV name; OMELETTE_ENV_PASSTHROUGH does not re-admit it)',
   ];
 }
@@ -471,8 +472,9 @@ async function probeLogin(unit, binPath) {
   const name = unit.name;
   if (name === 'mistral') {
     const home = process.env.HOME || homedir();
-    return existsSync(join(home, '.vibe', 'config.toml')) || existsSync(join(home, '.vibe', '.env'))
-      ? { state: 'in', detail: 'present (~/.vibe/config.toml)' }
+    const found = ['config.toml', '.env'].find((f) => existsSync(join(home, '.vibe', f)));
+    return found
+      ? { state: 'in', detail: `present (~/.vibe/${found})` }
       : { state: 'missing', detail: 'absent — run `vibe` once in a terminal and sign in through the browser' };
   }
   const argsFor = { codex: ['login', 'status'], grok: ['models'], gemini: ['models'] }[name];

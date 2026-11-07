@@ -9,7 +9,9 @@
  *
  * THE CLONE — `git clone --no-hardlinks --depth 1 file://<work tree>` into
  * `<OS temp>/omelette-mistral-repro/run-*` /clone, HEAD only: uncommitted
- * work, `.env` and ignored files are not in it. Never under the fleet home: the
+ * work, `.env` and ignored files are not in it, and its `origin` and reflog
+ * are removed, so the clone does not name the work tree, which the profile read-denies (SRC)
+ * with the operator's whole home. Never under the fleet home: the
  * profile read-denies it, and Seatbelt's last matching rule wins, so a clone
  * there would be unreadable to every sandboxed command. A committed `.vibe/`
  * is dropped before the spawn: Vibe honours a project config over its home,
@@ -24,11 +26,8 @@
  * a sandboxed command and re-allows the run's own clone and tmp last, so a
  * command never reads or writes a sibling run's clone, tmp or out; RUNS and
  * the run's own dir (RUN, a literal path, never a regex) stay stat-able, not
- * listable, so node and git can walk down to the clone; it also
- * read-denies ~/.gnupg, ~/.netrc, ~/.kube, ~/.docker, ~/.npmrc and
- * ~/.git-credentials, refuses security, pbpaste and pbcopy, a signal to any
- * process outside the sandbox, a file flag in the clone and the unlink,
- * rename or replacement of the clone and tmp directories themselves (repro.sb).
+ * listable, so node and git can walk down to the clone. What else it denies:
+ * repro.sb's header.
  *
  * THE DIFF — taken by the adapter, outside the sandbox, against a copy of the
  * clone's fresh `.git` kept in the run's OUT dir (the profile denies every
@@ -45,9 +44,9 @@
  * Zero deps.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { accessSync, chmodSync, constants, cpSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { accessSync, chmodSync, constants, cpSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, rmdirSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { TRUE_WORDS } from '../../core/config.mjs';
 
 /** The gate: `OMELETTE_ALLOW_REPRO` in the true words; `OMELETTE_ALLOW_WRITE` is not consulted. */
@@ -131,6 +130,25 @@ function inNestedRepo(clone, path) {
  */
 export const regexLiteral = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** NODEUP when the node's prefix is not under the home: a regex no path matches. */
+export const NODEUP_NONE = '^$';
+
+/**
+ * The directories from `home` (itself included) down to the parent of `node` (the prefix the profile re-allows,
+ * or the binary alone), as the one anchored regex the profile allows metadata on (NODEUP): node lstats every
+ * component of its script's path, so npm under `~/.nvm` needs each of them stat-able. Never listable, and nothing
+ * beside them. NODEUP_NONE when `node` is not under `home`. Both paths come resolved.
+ */
+export function nodeUp({ home, node }) {
+  if (!node.startsWith(home === sep ? sep : home + sep)) return NODEUP_NONE;
+  const chain = [];
+  for (let d = dirname(node); ; d = dirname(d)) {
+    chain.unshift(d);
+    if (d === home || d === dirname(d)) break;
+  }
+  return `^(${chain.map(regexLiteral).join('|')})$`;
+}
+
 /** A path on one line: JSON-quoted when it holds a control character (a newline would forge a diff line). */
 const oneLine = (p) => (/[\u0000-\u001f\u007f]/.test(p) ? JSON.stringify(p) : p);
 
@@ -155,12 +173,45 @@ export function runsRoot() {
   return root;
 }
 
+/** The most symlinks outsideLinks reads under a directory; past it the directory is refused as unchecked. */
+export const LINKS_CAP = 20_000;
+
+/**
+ * The first symlink under `dir` that resolves outside it, or null — review's
+ * check before the spawn: Vibe's read_file follows a link out of its workdir
+ * whatever `outside_workdir` says (probe 2026-11-06). The tree itself is
+ * walked (`find -type l`, links not followed), git work tree or not: Vibe reads
+ * the tree, so an untracked, ignored or submodule link is the same hole as a
+ * committed one. At most LINKS_CAP links; more, or a walk that does not finish
+ * in a minute, is refused as unchecked. Each target is resolved against the
+ * link's own directory (followed to the end when it exists) and compared with
+ * the real `dir`. Returns `{ path, target }` for the first one outside (each on
+ * one line, JSON-quoted when it holds a control character), `{ unchecked:
+ * <why> }` when the walk could not be finished.
+ */
+export function outsideLinks(dir) {
+  const real = realpathSync(dir);
+  const found = spawnSync('/usr/bin/find', [real, '-type', 'l', '-print0'], { timeout: 60_000, maxBuffer: 256 * MB });
+  if (found.error) return { unchecked: `find: ${found.error.code || found.error.message}` };
+  const links = found.stdout.toString().split('\0').filter(Boolean);
+  if (links.length > LINKS_CAP) return { unchecked: `more than ${LINKS_CAP} symlinks` };
+  for (const path of links) {
+    let target;
+    try { target = readlinkSync(path); } catch { continue; } // gone since the walk: nothing to follow
+    let to = resolve(dirname(path), target);
+    try { to = realpathSync(to); } catch { /* dangling: its own path is where a read would go */ }
+    if (to !== real && !to.startsWith(real + sep)) return { path: oneLine(path), target: oneLine(target) };
+  }
+  return null;
+}
+
 /**
  * The run's directories and a HEAD-only clone of the work tree at `cwd`:
  * `runDir` (mkdtemp `run-*` under runsRoot(), resolved), `clone`, `tmp` (the
  * run's TMPDIR, 0700), `out` (Vibe's output dir and the prompt, 0700), the
  * clone's short `head`, `dirty` — the work tree had uncommitted changes —
- * and `ids`, the lstat `{ dev, ino }` of the clone and tmp dirs (assertRun).
+ * `ids`, the lstat `{ dev, ino }` of the clone and tmp dirs (assertRun), and
+ * `top`, the work tree's top (the profile's SRC). The clone keeps no remote and no reflog.
  * Throws, before making anything, when `cwd` is not inside a git work tree.
  */
 export function prepareClone({ cwd, log = () => {} }) {
@@ -185,6 +236,9 @@ export function prepareClone({ cwd, log = () => {} }) {
     mkdirSync(out, { mode: 0o700 });
     // git URL-decodes a file:// URL: a literal % in the path is sent as %25.
     git([...CLONE_CONFIG, 'clone', '--no-hardlinks', '--depth', '1', '--quiet', `file://${top.replace(/%/g, '%25')}`, clone], { env, timeout: 300_000 });
+    // No remote and no reflog: either would name the work tree to a command in the clone (the profile denies reading it, SRC).
+    git([...CLONE_CONFIG, '-C', clone, 'remote', 'remove', 'origin'], { env });
+    rmSync(join(clone, '.git', 'logs'), { recursive: true, force: true });
     rmSync(join(clone, '.vibe'), { recursive: true, force: true });
     // The drop is the adapter's, not the model's: out of the index too, so it is never proposed as a patch.
     git([...CLONE_CONFIG, '-C', clone, 'rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', '.vibe'], { env });
@@ -194,7 +248,7 @@ export function prepareClone({ cwd, log = () => {} }) {
     const idOf = (p) => { const st = lstatSync(p); return { dev: st.dev, ino: st.ino }; };
     const ids = { clone: idOf(clone), tmp: idOf(tmp) };
     log(`repro clone of ${top} at ${head}${dirty ? ' (the work tree had uncommitted changes, not in the clone)' : ''}: ${clone} — LFS files are pointers, not content`);
-    return { runDir, clone, tmp, out, head, dirty, ids };
+    return { runDir, clone, tmp, out, head, dirty, ids, top };
   } catch (e) {
     removeRun(runDir);
     throw e;
@@ -266,57 +320,119 @@ export function fixModes({ wrapper, env, paths, log = () => {} }) {
   return r.status === 0;
 }
 
+/**
+ * Removes what the run left in `paths` (its clone and tmp): `/bin/rm -rf` run THROUGH the repro wrapper, so the
+ * same profile stands. rm never follows a link, and the kernel refuses a write behind one that resolves outside the
+ * clone and tmp, so a process the run left behind cannot point the removal at the operator's files by swapping a
+ * directory for a link mid-walk — the race an unsandboxed recursive delete would lose. The two directories
+ * themselves stay (the profile keeps them) and rm says so: its exit is not read. removeRun takes them, empty.
+ */
+export function clearRun({ wrapper, env, paths }) {
+  spawnSync(wrapper, ['-c', 'exec /bin/rm -rf "$@"', 'rm', ...paths], { env, stdio: 'ignore', timeout: 120_000 });
+}
+
+/** `p` gone, never followed: rmdir, or unlink when a link or a file stands there; absent is gone. Throws otherwise (a directory not empty). */
+function removeEntry(p) {
+  try { rmdirSync(p); } catch (e) {
+    if (e && e.code === 'ENOENT') return;
+    if (e && e.code === 'ENOTDIR') { unlinkSync(p); return; }
+    throw e;
+  }
+}
+
+/** The run dir once its clone and tmp are emptied: OUT (no command can write it) recursively, the two dirs and the run dir only when empty. */
+function removeEmptied(runDir) {
+  rmSync(join(runDir, 'out'), { recursive: true, force: true });
+  removeEntry(join(runDir, 'clone'));
+  removeEntry(join(runDir, 'tmp'));
+  removeEntry(runDir);
+}
+
 const HEADING = '## proposed patch (not applied)';
-/** A heading of the adapter's name as a model writes it: any level, case, indent or spacing. */
-const HEADING_SRC = String.raw`^[ \t]*#+[ \t]*proposed[ \t]+patch[ \t]*\([ \t]*not[ \t]+applied[ \t]*\)`;
+const HEADING_NAME = String.raw`proposed[ \t]+patch[ \t]*\([ \t]*not[ \t]+applied[ \t]*\)`;
+/** A heading of the adapter's name as a model writes it: ATX at any level, or an HTML `<h1>`–`<h6>`; any case, indent or spacing. */
+const HEADING_SRC = String.raw`^[ \t]*(?:#+[ \t]*|<h[1-6](?:[ \t][^>\n]*)?>[ \t]*)${HEADING_NAME}`;
+/** …or setext: a line opening with the name over a line of `=` or `-`. */
+const SETEXT_SRC = String.raw`^[ \t]*${HEADING_NAME}[^\n]*(?=\n[ \t]{0,3}(?:=+|-+)[ \t]*$)`;
 /** The lines only the adapter writes, its partial markers (core/partial.mjs) among them. */
 const ADAPTER_LINE_SRC = String.raw`^[ \t]*(_\((clone unchanged|clone kept:|the clone is HEAD|vibe:|diff unavailable:)|\[mistral: )`;
 const MODEL_WRITTEN = '> (model-written, not the adapter\'s) ';
-const demoteHeadings = (text) => text.replace(new RegExp(HEADING_SRC, 'gim'), (h) => MODEL_WRITTEN + h);
+const demoteHeadings = (text) => text
+  .replace(new RegExp(HEADING_SRC, 'gim'), (h) => MODEL_WRITTEN + h)
+  .replace(new RegExp(SETEXT_SRC, 'gim'), (h) => MODEL_WRITTEN + h);
+
+/** The longest run of `char` (a backtick or a tilde) in `text`. */
+const longestRun = (text, char) => (text.match(char === '`' ? /`+/g : /~+/g) || []).reduce((m, run) => Math.max(m, run.length), 0);
 
 /**
- * The model's answer made unable to pass for the adapter's lines: a line that
+ * The code fence a markdown reader still has open at the end of `text`, as `{ char }`, or null: a fence line is three
+ * or more backticks or tildes after at most three spaces (a backtick one with no backtick behind it); the open fence
+ * closes on a line of the same character, at least as long, with nothing else on it.
+ */
+function openFence(text) {
+  let open = null;
+  for (const line of text.split('\n')) {
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!m) continue;
+    const [char, length, rest] = [m[1][0], m[1].length, m[2]];
+    if (!open) { if (char === '~' || !rest.includes('`')) open = { char, length }; }
+    else if (char === open.char && length >= open.length && !rest.trim()) open = null;
+  }
+  return open;
+}
+
+/**
+ * The model's answer made unable to pass for the adapter's lines: its line
+ * ends made LF (a CR alone ends a line for a renderer), then a line that
  * opens like one of the adapter's (`_(clone unchanged)_`, `_(clone kept: …)_`,
  * `_(the clone is HEAD …)_`, `_(vibe: …)_`, `_(diff unavailable: …)_`, a
- * `[mistral: …]` partial marker) and a
- * heading of the adapter's name get the model-written prefix, and a code
- * fence the answer left open is closed, so nothing the adapter appends after
- * it lands inside the model's block.
+ * `[mistral: …]` partial marker) and a heading of the adapter's name (ATX,
+ * setext or HTML) get the model-written prefix, and a code fence the answer
+ * left open (backticks or tildes) is closed by one of its character, one
+ * longer than the longest run of it in the answer, so nothing the adapter
+ * appends after it lands inside the model's block.
  */
 export function neutraliseModelText(text) {
-  const own = demoteHeadings(String(text).replace(new RegExp(ADAPTER_LINE_SRC, 'gm'), (l) => MODEL_WRITTEN + l));
-  const fences = own.split(/\r\n|\r|\n/).filter((l) => /^`{3,}/.test(l)).length;
-  return fences % 2 ? `${own}\n\`\`\`` : own;
+  const plain = String(text).replace(/\r\n?/g, '\n');
+  const own = demoteHeadings(plain.replace(new RegExp(ADAPTER_LINE_SRC, 'gm'), (l) => MODEL_WRITTEN + l));
+  const open = openFence(own);
+  return open ? `${own}\n${open.char.repeat(Math.max(3, longestRun(own, open.char) + 1))}` : own;
 }
 
 /**
  * The answer with the clone's diff appended under the adapter's heading, or
  * `_(clone unchanged)_` when there is none. A heading of that name already in
  * `text` is the model's: it is demoted on its own line, so the adapter's is
- * the one heading left. The fence is longer than any backtick run in the diff.
+ * the one heading left. The fence is longer than any backtick run in the
+ * answer or the diff.
  */
 export function appendPatch(text, diff) {
   const own = demoteHeadings(text);
   if (!diff) return `${own}\n\n_(clone unchanged)_`;
-  const longest = (diff.match(/`+/g) || []).reduce((m, run) => Math.max(m, run.length), 0);
-  const fence = '`'.repeat(Math.max(3, longest + 1));
+  const fence = '`'.repeat(Math.max(3, longestRun(`${own}\n${diff}`, '`') + 1));
   return `${own}\n\n${HEADING}\n\n${fence}diff\n${diff.replace(/\n$/, '')}\n${fence}`;
 }
 
 /**
- * The run's directory, clone and all; never throws. When the first removal
- * fails (a directory the model left mode 000), `fix` — the adapter's
- * fixModes over the clone and tmp, under the sandbox — runs and the removal
- * is tried once more; what still stands is one log line.
+ * The run's directory, clone and all; never throws. A run a model command
+ * touched passes `clear` (clearRun over the clone and tmp, under the sandbox):
+ * the clone's and tmp's contents go through it, and the adapter itself removes
+ * only OUT and the two directories once empty — it never walks a directory a
+ * command could still write. When that fails (a directory the model left mode
+ * 000, which rm cannot enter), `fix` — fixModes, under the sandbox too — runs
+ * and the removal is tried once more; what still stands is one log line.
+ * Without `clear` (no command ran: prepareClone's own failure) the run dir is
+ * removed in one recursive pass.
  * @param {string} runDir
- * @param {{log?: (line: string) => void, fix?: (() => void) | null}} [opts]
+ * @param {{log?: (line: string) => void, fix?: (() => void) | null, clear?: (() => void) | null}} [opts]
  * @returns {boolean} true when the directory is gone
  */
-export function removeRun(runDir, { log = () => {}, fix = null } = {}) {
-  try { rmSync(runDir, { recursive: true, force: true }); return true; } catch { /* fixed, then once more */ }
+export function removeRun(runDir, { log = () => {}, fix = null, clear = null } = {}) {
+  const remove = clear ? () => { clear(); removeEmptied(runDir); } : () => rmSync(runDir, { recursive: true, force: true });
+  try { remove(); return true; } catch { /* fixed, then once more */ }
   if (fix) fix();
   try {
-    rmSync(runDir, { recursive: true, force: true });
+    remove();
     return true;
   } catch (e) {
     log(`repro run dir not removed: ${runDir} — ${(e && e.message) || e}`);

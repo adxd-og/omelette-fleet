@@ -34,7 +34,7 @@
  * `<home>/logs/session/unified/` (2026-11-06, Vibe 3.1.0), a second copy of
  * the reviewed code outliving the call. `[session_logging] enabled = false`
  * stops it; what the home still gathers (vibe.log, the plugin store) is
- * trimmed by capVibeLogs. `VIBE_HOME`, `TMPDIR` and
+ * trimmed by capVibeLogs. `HOME`, `VIBE_HOME`, `TMPDIR` and
  * `OMELETTE_FLEET_HOME` reach the child through `extraEnv`, each
  * `realpathSync`'d: Seatbelt (the repro wrapper) matches resolved paths, and
  * `/var/folders/…` is not `/private/var/folders/…`.
@@ -90,8 +90,8 @@
  * the runtime turns that into the operator action below (never a retry).
  */
 import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, sep } from 'node:path';
 import { defineUnit } from '../../core/unit.mjs';
 import { makeCatalog } from '../../core/catalog.mjs';
 import { checkCwd } from '../../core/cwd.mjs';
@@ -100,7 +100,7 @@ import { readRegularFile } from '../../core/status.mjs';
 import { ensureHome, resolveAlias } from './home.mjs';
 import { EFFORTS, GUIDE, MISTRAL_MODELS } from './models.js';
 import {
-  appendPatch, assertRun, cloneDiff, fixModes, neutraliseModelText, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
+  appendPatch, assertRun, clearRun, cloneDiff, fixModes, neutraliseModelText, nodeUp, outsideLinks, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
 } from './repro.mjs';
 
 export const catalog = makeCatalog({
@@ -127,8 +127,8 @@ export const REPRO_PREFIX =
   'You are a security reviewer who reproduces. The directory you are in is a disposable clone of the repository\'s ' +
   'HEAD; nothing you change here reaches the real tree. Confirm each finding by running it. You have bash only: ' +
   'read with cat and grep; every command runs under a kernel sandbox that refuses the network, writes outside this ' +
-  'clone and its temp dir, and reads of the operator\'s secret dirs (~/.ssh, ~/.aws, ~/.config, ~/.vibe, ~/.gnupg ' +
-  'and the fleet home among them). Propose a fix by editing the files in place — the adapter appends the diff of ' +
+  'clone and its temp dir, and reads of the operator\'s home and of the work tree this clone was taken from. ' +
+  'Propose a fix by editing the files in place — the adapter appends the diff of ' +
   'the clone to your answer, so do not paste a patch yourself. Never git commit, never push, never reach the ' +
   'network (it is refused anyway). For each finding say what an attacker gains, in four parts — location · ' +
   'scenario · consequence · how to confirm (the command you ran and what it printed) — with the location as a ' +
@@ -246,7 +246,9 @@ const show = (v) => (typeof v === 'string' ? v : String(JSON.stringify(v)));
  * Turn a finished run and its export into `{ text, usage, partial?, footer }`,
  * or throw a refusal: the fallback (export or session record names another
  * model), the policy echo (the run did not carry the home's policy, the
- * home's wrapper as the bash shell included), then an empty answer. `text` is
+ * home's wrapper as the bash shell included), a backend failure (`outcome:
+ * infrastructure_failure` or `error.code: backend_error`, the one refusal
+ * review retries), then an empty answer. `text` is
  * the answer, the footer after a blank line, then any marker
  * (core/partial.mjs). Pure; exported for tests and the repro profile.
  * @param {{stdout:string, code:number|null, killed:boolean, capped?:boolean, cancelled?:boolean}} res
@@ -274,6 +276,12 @@ export function extractResult(res, exp, { requested, profile = 'review', timeout
   ];
   for (const [key, value, want] of policy) {
     if (value !== want) throw new Error(`mistral: the run did not carry the unit's policy (${key}=${show(value)}) — VIBE_HOME was not honoured`);
+  }
+  // Vibe's backend, not the run, failed: review runs it once more (not isDeterministic); repro never does.
+  const error = exp.error && typeof exp.error === 'object' ? exp.error : {};
+  if (exp.outcome === 'infrastructure_failure' || error.code === 'backend_error') {
+    const why = String(error.message || exp.outcome).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
+    throw new Error(`mistral: Vibe's backend failed (${why}) — ${profile === 'repro' ? 'not retried: a repro run is never re-run' : 'retried'}`);
   }
   const answer = String(res.stdout || '').trim();
   if (!answer) throw new Error(`mistral: produced no answer (outcome=${exp.outcome}, exit=${res.code})`);
@@ -436,7 +444,7 @@ async function reviewOnce(ctx, { prompt, workdir, requested }) {
     const res = await ctx.spawn({
       args,
       cwd: workdir,
-      extraEnv: { VIBE_HOME: realpathSync(vibeHome), TMPDIR: realpathSync(outDir), OMELETTE_FLEET_HOME: realpathSync(ctx.home) },
+      extraEnv: { HOME: operatorHome(), VIBE_HOME: realpathSync(vibeHome), TMPDIR: realpathSync(outDir), OMELETTE_FLEET_HOME: realpathSync(ctx.home) },
     });
     return answerFrom(ctx, res, { outDir, requested, profile: 'review', timeoutS: ctx.cfg.timeoutS, wrapper: join(vibeHome, 'shell.sh') });
   } finally {
@@ -462,18 +470,25 @@ async function reproOnce(ctx, { prompt, cwd, requested }) {
   const keep = ctx.cfg.reproKeep === true;
   const kept = keep ? `\n\n_(clone kept: ${run.clone})_` : '';
   let fix = null;
+  let clear = null;
   try {
     const dirtyLine = run.dirty ? `_(the clone is HEAD ${run.head}; uncommitted changes in ${cwd} were not in it)_\n\n` : '';
+    // The model is told without the path: the work tree is not its to look for (the profile denies it, SRC).
+    const dirtyPrompt = run.dirty ? `_(the clone is HEAD ${run.head}; the work tree had uncommitted changes, which are not in this clone)_\n\n` : '';
     const promptFile = join(run.out, 'prompt.md');
-    writeFileSync(promptFile, REPRO_PREFIX + dirtyLine + prompt, { flag: 'wx', mode: 0o600 });
+    writeFileSync(promptFile, REPRO_PREFIX + dirtyPrompt + prompt, { flag: 'wx', mode: 0o600 });
     const timeLimitS = ctx.cfg.reproTimeoutS - 15;
     const args = buildArgs({
       profile: 'repro', workdir: run.clone, model: requested, tools: REPRO_TOOLS,
       maxTurns: ctx.cfg.maxTurns, maxPrice: ctx.cfg.reproMaxPrice, timeLimitS, outDir: run.out, promptFile,
     });
     ctx.log(`vibe · profile=repro · model=${requested} · tools=bash · max-turns=${ctx.cfg.maxTurns} · max-price=$${ctx.cfg.reproMaxPrice} · time-limit=${timeLimitS}s · workdir=${run.clone}`);
-    // Seatbelt matches resolved paths: every path the wrapper and the profile read is resolved here.
+    // Seatbelt matches resolved paths: every path the wrapper and the profile read is resolved here — HOME too, which
+    // the wrapper hands the profile as it stands in Vibe's env (a HOME spelled through a symlink would deny nothing).
+    const home = operatorHome();
+    const node = nodePrefix();
     const extraEnv = {
+      HOME: home,
       ...Object.fromEntries(Object.entries({
         VIBE_HOME: vibeHome,
         TMPDIR: run.tmp,
@@ -483,13 +498,18 @@ async function reproOnce(ctx, { prompt, cwd, requested }) {
         OMELETTE_REPRO_OUT: run.out,
         OMELETTE_REPRO_RUNS: runsRoot(),
         OMELETTE_REPRO_RUN: run.runDir,
+        OMELETTE_REPRO_SRC: run.top,
       }).map(([k, v]) => [k, realpathSync(v)])),
       // The profile reads TMPROOT only inside a regex: the resolved temp root, its metacharacters escaped.
       OMELETTE_REPRO_TMPROOT: regexLiteral(realpathSync(tmpdir())),
+      OMELETTE_REPRO_NODE: node,
+      // The directories from HOME down to the node prefix's parent, stat-able past the HOME deny (npm lstats them).
+      OMELETTE_REPRO_NODEUP: nodeUp({ home, node }),
     };
-    // The env of the wrapper's chmod -R: the spawn's (HOME is the operator's), so the same profile stands.
+    // The env of the wrapper's chmod -R and rm -rf: the spawn's (HOME is the operator's), so the same profile stands.
     const childEnv = { ...process.env, ...extraEnv };
     fix = () => fixModes({ wrapper: join(vibeHome, 'shell.sh'), env: childEnv, paths: [run.clone, run.tmp], log: ctx.log });
+    clear = () => clearRun({ wrapper: join(vibeHome, 'shell.sh'), env: childEnv, paths: [run.clone, run.tmp] });
     // A process a command backgrounded must not outlive the call and wait for the next run.
     const res = await ctx.spawn({ args, cwd: run.clone, extraEnv, hardKillMs: ctx.cfg.reproTimeoutS * 1000, killGroupOnExit: true });
     // A command that swapped the clone or tmp for a link would point the adapter's chmod and git at the operator's files.
@@ -509,8 +529,25 @@ async function reproOnce(ctx, { prompt, cwd, requested }) {
     if (keep) throw new Error(`${(e && e.message) || e}${kept}`);
     throw e;
   } finally {
-    if (!keep) removeRun(run.runDir, { log: ctx.log, fix });
+    if (!keep) removeRun(run.runDir, { log: ctx.log, fix, clear });
   }
+}
+
+/**
+ * The install prefix of the node the adapter runs on (its bin's parent, resolved), which the repro profile re-allows
+ * past its HOME deny (NODE), so a node under ~/.nvm still runs. Never the operator's home or an ancestor of it — a
+ * node in `~/bin` would re-open the whole home — then the binary alone.
+ */
+function nodePrefix() {
+  const prefix = realpathSync(dirname(dirname(process.execPath)));
+  const home = operatorHome();
+  const covers = home === prefix || home.startsWith(prefix === sep ? sep : prefix + sep);
+  return covers ? realpathSync(process.execPath) : prefix;
+}
+
+/** The operator's home, resolved: the HOME Vibe runs with and the repro profile denies, and the one nodePrefix keeps clear of. */
+function operatorHome() {
+  return realpathSync(process.env.HOME || homedir());
 }
 
 /** `<dir>/.vibe` is there, whatever it is (a file, a link, a directory) — or cannot be ruled out. */
@@ -564,9 +601,10 @@ export default defineUnit({
       description:
         'Ask Mistral Large 4 (local vibe CLI, the operator\'s plan) for a security review of a directory: what an ' +
         'attacker gains, findings in four parts with path:line pointers. READ-ONLY by policy, not by a kernel: Vibe ' +
-        'gets read_file and grep only — no shell, no web, no write tool — and its home denies reads outside the ' +
-        'workdir; the run can read what the operator\'s user can read under `cwd`, and nothing it reads can leave ' +
-        'except in its answer. The answer ends with a footer naming the outcome, the steps, Vibe\'s est. cost (not ' +
+        'gets read_file and grep only — no shell, no web, no write tool. Its home\'s outside-workdir deny is policy too, ' +
+        'and Vibe\'s read_file follows symlinks, so the tool refuses a `cwd` holding a symlink that resolves outside it; ' +
+        'the run can read what the operator\'s user can read under `cwd`, and nothing it reads can leave except in ' +
+        'its answer. The answer ends with a footer naming the outcome, the steps, Vibe\'s est. cost (not ' +
         'the bill) and the kept export.json. A run Vibe answered with another model than the one asked is refused, ' +
         'not returned. A run that hit its time limit comes back marked partial. Verify every finding.',
       inputSchema: {
@@ -593,6 +631,14 @@ export default defineUnit({
         if (projectVibe(workdir)) {
           return { text: `Error: ${join(workdir, '.vibe')} exists — a project Vibe config would override the unit's policy for this run; remove it, or use mistral_security_repro, which clones HEAD and drops it`, isError: true };
         }
+        // Vibe's read_file follows a link out of the workdir: a cwd holding one that resolves outside is refused before any spawn.
+        const link = outsideLinks(workdir);
+        if (link && link.unchecked) {
+          return { text: `Error: the symlinks under ${workdir} could not all be checked (${link.unchecked}) — Vibe's read_file follows a link out of the workdir; review a smaller directory`, isError: true };
+        }
+        if (link) {
+          return { text: `Error: ${link.path} is a symlink to ${link.target}, outside ${workdir} — Vibe's read_file would follow it; remove it, or review a copy without it`, isError: true };
+        }
         const requested = pickAlias(ctx);
         return ctx.retry(() => reviewOnce(ctx, { prompt, workdir, requested }), { skipIf: isDeterministic });
       },
@@ -605,8 +651,8 @@ export default defineUnit({
         'in a disposable HEAD-only clone of `cwd` (uncommitted changes are not in it, the answer says so; LFS files ' +
         'are pointers, not content). Vibe gets bash only (its read_file and grep run outside the kernel sandbox and ' +
         'follow symlinks out of the clone, so they are not given); every bash command runs under a macOS kernel ' +
-        'sandbox (Seatbelt) that refuses the network, writes outside the clone and its temp dir, and reads of ~/.ssh, ' +
-        '~/.aws, ~/.config, ~/.vibe, ~/.gnupg and the fleet home. Closed unless the unit\'s registration sets OMELETTE_ALLOW_REPRO=1 (OMELETTE_ALLOW_WRITE does not ' +
+        'sandbox (Seatbelt) that refuses the network, writes outside the clone and its temp dir, and reads of the ' +
+        'operator\'s home, your work tree and the fleet home. Closed unless the unit\'s registration sets OMELETTE_ALLOW_REPRO=1 (OMELETTE_ALLOW_WRITE does not ' +
         'open it); macOS only. Nothing is applied to your tree: when the clone changed, the adapter appends its diff ' +
         'under `## proposed patch (not applied)` for you to review. Never retried; a run that hit its time limit ' +
         'comes back marked partial. Verify every finding.',

@@ -15,13 +15,13 @@ import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import unit, { REPRO_PREFIX } from '../units/mistral/adapter.mjs';
 import { PARTIAL_MARK_RE } from '../core/partial.mjs';
 import { ensureHome } from '../units/mistral/home.mjs';
 import {
-  assertRun, cloneDiff, fixModes, neutraliseModelText, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
+  NODEUP_NONE, appendPatch, assertRun, clearRun, cloneDiff, fixModes, neutraliseModelText, nodeUp, prepareClone, regexLiteral, removeRun, reproAllowed, reproSupported, runsRoot,
 } from '../units/mistral/repro.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
@@ -35,7 +35,7 @@ const made = [BASE];
 after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 
 const CLOSED = 'Error: mistral_security_repro is closed — set OMELETTE_ALLOW_REPRO=1 on the unit\'s registration to let the model execute code in a disposable clone (OMELETTE_ALLOW_WRITE does not open it)';
-const RESOLVED_ENV = ['VIBE_HOME', 'TMPDIR', 'OMELETTE_FLEET_HOME', 'OMELETTE_REPRO_CLONE', 'OMELETTE_REPRO_TMP', 'OMELETTE_REPRO_OUT', 'OMELETTE_REPRO_RUNS', 'OMELETTE_REPRO_RUN'];
+const RESOLVED_ENV = ['VIBE_HOME', 'TMPDIR', 'OMELETTE_FLEET_HOME', 'OMELETTE_REPRO_CLONE', 'OMELETTE_REPRO_TMP', 'OMELETTE_REPRO_OUT', 'OMELETTE_REPRO_RUNS', 'OMELETTE_REPRO_RUN', 'OMELETTE_REPRO_SRC', 'OMELETTE_REPRO_NODE'];
 
 const FAKE = join(BASE, 'fake-vibe.mjs');
 writeFileSync(FAKE, [
@@ -49,7 +49,8 @@ writeFileSync(FAKE, [
   'const workdir = opt("--workdir");',
   'const homeConfig = readFileSync(join(process.env.VIBE_HOME, "config.toml"), "utf8");',
   'const shell = JSON.parse(/^shell = (".*")$/m.exec(homeConfig)[1]);',
-  'const ran = sc.shell ? spawnSync(shell, ["-c", sc.shell], { cwd: workdir, env: process.env, encoding: "utf8" }) : null;',
+    // The wrapper hands bash the run's tmp as HOME (review fix round): a command names the operator's home as $T_HOME.
+  'const ran = sc.shell ? spawnSync(shell, ["-c", sc.shell], { cwd: workdir, env: { ...process.env, T_HOME: process.env.HOME }, encoding: "utf8" }) : null;',
   'const resolved = {};',
   `for (const k of ${JSON.stringify(RESOLVED_ENV)}) resolved[k] = process.env[k] ? realpathSync(process.env[k]) : null;`,
   'const esc = (s) => JSON.stringify(s).slice(1, -1);',
@@ -61,6 +62,8 @@ writeFileSync(FAKE, [
   '  vibeInWorkdir: existsSync(join(workdir, ".vibe")),',
   '  files: readdirSync(workdir),',
   '  ran: ran && { status: ran.status, stdout: ran.stdout, stderr: ran.stderr },',
+  '  remotes: spawnSync("git", ["-C", workdir, "remote"], { encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } }).stdout,',
+  '  reflog: existsSync(join(workdir, ".git", "logs")),',
   '}) + "\\n");',
   // The clone swapped for a link from outside the sandbox: what the kernel refuses a command, the adapter must still catch.
   'if (sc.swap) { rmSync(workdir, { recursive: true, force: true }); symlinkSync(sc.swap, workdir); }',
@@ -153,8 +156,9 @@ function world({ config, edit = () => {}, files, uncommitted, homes = HOMES, har
   }, { env, onResult: (r) => records.push(r) });
   const spawns = () => (existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   const call = (args = {}) => rt.callTool('mistral_security_repro', { prompt: 'reproduce the auth bug', cwd: work, ...args });
-  const repro = (args = {}) => withEnv({ OMELETTE_ALLOW_REPRO: '1' }, () => call(args));
-  const review = () => rt.callTool('mistral_security_review', { prompt: 'find the auth bug', cwd: work });
+  // The adapter takes HOME from its own process (resolved): the world's home is that HOME for the call.
+  const repro = (args = {}) => withEnv({ OMELETTE_ALLOW_REPRO: '1', HOME: home }, () => call(args));
+  const review = () => withEnv({ HOME: home }, () => rt.callTool('mistral_security_review', { prompt: 'find the auth bug', cwd: work }));
   return { root, home, fleet, work, head, records, spawns, retries: () => retries, call, repro, review };
 }
 
@@ -237,7 +241,11 @@ test('the clone is HEAD only and the answer says the tree was dirty', { skip: !D
   assert.ok(!s.files.includes('wip.txt'), 'the uncommitted file is not in the clone');
   const line = `_(the clone is HEAD ${w.head}; uncommitted changes in ${w.work} were not in it)_`;
   assert.equal(r.text.split('\n')[0], line);
-  assert.ok(s.prompt.includes(line), 'the model is told too');
+  // Review fix round (B1): the model is told, without the work tree's path; the clone has no remote naming it.
+  assert.ok(s.prompt.includes(`_(the clone is HEAD ${w.head}; the work tree had uncommitted changes, which are not in this clone)_`), s.prompt);
+  assert.ok(!s.prompt.includes(w.work) && !s.prompt.includes(realpathSync(w.work)), 'the prompt names no work tree');
+  assert.equal(s.remotes, '', 'the clone keeps no remote');
+  assert.equal(s.reflog, false, 'the clone keeps no reflog, whose clone line names the work tree');
 });
 
 test('a committed .vibe/config.toml is gone from the clone before the spawn', { skip: !DARWIN }, async () => {
@@ -272,6 +280,11 @@ test('every path in the child\'s env is resolved; TMPROOT is the resolved temp r
     assert.ok(s.env[k], `${k} is set`);
     assert.equal(s.env[k], s.resolved[k], `${k} is resolved`);
   }
+  // HOME, which the wrapper hands the profile as it stands: the adapter's /tmp/… reaches Vibe as /private/tmp/….
+  assert.ok(w.home.startsWith('/tmp/'), w.home);
+  assert.equal(s.env.HOME, realpathSync(w.home));
+  // NODEUP is built from the same two resolved paths.
+  assert.equal(s.env.OMELETTE_REPRO_NODEUP, nodeUp({ home: s.env.HOME, node: s.env.OMELETTE_REPRO_NODE }));
   assert.ok(s.env.OMELETTE_REPRO_CLONE.startsWith(`${real}/`), 'the clone went under the symlinked temp root');
   assert.ok(s.env.OMELETTE_FLEET_HOME.startsWith('/private/tmp/'), s.env.OMELETTE_FLEET_HOME);
   // The profile reads TMPROOT inside a regex: the `.` of real.tmp reaches it escaped.
@@ -317,6 +330,16 @@ test('no retry on a failed repro run', { skip: !DARWIN }, async () => {
   assert.match(r.text, /no export\.json in \S+\/out \(exit 1\)/);
   assert.equal(w.spawns().length, 1);
   assert.equal(w.retries(), 0, 'ctx.retry is never called');
+});
+
+// Review fix round (B4): a backend failure is retried by review only; a repro run is never re-run.
+test('repro: an export naming a backend failure is one run and the refusal, never retried', { skip: !DARWIN }, async () => {
+  const w = world({ edit: (s) => { Object.assign(s.export, { outcome: 'infrastructure_failure', error: { code: 'backend_error', message: 'upstream 503' } }); } });
+  const r = await w.repro();
+  assert.equal(r.isError, true);
+  assert.match(r.text, /mistral: Vibe's backend failed \(upstream 503\) — not retried: a repro run is never re-run$/);
+  assert.equal(w.spawns().length, 1);
+  assert.equal(w.retries(), 0);
 });
 
 test('a repro deadline names 2385s and mistral.reproTimeoutS', { skip: !DARWIN }, async () => {
@@ -379,10 +402,10 @@ test('the adapter\'s diff runs nothing the model planted in the clone\'s .git an
   const w = world({
     edit: (s) => {
       s.shell = [
-        'printf "#!/bin/sh\\ntouch %s\\n" "$HOME/fsmonitor-ran" > fsm.sh',
+        'printf "#!/bin/sh\\ntouch %s\\n" "$T_HOME/fsmonitor-ran" > fsm.sh',
         'chmod +x fsm.sh',
         'git config core.fsmonitor "$PWD/fsm.sh"',
-        'ln -s "$HOME/.ssh/id" leak',
+        'ln -s "$T_HOME/.ssh/id" leak',
         'printf "patched\\n" >> README.md',
       ].join(' && ');
     },
@@ -419,7 +442,7 @@ test('a nested repository in the clone is named, not diffed, and its config neve
         'printf x > nested/f',
         'git -C nested add f',
         'git -C nested -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -qm n',
-        'git -C nested config core.fsmonitor "touch $HOME/pwned"',
+        'git -C nested config core.fsmonitor "touch $T_HOME/pwned"',
         'printf "patched\\n" >> README.md',
       ].join(' && ');
     },
@@ -440,7 +463,7 @@ test('the Seatbelt holds: a write to $HOME/x, a curl and a read of $HOME/.ssh ar
   try {
     const w = world({
       edit: (s) => {
-        s.shell = `echo a > "$HOME/x"; echo b > "$OMELETTE_REPRO_CLONE/y"; cat "$OMELETTE_REPRO_CLONE/y"; ls "$HOME/.ssh"; cat "$HOME/.ssh/id"; /usr/bin/curl -s --max-time 3 http://127.0.0.1:${port}/; echo curl=$?`;
+        s.shell = `echo a > "$T_HOME/x"; echo b > "$OMELETTE_REPRO_CLONE/y"; cat "$OMELETTE_REPRO_CLONE/y"; ls "$T_HOME/.ssh"; cat "$T_HOME/.ssh/id"; /usr/bin/curl -s --max-time 3 http://127.0.0.1:${port}/; echo curl=$?`;
       },
     });
     const r = await w.repro();
@@ -462,7 +485,7 @@ test('the Seatbelt holds: a write to $HOME/x, a curl and a read of $HOME/.ssh ar
 test('a hard link into the clone does not reach the operator\'s file', { skip: !KERNEL }, async () => {
   const w = world({
     edit: (s) => {
-      s.shell = 'printf x >> "$HOME/secret"; echo direct=$?; ln "$HOME/secret" "$OMELETTE_REPRO_CLONE/z" && printf x >> "$OMELETTE_REPRO_CLONE/z"; echo link=$?';
+      s.shell = 'printf x >> "$T_HOME/secret"; echo direct=$?; ln "$T_HOME/secret" "$OMELETTE_REPRO_CLONE/z" && printf x >> "$OMELETTE_REPRO_CLONE/z"; echo link=$?';
     },
   });
   writeFileSync(join(w.home, 'secret'), 'operator-secret\n');
@@ -513,7 +536,7 @@ test('the profile parses: sandbox-exec -D … -f repro.sb /usr/bin/true exits 0'
   mkdirSync(d);
   const r = spawnSync('/usr/bin/sandbox-exec', [
     '-D', `CLONE=${d}`, '-D', `TMP=${d}`, '-D', `HOME=${d}`, '-D', `FLEET=${fleet}`, '-D', `OUT=${d}`,
-    '-D', `RUNS=${d}`, '-D', `RUN=${d}`, '-D', `TMPROOT=${d}`,
+    '-D', `RUNS=${d}`, '-D', `RUN=${d}`, '-D', `TMPROOT=${d}`, '-D', `SRC=${d}`, '-D', `NODE=${d}`, '-D', `NODEUP=${NODEUP_NONE}`,
     '-f', join(dir, 'repro.sb'), '/usr/bin/true',
   ]);
   assert.equal(r.status, 0, r.stderr.toString());
@@ -566,7 +589,7 @@ test('RUNS: a command reads and writes its own clone, never a sibling run\'s clo
     const w = world({
       edit: (s) => {
         s.shell = [
-          'ln -s "$HOME/.ssh/id" leak; cat leak; echo link=$?',
+          'ln -s "$T_HOME/.ssh/id" leak; cat leak; echo link=$?',
           'echo plain > plain.txt; cat plain.txt; echo own=$?',
           `cat ${sq(join(sibling.clone, 'README.md'))}; echo sibread=$?`,
           `echo x >> ${sq(join(sibling.clone, 'README.md'))}; echo sibwrite=$?`,
@@ -641,13 +664,28 @@ test('neutraliseModelText: each adapter line shape and the heading in any spacin
     assert.equal(neutraliseModelText(neutraliseModelText(l)), P + l, `${l}: prefixed once`);
   }
   for (const l of ['see _(clone unchanged)_', '_(vibes: x)_', '## proposed patches', 'proposed patch (not applied)']) assert.equal(neutraliseModelText(l), l, l);
-  // A lone CR ends a line for a markdown renderer: what follows it is a line too.
-  assert.equal(neutraliseModelText('a\r_(vibe: x)_'), `a\r${P}_(vibe: x)_`);
+  // Review fix round (B5): a CR, alone or before a LF, is a line end, normalised to a LF before any line is read.
+  assert.equal(neutraliseModelText('a\r_(vibe: x)_'), `a\n${P}_(vibe: x)_`);
+  assert.equal(neutraliseModelText('a\r\n[mistral: x]\r\nb'), `a\n${P}[mistral: x]\nb`);
+  // A setext heading of the adapter's name, and an HTML one, are the model's too.
+  for (const [l, under] of [['proposed patch (not applied)', '---'], ['  Proposed Patch (not applied)', '==='], ['proposed patch (not applied)', '-']]) {
+    assert.equal(neutraliseModelText(`a\n${l}\n${under}\nb`), `a\n${P}${l}\n${under}\nb`, l);
+  }
+  for (const l of ['<h2>proposed patch (not applied)</h2>', ' <H3 id="x"> Proposed  Patch (not applied)</H3>']) {
+    assert.equal(neutraliseModelText(`a\n${l}\nb`), `a\n${P}${l}\nb`, l);
+  }
+  assert.equal(neutraliseModelText('proposed patch (not applied)\nb'), 'proposed patch (not applied)\nb', 'no underline: a paragraph');
 });
 
 test('neutraliseModelText: an odd count of fence lines gets one closing fence; an even count and an empty answer are left as they are', () => {
-  assert.equal(neutraliseModelText('a\n```\nx'), 'a\n```\nx\n```');
-  assert.equal(neutraliseModelText('```js\nx\n```\n```\ny'), '```js\nx\n```\n```\ny\n```');
+  // Review fix round (B5): the closing fence is one character longer than the longest run of it in the answer.
+  assert.equal(neutraliseModelText('a\n```\nx'), 'a\n```\nx\n````');
+  assert.equal(neutraliseModelText('```js\nx\n```\n```\ny'), '```js\nx\n```\n```\ny\n````');
+  assert.equal(neutraliseModelText('a\n`````\nx'), 'a\n`````\nx\n``````', 'a fence of five closes only with five or more');
+  assert.equal(neutraliseModelText('~~~\nx'), '~~~\nx\n~~~~', 'a tilde fence closes with tildes');
+  assert.equal(neutraliseModelText('   ```\nx'), '   ```\nx\n````', 'up to three spaces before a fence');
+  assert.equal(neutraliseModelText('    ```\nx'), '    ```\nx', 'four spaces: indented code, no fence');
+  assert.equal(neutraliseModelText('```\n~~~\nx'), '```\n~~~\nx\n````', 'a tilde line inside a backtick fence closes nothing');
   assert.equal(neutraliseModelText('```\nx\n```'), '```\nx\n```');
   assert.equal(neutraliseModelText('a `` b\n x ```'), 'a `` b\n x ```', 'a backtick run inside a line is no fence');
   assert.equal(neutraliseModelText(''), '');
@@ -663,7 +701,15 @@ test('the model\'s answer cannot pass for the adapter\'s lines nor hold the adap
   const at = lines.indexOf('## proposed patch (not applied)');
   assert.ok(at > lines.findIndex((l) => l.startsWith('_(vibe: ')), r.text);
   assert.equal(lines.slice(0, at).filter((l) => /^`{3,}/.test(l)).length % 2, 0, 'no fence is open over the adapter\'s heading');
-  assert.match(r.text, /\n```diff\ndiff --git a\/x b\/x\n[\s\S]*\n\+y\n```$/);
+  // The adapter's fence is longer than the closing fence the model's text was given (````): five backticks.
+  assert.match(r.text, /\n`````diff\ndiff --git a\/x b\/x\n[\s\S]*\n\+y\n`````$/);
+});
+
+test('appendPatch: a setext heading of the adapter\'s name over an unchanged clone is demoted; the fence outruns the model\'s backticks', () => {
+  const P = '> (model-written, not the adapter\'s) ';
+  assert.equal(appendPatch(neutraliseModelText('proposed patch (not applied)\n---\nfake'), ''), `${P}proposed patch (not applied)\n---\nfake\n\n_(clone unchanged)_`);
+  const r = appendPatch('see ``````x``````', 'diff --git a/x b/x\n+y\n');
+  assert.ok(r.endsWith('\n## proposed patch (not applied)\n\n```````diff\ndiff --git a/x b/x\n+y\n```````'), r);
 });
 
 test('a nested repository whose path holds a newline is named on one line, JSON-quoted, and forges no diff line', () => {
@@ -764,11 +810,65 @@ function sandboxedRun(name, home) {
   const env = {
     PATH: '/usr/bin:/bin', HOME: home, OMELETTE_FLEET_HOME: realpathSync(fleet), OMELETTE_REPRO_CLONE: run.clone, OMELETTE_REPRO_TMP: run.tmp,
     OMELETTE_REPRO_OUT: run.out, OMELETTE_REPRO_RUNS: realpathSync(runsRoot()), OMELETTE_REPRO_RUN: run.runDir,
-    OMELETTE_REPRO_TMPROOT: regexLiteral(realpathSync(tmpdir())),
+    OMELETTE_REPRO_TMPROOT: regexLiteral(realpathSync(tmpdir())), OMELETTE_REPRO_SRC: realpathSync(run.top),
+    OMELETTE_REPRO_NODE: realpathSync(dirname(dirname(process.execPath))), OMELETTE_REPRO_NODEUP: nodeUp({ home, node: realpathSync(dirname(dirname(process.execPath))) }),
   };
   return { run, wrapper: join(dir, 'shell.sh'), env };
 }
 const modeOf = (p) => lstatSync(p).mode & 0o777;
+
+test('nodeUp: the directories from HOME down to the node prefix\'s parent, regex-escaped; none when the prefix is not under HOME', () => {
+  assert.equal(nodeUp({ home: '/h', node: '/h/.nvm/versions/node/v20' }), '^(/h|/h/\\.nvm|/h/\\.nvm/versions|/h/\\.nvm/versions/node)$');
+  // The binary alone, when the prefix would cover the home (nodePrefix): ~/bin/node.
+  assert.equal(nodeUp({ home: '/h', node: '/h/bin/node' }), '^(/h|/h/bin)$');
+  for (const node of ['/opt/node', '/hx/node', '/h']) assert.equal(nodeUp({ home: '/h', node }), NODEUP_NONE, node);
+});
+
+test('NODEUP: the directories from HOME down to the node prefix are stat-able and never listable; nothing beside them is', { skip: !KERNEL }, () => {
+  const home = realpathSync(mkdtempSync(join(HOMES, 'omelette-mistral-t3-nodeup-')));
+  made.push(home);
+  const node = join(home, 'nvm', 'versions', 'node', 'v20');
+  for (const d of [join(node, 'bin'), join(home, 'nvm', 'versions', 'node', 'v18'), join(home, 'other')]) mkdirSync(d, { recursive: true });
+  writeFileSync(join(home, 'other', 'note'), 'operator note\n');
+  writeFileSync(join(home, '.zsh_history'), 'operator history\n');
+  const { run, wrapper, env } = sandboxedRun('nodeup', home);
+  try {
+    const stat = (name, p) => `/usr/bin/stat -f %N "$T_HOME/${p}" >/dev/null 2>&1; echo ${name}=$?`;
+    const r = spawnSync(wrapper, ['-c', [
+      stat('home', '.'), stat('nvm', 'nvm'), stat('versions', 'nvm/versions'), stat('nodes', 'nvm/versions/node'),
+      stat('sibling', 'nvm/versions/node/v18'), stat('other', 'other'), stat('history', '.zsh_history'),
+      'ls "$T_HOME" >/dev/null 2>&1; echo lshome=$?',
+      'ls "$T_HOME/nvm" >/dev/null 2>&1; echo lsnvm=$?',
+      'cat "$T_HOME/.zsh_history" >/dev/null 2>&1; echo cathistory=$?',
+    ].join('\n')], { env: { ...env, OMELETTE_REPRO_NODE: node, OMELETTE_REPRO_NODEUP: nodeUp({ home, node }), T_HOME: home }, cwd: run.clone, encoding: 'utf8' });
+    const rows = Object.fromEntries([...r.stdout.matchAll(/^(\w+)=(\d+)$/gm)].map((m) => [m[1], Number(m[2])]));
+    assert.deepEqual(rows, { home: 0, nvm: 0, versions: 0, nodes: 0, sibling: 1, other: 1, history: 1, lshome: 1, lsnvm: 1, cathistory: 1 }, r.stdout + r.stderr);
+  } finally {
+    removeRun(run.runDir);
+  }
+});
+
+// The operator's real HOME, only for npm to run and `ls` of it to be refused; skipped where npm is not beside the node.
+test('npm runs in the clone under the real HOME, a node under it included (NODEUP); the home stays unlistable', { skip: !KERNEL || !existsSync(join(dirname(process.execPath), 'npm')) }, () => {
+  const home = realpathSync(homedir());
+  const node = realpathSync(dirname(dirname(process.execPath)));
+  const { run, wrapper, env } = sandboxedRun('nodeup-npm', home);
+  try {
+    mkdirSync(join(run.clone, 'pkg'));
+    writeFileSync(join(run.clone, 'pkg', 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0', scripts: { test: 'node --test' } }));
+    writeFileSync(join(run.clone, 'pkg', 'ok.test.mjs'), "import test from 'node:test';\ntest('ok', () => {});\n");
+    const r = spawnSync(wrapper, ['-c', [
+      'cd pkg',
+      'npm --version >/dev/null 2>&1; echo npmversion=$?',
+      'npm test >/dev/null 2>&1; echo npmtest=$?',
+      'ls "$T_HOME" >/dev/null 2>&1; echo lshome=$?',
+    ].join('\n')], { env: { ...env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, OMELETTE_REPRO_NODEUP: nodeUp({ home, node }), T_HOME: home }, cwd: run.clone, encoding: 'utf8', timeout: 120_000 });
+    const rows = Object.fromEntries([...r.stdout.matchAll(/^(\w+)=(\d+)$/gm)].map((m) => [m[1], Number(m[2])]));
+    assert.deepEqual(rows, { npmversion: 0, npmtest: 0, lshome: 1 }, r.stdout + r.stderr);
+  } finally {
+    removeRun(run.runDir);
+  }
+});
 
 test('fixModes gives the owner back a 000 directory and a 000 file, and leaves a 755 file\'s exec bit', { skip: !KERNEL }, () => {
   const { run, wrapper, env } = sandboxedRun('fix-000', BASE);
@@ -816,9 +916,46 @@ test('removeRun with fix removes a run whose clone holds a 000 directory', { ski
   chmodSync(locked, 0o000);
   const logs = [];
   const fix = () => fixModes({ wrapper, env, paths: [run.clone, run.tmp], log: (m) => logs.push(m) });
-  assert.equal(removeRun(run.runDir, { log: (m) => logs.push(m), fix }), true, logs.join('\n'));
+  const clear = () => clearRun({ wrapper, env, paths: [run.clone, run.tmp] });
+  assert.equal(removeRun(run.runDir, { log: (m) => logs.push(m), fix, clear }), true, logs.join('\n'));
   assert.equal(existsSync(run.runDir), false);
   assert.deepEqual(logs, []);
+});
+
+// Review fix round (B2): the clone's contents go through rm -rf under the profile; a directory swapped for a link
+// to the operator's files is unlinked, never walked.
+test('removeRun clears the clone through the wrapper: a directory replaced by a link to one under HOME leaves that directory\'s file in place', { skip: !KERNEL }, () => {
+  const home = realpathSync(mkdtempSync(join(HOMES, 'omelette-mistral-t3-rmhome-')));
+  made.push(home);
+  mkdirSync(join(home, 'victim'));
+  writeFileSync(join(home, 'victim', 'keep'), 'operator file\n');
+  const { run, wrapper, env } = sandboxedRun('rm-link', home);
+  mkdirSync(join(run.clone, 'd'));
+  writeFileSync(join(run.clone, 'd', 'f'), 'x\n');
+  rmSync(join(run.clone, 'd'), { recursive: true });
+  symlinkSync(join(home, 'victim'), join(run.clone, 'd'));
+  const logs = [];
+  const clear = () => clearRun({ wrapper, env, paths: [run.clone, run.tmp] });
+  assert.equal(removeRun(run.runDir, { log: (m) => logs.push(m), clear }), true, logs.join('\n'));
+  assert.equal(existsSync(run.runDir), false);
+  assert.equal(readFileSync(join(home, 'victim', 'keep'), 'utf8'), 'operator file\n');
+});
+
+// …and the adapter never walks the clone itself: what the sandboxed clear left there stays, named in one log line.
+test('removeRun with clear removes the clone only once empty: a clear that left a file leaves the run dir, logged', () => {
+  const d = join(BASE, 'rm-noclear');
+  gitRepo(d);
+  const run = prepareClone({ cwd: d });
+  const logs = [];
+  try {
+    assert.equal(removeRun(run.runDir, { log: (m) => logs.push(m), clear: () => {} }), false);
+    assert.ok(existsSync(join(run.clone, 'README.md')), 'the adapter walked the clone');
+    assert.equal(existsSync(run.out), false, 'OUT, which no command can write, is removed');
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /^repro run dir not removed: /);
+  } finally {
+    removeRun(run.runDir);
+  }
 });
 
 /* ── T3c: the clone and tmp directories themselves cannot be unlinked or replaced ── */
@@ -881,6 +1018,50 @@ test('the kernel keeps the clone dir: rmdir, rm -rf and mv of it are refused; fi
   const { ran } = w.spawns()[0];
   for (const [k, v] of [['touch', 0], ['mkdir', 0], ['chmod', 0], ['rmdirsub', 0], ['gitinit', 0], ['gitadd', 0], ['gitstatus', 0], ['node', 0], ['rmrf', 1], ['rmdir', 1], ['mv', 1], ['still', 0]]) {
     assert.match(ran.stdout, new RegExp(`^${k}=${v}$`, 'm'), ran.stdout + ran.stderr);
+  }
+});
+
+/* ── 1.9.0 review fix round: the profile (A1–A4, E4) ── */
+
+const PROCARGS = "import ctypes,sys; l=ctypes.CDLL(None,use_errno=True); m=(ctypes.c_int*3)(1,49,int(sys.argv[1])); n=ctypes.c_size_t(0); sys.exit(0 if l.sysctl(m,3,None,ctypes.byref(n),None,0)==0 and n.value>0 else 1)";
+test('the fix round\'s profile: no read of HOME or the work tree, no other process\'s argv, no launchd job, no other terminal, no write under the clone\'s .vibe; git, node and python3 run', { skip: !KERNEL }, async () => {
+  const uid = process.getuid();
+  const tty = readdirSync('/dev').filter((d) => /^ttys\d+$/.test(d)).find((d) => { try { return lstatSync(join('/dev', d)).uid === uid; } catch { return false; } });
+  const label = `com.omelette.test.${process.pid}`;
+  const w = world({
+    edit: (s) => {
+      s.shell = [
+        'cat "$T_HOME/notes"; echo home=$?',
+        // Ruling 1: bash's HOME is the run's tmp, so git reads no ~/.gitconfig it may not open.
+        'test "$HOME" = "$OMELETTE_REPRO_TMP"; echo hometmp=$?',
+        'echo "global=[$(git config --global user.name)]"',
+        'cat "$OMELETTE_REPRO_SRC/README.md"; echo src=$?',
+        'git status --porcelain >/dev/null; echo git=$?',
+        `${sq(process.execPath)} --test t.test.mjs >/dev/null 2>&1; echo node=$?`,
+        "python3 -c 'import ssl, sqlite3'; echo py=$?",
+        `python3 -c ${sq(PROCARGS)} $PPID; echo procout=$?`,
+        `python3 -c ${sq(PROCARGS)} $$; echo procown=$?`,
+        `cp /bin/launchctl "$TMPDIR/l"; "$TMPDIR/l" submit -l ${label} -- /usr/bin/true; echo submit=$?`,
+        ...(tty ? [`(exec 3>/dev/${tty}); echo tty=$?`] : []),
+        'echo x >/dev/null; echo null=$?; echo x >/dev/fd/2; echo fd=$?',
+        'mkdir .vibe; echo mkvibe=$?; echo b > beside; echo beside=$?',
+      ].join('; ');
+    },
+  });
+  writeFileSync(join(w.home, 'notes'), 'operator-notes\n');
+  writeFileSync(join(w.home, '.gitconfig'), '[user]\n\tname = operator-name\n');
+  try {
+    const r = await w.repro();
+    assert.equal(r.isError, undefined, r.text);
+    const { ran } = w.spawns()[0];
+    assert.match(ran.stdout, /^global=\[\]$/m, ran.stdout + ran.stderr);
+    const rows = [['home', 1], ['hometmp', 0], ['src', 1], ['git', 0], ['node', 0], ['py', 0], ['procout', 1], ['procown', 0], ['null', 0], ['fd', 0], ['mkvibe', 1], ['beside', 0], ...(tty ? [['tty', 1]] : [])];
+    for (const [k, v] of rows) assert.match(ran.stdout, new RegExp(`^${k}=${v}$`, 'm'), `${k}\n${ran.stdout}${ran.stderr}`);
+    assert.doesNotMatch(ran.stdout, /^submit=0$/m, 'a copied launchctl submitted a job');
+    assert.doesNotMatch(ran.stdout, /operator-notes|^demo$/m);
+    assert.match(r.text, /^\+\+\+ b\/beside$/m, 'the file beside .vibe is in the patch');
+  } finally {
+    if (spawnSync('/bin/launchctl', ['list', label]).status === 0) spawnSync('/bin/launchctl', ['remove', label]);
   }
 });
 

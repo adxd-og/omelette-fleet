@@ -37,7 +37,7 @@ writeFileSync(FAKE, [
   'const workdir = opt("--workdir");',
   'const shell = JSON.parse(/^shell = (".*")$/m.exec(readFileSync(join(process.env.VIBE_HOME, "config.toml"), "utf8"))[1]);',
   'process.env.FAKE_VIBE_DONE = sc.done || "";',
-  'const ran = sc.shell ? spawnSync(shell, ["-c", sc.shell], { cwd: workdir, env: process.env, encoding: "utf8" }) : null;',
+  'const ran = sc.shell ? spawnSync(shell, ["-c", sc.shell], { cwd: workdir, env: { ...process.env, T_HOME: process.env.HOME }, encoding: "utf8" }) : null;',
   'appendFileSync(sc.record, JSON.stringify({ workdir, ran: ran && { status: ran.status, stdout: ran.stdout, stderr: ran.stderr } }) + "\\n");',
   'writeFileSync(join(outDir, "export.json"), JSON.stringify({ outcome: "finished", stop_reason: null, error: null, session_id: "b7c1e2d0-0000-4000-8000-000000000003",',
   '  usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, total_tokens: 2 }, cost_usd: 0, steps: 1, exit_code: 0,',
@@ -86,7 +86,8 @@ function world({ config, shell = () => '', swap } = {}) {
     tools: unit.tools.map((t) => (t.run ? { ...t, run: (a, ctx) => t.run(a, { ...ctx, spawn: (o) => ctx.spawn({ ...o, args: [FAKE, scenarioPath, ...o.args] }) }) } : t)),
   }, { env });
   const spawns = () => (existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
-  const repro = (extra = {}) => withEnv({ OMELETTE_ALLOW_REPRO: '1', ...extra }, () => rt.callTool('mistral_security_repro', { prompt: 'reproduce', cwd: work }));
+  // The adapter takes HOME from its own process (resolved): the world's home is that HOME for the call.
+  const repro = (extra = {}) => withEnv({ OMELETTE_ALLOW_REPRO: '1', HOME: home, ...extra }, () => rt.callTool('mistral_security_repro', { prompt: 'reproduce', cwd: work }));
   const exportsKept = () => { try { return readdirSync(join(fleet, 'results', 'mistral', 'exports')); } catch { return []; } };
   return { root, work, spawns, repro, exportsKept };
 }
