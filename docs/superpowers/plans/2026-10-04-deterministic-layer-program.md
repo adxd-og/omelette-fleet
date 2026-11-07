@@ -127,6 +127,8 @@ Spec `docs/superpowers/specs/2026-10-04-1.7.0-fleet-pane-design.md`, plan `docs/
 
 ### 1.9.0 — the gates
 
+> Shifted one minor by the Mistral unit (1.9.0, 2026-11-06): this release becomes 1.10.0 and the ones after it move up one. The operator is to confirm.
+
 Shared state, kept by the mod per session: for each coder agent, its last stop; for each tester, its stops and the messages sent to it; the files a coder's loop wrote.
 
 | Gate | Fires on | Refuses when | Way out |

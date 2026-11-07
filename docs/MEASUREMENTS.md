@@ -53,6 +53,7 @@ What has actually been measured on this project, how each number was taken, and 
 | Question | Where |
 |---|---|
 | How do the fleet's units score on our own research and review tasks? | [The fleet's units on our own tasks](#the-fleets-units-on-our-own-tasks) |
+| How did Mistral Large 4 score on the 2026-10-20 security audit, read-only and with a sandboxed shell, and what did the first live repro runs cost? | [Mistral: the security-audit replay (2026-11-06)](#mistral-the-security-audit-replay-2026-11-06) |
 
 **About these numbers:**
 
@@ -530,6 +531,8 @@ The versions the live gate ran on, from the ledgers' live-gate lines and the CHA
 | 1.7.3 (2026-11-02) | 1.4.12 | 1.0.62 | 0.166.0 |
 | 1.8.0 (2026-11-04) | 1.4.12 | 1.0.62 | 0.166.0 |
 
+<!-- T6: vendor matrix row, units-per-release line -->
+
 Each release adds its row at the live gate (a step of the release procedure the ledger records; this repository's own checklist is the operator's, not a published file).
 
 **Units per release.** From 1.6.0 the release line of each ledger records `omelette-fleet results --stats --since "$(git log -1 --format=%cI <first commit>)"` — the ISO time of the branch's first commit with its offset (`2026-09-25T18:47:00+03:00`); UTC, with or without milliseconds, reads the same (calls, wall-clock, spool per unit); a unit whose call count equals `resultsKeep` (50) is a floor, not a count, because the spool prunes as it fills. 1.6.0, from the branch's first commit (2026-09-25T18:47Z) to the merge — the U1 measurement's runs, the live gate and the release reviews included: gemini 5 calls / 10 min 20 s / 10 KB; grok 4 / 3 min 7 s / 11 KB (one of them the live gate's hard kill: `status: error`, nothing salvaged; another the 60 s kill with text, `partial: true`); codex 14 / 1 h 5 min 7 s / 54 KB — 23 calls, 1 h 18 min of vendor wall-clock, none at the cap. The row taken with `--since 2026-09-25` (the whole day) read 78 calls and 5 h 58 min, most of it 1.5.0's release day and codex's 50 the cap — the wrong window, kept here as the reason the rule names the commit time. 1.6.1, from the branch's first commit (2026-09-30T13:34:33+03:00, read with `git log -1 --format=%cI`) to the merge: 5 calls, 33 min 18 s of unit wall-clock — grok 1 (the release sweep, 22 min), codex 4 (a code review from another session's server at 11:11Z, the two release reviews, the live gate's image run); the Gemini research for the catalog ran before the first commit and is not in the window; none at the `resultsKeep` floor. 1.6.2, whose one commit landed after all the work (so the first-commit window would have been empty), from the branch's creation (reflog, 2026-10-03T13:24:06+03:00) to the merge: grok 1 call (the release sweep, 4 min 17 s, 710 B spool, 112 206 tokens in / 17 417 out), gemini and codex 0 through the unit — the two Claude smoke runs and the tester's one call went to agy directly and are not in the window; the catalog's live gate through the unit is deferred to the bucket's reset. The nine tester arms (three of them headless main sessions) and the five coder arms (three in the effort trial, two in the matched repeat) ran on Claude, not on units, and are in [their own section](#the-testers-effort-a-second-pass-and-an-advisor). 1.7.0, from the branch's first commit (2026-10-04T12:11:40+03:00) to the merge — the release reviews, their re-reviews and the desktop live gate's session included: gemini 2 calls / 7 min 34 s / 21 KB (one `partial`); grok 4 / 49 min 27 s / 37 KB; codex 5 / 32 min 5 s / 34 KB — 11 calls, 1 h 29 min of unit wall-clock, none at the `resultsKeep` floor. 1.7.1, from the first lane commit (2026-10-12T20:56:47+03:00) to the merge — the Argon research (Astra), the release reviews and re-reviews and the live gate included: gemini 13 calls / 12 min 56 s / 18 KB (2 errors); grok 4 / 25 min 40 s / 28 KB (1 error); codex 21 / 2 h 29 min 47 s / 95 KB — 38 calls, 3 h 8 min of unit wall-clock, none at the `resultsKeep` floor. The live gate ran `gemini_research` once on `Gemini 3.8 Flash (High)` (10.3 s) and once on `Gemini 4 Argon (Low)` (8.5 s), both answering. 1.7.2, from the branch's first commit (2026-10-21T13:40:19+03:00) to the merge — three Codex gpt-6-astra reviews, three re-review passes, two Grok sweeps and the live gate included: gemini 2 calls / 1 min 1 s / 1 KB (the live gate's `gemini_image` and `gemini_research`); grok 3 / 37 min 45 s / 5 KB; codex 7 / 40 min 5 s / 15 KB — 12 calls, 1 h 19 min of unit wall-clock, none at the `resultsKeep` floor. The Opus whole-branch review and its two re-reviews ran on a Claude sub-agent, not a unit (191k + 60k + 50k tokens of context). The live gate also ran headless `agy -p` directly, outside the unit, once: the hooks check (SECURITY, the agy paragraph). 1.7.3, from the branch's first commit to the merge: gemini 1 call (ok), grok 2 (ok, one `partial`), codex 7 (2 ok, 5 errors — the plan-stage refusals) — 10 calls (the figures from its ledger's release line; the wall-clock and spool columns were not copied there). 1.8.0, from the branch's first commit (2026-11-03T14:15:51+02:00) to the merge — the spec-stage Codex review, the Grok sweeps and the live gate included: gemini 1 call / 9 min 43 s / 32 KB (`partial`); grok 5 / 47 min 18 s / 28 KB (773 628 tokens in / 196 791 out); codex 5 / 16 min 7 s / 6 KB (1 ok — the spec-stage review on 2026-11-03 — and 4 errors on the evening of 2026-11-03, the free tier spent until 2026-12-03: no Codex review of the branch; a second Opus reviewer took the guard script instead) — 11 calls, 1 h 13 min of unit wall-clock, none at the `resultsKeep` floor.
@@ -569,6 +572,48 @@ Round one of the evals, 2026-10-16, on agy 1.4.0, codex 0.162.1 and grok 1.0.60:
 
 **How it was graded.** One clean `omelette-reviewer` graded the blinded answers (383 lines). The session checked every uncertain grade and every claimed new defect, plus a seeded 10 % sample of the rest (33 lines, none changed). It overturned 8 grades: 7 under one ruling (a race in the tick that the key's stale-tick defect covers), 1 for consistency with a matching finding. It dropped 13 duplicate lines for that same race.
 
+## Mistral: the security-audit replay (2026-11-06)
+
+Purpose: measure Mistral Large 4 (Vibe 3.1.0, tools `read_file` and `grep`) as a security reviewer against the fleet's units, on a task with a known answer: the 2026-10-20 Codex audit of revision `318529e` (1.7.1), six findings. The snapshot is `git archive 318529e`, no history; the same brief for every arm; one run per arm. The session checked every pointer against the snapshot and ruled every claim.
+
+| Arm | Findings | Key hits (of 6) | New, hold | Rejected (intentional / premise too weak) | Wrong | Pointer drift | Wall time | Tokens |
+|---|---|---|---|---|---|---|---|---|
+| Mistral Large 4, thinking high (Vibe) | 9 | 3 (#1, #2, #4) | 2 (guard fail-open above 8 MiB; `OMELETTE_PKG_ROOT` into `update` with inherited env), both low | 3 (gemini_image accept-edits: adapter header; kill window: spawn header; results body raw: SECURITY) | 0 | 0 of 9 | 12.6 min, 34 steps | 4.65 M in (3.90 M cached) / 38 k out, $0 on plan |
+| GLM-5.3 Flash, thinking high (Vibe) | 4 | 2 (#2, #4) | 1 fact, no new reach | 1 (`imagePath` is the tool's contract) | 0 | 2 of 4 | 18.6 min, 34 steps | 4.36 M in (2.89 M cached) / 24 k out, $0 on plan |
+| GLM-5.3, thinking high (Vibe; paid on the catalog) | 6 | 3 (#1, #2, #3) | 0 (the `@path` finding adds the error-sink tail as the exfil channel, a real detail the key lacks) | 2 (hostile ledger handoff: same class as CLAUDE.md; proxy userinfo: SECURITY) | 0 | 0 of 6 primary; 5 secondary pointers off by 1 to 6 lines | 16.7 min, 52 steps | 8.40 M in (8.00 M cached) / 45 k out, Vibe est. $2.84 (console not read) |
+| Grok 4.7 (`grok_code_review`) | 12 | 3 (#1, #2, #3) | 3 (guard: `git config core.fsmonitor` and `-c core.hooksPath` pass; `checkout HEAD -- .` and `clean -fd` pass; `OMELETTE_PKG_ROOT`), all guard-containment or low | 4 | 1 (`alias.diff` in repo config: git ignores aliases that shadow builtins) | 0 of 12 | 23.1 min | n/a |
+| Codex gpt-6-luna, high (`codex_code_review`; 6.1-sol refused on the ChatGPT tier) | 1 | 1 partial (#1, `install` only) | 0 | 0 | 0 | 0 of 1 | 2.8 min | n/a |
+
+Key coverage by any arm: #1 (Large 4, GLM-5.3, Grok, Codex), #2 (Large 4, GLM-5.3, Flash, Grok), #3 (GLM-5.3, Grok), #4 (Large 4, Flash). #5 (a parent-directory symlink race) and #6 (guard quotes) were found by no read-only arm. Union 4 of 6.
+
+**Verdict.** Large 4 as a read-only security reviewer is justified: half the key, zero wrong claims, zero drifted pointers, 13 minutes. Three of its nine findings were documented behaviour, which is why ORCHESTRATION keeps it out of "source of record". Flash is a free sweep arm whose pointers drift.
+
+**Limits.** The key was written by Codex gpt-6.1-sol, so it is biased toward what Codex sees. One run per arm, so every difference is confounded with run noise. The snapshot hides history, not the disk. The Vibe arms had no shell, so nothing was reproduced live. A fair Codex comparison waits for a paid tier.
+
+### Probe 7: the repro profile
+
+The same snapshot as a git checkout in a disposable copy, `sandbox-exec` with `repro.sb` under every model command, Large 4 with `bash`, `read_file` and `grep`, and the same brief plus "confirm each finding by running it here". 13.2 min, 40 steps, 33 shell commands, 5.11 M tokens (4.66 M cached), $0 on the plan. The tree afterwards was untouched. (The shipped tool gives Vibe `bash` only, because Vibe's `read_file` follows a symlink out of the workdir; see [CONFIG](CONFIG.md#the-mistral-unit-keys-and-homes).)
+
+| Finding | Confirmed by | Ruling |
+|---|---|---|
+| `whichBin` with a relative `PATH`: a planted `git` runs on `update` with the inherited env | a planted `./git` and `node_modules/.bin/git`, ran `update`, captured the `GH_TOKEN` and `SSH_AUTH_SOCK` values it had set | key #1, verified |
+| guard: `'git' commit`, `"git" commit`, `gi''t commit`, `'git' tag` exit 0, `git commit` exits 2 | rendered the hook, fed 12 PreToolUse events on stdin, read the exit codes | key #6, verified; found by no read-only arm |
+| SessionStart(compact) prints a hostile repo's ledger handoff | fed a SessionStart event, saw the planted block on stdout | rejected (same class as a hostile CLAUDE.md), mechanism confirmed |
+| status and update tmp writes follow a planted symlink | planted the symlink, called `createStatus().boot()`, read the victim file | key #2, verified |
+
+Large 4 across both modes: keys #1, #2, #4 (read-only) and #6 (repro), 4 of 6 alone. #5 is still found by nobody. Repro found fewer things (4) than read-only (9), but every one of them ran, and its pointer and exit-code claims were verbatim.
+
+### The first live repro runs of the shipped tool
+
+Large 4, `OMELETTE_ALLOW_REPRO=1`, a scratch fleet home, this repository as `cwd`, asking for key #6.
+
+| Run | Wall time | Steps | Tokens | Est. cost | What it answered |
+|---|---|---|---|---|---|
+| Round 1 (clone of 65bfd27) | 325 s | 17 | 912 135 in (765 952 cached) / 16 040 out | $0 | Key #6 not reproducible on that revision: 40 quoting variants exit 2, the controls exit 0, pointers verified against the file. `_(clone unchanged)_`, clone removed, tree untouched |
+| Round 2 (the revised repro code) | 1457 s | 50 | 3.18 M in (2.72 M cached) / 52 936 out | $0 | The same finding 1, and a new finding 2: a command substitution where `git` or its subcommand goes passes the 1.8.0 guard (`git $(echo) commit -m x` exits 0 and commits). The model fixed it in the clone and the adapter appended the diff; the session verified the bypass against the rendered guard and did not apply the patch |
+
+Round 2's finding is the unit's first real result. It closed in the same release (see the CHANGELOG). Costs are Vibe's estimate from catalog prices; the console's Usage page is the bill.
+
 ## How the numbers are taken
 
 - **Sub-agent tokens.** `node scripts/agent-usage.mjs <transcript.jsonl>` (in the repository; not part of the installed package) reads a Claude Code session transcript (`~/.claude/projects/<project>/<session>.jsonl`) and collects the task notifications the harness writes when a background sub-agent finishes — `subagent_tokens`, `tool_uses`, `duration_ms` — one row per agent. It reads nothing else, and a description that carries an absolute path is cut to its last segment. The transcript itself is private and is not in this repository; only the aggregates above are.
@@ -583,6 +628,7 @@ Round one of the evals, 2026-10-16, on agy 1.4.0, codex 0.162.1 and grok 1.0.60:
 - **Contract sizes.** `FLEET_CONTRACT.length` and `SHORT_CONTRACT.length` from `core/rules.mjs`.
 - **Rules file size.** `renderRulesFile('1.2.0', { merge: 'session' })` from `core/rules.mjs` — `.length` for characters, `Buffer.byteLength` for bytes — and, for 1.1.0, the same three substitutions applied to `git show v1.1.0:rules/omelette-fleet.md`.
 - **Per-task cost tables.** Taken from sub-agent transcripts with `scripts/context-by-source.mjs --agents` — roles come from each agent's `.meta.json` `agentType` since commit `1997a71`, guessed from the description only when a run predates it — and that day's list prices. Session-side numbers are estimates: the session's own windows overlap other, concurrent work, so they are not read off a clean transcript the way a sub-agent's are.
+- **The Mistral replay.** The brief, the snapshot (`git archive 318529e`) and one run per arm, each through its own route: Vibe 3.1.0 headless with `read_file` and `grep` for the Mistral and GLM arms, `grok_code_review` and `codex_code_review` for the others. The session opened every pointer against the snapshot and ruled every claim; the figures are Vibe's `export.json` (`steps`, `usage`, `cost_usd`) and the wall clock. The live repro rows are the same fields from the two runs' kept `export.json`.
 - **The Codex web default mode.** Three runs, each in a fresh empty directory with stdin closed (`< /dev/null`: codex reads stdin to EOF when it is not a TTY): `codex exec -s read-only --ignore-user-config --ignore-rules --json -m gpt-6-astra '<prompt>'`, the same with `-c 'web_search="cached"'`, and the same with `-c 'web_search="live"'`; the number is the count of `"type":"web_search"` items in each `--json` stream.
 
 ## Not measured yet
@@ -593,5 +639,6 @@ Round one of the evals, 2026-10-16, on agy 1.4.0, codex 0.162.1 and grok 1.0.60:
 - **The second pass on another task, against one xhigh pass.** [The tester measurement](#the-testers-effort-a-second-pass-and-an-advisor) is one task, one run per cell; the flow held on 1.6.1 Task 1b, but with no single-pass arm beside it. A matched pair on a second task is what would make the margin a ranking.
 - **The second pass after a skill-forked first pass.** Every measured second pass continued a tester dispatched by hand through the Agent tool; whether a tester forked by the `/omelette-test` skill can be continued was not tried, and the fallback — a fresh `omelette-tester` given the first one's test file — is unmeasured too.
 - **Opus as the second-pass reader.** Only Sonnet 5.5 has run the second pass; whether `claude-opus-5-5` reads what a diff writes better for its price is unmeasured.
+- **Large 4 at thinking low or medium, and a second run of the same arm.** The replay is thinking high, one run per arm; the other two levels are unmeasured, and so is run-to-run spread for every arm in that table.
 
 The plugin run of the security audit, listed here until 1.6.1, ran on 2026-09-25 on the operator's own `/claude-security` invocation: [the row](#security-audit-plain-brief-and-plugin-over-one-revision) has all three runs.

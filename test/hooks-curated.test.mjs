@@ -16,6 +16,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HOOK_FILES, renderHookFile } from '../core/rules.mjs';
 
+// The guard line compares the installed mod with the package: the fixture installs the package's own version.
+const PKG_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const PKG_RE = PKG_VERSION.replace(/\./g, '\\.');
+
 const BASH_CURATED = (file) => `${file} is appended to, never rewritten; to replace it on purpose, move it first`;
 const WRITE_CURATED = (file) => `${file} is appended to, never rewritten: Edit for an in-place change (the harness checks it has not moved since your read), append otherwise; to replace it on purpose, move it first`;
 
@@ -280,16 +284,16 @@ test('doctor: the guard line reads settings.local.json before settings.json, hon
 
   // The local file's `false` wins over the shared file's `true`.
   const user = join(dir, '.claude');
-  plugin(user, { enabled: true, version: '1.8.0' });
-  assert.match(guardLine(), / · mod omelette-fleet enabled, installed 1\.8\.0 — the mod answers first$/);
+  plugin(user, { enabled: true, version: PKG_VERSION });
+  assert.match(guardLine(), new RegExp(` · mod omelette-fleet enabled, installed ${PKG_RE} — the mod answers first$`));
   writeFileSync(join(user, 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'omelette-fleet@omelette-fleet': false } }));
-  assert.match(guardLine(), / · mod omelette-fleet installed 1\.8\.0, not enabled — the second delivery is absent$/);
+  assert.match(guardLine(), new RegExp(` · mod omelette-fleet installed ${PKG_RE}, not enabled — the second delivery is absent$`));
   // Enabled and installed nowhere: no mod half.
   const alt = join(dir, 'alt');
   assert.doesNotMatch(guardLine({ ...env, CLAUDE_CONFIG_DIR: alt }), /mod omelette-fleet/);
   // A CLAUDE_CONFIG_DIR replaces `<home>/.claude` for both files.
-  plugin(alt, { enabled: true, version: '1.8.0' });
-  assert.match(guardLine({ ...env, CLAUDE_CONFIG_DIR: alt }), / · mod omelette-fleet enabled, installed 1\.8\.0 — the mod answers first$/);
+  plugin(alt, { enabled: true, version: PKG_VERSION });
+  assert.match(guardLine({ ...env, CLAUDE_CONFIG_DIR: alt }), new RegExp(` · mod omelette-fleet enabled, installed ${PKG_RE} — the mod answers first$`));
 });
 
 test('curated: a ledger module that never settles, throws on import or throws in readRegisterPath costs a clock and one stderr line, never the refusal', () => {
