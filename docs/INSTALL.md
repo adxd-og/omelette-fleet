@@ -24,8 +24,8 @@ Everything after README's five commands: what each step writes, how `doctor` rep
 
 - **Node 20 or newer.** There are no dependencies to install and no build step.
 - **Claude Code**, with `claude` on your `PATH`. `install` registers the units through `claude mcp add`.
-- **At least one vendor CLI**, installed and logged in: `agy` (Antigravity, for Gemini), `grok` (Grok Build) or `codex` (Codex CLI). A partial fleet is normal. `install` skips a unit whose CLI is not on `PATH`, and the units you have work the same.
-- **macOS or Linux.** Native Windows is not supported. The package runs on Windows through WSL. A native harness would need `.cmd` shims for the vendor CLIs and handling for path and file-mode differences; it is not built and has no date. CI runs on Ubuntu and macOS only.
+- **At least one vendor CLI**, installed and logged in: `agy` (Antigravity, for Gemini), `grok` (Grok Build), `codex` (Codex CLI) or `vibe` (Mistral Vibe; `uv tool install mistral-vibe`, 3.1.0 was the version the 1.9.0 gate ran on). A partial fleet is normal. `install` skips a unit whose CLI is not on `PATH`, and the units you have work the same.
+- **macOS or Linux.** `mistral_security_repro` is macOS only: its sandbox is `sandbox-exec`, and where that is missing the tool refuses and `doctor` says `macOS only (1.9.0)`. Native Windows is not supported. The package runs on Windows through WSL. A native harness would need `.cmd` shims for the vendor CLIs and handling for path and file-mode differences; it is not built and has no date. CI runs on Ubuntu and macOS only.
 
 omelette-fleet is not published on npm. You run it from a git clone, so `npx omelette-fleet` does not work.
 
@@ -36,6 +36,7 @@ omelette-fleet is not published on npm. You run it from a git clone, so `npx ome
 | **gemini** | `agy` (Antigravity) | agy has no `login` subcommand. Run `agy` once and sign in through its OAuth flow; the credentials land under `~/.gemini/`. To let it read local images and PDFs, it needs `read_file(*)` in the agy allow-rules, the opt-in set in SECURITY, [Recommended agy allow-rules](SECURITY.md#recommended-agy-allow-rules). Antigravity's terms are a grey zone for this unit on consumer plans: [SECURITY](SECURITY.md#antigravitys-terms-a-grey-zone) |
 | **grok** | `grok` (Grok Build) | `grok login`, or `grok login --device-code` |
 | **codex** | `codex` (Codex CLI) | `codex login`, with your ChatGPT account |
+| **mistral** | `vibe` (Mistral Vibe) | Run `vibe` once in a terminal and sign in through the browser. The login lives in the Keychain, and the unit runs on it only: `MISTRAL_API_KEY` is scrubbed. `doctor` cannot read the Keychain, so its `login` line checks that `~/.vibe/config.toml` or `~/.vibe/.env` exists and reads neither |
 
 `doctor` shows each CLI's login state on its `login` line ([Each line](#each-line)).
 
@@ -54,7 +55,7 @@ alias omelette-fleet=/path/to/omelette-fleet/bin/omelette-fleet.mjs
 
 What `install` does:
 
-- It registers one MCP server per unit with `claude mcp add -s user`. The name is `<prefix>-<unit>`, and the default prefix is `omelette`: `omelette-gemini`, `omelette-grok`, `omelette-codex`. `--prefix <name>` picks another; `--units <a,b,c>` picks a subset.
+- It registers one MCP server per unit with `claude mcp add -s user`. The name is `<prefix>-<unit>`, and the default prefix is `omelette`: `omelette-gemini`, `omelette-grok`, `omelette-codex`, `omelette-mistral`. `--prefix <name>` picks another; `--units <a,b,c>` picks a subset.
 - It skips a unit whose vendor CLI is not on `PATH`, unless you pass `--force`.
 - It creates `~/.omelette/fleet.config.json` from `examples/fleet.config.json` if you have none. An existing file is never overwritten. What the example holds: [CONFIG, "Shape"](CONFIG.md#shape).
 - Without `claude` on `PATH`, it registers nothing. It still writes the fleet config and prints the exact `claude mcp add` commands to run later.
@@ -96,7 +97,7 @@ The guard is optional. It is one script, `.claude/hooks/omelette-guard.mjs`, wri
 
 ## The fleet pane
 
-`omelette-fleet rules --mods` prints how to install the fleet pane, and writes nothing. The pane is a Claude Code mod. It draws the orchestrator, its sub-agents and the three units, and who is calling whom. It also runs the guard, pins a guarded role's model to its definition and hands back the handoff block. Install, update and removal: [MODS](MODS.md#install-update-and-removal).
+`omelette-fleet rules --mods` prints how to install the fleet pane, and writes nothing. The pane is a Claude Code mod. It draws the orchestrator, its sub-agents and the four units, and who is calling whom. It also runs the guard, pins a guarded role's model to its definition and hands back the handoff block. Install, update and removal: [MODS](MODS.md#install-update-and-removal).
 
 ## What doctor tells you
 
@@ -201,8 +202,9 @@ A registration counts as ours by **where it points**, not by what it is called: 
 | `mcp timeout` | The client's own two timeout walls: the wall-clock `MCP_TOOL_TIMEOUT` against the longest call the enabled units can make, and the 30-minute stdio idle abort. It prints the snippet to merge when the first one is short ([CONFIG](CONFIG.md#client-timeouts)) | No: informational |
 | `next` | The one thing still missing ([The next ladder](#the-next-ladder)) | No |
 | `bin`, `version` (per unit) | The vendor binary it found, and its `--version`. A non-zero `--version` is `unknown (exit N)` with the tail of its output, never a version | Yes, when the binary is missing |
-| `login` | The CLI's login state. A `login status` with no explicit signal is `unknown (exit N)` with the tail of its output, never "signed out" | Yes, when the CLI says it is signed out; `unknown` is not |
-| `models` (grok, codex) | The CLI's own default model beside the catalog; for Codex, also the model the fleet pins ([CONFIG](CONFIG.md#which-unit-actually-uses-which-key)) | No |
+| `login` | The CLI's login state (Mistral: the `~/.vibe` file check, `absent` when neither file is there, which is not a fault). A `login status` with no explicit signal is `unknown (exit N)` with the tail of its output, never "signed out" | Yes, when the CLI says it is signed out; `unknown` is not |
+| `homes`, `repro`, `billing` (mistral) | The two Vibe homes with the version and time of the last render (`not rendered yet` until the first call), the repro gate (`open (OMELETTE_ALLOW_REPRO=1)` or `closed`) with whether `sandbox-exec` was found, and the billing scrub (`MISTRAL_API_KEY` scrubbed; the Keychain login is the only route) | No |
+| `models` (grok, codex, mistral) | The CLI's own default model beside the catalog (Mistral prints the catalog head and the alias count, because Vibe reports no default); for Codex, also the model the fleet pins ([CONFIG](CONFIG.md#which-unit-actually-uses-which-key)) | No |
 | `config` | The resolved config with sources, the effective mode and the write ceiling | No |
 | `notice` (gemini) | Antigravity's terms are a grey zone for this unit on consumer plans. Printed when agy is found or the unit is registered ([SECURITY](SECURITY.md#antigravitys-terms-a-grey-zone)) | No |
 | `mcp` | The registration, and whether its server file exists | Yes, when the registration points at a server file that no longer exists |

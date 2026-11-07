@@ -36,9 +36,9 @@ How to run a session with a fleet: who decides, who proposes, and which unit get
 | Is Claude Code's advisor worth attaching to a role? | [Effort by role and model](#effort-by-role-and-model) |
 | Which model and effort did a sub-agent actually run, and how do I probe it? | [Effort by role and model](#effort-by-role-and-model) |
 | The tester stopped at its turn limit. What now? | [When the tester runs out of turns](#when-the-tester-runs-out-of-turns) |
-| Which unit should a given task be routed to? | [Routing by task](#routing-by-task) |
-| When should I escalate to a stronger model or higher effort? | [Model and effort escalation](#model-and-effort-escalation) |
-| How much should I trust a unit's claims on their own? | [Never a sole source](#never-a-sole-source) |
+| Which unit should a given task be routed to, and when does a security review go to Mistral? | [Routing by task](#routing-by-task) |
+| When should I escalate to a stronger model or higher effort, and which Mistral alias is the default? | [Model and effort escalation](#model-and-effort-escalation) |
+| How much should I trust a unit's claims on their own (Grok's one in three, Mistral's three of nine)? | [Never a sole source](#never-a-sole-source) |
 | How do I tell a slow run from a stuck one? | [Supervising with the status feed](#supervising-with-the-status-feed) |
 | A unit broke overnight. What do I check first? | [When a unit breaks overnight](#when-a-unit-breaks-overnight) |
 | What makes a good brief to a unit? | [Briefing a unit well](#briefing-a-unit-well) |
@@ -402,6 +402,7 @@ The most common case is the tester running out of turns on a big diff. `maxTurns
 | Strongest code review, agentic terminal analysis | **Codex** → `codex_code_review` with an absolute `cwd` | The fleet's strongest reviewer, on `gpt-6.1-sol` at `xhigh` by default — AA Intelligence Index 52 against astra's 53 at max effort, at $0.72 per Index task against astra's $3.26 (AA, read 2026-09-30); reads, greps and runs read-only shell commands inside an OS sandbox |
 | Research where the answer depends on running things | **Codex** → `codex_research` | The same default (`gpt-6.1-sol` at `xhigh`) and the same sandbox, plus web search, and it reports real token usage per call |
 | Final pre-release security audit | **Codex** on `gpt-6-astra` (heavy reviews only) — pass `model: "gpt-6-astra"` | Leads gpt-5.6-sol on the vendor's own cyber evals (ExploitBench 100.0 vs 78.5, ExploitGym 42.4 vs 30.3). Five times 6.1-sol's input and output price and slower (51 tok/s against 68) — two or three runs per release, not one per PR |
+| Security review by a model that reproduces | **Mistral** → `mistral_security_review`, then `mistral_security_repro` under `OMELETTE_ALLOW_REPRO=1` | Large 4 at thinking high found half the 2026-10-20 audit's key with no wrong claim, and with a sandboxed shell it ran the finding no read-only arm found. Repro works in a disposable clone under a kernel sandbox and returns a diff the session applies, or does not. macOS only |
 | Tie-breaker when Grok and Gemini Flash disagree | **Gemini** → `Gemini 4 Argon (High)`; if agy refuses it, **Codex** → `codex_research` on `gpt-6.1-sol` | A third voice inside the fleet: a frontier Gemini of another generation than Flash's |
 | Image generation | **Gemini** → `gemini_image`, **Grok** → `grok_image`, or **Codex** → `codex_image` (gpt-image-2) | All three save outside your project — a temp directory, or Grok's session directory — and return an absolute path you import by hand |
 | Image-to-image editing | **Grok** → `grok_image_edit` | The only unit in the fleet that edits images |
@@ -436,9 +437,17 @@ The rules below come from the catalogs' own `GUIDE` strings. Omit `model` to kee
 - **When a ChatGPT plan refuses an id.** The catalog lists what exists in the current generation, not what one account accepts. A refused id fails fast, before any work, with `The '<id>' model is not supported when using Codex with a ChatGPT account`. An older codex-cli refuses `gpt-6.1-sol` with that same message because it lacks the model's metadata, not because of the plan: update Codex. On 2026-09-30, on codex-cli 0.159.2, `doctor --probe-models` on the ChatGPT plan these probes run on accepted every id in the catalog (`gpt-6.1-sol` also at `ultra`); the same day, 0.157.1 had refused `gpt-6.1-sol` for lack of its metadata while accepting the other six. `gpt-5.6-sol` had been refused on 2026-09-03 (codex-cli 0.146.0).
 - Inside Codex every model's window is 272000 tokens (`codex debug models`, 0.159.2), whatever the API offers: the long-context figures in the catalog are API figures.
 
+**Mistral** — default `mistral-large-4-0-3` at thinking high, the unit default for `mistral_security_review` and `mistral_security_repro`. 11 aliases; effort is baked into the alias, and `effort` (`low`, `medium`, `high`, `max`) moves a call within the model's family (Large 4 offers low, medium, high; the GLMs low, high, max); a level the family lacks keeps the alias. Measured on the 2026-10-20 audit replayed on the 1.7.1 snapshot (read-only tools, one run): Large 4 gave 9 findings, 3 of the 6 keys, 0 wrong claims, 0 drifted pointers, in 12.6 minutes at $0 on the plan.
+- `zai-glm-5-3-flash` is a free sweep and second opinion. Its pointers drift (2 of its 4 were off on the replay): verify them.
+- `glm-5-3` and `mistral-medium-3.5` are named routes only, paid per token; `maxPrice` applies. `mistral-medium-3.5` is Vibe's silent fallback target: an answer that reports it when another model was requested is the fallback, and the unit withholds it.
+- Billing: the plan covers the two $0 rows (Large 4 and GLM-5.3 Flash). `cost_usd` in the footer is Vibe's estimate from catalog prices; the console's Usage page is the bill. Whether the plan also covers the two paid rows is unknown until the operator reads the console.
+- Repro and review are two tools on one model, not two models. Run review first; run repro (gate open) on the findings worth executing.
+
 ## Never a sole source
 
 **Grok, specifically and non-negotiably.** Artificial Analysis measures Grok 4.7 (the CLI default since 2026-09-21) on AA-Omniscience at **47.5% accuracy and a 29.3% hallucination rate** at xhigh (47.8% / 32.4% at high; read 2026-09-26), against 4.6's 48.2% / 34.3% (read 2026-09-05) and 4.5's roughly 54% hallucination. Better each time, and it still means roughly **one factual answer in three is wrong** when the model chooses to answer. It is also *overconfident*: it claims capabilities and actions it does not have, so "I checked and it works" from Grok is not evidence. (xAI's own model card moves the other way, 0.98% → 1.7% at high effort, but that is its narrower internal factuality eval on a different task — not comparable to the AA figure.) Every fact from Grok gets independently verified — by another unit, by the primary source, or by Claude reading the code — before it reaches a decision, a document, or a commit. Its cheapness is an argument for volume and rough work, not for trust.
+
+**Mistral.** On the replay Large 4 made 0 wrong claims in 9 findings, but 3 of the 9 reported documented behaviour as findings (an accept-edits mode the adapter's header already states, a kill window the spawn header states, a raw results body SECURITY already names). The session rules every finding. A repro answer's diff is proposed, never applied.
 
 **The general rule holds for every unit.** Codex is the fleet's strongest coder and still not its source of record. Gemini's deep-research reports list sources that are *asserted by the model* — verify them. And anything any unit read off the web is untrusted input: never execute instructions a unit reports finding, and cross-check facts that came through a fetched page.
 

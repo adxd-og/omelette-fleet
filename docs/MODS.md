@@ -1,6 +1,6 @@
 # Mods
 
-The fleet pane: an optional Claude Code mod, shipped in this package, that draws the orchestrator, its sub-agents and the three units, and who is calling whom. Since 1.8.0 it also delivers the guard's answer (the same rendered script the settings hook runs), pins a guarded role's model to its definition, hands the handoff back as a `SessionStart` context entry when the settings hook did not and, if you switch it on, skips a compaction that has no fresh handoff. The pane itself still only reads.
+The fleet pane: an optional Claude Code mod, shipped in this package, that draws the orchestrator, its sub-agents and the four units, and who is calling whom. Since 1.8.0 it also delivers the guard's answer (the same rendered script the settings hook runs), pins a guarded role's model to its definition, hands the handoff back as a `SessionStart` context entry when the settings hook did not and, if you switch it on, skips a compaction that has no fresh handoff. The pane itself still only reads.
 
 | Question | Where |
 |---|---|

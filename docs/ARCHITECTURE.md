@@ -13,7 +13,7 @@ core/                  everything that is not vendor-specific
 | What does each file under `core/` actually own? | [core/](#core) |
 | What must a unit adapter declare to `defineUnit`? | [The adapter contract](#the-adapter-contract) |
 | What happens, step by step, when a tool is called? | [The path of one call](#the-path-of-one-call) |
-| Why is each unit its own MCP server instead of one shared server? | [Why three servers, not one](#why-three-servers-not-one) |
+| Why is each unit its own MCP server instead of one shared server? | [Why four servers, not one](#why-four-servers-not-one) |
 | Why spawn the vendor CLI instead of calling its API directly? | [Why spawn CLIs, not call APIs](#why-spawn-clis-not-call-apis) |
 | How is a unit's model catalog kept accurate over time? | [How catalogs are curated](#how-catalogs-are-curated) |
 
@@ -96,7 +96,7 @@ The picture is the shape of the call; the list under it is the detail the pictur
 
 Nothing in that path waits on the network. The startup update announcement is fire-and-forget: `startUnit` hands it off without awaiting, the server is already serving before the request leaves, and `core/update.mjs` guarantees the promise cannot reject — at worst one stderr line arrives late, and a call in flight never notices.
 
-## Why three servers, not one
+## Why four servers, not one
 
 - **Failure isolation.** A vendor CLI that hangs, a missing binary, or a bug in one adapter takes down one server. The other units keep answering; the client shows exactly which one is offline.
 - **Stable tool names.** Each server owns a fixed tool list under a fixed server name, so `mcp__<prefix>-<unit>__<tool>` never changes because a different unit was installed, removed, or disabled. A single multiplexed server would have to renumber or namespace its tool list dynamically, and a partial fleet is the normal case here.

@@ -4,7 +4,7 @@
 
 <h1 align="center">Omelette Fleet</h1>
 
-<p align="center">Gemini, Grok and Codex as read-only units in Claude Code</p>
+<p align="center">Gemini, Grok, Codex and Mistral as read-only units in Claude Code</p>
 
 <p align="center">
   <a href="https://github.com/adxd-og/omelette-fleet/actions/workflows/test.yml"><img src="https://github.com/adxd-og/omelette-fleet/actions/workflows/test.yml/badge.svg" alt="test workflow status"></a>
@@ -25,13 +25,13 @@
 
 ## What it is
 
-Omelette Fleet adds three outside models to Claude Code as research and review peers: Google Gemini, xAI Grok and OpenAI Codex. Each one is a **unit**: a small MCP server (the way Claude Code talks to tools) that runs the vendor's own CLI, `agy`, `grok` or `codex`, on the subscription you already pay for. It is for people who work in Claude Code and want a second vendor's research or review without leaving the session. The one rule: **units propose, the session applies.** A unit reads, searches and reviews, and hands back text. Your Claude Code conversation, the **session**, decides what to do with that text, and it is the only thing that changes your code.
+Omelette Fleet adds four outside models to Claude Code as research and review peers: Google Gemini, xAI Grok, OpenAI Codex and Mistral. Each one is a **unit**: a small MCP server (the way Claude Code talks to tools) that runs the vendor's own CLI, `agy`, `grok`, `codex` or `vibe`, on the subscription you already pay for. It is for people who work in Claude Code and want a second vendor's research or review without leaving the session. The one rule: **units propose, the session applies.** A unit reads, searches and reviews, and hands back text. Your Claude Code conversation, the **session**, decides what to do with that text, and it is the only thing that changes your code.
 
-<img src="docs/assets/diagrams/fleet-topology.svg" alt="Claude Code calls three stdio MCP servers, each spawning its vendor CLI; the servers read config from and write the status feed and result spool to the fleet home, and return text only." width="880">
+<img src="docs/assets/diagrams/fleet-topology.svg" alt="Claude Code calls four stdio MCP servers, each spawning its vendor CLI; the servers read config from and write the status feed and result spool to the fleet home, and return text only." width="880">
 
 ## Quickstart
 
-You need Node 20 or newer, Claude Code, and at least one of `agy`, `grok` or `codex`, installed and logged in. It runs on macOS and Linux; on Windows, use WSL. The package is not on npm: you run it from a git clone.
+You need Node 20 or newer, Claude Code, and at least one of `agy`, `grok`, `codex` or `vibe`, installed and logged in. It runs on macOS and Linux; on Windows, use WSL. The package is not on npm: you run it from a git clone.
 
 1. Get the code:
    ```bash
@@ -64,6 +64,8 @@ Then merge the settings snippet that step 4 printed into the project's `.claude/
 | Deep research across many sources, about five CLI runs and several minutes per call | `gemini_deep_research` (Gemini) |
 | A cheap second opinion or a mechanical review sweep; verify every fact it states | `grok_research`, `grok_code_review` (Grok) |
 | The strongest code review, given an absolute `cwd` | `codex_code_review` (Codex), on `gpt-6.1-sol` (xhigh) by default |
+| A security review that reads the tree with Mistral Large 4 (no shell, no web) | `mistral_security_review` (Mistral) |
+| The same review, with the model running its findings in a disposable clone under a kernel sandbox; macOS only, behind `OMELETTE_ALLOW_REPRO=1`, returns a diff the session applies or not | `mistral_security_repro` (Mistral) |
 | An image, or an edit of one | `gemini_image`, `grok_image`, `codex_image`; `grok_image_edit` edits |
 | The answer to a call your client timed out on | `<unit>_result` on the same unit: every answer is saved before it is sent |
 
@@ -88,7 +90,7 @@ The **guard**, an optional hook script, refuses a `git commit` by the shipped su
 
 - **Closed by default.** No unit can write to your project while `OMELETTE_ALLOW_WRITE` stays closed (the default). The image tools save outside it: in a temp directory, or in Grok's own session directory.
 - **Two keys open it.** A unit writes only when the config file sets its `mode` to `workspace-write` *and* the unit is named in `OMELETTE_ALLOW_WRITE`, in the MCP server's environment. The config alone can only narrow.
-- **The strength differs by vendor.** Codex runs inside a kernel sandbox. Grok refuses write mode outright. Gemini rests on agy's own permission policy, so it holds only while your agy settings allow no edit or shell tool: the weakest of the three.
+- **The strength differs by vendor.** Codex runs inside a kernel sandbox. Grok refuses write mode outright. Gemini rests on agy's own permission policy, so it holds only while your agy settings allow no edit or shell tool: the weakest of the four. Mistral's review is policy too (a tool allow-list, no shell); its repro runs every command under a kernel sandbox in a disposable clone, behind its own gate.
 
 The threat model, each unit's layers and what is only best-effort: [docs/SECURITY.md](docs/SECURITY.md). To test it on your own machine: `doctor --probe-sandbox` ([INSTALL](docs/INSTALL.md#the-sandbox-probe)).
 
@@ -121,8 +123,8 @@ New here? Read [INSTALL](docs/INSTALL.md), then [ORCHESTRATION](docs/ORCHESTRATI
 | What the status feed looks like and how to read it | [docs/STATUS-FEED.md](docs/STATUS-FEED.md) |
 | Whether a call finished, came back partial, was cancelled or failed | [STATUS-FEED, What ok, error and cancelled mean](docs/STATUS-FEED.md#what-ok-error-and-cancelled-mean) |
 | How to see the fleet at work in a pane, and what the pane reads | [docs/MODS.md](docs/MODS.md) |
-| How the pieces fit, why three servers, and what one call goes through | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| How to add a fourth unit | [docs/ADAPTERS.md](docs/ADAPTERS.md) |
+| How the pieces fit, why four servers, and what one call goes through | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| How to add a fifth unit, and what a unit that executes code adds | [docs/ADAPTERS.md](docs/ADAPTERS.md) |
 | What has been measured — planning cost, review yield, `check` before and after — and what has not | [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) |
 | What changed release to release | [CHANGELOG.md](CHANGELOG.md) |
 

@@ -22,6 +22,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | What config keys exist and what do they default to? | [Keys](#keys) |
 | What extra keys does one unit have, and what's its built-in default? | [Unit-specific extras and built-in overrides](#unit-specific-extras-and-built-in-overrides) |
 | Which config keys does a given unit actually read? | [Which unit actually uses which key](#which-unit-actually-uses-which-key) |
+| What are the Mistral unit's `mistral.*` keys, its two Vibe homes and `rendered.json`? | [The Mistral unit: keys and homes](#the-mistral-unit-keys-and-homes) |
 | Which model does Codex pin when none is set, and what does doctor's `models` line compare? | [Which unit actually uses which key](#which-unit-actually-uses-which-key) |
 | In what order do env, file and defaults get resolved? | [Resolution order](#resolution-order) |
 | How do I change a config value from the command line? | [Editing with `set`](#editing-with-set) |
@@ -34,10 +35,10 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | Does a config change need a restart to take effect? | [Live reload](#live-reload) |
 | What happens when I disable a unit? | [`enabled: false`](#enabled-false) |
 | What happens to a run when the client cancels it? | [Cancellation](#cancellation) |
-| How does `timeoutS` behave differently per unit? | [How `timeoutS` differs per unit](#how-timeouts-differs-per-unit) |
+| How does `timeoutS` behave differently per unit, and how do `timeoutS` and `reproTimeoutS` differ for Mistral? | [How `timeoutS` differs per unit](#how-timeouts-differs-per-unit) |
 | What client-side timeouts can cut a call short? | [Client timeouts](#client-timeouts) |
 | What does `outputCap` actually bound? | [What `outputCap` does](#what-outputcap-does) |
-| What does the result spool store, and for how long? | [What the result spool keeps](#what-the-result-spool-keeps) |
+| What does the result spool store, and for how long (and where does Mistral's `export.json` go)? | [What the result spool keeps](#what-the-result-spool-keeps) |
 | What does a spooled result's `usage:` line mean? | [The `usage:` line](#the-usage-line) |
 | How do I see what the fleet has cost so far? | [`omelette-fleet results --stats`](#omelette-fleet-results---stats-unit---since-when) |
 
@@ -333,20 +334,21 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 | gemini | — | `timeoutS: 300` |
 | grok | `imageMaxTurns` (positive int, default `8`) — turn cap for image runs only | `timeoutS: 300`, `maxTurns: 30`, `outputCap: 10000000` |
 | codex | — | `timeoutS: 600`, `effort: "xhigh"`, `webSearch: true`, `outputCap: 4000000` |
+| mistral | `reproTimeoutS` (positive int, `2400`), `maxPrice` (positive int, dollars, `1`), `reproMaxPrice` (positive int, `3`), `reproKeep` (boolean, `false`). All flat `mistral.<key>`, as is the rest: [the Mistral section](#the-mistral-unit-keys-and-homes) | `timeoutS: 1500`, `model: "mistral-large-4-0-3"`, `effort: "high"`, `maxTurns: 150`, `outputCap: 400000` |
 
 ### Which unit actually uses which key
 
-| Key | gemini | grok | codex |
-|---|---|---|---|
-| `enabled`, `status`, `model`, `results`, `resultsKeep`, `resultsMaxBytes` | yes | yes | yes |
-| `mode` | `workspace-write` → `--mode accept-edits`, only when the call passes `cwd` | declared unsupported; always read-only | `workspace-write` → OS sandbox, review-with-`cwd` only |
-| `effort` | **ignored** — the catalog bakes effort into the model id and declares no effort levels | `--reasoning-effort` (`low`/`medium`/`high`/`xhigh`) | `model_reasoning_effort` (`low`/`medium`/`high`/`xhigh`/`max`/`ultra`) |
-| `timeoutS` | yes (see below) | yes | yes |
-| `maxTurns` | — | `--max-turns` | — |
-| `outputCap` | bounds stdout; a capped run is marked partial or refused — see below | bounds stdout (built-in `10000000`); same — see below | bounds stdout (built-in `4000000`); same — see below |
-| `webSearch` | — | research: `web_search,web_fetch`, or refused when `false`; review: never web | research: the CLI's own web mode, or `-c web_search="disabled"` when `false`; review: always `"disabled"` |
-| `cancel` | yes — the runtime honours it for every unit | yes | yes |
-| `imageMaxTurns` | — | image runs only | — |
+| Key | gemini | grok | codex | mistral |
+|---|---|---|---|---|
+| `enabled`, `status`, `model`, `results`, `resultsKeep`, `resultsMaxBytes` | yes | yes | yes | yes |
+| `mode` | `workspace-write` → `--mode accept-edits`, only when the call passes `cwd` | declared unsupported; always read-only | `workspace-write` → OS sandbox, review-with-`cwd` only | declared unsupported; always read-only. Repro is its own gate, `OMELETTE_ALLOW_REPRO`, not a mode |
+| `effort` | **ignored** — the catalog bakes effort into the model id and declares no effort levels | `--reasoning-effort` (`low`/`medium`/`high`/`xhigh`) | `model_reasoning_effort` (`low`/`medium`/`high`/`xhigh`/`max`/`ultra`) | moves the alias within the model's family: `low`/`medium`/`high`/`max` (Large 4 offers the first three) |
+| `timeoutS` | yes (see below) | yes | yes | review: yes. Repro reads `reproTimeoutS` instead (see below) |
+| `maxTurns` | — | `--max-turns` | — | `--max-turns` (built-in `150`) |
+| `outputCap` | bounds stdout; a capped run is marked partial or refused — see below | bounds stdout (built-in `10000000`); same — see below | bounds stdout (built-in `4000000`); same — see below | bounds stdout (built-in `400000`); same, marked `capped` |
+| `webSearch` | — | research: `web_search,web_fetch`, or refused when `false`; review: never web | research: the CLI's own web mode, or `-c web_search="disabled"` when `false`; review: always `"disabled"` | — (no web tool is ever given) |
+| `cancel` | yes — the runtime honours it for every unit | yes | yes | yes |
+| `imageMaxTurns` | — | image runs only | — | — |
 
 Keys that a unit ignores are still valid config — they are simply never read. An unknown key *name* warns and is ignored, in `defaults` as well as in `units.<unit>`. One consequence of `defaults` being checked per unit: a key that is valid for one unit only (`imageMaxTurns`) warns for the units that do not know it, so put unit-specific extras under `units.<unit>`.
 
@@ -361,6 +363,27 @@ Leaving `model` unset means "the vendor's own default" for Gemini and Grok. **No
 | gemini | — | no line |
 
 The codex line reads `--bundled`: the installed binary's catalog, not the server's, read with no network — `codex debug models` without the flag is the one refreshed from the server. It says what this binary ships with. The probe is a second process after `codex login status`, best-effort: a failure prints no line and never changes the login verdict.
+
+### The Mistral unit: keys and homes
+
+Every `mistral` key is flat, `mistral.<key>`; there is no nested block.
+
+| Key | Default | What it does |
+|---|---|---|
+| `timeoutS` | `1500` | Review run: Vibe's `--time-limit` is `timeoutS - 15`; the hard kill is at `timeoutS`. Must be above 15 |
+| `reproTimeoutS` | `2400` | The same for `mistral_security_repro` (`--time-limit` `reproTimeoutS - 15`). Must be above 15 |
+| `maxPrice` | `1` | Dollars; Vibe's `--max-price` for a review run. Binds only on the paid rows |
+| `reproMaxPrice` | `3` | The same for a repro run |
+| `reproKeep` | `false` | `true` keeps the repro run's directory (clone, tmp, output) and names the clone in the answer |
+| `maxTurns` | `150` | Vibe's `--max-turns`, both tools |
+| `outputCap` | `400000` | Characters of stdout kept |
+| `model`, `effort` | `mistral-large-4-0-3`, `high` | The unit default; `effort` moves the alias within its family |
+
+There is no `reproTools` key: a repro run gives Vibe `bash` only, because Vibe's in-process `read_file` follows a symlink out of the workdir (measured 2026-11-06), and beside a kernel sandbox it would be the hole.
+
+**The two homes.** `VIBE_HOME` is `<fleet home>/vibe/review/` for review and `<fleet home>/vibe/repro/` for repro. The unit renders both before every spawn from its catalog (`units/mistral/models.js`) and the policy block: a file whose bytes differ is rewritten, a symlink on the way is refused. Whenever it renders, it writes `rendered.json` (`{ version, at }`) beside them. Vibe rewrites `config.toml` on every run and drops the version marker, so `doctor` reads the sidecar to print `rendered v<version> at <time>`. The repro home also holds `repro.sb` and `shell.sh`. The operator's `~/.vibe` is never read or written. Edit nothing in a home: the next spawn overwrites it.
+
+**Environment.** `MISTRAL_DEFAULT_MODEL`, `MISTRAL_EFFORT`, `MISTRAL_TIMEOUT_S` set `model`, `effort`, `timeoutS`; `VIBE_BIN` points at a `vibe` that is not on `PATH`. `OMELETTE_ALLOW_REPRO` is the gate for the repro tool ([SECURITY](SECURITY.md#mistral--policy-for-reads-a-kernel-for-every-shell-command)).
 
 ## Resolution order
 
@@ -445,14 +468,14 @@ It also warns you when a change will not take effect: an environment variable th
 
 Per unit (these are the names in each adapter's `envMap`):
 
-| Config key | gemini | grok | codex |
-|---|---|---|---|
-| `model` | `AGY_DEFAULT_MODEL` | `GROK_DEFAULT_MODEL` | `CODEX_DEFAULT_MODEL` |
-| `effort` | — | — | `CODEX_EFFORT` |
-| `timeoutS` | `AGY_TIMEOUT_S` | `GROK_TIMEOUT_S` | `CODEX_TIMEOUT_S` |
-| `maxTurns` | — | `GROK_MAX_TURNS` | — |
-| `imageMaxTurns` | — | `GROK_IMAGE_MAX_TURNS` | — |
-| `webSearch` | — | — | `CODEX_WEB_SEARCH` |
+| Config key | gemini | grok | codex | mistral |
+|---|---|---|---|---|
+| `model` | `AGY_DEFAULT_MODEL` | `GROK_DEFAULT_MODEL` | `CODEX_DEFAULT_MODEL` | `MISTRAL_DEFAULT_MODEL` |
+| `effort` | — | — | `CODEX_EFFORT` | `MISTRAL_EFFORT` |
+| `timeoutS` | `AGY_TIMEOUT_S` | `GROK_TIMEOUT_S` | `CODEX_TIMEOUT_S` | `MISTRAL_TIMEOUT_S` |
+| `maxTurns` | — | `GROK_MAX_TURNS` | — | — |
+| `imageMaxTurns` | — | `GROK_IMAGE_MAX_TURNS` | — | — |
+| `webSearch` | — | — | `CODEX_WEB_SEARCH` | — |
 
 Keys with no environment name for a unit can only be set in the file.
 
@@ -464,12 +487,13 @@ Fleet-wide:
 | `OMELETTE_STATUS` | Overrides `status` for **every** unit (boolean words accepted). Source is reported as `env:OMELETTE_STATUS` |
 | `OMELETTE_ALLOW_WRITE` | Comma-separated list of units whose `workspace-write` request is honoured. **The second key of the write ceiling** — see [SECURITY.md](SECURITY.md) |
 | `ORION_ALLOW_GEMINI_MUTATE=1` | Legacy alias: opens the ceiling for `gemini` only |
+| `OMELETTE_ALLOW_REPRO` | `1`/`true`/`on`/`yes` opens `mistral_security_repro`. Its own gate: `OMELETTE_ALLOW_WRITE` does not open it, and it opens no write |
 | `OMELETTE_ENV_PASSTHROUGH` | Comma-separated exact names or `PREFIX_*` patterns added to the child-environment allowlist for **every** unit. The escape hatch for a CLI that needs one more variable; add narrowly, and note the billing scrub still runs after it |
 | `OMELETTE_UPDATE_CHECK` | `0`/`false`/`off`/`no` switches the release check off for every unit and for the CLI. It can only turn the check **off**: it is the machine-local kill switch, so setting it to `1` does not re-enable a config file that says `"updateCheck": false` |
 | `CLAUDE_CONFIG_DIR` | Not a fleet setting, but `doctor` honours it: it looks for `.claude.json` there before `~/`, and prints which file it read |
 | `OMELETTE_PKG_ROOT` | A **test hook**, documented as such in the CLI: it makes `update` (and the git-vs-npm install detection it uses) treat that directory as the package root instead of the real checkout, so the whole flow can be exercised against a throwaway fixture repo. Nothing else honours it — server paths, the shipped example config and `doctor` all still come from the real root, and a running MCP server keeps reporting its own version |
 
-Binary location, if a CLI is not on `PATH`: `AGY_BIN`, `GROK_BIN`, `CODEX_BIN`.
+Binary location, if a CLI is not on `PATH`: `AGY_BIN`, `GROK_BIN`, `CODEX_BIN`, `VIBE_BIN`.
 
 These are the only variables a vendor CLI sees beyond the fixed allowlist and its own exact names (no unit declares a pattern; only `OMELETTE_ENV_PASSTHROUGH` takes one) — the child environment is built, not inherited. Full list and ordering in [SECURITY.md](SECURITY.md#the-environment-allowlist). If a unit ignores a variable you set, check that it survives the allowlist before assuming the config layer dropped it.
 
@@ -580,6 +604,7 @@ Two related guarantees, neither of them configurable:
 | **gemini** | The value is handed to the CLI as `--print-timeout <timeoutS>s`, and the process-group SIGKILL sits **60 s above it** — so agy gets to report its own timeout first, and a hard kill means agy itself hung. The hard-kill error therefore names `timeoutS + 60`. Default 300 s |
 | **grok** | No CLI-side timeout flag exists, so the process-group SIGKILL at `timeoutS` is the only wall-clock bound. Default 300 s; the example config raises it to 1800 s — a thorough `grok_code_review` has been observed running 15 minutes, and a kill now returns the partial answer rather than nothing |
 | **codex** | Same — hard kill only, at `timeoutS`. Default 600 s, because `codex_code_review` over a directory is a long call |
+| **mistral** | Vibe gets `--time-limit timeoutS - 15` and stops itself first (`outcome: deadline`), still writing its answer and `export.json`; the answer comes back marked `stopped at the <timeoutS - 15>s time limit`. The process-group SIGKILL at `timeoutS` is the backstop (`hard-killed after <N>s`). Default 1500 s for `mistral_security_review`. `mistral_security_repro` reads `reproTimeoutS` (default 2400 s) in the same way, and its markers name `mistral.reproTimeoutS` as the key to raise |
 
 A hard kill whose text was captured returns that text marked partial — `[<unit>: hard-killed after <N>s — …]` appended, `partial: true` beside `status: "ok"` ([STATUS-FEED](STATUS-FEED.md#what-ok-error-and-cancelled-mean) describes it); only a kill with nothing captured is an error naming the unit and the limit, e.g. `codex hard-killed after 600s (raise codex.timeoutS in the fleet config)`. `gemini_deep_research` runs several stages (decompose, parallel gathers, synthesis), each bounded separately, and each stage's wall is `timeoutS + 60 s` — agy is handed `timeoutS` and the process-group SIGKILL sits 60 s above it. The whole pipeline commonly takes 3–10 minutes.
 
@@ -642,6 +667,8 @@ Every tool call that spawns a vendor CLI has its answer written to `<home>/resul
 | The literal `(vendor default)` | A tool that hands the choice to its CLI and never learns the id (`gemini_research`, `gemini_image` and every grok tool) |
 
 It exists because an answer can outlive the request that asked for it. Claude Code abandons a stdio tool call at `MCP_TOOL_TIMEOUT`, and again after 30 minutes without progress; a cancelled call under `cancel: finish` is left to finish deliberately. In each case the run was paid for and the client is gone. `<unit>_result` (in a session) and `omelette-fleet results` (in a shell) read the file back, and neither starts a run.
+
+**Mistral's `export.json`.** Beside the spool, the Mistral unit keeps Vibe's raw `export.json` of every run (outcome, stop reason, usage, estimated cost, steps, the effective config) at `<home>/results/mistral/exports/<ISO time>-<pid>-<seq>.export.json`, `0600`, the newest `resultsKeep`. The answer's footer names it (`export=<path>`) and the alias that ran. The unit's fallback check rests on it, because the homes turn Vibe's session log off and no journal remains.
 
 Retention is per unit and runs after every write and at server start: `resultsKeep` results (default 50), inside `resultsMaxBytes` (default 50 MB), oldest by `endedAt` removed first, abandoned `*.tmp` files older than an hour swept. A single result larger than the whole budget is kept anyway — it is the answer that was just paid for. `results: false` (per unit or in `defaults`) switches writing off; it does not hide what is already spooled. `doctor` prints `(disabled in config) — answers are not spooled` on the unit's `results` line.
 
