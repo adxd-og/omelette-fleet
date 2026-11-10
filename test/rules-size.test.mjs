@@ -72,10 +72,11 @@ const DUTIES = [
 // docs-2c p21: 15 750 -> 16 400 — the superpowers paragraph in the operating model: this file wins, five conflicts resolved (+518: 16 188 / 16 156), plus headroom.
 // 1.8.0: 16 400 -> 18 850 — the review brief (the plan header, the touched record, BASE and base..HEAD, no pre-judging, what a coder fixes, the yield split), the handoff's six fields, tried:, the gate's HH:MM, the curated files and the guard's two deliveries (+2 512: 18 700 / 18 668), plus headroom.
 // 1.9.0: 18 850 -> 19 403 — the Mistral routing row and its "never a sole source" bullet (+410: 19 253 / 19 221), plus headroom.
-test('the rendered rules file is at most 19 403 characters under either merge policy', () => {
+// 1.10.0: 19 403 -> 20 227 — the hard coders: the coder line's two Fable routes, the tester flow's last round to hard then one to xhard, the same round in the superpowers paragraph, six definitions with claude-fable-5-2, six guarded names (+824: 20 077 / 20 045), plus headroom.
+test('the rendered rules file is at most 20 227 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 19403, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 20227, `${merge}: ${text.length} characters`);
   }
 });
 
@@ -106,7 +107,7 @@ test('"Ledger and handoff" states the six hook obligations in full, one line eac
  */
 const HANDED = [
   "- A planner gets its spec section and the pointers the session hands it, and the plan header lists what it read.",
-  "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates); a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.",
+  "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates), `omelette-coder-hard` (Fable-class, the session's own quota) by name only, one task at a time: the plan's `hard` bucket (refusal or parser logic, a sandbox profile, concurrency, a cause two attempts missed) or the fresh coder after a second round failed on the same finding; `omelette-coder-xhard` only after a `hard` round failed on the same finding, or on the operator's word; a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.",
   "- Pay for judgement, not for repetition: planners do not dry-run plans.",
 ];
 
@@ -145,8 +146,8 @@ test('"Reviews" says how the session reviews a plan, after the four-part finding
 const P1_REVIEWS_LINE = "- **A sub-agent review goes to `omelette-reviewer`.** It writes nothing but `.omelette/reports/<name>-review.md`; run `git status --porcelain` and compare `git rev-parse HEAD` and `git symbolic-ref -q HEAD` after it, and reject the review outright if anything but that report changed.";
 // 1.3.0 P2: four definitions, the medium coder right after the coder.
 // Re-pinned in 1.6.1 Task 2: the tester at high, the models named by generation
-// and pinned by exact id.
-const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs four definitions — **`omelette-coder`** (Opus 5.5, `effort: xhigh`), **`omelette-coder-medium`** (Opus 5.5, `effort: medium`), **`omelette-tester`** (Sonnet 5.5, `effort: high`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus 5.5, `effort: xhigh`), each model pinned by exact id (`claude-opus-5-5`, `claude-sonnet-5-5`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-tester` / `omelette-reviewer`.";
+// and pinned by exact id. 1.10.0: six, the two hard coders on Fable 5.2.
+const P1_DEFINITIONS_LINE = "- `omelette-fleet rules --agents` installs six definitions — **`omelette-coder`** (Opus 5.5, `effort: xhigh`), **`omelette-coder-medium`** (Opus 5.5, `effort: medium`), **`omelette-coder-hard`** (Fable 5.2, `effort: high`), **`omelette-coder-xhard`** (Fable 5.2, `effort: xhigh`), **`omelette-tester`** (Sonnet 5.5, `effort: high`, `maxTurns: 80` by default (config)) and **`omelette-reviewer`** (Opus 5.5, `effort: xhigh`), each model pinned by exact id (`claude-opus-5-5`, `claude-fable-5-2`, `claude-sonnet-5-5`) — plus the `/omelette-test` skill. Select a definition with `subagent_type: omelette-coder` / `omelette-coder-medium` / `omelette-coder-hard` / `omelette-coder-xhard` / `omelette-tester` / `omelette-reviewer`.";
 const CODER_LINE = "- **Code changes go to a strong coding sub-agent** (Opus-class, xhigh — the shipped `omelette-coder`), briefed with the approved plan and the constraints. Never to a fleet unit.";
 
 for (const merge of ['session', 'pr']) {
@@ -157,10 +158,10 @@ for (const merge of ['session', 'pr']) {
     assert.equal(lines[plan + 1], P1_REVIEWS_LINE, 'the reviewer line follows it, whole');
   });
 
-  test(`"Spawning sub-agents" says four definitions, each with its model and effort (${merge})`, () => {
+  test(`"Spawning sub-agents" says six definitions, each with its model and effort (${merge})`, () => {
     const lines = section(renderRulesFile('1.2.0', { merge }), '## Spawning sub-agents: model and effort').split('\n');
     assert.ok(lines.includes(P1_DEFINITIONS_LINE), 'the definitions line, whole');
-    assert.ok(!lines.some((l) => l.includes('installs two definitions') || l.includes('installs three definitions')), 'the old counts are gone');
+    assert.ok(!lines.some((l) => l.includes('installs two definitions') || l.includes('installs three definitions') || l.includes('installs four definitions')), 'the old counts are gone');
   });
 }
 
@@ -172,8 +173,8 @@ for (const merge of ['session', 'pr']) {
  */
 const P1_BRANCH_LINE_HEAD = "- **Branch per feature; main is gated.** Work on a `feat/<name>` branch. The session commits each task on that branch once its review passes; no shipped sub-agent role commits — the coder reports its diff, the tester reports what it ran, the reviewer reports its findings, and the guard hook refuses any of their `git commit`. ";
 const P1_NESTING_LINE = "- Sub-agents may nest up to three levels deep, but every shipped definition carries `disallowedTools: Agent`: they cannot spawn anything, so the **orchestrator** spawns the tester, never the coder.";
-// 1.3.0 P2: the fourth name, and only that (the session's ruling).
-const P1_GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it, and omelette-fleet never edits your settings files itself. The guard covers `omelette-coder`, `omelette-coder-medium`, `omelette-tester` and `omelette-reviewer` and names the one it caught.";
+// 1.3.0 P2: the fourth name, and only that (the session's ruling). 1.10.0: the fifth and sixth.
+const P1_GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it, and omelette-fleet never edits your settings files itself. The guard covers `omelette-coder`, `omelette-coder-medium`, `omelette-coder-hard`, `omelette-coder-xhard`, `omelette-tester` and `omelette-reviewer` and names the one it caught.";
 
 for (const merge of ['session', 'pr']) {
   test(`the three lines that counted two roles name every shipped role, each whole (${merge})`, () => {
@@ -203,7 +204,7 @@ test('the operating model\'s coder line stays byte for byte, and no 1.3.0 line c
  * which P2 leaves byte for byte.
  */
 const CODER_1_2_0 = "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open.";
-const CODER_BUCKETS = "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates); a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.";
+const CODER_BUCKETS = "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates), `omelette-coder-hard` (Fable-class, the session's own quota) by name only, one task at a time: the plan's `hard` bucket (refusal or parser logic, a sandbox profile, concurrency, a cause two attempts missed) or the fresh coder after a second round failed on the same finding; `omelette-coder-xhard` only after a `hard` round failed on the same finding, or on the operator's word; a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.";
 
 test('the coder line carries the bucket clause after its 1.2.0 words, whole, under either merge policy — and the "Opus-class, xhigh" line is untouched', () => {
   assert.ok(CODER_BUCKETS.startsWith(`${CODER_1_2_0} `), 'the clause is appended; the 1.2.0 words are its first words');
@@ -261,3 +262,15 @@ for (const merge of ['session', 'pr']) {
     }
   });
 }
+
+// ── 1.10.0: the hard coders' route in the tester flow ───────────────────────
+
+/** Tester flow step 6 with the two Fable rungs (spec 2026-11-10, "2. Routing", row 3), pinned whole. */
+const STEP_6_1_10_0 = "6. The ruling, with the findings, goes back to the coder (continue the same sub-agent where the harness supports resuming one, so its context is kept), **at most 2–3 rounds**, then escalate to the operator. After a review past five minutes the coder's cache is gone: brief a fresh coder (task, diff, findings) — a 30–50 k write, not a 310 k rewrite. The last round before the operator may go to a fresh `omelette-coder-hard`; if the tester's or reviewer's finding still stands after it, one more to a fresh `omelette-coder-xhard`.";
+
+test('1.10.0: the tester flow sends the last round before the operator to a fresh hard coder, then one more to the extra-hard one, under either merge policy', () => {
+  for (const merge of ['session', 'pr']) {
+    const flow = section(renderRulesFile('1.2.0', { merge }), '## Tester flow').split('\n');
+    assert.ok(flow.includes(STEP_6_1_10_0), `${merge}: step 6, whole`);
+  }
+});
