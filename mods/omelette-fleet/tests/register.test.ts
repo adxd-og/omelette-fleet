@@ -2025,6 +2025,24 @@ describe('tester 1.8.0 Task 8: pins, the effort flag and the effort notice at th
     expect(nodeOf(world, 'agent-3')).toMatchObject({ role: 'omelette-tester', pinned: { from: 'haiku', to: 'claude-sonnet-5-5' } })
   })
 
+  test('1.10.0: either hard coder asked for another model reaches the engine on its definition\'s claude-fable-5-2, one toast each; its own id is no pin', async ($, on) => {
+    const files = {
+      ...FOUR,
+      [PROJECT('omelette-coder-hard')]: definition('omelette-coder-hard', 'claude-fable-5-2', 'high'),
+      [PROJECT('omelette-coder-xhard')]: definition('omelette-coder-xhard', 'claude-fable-5-2', 'xhigh'),
+    }
+    const { world, seen } = await started(on, files)
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder-hard', model: 'opus' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder-xhard', model: 'claude-opus-5-5' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder-hard', model: 'claude-fable-5-2' } as never)
+
+    expect(seen.models).toEqual(['claude-fable-5-2', 'claude-fable-5-2', 'claude-fable-5-2'])
+    expect(seen.toasts).toEqual(['pinned omelette-coder-hard to claude-fable-5-2', 'pinned omelette-coder-xhard to claude-fable-5-2'])
+    expect(world.fleet?.counts?.pins).toBe(2)
+  })
+
   test('no pin where the call names the definition\'s model: its id, its alias, or a definition that spells an alias', async ($, on) => {
     const files = { ...FOUR, [PROJECT('omelette-reviewer')]: definition('omelette-reviewer', 'opus', 'xhigh') }
     const { world, seen } = await started(on, files)

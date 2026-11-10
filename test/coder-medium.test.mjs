@@ -48,8 +48,8 @@ const withoutNameAndEffort = (text) => text.split('\n').filter((l) => !/^(name|e
 
 // ── Task 2: the fourth definition renders ────────────────────────────────────
 
-test('rules --agents ships four definitions, the medium coder right after the coder, each with the marker on line 2 and its own name', () => {
-  assert.deepEqual(AGENT_FILES, ['omelette-coder.md', 'omelette-coder-medium.md', 'omelette-tester.md', 'omelette-reviewer.md']);
+test('rules --agents ships six definitions, the medium coder right after the coder and the two hard coders after it, each with the marker on line 2 and its own name', () => {
+  assert.deepEqual(AGENT_FILES, ['omelette-coder.md', 'omelette-coder-medium.md', 'omelette-coder-hard.md', 'omelette-coder-xhard.md', 'omelette-tester.md', 'omelette-reviewer.md']);
   assert.equal(AGENT_ROLES['omelette-coder-medium.md'], 'coderMedium');
   for (const name of AGENT_FILES) {
     const text = renderAgentFile(name, '1.3.0');
@@ -74,7 +74,7 @@ test('omelette-coder-medium is the coder text with its own name and effort: medi
 });
 
 test('the medium coder has no template of its own: it renders from agents/omelette-coder.md', () => {
-  assert.deepEqual(rules.AGENT_TEMPLATES, { 'omelette-coder-medium.md': 'omelette-coder.md' });
+  assert.deepEqual(rules.AGENT_TEMPLATES, { 'omelette-coder-medium.md': 'omelette-coder.md', 'omelette-coder-hard.md': 'omelette-coder.md', 'omelette-coder-xhard.md': 'omelette-coder.md' });
   assert.equal(existsSync(join(ROOT, 'agents', 'omelette-coder-medium.md')), false, 'no second copy of the coder text');
   assert.ok(readFileSync(join(ROOT, 'agents', 'omelette-coder.md'), 'utf8').includes('\nname: {{name}}\n'), 'the coder template takes its name from the file it renders');
 });
@@ -161,13 +161,14 @@ test('every definition rules --agents ships is a role the guard refuses by name'
   }
 });
 
-test('rules --help and install --help count four definitions, the medium coder among them', () => {
+test('rules --help and install --help count six definitions, the medium coder and the two hard coders among them', () => {
   const dir = home();
   const rulesHelp = cli(['rules', '--help'], { dir });
   assert.equal(rulesHelp.code, 0, rulesHelp.err);
-  assert.match(rulesHelp.out, /--agents also writes four sub-agent definitions/);
+  assert.match(rulesHelp.out, /--agents also writes six sub-agent definitions/);
   assert.match(rulesHelp.out, /omelette-coder-medium: Opus medium;/);
-  assert.match(cli(['install', '--help'], { dir }).out, /the four sub-agent definitions/);
+  assert.match(rulesHelp.out, /omelette-coder-hard:\s+Fable high; omelette-coder-xhard: Fable xhigh;/);
+  assert.match(cli(['install', '--help'], { dir }).out, /the six sub-agent definitions/);
 });
 
 // ── Task 3: `set` reaches agents.coderMedium ─────────────────────────────────
@@ -203,7 +204,7 @@ test('set refuses an invalid agents.coderMedium value and a key the role does no
   assert.match(key.err, /unknown key "maxTurns" for agent "coderMedium" — known keys: model, effort/);
   const role = cli(['set', 'agents.coder-medium.effort=high'], { dir });
   assert.equal(role.code, 1, 'the key is agents.coderMedium, not the file name');
-  assert.match(role.err, /unknown agent "coder-medium" — known agents: coder, coderMedium, tester, reviewer/);
+  assert.match(role.err, /unknown agent "coder-medium" — known agents: coder, coderMedium, coderHard, coderXhard, tester, reviewer/);
   assert.equal(existsSync(join(dir, 'fleet.config.json')), false);
 });
 

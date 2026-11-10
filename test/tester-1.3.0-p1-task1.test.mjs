@@ -59,7 +59,7 @@ test('`set agents.reviewer.maxTurns=…` is refused: the reviewer has no maxTurn
 // (bin/omelette-fleet.mjs) walks `dirReport`, which reports project AND
 // global — the global half of that loop is untested anywhere in the diff.
 
-test('`update --check` also hints the partial agents scope at --global, with the same "N of 4 missing" count', () => {
+test('`update --check` also hints the partial agents scope at --global, with the same "N of 6 missing" count', () => {
   const dir = home();
   const cfg = join(dir, 'cfgdir');
   const proj = join(dir, 'proj');
@@ -75,7 +75,7 @@ test('`update --check` also hints the partial agents scope at --global, with the
   assert.equal(r.code, 0, r.err);
   assert.match(
     r.out,
-    /^agent files under .*(\/|\\)agents are v0\.2\.0 \(this install is v0\.2\.0\) — refresh: omelette-fleet rules --agents --global \(2 of 4 missing\)$/m,
+    /^agent files under .*(\/|\\)agents are v0\.2\.0 \(this install is v0\.2\.0\) — refresh: omelette-fleet rules --agents --global \(4 of 6 missing\)$/m,
     r.out,
   );
   assert.equal(existsSync(join(agents, 'omelette-reviewer.md')), false, 'a hint is never a write');

@@ -1,6 +1,6 @@
 /**
  * omelette-fleet :: mods/omelette-fleet/hooks/roles.mjs
- * The four guarded roles' definitions (1.8.0): the `model:` and `effort:`
+ * The guarded roles' definitions (1.8.0; six since 1.10.0): the `model:` and `effort:`
  * lines of each role's frontmatter, read once per session, so the mod can pin
  * a spawn to the definition's model and flag a step whose effort is not the
  * definition's. The definition decides; this file only reads it, and a file
@@ -11,7 +11,7 @@
  */
 
 /** The roles `rules --agents` installs and the guard covers, matched whole (GUARDED_AGENTS). */
-export const ROLES = Object.freeze(['omelette-coder', 'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer']);
+export const ROLES = Object.freeze(['omelette-coder', 'omelette-coder-medium', 'omelette-coder-hard', 'omelette-coder-xhard', 'omelette-tester', 'omelette-reviewer']);
 
 /**
  * The aliases the `Agent` tool takes, as the ids they stand for: kept by hand

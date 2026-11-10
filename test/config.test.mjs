@@ -67,7 +67,7 @@ test('coerce: a `line` spec is one printable line — no blank, no control chara
 });
 
 test('AGENT_SETTINGS_SCHEMA: the shipped roles, their keys and the defaults the templates render', () => {
-  assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA), ['coder', 'coderMedium', 'tester', 'reviewer']);
+  assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA), ['coder', 'coderMedium', 'coderHard', 'coderXhard', 'tester', 'reviewer']);
   assert.deepEqual(Object.keys(AGENT_SETTINGS_SCHEMA.reviewer), ['model', 'effort']);
   // 1.6.1 Task 2: exact model ids by default, and the tester at high.
   assert.equal(AGENT_SETTINGS_SCHEMA.reviewer.model.default, 'claude-opus-5-5');

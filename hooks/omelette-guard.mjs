@@ -14,8 +14,9 @@
  * of the reviewer, which reads and writes one report; a settings-level hook is
  * what MAKES that true for git: the stdin event carries `agent_type` for a
  * sub-agent and nothing for the main thread, so the block lands on
- * omelette-coder, omelette-coder-medium, omelette-tester and omelette-reviewer
- * and on nothing else.
+ * omelette-coder, omelette-coder-medium, omelette-coder-hard,
+ * omelette-coder-xhard, omelette-tester and omelette-reviewer and on nothing
+ * else.
  * Exit 2 is what stops the call, and the reason it hands back names the agent
  * it caught.
  *
@@ -1912,8 +1913,12 @@ const forbidden = (raw, depth = 0, fed = NOT_FED) => {
  * effort — the same text under a second name — and is contained exactly as the
  * coder is. It is one more whole name, not a prefix: `omelette-coder-medium-2`
  * is somebody else's agent, as `omelette-coder-2` is.
+ *
+ * `omelette-coder-hard` and `omelette-coder-xhard` (1.10.0) are the same
+ * definition on Fable 5.2 at high and xhigh, contained the same way and matched
+ * whole the same way: `omelette-coder-hard-2` is somebody else's agent.
  */
-const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer']);
+const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-coder-medium', 'omelette-coder-hard', 'omelette-coder-xhard', 'omelette-tester', 'omelette-reviewer']);
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
 const UNREAD_REFUSAL = (agent) => `${REFUSAL(agent)} — a command substitution where git or its subcommand goes is not read`;
 const TOO_DEEP = (agent) => `${agent}: command too deep to read (over 1 MiB of bracket scanning) — split it, or write the file with Write`;

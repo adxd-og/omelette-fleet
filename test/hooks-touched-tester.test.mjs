@@ -311,14 +311,14 @@ test('touched: every guarded role gets a record under its own name, and an unrea
   const g = guard();
   const s = sandbox();
   writeFileSync(s.transcript, `${useLine('t1', 'Write', { file_path: 'x.txt' })}\n`);
-  for (const agent of ['omelette-coder', 'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer']) {
+  for (const agent of ['omelette-coder', 'omelette-coder-medium', 'omelette-coder-hard', 'omelette-coder-xhard', 'omelette-tester', 'omelette-reviewer']) {
     const r = fire(g, stop(s, { agent_type: agent }), s.proj, s.env);
     assert.equal(r.code, 0, `${agent}: ${r.err}`);
     assert.equal(r.err, '', agent);
     const text = readFileSync(recordFile(s, agent), 'utf8');
     assert.ok(text.startsWith(`# touched — ${agent} ${ID}\n`), text);
   }
-  assert.deepEqual(readdirSync(join(s.proj, '.omelette', 'reports')).sort(), ['omelette-coder', 'omelette-coder-medium', 'omelette-reviewer', 'omelette-tester'].map((a) => `touched-${a}-abcdef01.md`));
+  assert.deepEqual(readdirSync(join(s.proj, '.omelette', 'reports')).sort(), ['omelette-coder', 'omelette-coder-hard', 'omelette-coder-medium', 'omelette-coder-xhard', 'omelette-reviewer', 'omelette-tester'].map((a) => `touched-${a}-abcdef01.md`));
   chmodSync(s.transcript, 0);
   if (process.getuid && process.getuid() !== 0) {
     rmSync(recordFile(s), { force: true });

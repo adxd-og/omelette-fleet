@@ -471,8 +471,8 @@
   {
     "id": "guard-tester-unguarded",
     "file": "hooks/omelette-guard.mjs",
-    "find": "'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer'",
-    "replace": "'omelette-coder-medium', 'omelette-reviewer'",
+    "find": "'omelette-coder-xhard', 'omelette-tester', 'omelette-reviewer'",
+    "replace": "'omelette-coder-xhard', 'omelette-reviewer'",
     "breaks": "omelette-tester may commit, stash or branch"
   },
   {

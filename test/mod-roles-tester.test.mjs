@@ -111,7 +111,7 @@ test('readRoleDefinitions with no cwd reads HOME\'s alone', async () => {
   const $ = { env: { get: async () => '/h' }, fs: { read: async (path) => { reads.push(path); throw new Error('ENOENT'); } } };
   assert.equal((await readRoleDefinitions($, undefined)).size, 0);
   assert.deepEqual(reads.every((path) => path.startsWith('/h/.claude/agents/')), true);
-  assert.equal(reads.length, 4);
+  assert.equal(reads.length, 6);
 });
 
 // Round 2.

@@ -46,7 +46,7 @@ function frontmatter(text) {
 }
 
 test('omelette-reviewer renders beside the coder and the tester, from its own agents block, with the marker on line 2', () => {
-  assert.deepEqual(AGENT_FILES, ['omelette-coder.md', 'omelette-coder-medium.md', 'omelette-tester.md', 'omelette-reviewer.md']);
+  assert.deepEqual(AGENT_FILES, ['omelette-coder.md', 'omelette-coder-medium.md', 'omelette-coder-hard.md', 'omelette-coder-xhard.md', 'omelette-tester.md', 'omelette-reviewer.md']);
   assert.equal(AGENT_ROLES['omelette-reviewer.md'], 'reviewer');
   const lines = reviewer().split('\n');
   assert.equal(lines[0], '---');
@@ -147,7 +147,7 @@ test('rules --agents writes omelette-reviewer.md with the configured values, and
   assert.match(text, /^effort: max$/m);
   assert.match(text, /^model: claude-opus-5-5$/m, 'the default model, an exact id since 1.6.1 Task 2');
   const d = cli(['doctor'], { dir, cwd: proj });
-  assert.match(d.out, /^agents {8}project: v\d+\.\d+\.\d+\S* \(4\) · global: absent$/m, d.out);
+  assert.match(d.out, /^agents {8}project: v\d+\.\d+\.\d+\S* \(6\) · global: absent$/m, d.out);
 });
 
 test('update --check hints rules --agents for a scope missing the reviewer, even at this install\'s own version, and writes nothing', () => {
@@ -163,7 +163,7 @@ test('update --check hints rules --agents for a scope missing the reviewer, even
   writeFileSync(join(pkgRoot, 'package.json'), JSON.stringify({ name: 'omelette-fleet', version: '0.2.0' }, null, 2));
   const r = cli(['update', '--check'], { dir, cwd: proj, env: { OMELETTE_PKG_ROOT: pkgRoot } });
   assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /^agent files under .*\.claude(\/|\\)agents are v0\.2\.0 \(this install is v0\.2\.0\) — refresh: omelette-fleet rules --agents \(2 of 4 missing\)$/m, r.out);
+  assert.match(r.out, /^agent files under .*\.claude(\/|\\)agents are v0\.2\.0 \(this install is v0\.2\.0\) — refresh: omelette-fleet rules --agents \(4 of 6 missing\)$/m, r.out);
   assert.equal(existsSync(join(agents, 'omelette-reviewer.md')), false, 'a hint is never a write');
 });
 

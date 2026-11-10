@@ -159,7 +159,7 @@ test('the rules file and `rules --help` no longer give the shipped tester Sonnet
   const rules = read('rules/omelette-fleet.md');
   assert.ok(!rules.includes('(Sonnet, `effort: xhigh`') && !rules.includes('Sonnet-class, xhigh'), 'rules');
   const help = spawnSync(process.execPath, [BIN, 'rules', '--help'], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home(), OMELETTE_HOME: home(), OMELETTE_UPDATE_CHECK: '0' } });
-  assert.match(help.stdout, /^\s*Sonnet high; omelette-reviewer: Opus xhigh; all four disallow\s*$/m, '`rules --help`');
+  assert.match(help.stdout, /^\s*Sonnet high; omelette-reviewer: Opus xhigh; all six disallow\s*$/m, '`rules --help`');
 });
 
 // ── the shipped example stops freezing the package's defaults (ruling B) ──────

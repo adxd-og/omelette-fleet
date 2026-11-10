@@ -108,7 +108,7 @@ const COMMANDS = {
       'shipped example if it does not exist yet (never overwritten).',
       'A unit whose vendor CLI is not in PATH is skipped unless --force.',
       '--rules then does `rules --agents --hooks` in the current directory:',
-      'the operating rules, the four sub-agent definitions, the /omelette-test',
+      'the operating rules, the six sub-agent definitions, the /omelette-test',
       'skill and the guard script, followed by the settings.json snippet',
       'and the `merge policy` the rules file was written with.',
       '--dry-run prints every command and every write, and runs nothing.',
@@ -147,9 +147,10 @@ const COMMANDS = {
       'the text to stdout; --remove deletes only a file with the marker, plus',
       "the skill's own directory once its SKILL.md is gone and it is empty —",
       'a skill IS a directory, and an empty one still reads as installed.',
-      '--agents also writes four sub-agent definitions (omelette-coder:',
-      'Opus xhigh; omelette-coder-medium: Opus medium; omelette-tester:',
-      'Sonnet high; omelette-reviewer: Opus xhigh; all four disallow',
+      '--agents also writes six sub-agent definitions (omelette-coder:',
+      'Opus xhigh; omelette-coder-medium: Opus medium; omelette-coder-hard:',
+      'Fable high; omelette-coder-xhard: Fable xhigh; omelette-tester:',
+      'Sonnet high; omelette-reviewer: Opus xhigh; all six disallow',
       'Agent, the reviewer also Edit and NotebookEdit) into .claude/agents,',
       'where their effort is set, and the /omelette-test skill into',
       '.claude/skills. --hooks writes the guard script into .claude/hooks',
@@ -3314,8 +3315,9 @@ function cmdSet(argv) {
     if (parts[0].toLowerCase() === 'agents') {
       if (parts.length !== 3 || parts.some((p) => !p)) { errors.push(`"${a}" is not agents.<agent>.<key>=<value>`); continue; }
       // The role is matched without regard to case, as it always was, but
-      // against the schema's OWN spelling: `coderMedium` is camelCase, and a
-      // lowercased input alone would never find it. Own keys only, so an
+      // against the schema's OWN spelling: `coderMedium`, `coderHard` and
+      // `coderXhard` are camelCase, and a lowercased input alone would never
+      // find them. Own keys only, so an
       // inherited name (`constructor`) is still an unknown agent.
       const given = parts[1].toLowerCase();
       const role = Object.keys(AGENT_SETTINGS_SCHEMA).find((r) => r.toLowerCase() === given);

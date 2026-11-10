@@ -1,7 +1,7 @@
 /**
  * omelette-fleet :: test/mod-roles-1.8.0.test.mjs
  * The pins' pure half (1.8.0, Task 8): roles.mjs reading a definition's
- * frontmatter, the alias map `namesModel` reads it through, where the four
+ * frontmatter, the alias map `namesModel` reads it through, where the six
  * definitions are looked for, and the pane's notes for a pin and an effort
  * flag. The kit tests (mods/omelette-fleet/tests/register.test.ts) run the
  * hooks themselves.
@@ -59,7 +59,7 @@ test('namesModel: the id, or an alias the map reads as that id; another family, 
   assert.equal(namesModel('opus', undefined), false);
 });
 
-test('readRoleDefinitions: each of the four roles from the project, else from HOME; one in neither is left out; nothing else is read', async () => {
+test('readRoleDefinitions: each of the six roles from the project, else from HOME; one in neither is left out; nothing else is read', async () => {
   const files = {
     '/w/p/.claude/agents/omelette-coder.md': definition('claude-opus-5-5', 'xhigh'),
     '/h/.claude/agents/omelette-coder.md': definition('claude-haiku-5-5', 'low'),
@@ -80,7 +80,7 @@ test('readRoleDefinitions: each of the four roles from the project, else from HO
 
   const roles = await readRoleDefinitions($, '/w/p');
 
-  assert.deepEqual(ROLES, ['omelette-coder', 'omelette-coder-medium', 'omelette-tester', 'omelette-reviewer']);
+  assert.deepEqual(ROLES, ['omelette-coder', 'omelette-coder-medium', 'omelette-coder-hard', 'omelette-coder-xhard', 'omelette-tester', 'omelette-reviewer']);
   assert.deepEqual(Object.fromEntries(roles), {
     'omelette-coder': { model: 'claude-opus-5-5', effort: 'xhigh' },
     'omelette-tester': { model: 'claude-sonnet-5-5', effort: 'high' },
@@ -90,6 +90,10 @@ test('readRoleDefinitions: each of the four roles from the project, else from HO
     '/w/p/.claude/agents/omelette-coder.md',
     '/w/p/.claude/agents/omelette-coder-medium.md',
     '/h/.claude/agents/omelette-coder-medium.md',
+    '/w/p/.claude/agents/omelette-coder-hard.md',
+    '/h/.claude/agents/omelette-coder-hard.md',
+    '/w/p/.claude/agents/omelette-coder-xhard.md',
+    '/h/.claude/agents/omelette-coder-xhard.md',
     '/w/p/.claude/agents/omelette-tester.md',
     '/h/.claude/agents/omelette-tester.md',
     '/w/p/.claude/agents/omelette-reviewer.md',

@@ -7,6 +7,7 @@
  *     "updateCheck": true,
  *     "contract": "auto",
  *     "agents": { "coder": { model, effort }, "coderMedium": { model, effort },
+ *                 "coderHard": { model, effort }, "coderXhard": { model, effort },
  *                 "tester": { model, effort, maxTurns }, "reviewer": { model, effort } },
  *     "handoff": { enabled },
  *     "workflow": { merge },
@@ -241,6 +242,22 @@ export const AGENT_SETTINGS_SCHEMA = {
   coderMedium: {
     model: { type: 'line', default: 'claude-opus-5-5' },
     effort: { type: 'enum', values: EFFORT_LEVELS, default: 'medium' },
+  },
+  // The coder's template under a third name (1.10.0), on Fable 5.2 at high: a
+  // named route for the tasks the Opus coder loses rounds on, from the
+  // session's own quota, never the default. High because that is where Fable's
+  // lead over the coder arrives on the index; xhigh adds nothing on it
+  // (docs/MEASUREMENTS.md, "The hard coders: Fable 5.2 by effort on a public
+  // index").
+  coderHard: {
+    model: { type: 'line', default: 'claude-fable-5-2' },
+    effort: { type: 'enum', values: EFFORT_LEVELS, default: 'high' },
+  },
+  // The same at xhigh (1.10.0): the rung after a hard round that failed on the
+  // same finding, or the operator's word — never a first dispatch.
+  coderXhard: {
+    model: { type: 'line', default: 'claude-fable-5-2' },
+    effort: { type: 'enum', values: EFFORT_LEVELS, default: 'xhigh' },
   },
   // High, not xhigh (1.6.1): on one task's diff a directed second pass at high
   // found more than one xhigh pass at about half the cost, and the template
