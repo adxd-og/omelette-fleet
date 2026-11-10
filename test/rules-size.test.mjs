@@ -72,11 +72,11 @@ const DUTIES = [
 // docs-2c p21: 15 750 -> 16 400 — the superpowers paragraph in the operating model: this file wins, five conflicts resolved (+518: 16 188 / 16 156), plus headroom.
 // 1.8.0: 16 400 -> 18 850 — the review brief (the plan header, the touched record, BASE and base..HEAD, no pre-judging, what a coder fixes, the yield split), the handoff's six fields, tried:, the gate's HH:MM, the curated files and the guard's two deliveries (+2 512: 18 700 / 18 668), plus headroom.
 // 1.9.0: 18 850 -> 19 403 — the Mistral routing row and its "never a sole source" bullet (+410: 19 253 / 19 221), plus headroom.
-// 1.10.0: 19 403 -> 20 227 — the hard coders: the coder line's two Fable routes, the tester flow's last round to hard then one to xhard, the same round in the superpowers paragraph, six definitions with claude-fable-5-2, six guarded names (+824: 20 077 / 20 045), plus headroom.
-test('the rendered rules file is at most 20 227 characters under either merge policy', () => {
+// 1.10.0: 19 403 -> 20 402 — the hard coders: the coder line's two Fable routes, the tester flow's third round to hard then one to xhard, then the operator, one fix round on each Fable rung, the same round in the superpowers paragraph, six definitions with claude-fable-5-2, six guarded names (+999: 20 252 / 20 220), plus headroom.
+test('the rendered rules file is at most 20 402 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 20227, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 20402, `${merge}: ${text.length} characters`);
   }
 });
 
@@ -107,7 +107,7 @@ test('"Ledger and handoff" states the six hook obligations in full, one line eac
  */
 const HANDED = [
   "- A planner gets its spec section and the pointers the session hands it, and the plan header lists what it read.",
-  "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates), `omelette-coder-hard` (Fable-class, the session's own quota) by name only, one task at a time: the plan's `hard` bucket (refusal or parser logic, a sandbox profile, concurrency, a cause two attempts missed) or the fresh coder after a second round failed on the same finding; `omelette-coder-xhard` only after a `hard` round failed on the same finding, or on the operator's word; a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.",
+  "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates), `omelette-coder-hard` (Fable-class, the session's own quota) by name only, one task at a time: the plan's `hard` bucket (refusal or parser logic, a sandbox profile, concurrency, a cause two attempts missed) or the third fix round, fresh, after two failed on the same finding; `omelette-coder-xhard` only for the one round after a `hard` fix round failed on the same finding, or on the operator's word; a Fable coder gets one fix round; a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.",
   "- Pay for judgement, not for repetition: planners do not dry-run plans.",
 ];
 
@@ -204,7 +204,7 @@ test('the operating model\'s coder line stays byte for byte, and no 1.3.0 line c
  * which P2 leaves byte for byte.
  */
 const CODER_1_2_0 = "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open.";
-const CODER_BUCKETS = "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates), `omelette-coder-hard` (Fable-class, the session's own quota) by name only, one task at a time: the plan's `hard` bucket (refusal or parser logic, a sandbox profile, concurrency, a cause two attempts missed) or the fresh coder after a second round failed on the same finding; `omelette-coder-xhard` only after a `hard` round failed on the same finding, or on the operator's word; a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.";
+const CODER_BUCKETS = "- A coder gets its task's plan section and pointers, not the spec, whose path covers what the plan left open. Brief `omelette-coder-medium` when the section prints the exact text, diff, tests and expected numbers (the coder executes), `omelette-coder` otherwise (a new thing with no written shape, debugging with no known cause, a decision the brief explicitly delegates), `omelette-coder-hard` (Fable-class, the session's own quota) by name only, one task at a time: the plan's `hard` bucket (refusal or parser logic, a sandbox profile, concurrency, a cause two attempts missed) or the third fix round, fresh, after two failed on the same finding; `omelette-coder-xhard` only for the one round after a `hard` fix round failed on the same finding, or on the operator's word; a Fable coder gets one fix round; a brief leaving a required decision open gets `NEEDS_CONTEXT` at any effort; the bucket and its reason go into the brief and the ledger line.";
 
 test('the coder line carries the bucket clause after its 1.2.0 words, whole, under either merge policy — and the "Opus-class, xhigh" line is untouched', () => {
   assert.ok(CODER_BUCKETS.startsWith(`${CODER_1_2_0} `), 'the clause is appended; the 1.2.0 words are its first words');
@@ -266,11 +266,12 @@ for (const merge of ['session', 'pr']) {
 // ── 1.10.0: the hard coders' route in the tester flow ───────────────────────
 
 /** Tester flow step 6 with the two Fable rungs (spec 2026-11-10, "2. Routing", row 3), pinned whole. */
-const STEP_6_1_10_0 = "6. The ruling, with the findings, goes back to the coder (continue the same sub-agent where the harness supports resuming one, so its context is kept), **at most 2–3 rounds**, then escalate to the operator. After a review past five minutes the coder's cache is gone: brief a fresh coder (task, diff, findings) — a 30–50 k write, not a 310 k rewrite. The last round before the operator may go to a fresh `omelette-coder-hard`; if the tester's or reviewer's finding still stands after it, one more to a fresh `omelette-coder-xhard`.";
+const STEP_6_1_10_0 = "6. The ruling, with the findings, goes back to the coder (continue the same sub-agent where the harness supports resuming one, so its context is kept), **at most 2–3 rounds**, then escalate to the operator. After a review past five minutes the coder's cache is gone: brief a fresh coder (task, diff, findings) — a 30–50 k write, not a 310 k rewrite. After two rounds failed on the same finding the third may go to a fresh `omelette-coder-hard`; if the tester's or reviewer's finding still stands after it, one more to a fresh `omelette-coder-xhard`, then the operator. A Fable coder gets one fix round, then the next rung — also on a task it built.";
 
-test('1.10.0: the tester flow sends the last round before the operator to a fresh hard coder, then one more to the extra-hard one, under either merge policy', () => {
+test('1.10.0: the tester flow sends the third round to a fresh hard coder, then one more to the extra-hard one, then the operator, under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const flow = section(renderRulesFile('1.2.0', { merge }), '## Tester flow').split('\n');
     assert.ok(flow.includes(STEP_6_1_10_0), `${merge}: step 6, whole`);
+    assert.ok(renderRulesFile('1.2.0', { merge }).includes('fix rounds stop at 2–3 (one more on `omelette-coder-xhard`) and go to the operator'), `${merge}: the superpowers paragraph names the same extra round`);
   }
 });
