@@ -2006,7 +2006,7 @@ describe('tester 1.8.0 Task 8: pins, the effort flag and the effort notice at th
     return { world, seen }
   }
 
-  test('each of the four roles spawned on haiku reaches the engine with its own definition\'s id: one toast each, four pins', async ($, on) => {
+  test('each of the four Opus and Sonnet roles spawned on haiku reaches the engine with its own definition\'s id: one toast each, four pins', async ($, on) => {
     const { world, seen } = await started(on, FOUR)
     await $.session.start(SESSION)
 

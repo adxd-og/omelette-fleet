@@ -349,7 +349,7 @@ test('fix round 2 (budget): past 4096 brace groups or 65536 brace words in one c
   check([[`echo ${words('{a,b}', 4097)}`, 0, '']], null);
 });
 
-test('fix round 2 (budget): 8 MiB of {a,b} words is refused in under 2 s; 1 MB of plain words is read as before', () => {
+test('fix round 2 (budget): 8 MiB of {a,b} words is refused in under 5 s; 1 MB of plain words is read as before', () => {
   const path = guardPath();
   // Under the hook's 8 MiB stdin cap, the event's JSON around it included.
   const big = fastest(path, `echo ${words('{a,b}', Math.floor((8 * MB - 4096) / 6))}`);

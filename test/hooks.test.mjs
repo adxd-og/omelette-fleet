@@ -2134,7 +2134,7 @@ test('release review (1.8.0, round 3): a `#` glued to an array assignment\'s `)`
   ]);
 });
 
-test('release review (1.8.0, round 3): a `cd` chain is followed in one linear pass — 256 KB of `cd a && ` in under 1 s', () => {
+test('release review (1.8.0, round 3): a `cd` chain is followed in one linear pass — 256 KB of `cd a && ` in under 2.5 s', () => {
   const g = guard();
   const { dir } = curatedProject();
   const chain = 'cd a && '.repeat(32 * 1024);
