@@ -24,7 +24,7 @@ function golden() {
     usage: { contextPercent: 31, fiveHour: 11, sevenDay: 71, costUsd: 646 },
     history: [],
     nodes: [
-      { id: 'main', kind: 'orchestrator', role: 'orchestrator', model: 'claude-fable-5-1', effort: 'high', status: 'running', since: NOW - 10 * MIN, order: 0 },
+      { id: 'main', kind: 'orchestrator', role: 'orchestrator', model: 'claude-fable-5-2', effort: 'high', status: 'running', since: NOW - 10 * MIN, order: 0 },
       { id: 'unit:gemini', kind: 'unit', role: 'gemini', status: 'idle', since: NOW - HOUR, feed: 'ok', lastEndedAt: NOW - 12 * MIN, order: 1 },
       {
         id: 'unit:grok', kind: 'unit', role: 'grok', status: 'running', callerId: 'main', activity: 'code_review', activityCallId: 'toolu_g1',
@@ -84,7 +84,7 @@ const GOLDEN_71 = [
   '                 └─────────────────┼─────────────────┘',
   '                      ┌────────────┴────────────┐',
   '                      │ ● orchestrator          │',
-  '                      │ fable-5-1 · high · 31%  │',
+  '                      │ fable-5-2 · high · 31%  │',
   '                      └────────────┬────────────┘',
   '        ┌─────────────────┬────────┴────────┬─────────────────┐',
   '┌───────┴───────┐ ┌───────┴───────┐ ┌───────┴───────┐ ┌───────┴───────┐',
@@ -97,7 +97,7 @@ const GOLDEN_71 = [
 const TREE_35 = [
   'ctx 31% · 5h 11% · 7d 71%',
   '',
-  '● orchestrator  fable-5-1 · high',
+  '● orchestrator  fable-5-2 · high',
   '├ ▶ coder-medium  opus · medium',
   '│   Bash: npm test',
   '├ · tester  sonnet · high',
@@ -250,7 +250,7 @@ test('a pane of 8 rows at 80 columns: the tree, not the graph, eight rows, the l
   assert.deepEqual(rows, [
     'ctx 31% · 5h 11% · 7d 71%',
     '',
-    '● orchestrator  fable-5-1 · high',
+    '● orchestrator  fable-5-2 · high',
     '├ ▶ coder-medium  opus · medium',
     '│   Bash: npm test',
     '├ · tester  sonnet · high',

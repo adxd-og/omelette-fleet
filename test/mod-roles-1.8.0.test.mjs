@@ -44,7 +44,7 @@ test('no definition is read where the frontmatter is not one: none, never closed
 });
 
 test('namesModel: the id, or an alias the map reads as that id; another family, an alias off the map or another id is a pin', () => {
-  for (const [alias, id] of [['opus', 'claude-opus-5-5'], ['sonnet', 'claude-sonnet-5-5'], ['haiku', 'claude-haiku-5-5'], ['fable', 'claude-fable-5-1']]) {
+  for (const [alias, id] of [['opus', 'claude-opus-5-5'], ['sonnet', 'claude-sonnet-5-5'], ['haiku', 'claude-haiku-5-5'], ['fable', 'claude-fable-5-2']]) {
     assert.equal(ALIASES[alias], id);
     assert.equal(namesModel(alias, id), true, alias);
     assert.equal(namesModel(id, id), true, id);

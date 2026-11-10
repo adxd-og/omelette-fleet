@@ -24,7 +24,7 @@ function golden() {
     usage: { contextPercent: 31, fiveHour: 11, sevenDay: 71, costUsd: 646 },
     history: [],
     nodes: [
-      { id: 'main', kind: 'orchestrator', role: 'orchestrator', model: 'claude-fable-5-1', effort: 'high', status: 'running', since: NOW - 10 * MIN, order: 0 },
+      { id: 'main', kind: 'orchestrator', role: 'orchestrator', model: 'claude-fable-5-2', effort: 'high', status: 'running', since: NOW - 10 * MIN, order: 0 },
       { id: 'unit:gemini', kind: 'unit', role: 'gemini', status: 'idle', since: NOW - HOUR, feed: 'ok', lastEndedAt: NOW - 12 * MIN, order: 1 },
       {
         id: 'unit:grok', kind: 'unit', role: 'grok', status: 'running', callerId: 'main', activity: 'code_review', activityCallId: 'toolu_g1',

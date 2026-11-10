@@ -18,7 +18,7 @@ export const ROLES = Object.freeze(['omelette-coder', 'omelette-coder-medium', '
  * beside the catalogs and bumped with them. An alias of the definition's
  * family is its model, not an override.
  */
-export const ALIASES = Object.freeze({ opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5', fable: 'claude-fable-5-1' });
+export const ALIASES = Object.freeze({ opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5', fable: 'claude-fable-5-2' });
 
 /** What a `model:` or `effort:` value may be: an id, an alias, a level — never a template's `{{model}}` or a sentence. */
 const VALUE = /^[\w.:@/[\]-]{1,128}$/;

@@ -141,7 +141,7 @@ const SPAWN = {
   description: 'Run the suite',
   subagentType: 'omelette-coder-medium',
   provider: { plugin: 'project', tier: 'user' },
-  parentModel: 'claude-fable-5-1',
+  parentModel: 'claude-fable-5-2',
   background: false,
   fork: false,
 }
@@ -2041,6 +2041,22 @@ describe('tester 1.8.0 Task 8: pins, the effort flag and the effort notice at th
     expect(seen.models).toEqual(['claude-fable-5-2', 'claude-fable-5-2', 'claude-fable-5-2'])
     expect(seen.toasts).toEqual(['pinned omelette-coder-hard to claude-fable-5-2', 'pinned omelette-coder-xhard to claude-fable-5-2'])
     expect(world.fleet?.counts?.pins).toBe(2)
+  })
+
+  test('1.10.0: `fable` is the hard coders\' own model, not an override — no pin, no toast', async ($, on) => {
+    const files = {
+      [PROJECT('omelette-coder-hard')]: definition('omelette-coder-hard', 'claude-fable-5-2', 'high'),
+      [PROJECT('omelette-coder-xhard')]: definition('omelette-coder-xhard', 'claude-fable-5-2', 'xhigh'),
+    }
+    const { world, seen } = await started(on, files)
+    await $.session.start(SESSION)
+
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder-hard', model: 'fable' } as never)
+    await $.agent.spawn({ ...SPAWN, subagentType: 'omelette-coder-xhard', model: 'fable' } as never)
+
+    expect(seen.models).toEqual(['fable', 'fable'])
+    expect(seen.toasts).toEqual([])
+    expect(world.fleet?.counts?.pins).toBeUndefined()
   })
 
   test('no pin where the call names the definition\'s model: its id, its alias, or a definition that spells an alias', async ($, on) => {

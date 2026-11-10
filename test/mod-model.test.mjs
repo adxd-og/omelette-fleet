@@ -94,11 +94,11 @@ test('step: sets model and effort on the main loop and on an agent; the activity
     spawn(T0, CODER, 'omelette-coder-medium', { model: 'claude-opus-5-5' }),
     call(T0 + SEC, CODER, 'k1', 'Bash', 'Bash: npm test'),
     { type: 'step', at: T0 + 2 * SEC, agentId: CODER, model: 'claude-opus-5-5', effort: 'medium' },
-    { type: 'step', at: T0 + 2 * SEC, agentId: MAIN, model: 'claude-fable-5-1', effort: 'high' });
+    { type: 'step', at: T0 + 2 * SEC, agentId: MAIN, model: 'claude-fable-5-2', effort: 'high' });
   assert.equal(node(s, CODER).effort, 'medium');
   assert.equal(node(s, CODER).activity, 'Bash: npm test');
   assert.equal(node(s, CODER).activityCallId, 'k1');
-  assert.equal(node(s, MAIN).model, 'claude-fable-5-1');
+  assert.equal(node(s, MAIN).model, 'claude-fable-5-2');
   assert.equal(node(s, MAIN).effort, 'high');
   assert.equal(node(s, MAIN).since, T0, 'a step of a loop that was not reported keeps its since');
   // A model without effort leaves none.

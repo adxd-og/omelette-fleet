@@ -89,7 +89,7 @@ test('shortRole strips a plugin namespace first, then the omelette- prefix', () 
 
 test('shortModel drops the claude- prefix and leaves other ids alone', () => {
   assert.equal(shortModel('claude-opus-5-5'), 'opus-5-5');
-  assert.equal(shortModel('claude-fable-5-1'), 'fable-5-1');
+  assert.equal(shortModel('claude-fable-5-2'), 'fable-5-2');
   assert.equal(shortModel('grok-4.7'), 'grok-4.7');
   assert.equal(shortModel('gpt-6.1-sol'), 'gpt-6.1-sol');
 });
@@ -97,7 +97,7 @@ test('shortModel drops the claude- prefix and leaves other ids alone', () => {
 test('familyOf names a Claude model\'s family and leaves a non-Claude id unchanged', () => {
   assert.equal(familyOf('claude-opus-5-5'), 'opus');
   assert.equal(familyOf('claude-sonnet-5-5'), 'sonnet');
-  assert.equal(familyOf('claude-fable-5-1'), 'fable');
+  assert.equal(familyOf('claude-fable-5-2'), 'fable');
   assert.equal(familyOf('grok-4.7'), 'grok-4.7');
   assert.equal(familyOf('gpt-6.1-sol'), 'gpt-6.1-sol');
 });
