@@ -43,8 +43,12 @@ function cli(args, { dir, cwd = dir } = {}) {
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
 
-/** A rendered definition without its `name:` and `effort:` lines — what the two coders must share. */
-const withoutNameAndEffort = (text) => text.split('\n').filter((l) => !/^(name|effort): /.test(l)).join('\n');
+/** A rendered definition's body: everything after the frontmatter's closing `---` — what the two coders must share. */
+function body(text) {
+  const end = text.indexOf('\n---\n');
+  assert.notEqual(end, -1, 'the frontmatter closes');
+  return text.slice(end + '\n---\n'.length);
+}
 
 // ── Task 2: the fourth definition renders ────────────────────────────────────
 
@@ -70,7 +74,7 @@ test('omelette-coder-medium is the coder text with its own name and effort: medi
   assert.match(coder, /^name: omelette-coder$/m);
   assert.match(coder, /^effort: xhigh$/m);
   assert.equal(medium.split('\n').length, coder.split('\n').length, 'no line added or dropped');
-  assert.equal(withoutNameAndEffort(medium), withoutNameAndEffort(coder), 'one text: only the name and effort lines differ');
+  assert.equal(body(medium), body(coder), 'one body: the coder\'s word for word');
 });
 
 test('the medium coder has no template of its own: it renders from agents/omelette-coder.md', () => {

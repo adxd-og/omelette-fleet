@@ -340,14 +340,29 @@ export const AGENT_ROLES = {
  * `omelette-coder-xhard` are the coder on Fable 5.2 at high and xhigh (1.10.0).
  * Their instructions are the coder's, word for word, so they live in one file
  * and cannot drift apart. What each has of its own is its `name:` (the
- * template's `{{name}}`, filled from the file name) and its `agents.<role>`
- * block. A file absent here is its own template.
+ * template's `{{name}}`, filled from the file name), its `description:`
+ * (`AGENT_DESCRIPTIONS`) and its `agents.<role>` block. A file absent here is
+ * its own template.
  */
 export const AGENT_TEMPLATES = {
   'omelette-coder-medium.md': 'omelette-coder.md',
   'omelette-coder-hard.md': 'omelette-coder.md',
   'omelette-coder-xhard.md': 'omelette-coder.md',
 };
+
+/**
+ * The `description:` line of each coder rendered from `agents/omelette-coder.md`
+ * (its `{{description}}`): one body, four routes. It is what a session reads when
+ * it picks an agent, so each names its own. An unquoted YAML scalar: no `: ` and
+ * no backtick inside.
+ */
+const CODER_DESCRIPTION = 'Implements ONE task from a written brief — code and tests only, no commits unless the brief says so. Spawned by the orchestrating session; reviewed by it afterwards.';
+export const AGENT_DESCRIPTIONS = Object.freeze({
+  'omelette-coder.md': CODER_DESCRIPTION,
+  'omelette-coder-medium.md': `${CODER_DESCRIPTION} Medium effort, for a brief that prints the exact text, diff and tests.`,
+  'omelette-coder-hard.md': `${CODER_DESCRIPTION} Fable at high effort, a named route only — the plan's hard bucket or the third fix round, never a default.`,
+  'omelette-coder-xhard.md': `${CODER_DESCRIPTION} Fable at xhigh effort — only after a hard round failed on the same finding or on the operator's word, never a first dispatch.`,
+});
 
 /** The sub-agent definitions `rules --agents` ships, in the order they are written. */
 export const AGENT_FILES = Object.keys(AGENT_ROLES);
@@ -415,6 +430,10 @@ export function renderAgentFile(name, version, settings = agentSettings()) {
     .replaceAll('{{marker}}', AGENT_MARKER(String(version)))
     .replaceAll('{{version}}', String(version))
     .replaceAll('{{name}}', name.replace(/\.md$/, ''));
+  if (body.includes('{{description}}')) {
+    if (!Object.hasOwn(AGENT_DESCRIPTIONS, name)) throw new Error(`no description for agent: ${name}`);
+    body = body.replaceAll('{{description}}', () => AGENT_DESCRIPTIONS[name]);
+  }
   for (const [key, spec] of Object.entries(schema)) {
     // A FUNCTION replacement: a string one expands `$&`, `$'`, `` $` `` and `$$`,
     // and a `line` value may hold any of them — `opus$'…` would paste the rest

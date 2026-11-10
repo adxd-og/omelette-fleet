@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENT_SETTINGS_SCHEMA } from '../core/config.mjs';
-import { HOOK_FILES, agentSettings, renderAgentFile, renderHookFile } from '../core/rules.mjs';
+import { AGENT_FILES, HOOK_FILES, agentSettings, renderAgentFile, renderHookFile } from '../core/rules.mjs';
 import { layout, plainRows } from '../mods/omelette-fleet/hooks/layout.mjs';
 import { namesModel, readRoleDefinitions, ROLES } from '../mods/omelette-fleet/hooks/roles.mjs';
 import { shortRole } from '../mods/omelette-fleet/hooks/text.mjs';
@@ -49,8 +49,15 @@ function cli(args, { dir, cwd = dir } = {}) {
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
 
-/** A rendered definition without the three lines each role has of its own. */
-const withoutOwnLines = (text) => text.split('\n').filter((l) => !/^(name|model|effort): /.test(l)).join('\n');
+/** A rendered definition's body: everything after the frontmatter's closing `---`. */
+function body(text) {
+  const end = text.indexOf('\n---\n');
+  assert.notEqual(end, -1, 'the frontmatter closes');
+  return text.slice(end + '\n---\n'.length);
+}
+
+/** One frontmatter line's value, or undefined when the line is absent. */
+const field = (text, key) => (text.match(new RegExp(`^${key}: (.*)$`, 'm')) || [])[1];
 
 test('each hard coder is the coder\'s text with its own name, claude-fable-5-2 and its effort — high, then xhigh', () => {
   const coder = renderAgentFile('omelette-coder.md', '1.10.0');
@@ -61,8 +68,22 @@ test('each hard coder is the coder\'s text with its own name, claude-fable-5-2 a
     assert.match(text, new RegExp(`^effort: ${effort}$`, 'm'), agent);
     assert.match(text, /^disallowedTools: Agent$/m, `${agent}: it may not spawn, as the coder may not`);
     assert.equal(text.split('\n').length, coder.split('\n').length, `${agent}: no line added or dropped`);
-    assert.equal(withoutOwnLines(text), withoutOwnLines(coder), `${agent}: one text — only the name, model and effort lines differ`);
+    assert.equal(body(text), body(coder), `${agent}: one body — the coder's word for word`);
   }
+});
+
+/** The coder's `description:` as 1.10.0 shipped it, byte for byte. */
+const CODER_DESCRIPTION = 'Implements ONE task from a written brief — code and tests only, no commits unless the brief says so. Spawned by the orchestrating session; reviewed by it afterwards.';
+
+test('each coder\'s description is its own: four distinct, the coder\'s unchanged, the hard one a named route only, the extra-hard one never a first dispatch — and no definition renders a placeholder', () => {
+  const description = (name) => field(renderAgentFile(name, '1.10.0'), 'description');
+  const coders = ['omelette-coder.md', 'omelette-coder-medium.md', 'omelette-coder-hard.md', 'omelette-coder-xhard.md'];
+  const all = coders.map(description);
+  assert.equal(new Set(all).size, coders.length, `pairwise distinct:\n${all.join('\n')}`);
+  assert.equal(description('omelette-coder.md'), CODER_DESCRIPTION);
+  assert.ok(description('omelette-coder-hard.md').includes('named route only'), description('omelette-coder-hard.md'));
+  assert.ok(description('omelette-coder-xhard.md').includes('never a first dispatch'), description('omelette-coder-xhard.md'));
+  for (const name of AGENT_FILES) assert.ok(!renderAgentFile(name, '1.10.0').includes('{{'), `${name}: no placeholder survives`);
 });
 
 test('agents.coderHard and agents.coderXhard: claude-fable-5-2 at high and at xhigh by default, model and effort only, on the coder\'s ladder', () => {
