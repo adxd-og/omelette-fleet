@@ -72,11 +72,11 @@ const DUTIES = [
 // docs-2c p21: 15 750 -> 16 400 — the superpowers paragraph in the operating model: this file wins, five conflicts resolved (+518: 16 188 / 16 156), plus headroom.
 // 1.8.0: 16 400 -> 18 850 — the review brief (the plan header, the touched record, BASE and base..HEAD, no pre-judging, what a coder fixes, the yield split), the handoff's six fields, tried:, the gate's HH:MM, the curated files and the guard's two deliveries (+2 512: 18 700 / 18 668), plus headroom.
 // 1.9.0: 18 850 -> 19 403 — the Mistral routing row and its "never a sole source" bullet (+410: 19 253 / 19 221), plus headroom.
-// 1.10.0: 19 403 -> 20 402 — the hard coders: the coder line's two Fable routes, the tester flow's third round to hard then one to xhard, then the operator, one fix round on each Fable rung, the same round in the superpowers paragraph, six definitions with claude-fable-5-2, six guarded names (+999: 20 252 / 20 220), plus headroom.
-test('the rendered rules file is at most 20 402 characters under either merge policy', () => {
+// 1.10.0: 19 403 -> 20 468 — the hard coders: the coder line's two Fable routes, the tester flow's third round to hard then one to xhard, then the operator, one fix round on each Fable rung and a new finding after it to the operator, the same round in the superpowers paragraph, six definitions with claude-fable-5-2, six guarded names (+1065: 20 318 / 20 286), plus headroom.
+test('the rendered rules file is at most 20 468 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 20402, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 20468, `${merge}: ${text.length} characters`);
   }
 });
 
@@ -266,7 +266,7 @@ for (const merge of ['session', 'pr']) {
 // ── 1.10.0: the hard coders' route in the tester flow ───────────────────────
 
 /** Tester flow step 6 with the two Fable rungs (spec 2026-11-10, "2. Routing", row 3), pinned whole. */
-const STEP_6_1_10_0 = "6. The ruling, with the findings, goes back to the coder (continue the same sub-agent where the harness supports resuming one, so its context is kept), **at most 2–3 rounds**, then escalate to the operator. After a review past five minutes the coder's cache is gone: brief a fresh coder (task, diff, findings) — a 30–50 k write, not a 310 k rewrite. After two rounds failed on the same finding the third may go to a fresh `omelette-coder-hard`; if the tester's or reviewer's finding still stands after it, one more to a fresh `omelette-coder-xhard`, then the operator. A Fable coder gets one fix round, then the next rung — also on a task it built.";
+const STEP_6_1_10_0 = "6. The ruling, with the findings, goes back to the coder (continue the same sub-agent where the harness supports resuming one, so its context is kept), **at most 2–3 rounds**, then escalate to the operator. After a review past five minutes the coder's cache is gone: brief a fresh coder (task, diff, findings) — a 30–50 k write, not a 310 k rewrite. After two rounds failed on the same finding the third may go to a fresh `omelette-coder-hard`; if the tester's or reviewer's finding still stands after it, one more to a fresh `omelette-coder-xhard`, then the operator. A Fable coder gets one fix round — also on a task it built: the same finding still standing goes to the next rung, a new finding to the operator.";
 
 test('1.10.0: the tester flow sends the third round to a fresh hard coder, then one more to the extra-hard one, then the operator, under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
