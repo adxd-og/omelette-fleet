@@ -353,15 +353,16 @@ export const AGENT_TEMPLATES = {
 /**
  * The `description:` line of each coder rendered from `agents/omelette-coder.md`
  * (its `{{description}}`): one body, four routes. It is what a session reads when
- * it picks an agent, so each names its own. An unquoted YAML scalar: no `: ` and
+ * it picks an agent, so each names its own — the route, never the model or the
+ * effort, which are config and may differ. An unquoted YAML scalar: no `: ` and
  * no backtick inside.
  */
 const CODER_DESCRIPTION = 'Implements ONE task from a written brief — code and tests only, no commits unless the brief says so. Spawned by the orchestrating session; reviewed by it afterwards.';
 export const AGENT_DESCRIPTIONS = Object.freeze({
   'omelette-coder.md': CODER_DESCRIPTION,
-  'omelette-coder-medium.md': `${CODER_DESCRIPTION} Medium effort, for a brief that prints the exact text, diff and tests.`,
-  'omelette-coder-hard.md': `${CODER_DESCRIPTION} Fable at high effort, a named route only — the plan's hard bucket or the third fix round, never a default.`,
-  'omelette-coder-xhard.md': `${CODER_DESCRIPTION} Fable at xhigh effort — only after a hard round failed on the same finding or on the operator's word, never a first dispatch.`,
+  'omelette-coder-medium.md': `${CODER_DESCRIPTION} The medium coder, for a brief that prints the exact text, diff and tests.`,
+  'omelette-coder-hard.md': `${CODER_DESCRIPTION} The hard coder, a named route only — the plan's hard bucket or the third fix round, never a default.`,
+  'omelette-coder-xhard.md': `${CODER_DESCRIPTION} The extra-hard coder — only after a hard fix round failed on the same finding or on the operator's word, never a first dispatch.`,
 });
 
 /** The sub-agent definitions `rules --agents` ships, in the order they are written. */

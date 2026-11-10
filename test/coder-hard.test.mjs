@@ -83,6 +83,8 @@ test('each coder\'s description is its own: four distinct, the coder\'s unchange
   assert.equal(description('omelette-coder.md'), CODER_DESCRIPTION);
   assert.ok(description('omelette-coder-hard.md').includes('named route only'), description('omelette-coder-hard.md'));
   assert.ok(description('omelette-coder-xhard.md').includes('never a first dispatch'), description('omelette-coder-xhard.md'));
+  // Model and effort are config: a description that named them would lie after `set agents.coderHard.model=…`.
+  for (const f of ['omelette-coder.md', 'omelette-coder-medium.md', 'omelette-coder-hard.md', 'omelette-coder-xhard.md']) assert.doesNotMatch(description(f), /Fable|Opus|Sonnet|\beffort\b/i, f);
   for (const name of AGENT_FILES) assert.ok(!renderAgentFile(name, '1.10.0').includes('{{'), `${name}: no placeholder survives`);
 });
 

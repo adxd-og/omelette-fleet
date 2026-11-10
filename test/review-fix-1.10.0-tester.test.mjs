@@ -75,9 +75,10 @@ test('rules --agents writes six definitions whose frontmatter is valid and whose
     assert.ok(desc[n].length > CODER_DESCRIPTION.length + 20, `${n}: the added sentence is not empty`);
   }
   assert.equal(new Set(SIX.map((n) => desc[n])).size, SIX.length, 'six distinct descriptions');
-  assert.match(desc['omelette-coder-medium'], /[Mm]edium/);
-  assert.match(desc['omelette-coder-hard'], /high/);
-  assert.match(desc['omelette-coder-xhard'], /xhigh/);
+  // The route, never the model or the effort: both are config (the re-review's R3, ruled by the session).
+  assert.match(desc['omelette-coder-medium'], /medium coder/);
+  assert.match(desc['omelette-coder-hard'], /named route only/);
+  assert.match(desc['omelette-coder-xhard'], /never a first dispatch/);
 });
 
 test('a --global render and a --print render hold the same six valid descriptions as the project one', () => {
