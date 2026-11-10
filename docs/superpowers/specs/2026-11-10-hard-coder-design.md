@@ -39,6 +39,7 @@ Artificial Analysis Intelligence Index, per effort level, read from the model pa
 - `high` → `xhigh` buys nothing on this index and costs 63% more and 9 more minutes. Anthropic's own guidance for 5.2: most of the gain arrives by `high`; `xhigh` "raised scores slightly on coding evaluations and used many more tokens" — use it where a gain is measured.
 - `medium` equals `omelette-coder` (56 vs 57) at about 60% of the price and half the time. It is a faster same-grade coder, not a harder one — and it would move routine work from the Opus pool into the smaller Fable one.
 - One independent single-task test: all four of Opus medium/high and Fable medium/high passed 59/59; Fable `high` cost 4.5× Opus `high`. On a task the Opus coder already solves, Fable buys nothing.
+- Anthropic, "Which Claude model should you build with" (2026-11-09, read through a sub-agent): on FrontierCode 2.0 Fable 5.2 at `high` is level with Opus 5.5 at `max` (45.3% vs 45.5%) for about half the cost per task; on SWE-bench Pro Opus 5.5 at `xhigh` adds about 1.4 points over `high` at 2.5× the cost. Its ladder when a model falls short — let it verify with a test, raise effort one level, then the next model up at a lower effort — is the shape of [Routing](#2-routing): past Opus `xhigh` the next step is Fable below `xhigh`, not Opus `max`.
 - Not measured by us. The first real dispatch is the measurement ([Done-when](#done-when)).
 
 ## 1. The roles
