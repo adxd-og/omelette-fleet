@@ -1,6 +1,6 @@
 # The hard coders — two Fable 5.2 coders for the tasks the Opus coder loses rounds on, and Fable 5.1 retired
 
-**Status:** approved by the operator 2026-11-10 in chat («давай хай, а мб и сейчас ххай добавить, но как extra-hard coder») — `high` as the hard coder, `xhigh` beside it as the extra-hard one; the short name `xhard` and its operator-only route are the session's, [flagged below](#decisions) · **Base:** main `ee5c4d0` · **Version:** 1.10.0 (two more shipped roles are a minor; the gates program shifts one more minor)
+**Status:** approved by the operator 2026-11-10 in chat («давай хай, а мб и сейчас ххай добавить, но как extra-hard coder») — `high` as the hard coder, `xhigh` beside it as the extra-hard one; `xhard` follows a failed `hard` round automatically («можно авто ххард да, если хард не смог»); the short name `xhard` is the session's, [flagged below](#decisions) · **Base:** main `ee5c4d0` · **Version:** 1.10.0 (two more shipped roles are a minor; the gates program shifts one more minor)
 
 | Question | Where |
 |---|---|
@@ -65,13 +65,14 @@ Three sentences change in `rules/omelette-fleet.md`; the wording is the plan's t
 | Where | Today | Becomes |
 |---|---|---|
 | Operating model, "A coder gets…" | `omelette-coder-medium` when the plan prints the exact text, `omelette-coder` otherwise | adds: `omelette-coder-hard` (Fable-class, the session's own quota) only by name, with its reason in the ledger line — a task the plan buckets `hard` (refusal or parser logic, a sandbox profile, concurrency, a cause two attempts did not find), or the fresh coder after a second fix round failed on the same finding — one at a time, never a sweep |
-| same sentence | — | adds: `omelette-coder-xhard` only on the operator's word — the session proposes it with the reason and never dispatches it on its own |
-| Tester flow, step 6 | at most 2–3 rounds, then the operator | the last round before the operator may go to a fresh `omelette-coder-hard` (task, diff, findings) |
+| same sentence | — | adds: `omelette-coder-xhard` only after `omelette-coder-hard` failed a round on the same finding, or on the operator's word — never a first dispatch of the session's own |
+| Tester flow, step 6 | at most 2–3 rounds, then the operator | the last round before the operator may go to a fresh `omelette-coder-hard` (task, diff, findings); if that round fails on the same finding, one more to a fresh `omelette-coder-xhard`; then the operator |
 | Spawning sub-agents | "installs four definitions…" | six, with `omelette-coder-hard` (Fable 5.2, `effort: high`), `omelette-coder-xhard` (Fable 5.2, `effort: xhigh`) and `claude-fable-5-2` among the pinned ids |
 
 - **Why the escalation step costs nothing extra:** after a review past five minutes the coder's cache is gone and the rules already brief a fresh coder — the model changes on a dispatch that was cold anyway.
 - **`hard` is a third bucket**, beside the two the rules already name; the planner assigns it with a reason, the session may overrule it, both go in the ledger line as today. There is no `xhard` bucket: a plan never routes there.
-- **Why `xhard` waits for the operator:** a run is about 26 minutes and two thirds dearer than `hard` for a gain nobody has measured on this code, out of the quota the session itself runs on.
+- **The ladder is `omelette-coder` → `hard` → `xhard` → the operator**, one round on each Fable step. A task bucketed `hard` from the start goes to `xhard` when its fix round fails on the same finding. "Failed" is the tester's or the reviewer's finding still standing after the round, ruled by the session — not the coder's own report.
+- **Why `xhard` is never a first dispatch:** a run is about 26 minutes and two thirds dearer than `hard` for a gain nobody has measured on this code, out of the quota the session itself runs on. It is spent only where `hard` has already lost.
 - **When the Fable window is short**, the session says so and the operator picks: wait, or `omelette-coder`. The package reads no quota.
 - The planner, the tester and the reviewer keep their models.
 
@@ -129,11 +130,11 @@ Each pins a line of this spec; none reads source text.
 | A hard coder on Fable 5.2 at `high`; an extra-hard one at `xhigh` beside it | operator, 2026-11-10 |
 | Fable 5.1 replaced by 5.2; automatic model bumps later, after the guard debt | operator, 2026-11-10 |
 | The names `omelette-coder-hard` / `omelette-coder-xhard` (the operator said "hard coder" and "extra-hard coder"; `xhard` is the pane-width spelling) | session — operator may rename before T1 lands |
-| `xhard` runs only on the operator's word | session — operator may loosen it |
+| `xhard` runs automatically when `hard` failed a round on the same finding, otherwise only on the operator's word | operator, 2026-11-10 («можно авто ххард да, если хард не смог») |
 | 1.10.0 | session, by the minor-per-role rule |
 
 ## Done-when
 
 - `npm test` pristine, CI green on the pushed branch, three reviews ruled, merged, tagged `v1.10.0`, released, managed files re-rendered here.
 - Live gate: a probe sub-agent of each role — its transcript names `claude-fable-5-2`, the guard refuses its `git commit`; the vendor matrix row and the units-per-release line are in MEASUREMENTS.
-- **The measurement rides the next release:** the guard-debt patch's refusal-logic task goes to `omelette-coder-hard`, and MEASUREMENTS gets its row — tokens, wall clock, fix rounds, review findings — beside 1.9.0's heredoc task on `omelette-coder` (unmatched, N = 1, said so). An `xhard` row is added when the operator first calls one.
+- **The measurement rides the next release:** the guard-debt patch's refusal-logic task goes to `omelette-coder-hard`, and MEASUREMENTS gets its row — tokens, wall clock, fix rounds, review findings — beside 1.9.0's heredoc task on `omelette-coder` (unmatched, N = 1, said so). An `xhard` row is added the first time one runs.
