@@ -95,6 +95,8 @@ The full map of keys:
   "agents": {
     "coder":  { "model": "claude-opus-5-5", "effort": "xhigh" },
     "coderMedium": { "model": "claude-opus-5-5", "effort": "medium" },
+    "coderHard": { "model": "claude-fable-5-2", "effort": "high" },
+    "coderXhard": { "model": "claude-fable-5-2", "effort": "xhigh" },
     "tester": { "model": "claude-sonnet-5-5", "effort": "high", "maxTurns": 80 },
     "reviewer": { "model": "claude-opus-5-5", "effort": "xhigh" }
   },
@@ -142,7 +144,7 @@ Set `contract=full` if you would rather every session carry the whole text — a
 
 ### Agent settings
 
-The `agents` block is the other top-level one, and it configures something different from everything else in this file: the four Claude Code sub-agent definitions `omelette-fleet rules --agents` writes into `.claude/agents/`. No unit reads it, and no vendor CLI ever sees it.
+The `agents` block is the other top-level one, and it configures something different from everything else in this file: the six Claude Code sub-agent definitions `omelette-fleet rules --agents` writes into `.claude/agents/`. No unit reads it, and no vendor CLI ever sees it.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -150,15 +152,19 @@ The `agents` block is the other top-level one, and it configures something diffe
 | `agents.coder.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line — the only place a sub-agent's effort can be set |
 | `agents.coderMedium.model` | one printable line | `"claude-opus-5-5"` | The `model:` line of `omelette-coder-medium.md` — the coder's own template, rendered under a second name |
 | `agents.coderMedium.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"medium"` | Its `effort:` line. Medium because on a plan-driven task medium built the same behaviour as xhigh, which took 2.5× the cache reads and 3.6× the wall clock ([MEASUREMENTS](MEASUREMENTS.md#coder-effort-medium-high-xhigh-on-one-task), N = 1) |
+| `agents.coderHard.model` | one printable line | `"claude-fable-5-2"` | The `model:` line of `omelette-coder-hard.md` — the coder's own template under a third name |
+| `agents.coderHard.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"high"` | Its `effort:` line. High because Fable 5.2's lead over `omelette-coder` arrives by `high` on the Artificial Analysis index (62 against 57) and `xhigh` adds nothing on it ([MEASUREMENTS](MEASUREMENTS.md#the-hard-coders-fable-52-by-effort-on-a-public-index)) |
+| `agents.coderXhard.model` | one printable line | `"claude-fable-5-2"` | The `model:` line of `omelette-coder-xhard.md` — the same template under a fourth name |
+| `agents.coderXhard.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line — the rung after `hard`, for a finding a `hard` round left standing |
 | `agents.tester.model` | one printable line | `"claude-sonnet-5-5"` | The `model:` line of `omelette-tester.md` |
 | `agents.tester.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"high"` | Its `effort:` line — `high` plus the second pass the template carries, measured against one `xhigh` pass ([MEASUREMENTS](MEASUREMENTS.md#the-testers-effort-a-second-pass-and-an-advisor)) |
 | `agents.tester.maxTurns` | positive int | `80` | Its `maxTurns:` line — how many turns the tester gets before the harness stops it. It is honoured: the agent stops at the limit and the orchestrator is told it can continue it (measured 2026-09-06) |
 | `agents.reviewer.model` | one printable line | `"claude-opus-5-5"` | The `model:` line of `omelette-reviewer.md` |
 | `agents.reviewer.effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | `"xhigh"` | Its `effort:` line — review is judgement, the thing a release pays for |
 
-**Two coders, one text.** `omelette-coder-medium` is `omelette-coder`'s template rendered under a second name, so its instructions are the coder's word for word and only its `name:` and this block are its own. It ships *beside* the coder, not instead of it: one plan-driven trial suggests a medium bucket and does not license a new default, so `agents.coder.effort` stays `"xhigh"`. Which of the two a brief goes to is the rule in [ORCHESTRATION](ORCHESTRATION.md#what-each-agent-is-handed). `set` reads the role name without regard to case, so `agents.codermedium.effort` is the same key as `agents.coderMedium.effort`.
+**Four coders, one text.** `omelette-coder-medium`, `omelette-coder-hard` and `omelette-coder-xhard` are `omelette-coder`'s template rendered under other names, so their instructions are the coder's word for word and only each one's `name:` and its block are its own. They ship *beside* the coder, not instead of it: one plan-driven trial suggests a medium bucket and does not license a new default, so `agents.coder.effort` stays `"xhigh"`, and the two hard coders run on Fable 5.2 as named routes from the session's own quota, never as a default. Which one a brief goes to is the rule in [ORCHESTRATION](ORCHESTRATION.md#what-each-agent-is-handed). An install without Fable access never routes to the hard coders, or points `agents.coderHard.model` and `agents.coderXhard.model` elsewhere; `doctor` does not probe model access. `set` reads the role name without regard to case, so `agents.codermedium.effort` is the same key as `agents.coderMedium.effort`, and `agents.coderhard.effort` as `agents.coderHard.effort`.
 
-**Exact ids, not aliases.** Since 1.6.1 the model defaults are exact ids — `claude-opus-5-5` and `claude-sonnet-5-5` — because on 2026-09-30, on Claude Code 2.1.284, a sub-agent spawned with the `sonnet` alias ran on Sonnet 5 two days after 5.5 shipped, while `opus` resolved to Opus 5.5 ([ORCHESTRATION](ORCHESTRATION.md#spawning-sub-agents-model-and-effort)); `omelette-fleet set agents.tester.model=sonnet` still renders the alias for an install that prefers it. These are first-party ids: on a provider that names models differently (Bedrock, Vertex, Foundry), set `agents.<role>.model` to that provider's id or back to the alias — not tested here. Which effort each role runs at, and why: [ORCHESTRATION, Effort by role and model](ORCHESTRATION.md#effort-by-role-and-model).
+**Exact ids, not aliases.** Since 1.6.1 the model defaults are exact ids — `claude-opus-5-5` and `claude-sonnet-5-5`, and since 1.10.0 `claude-fable-5-2` for the two hard coders — because on 2026-09-30, on Claude Code 2.1.284, a sub-agent spawned with the `sonnet` alias ran on Sonnet 5 two days after 5.5 shipped, while `opus` resolved to Opus 5.5 ([ORCHESTRATION](ORCHESTRATION.md#spawning-sub-agents-model-and-effort)); `omelette-fleet set agents.tester.model=sonnet` still renders the alias for an install that prefers it. These are first-party ids: on a provider that names models differently (Bedrock, Vertex, Foundry), set `agents.<role>.model` to that provider's id or back to the alias — not tested here. Which effort each role runs at, and why: [ORCHESTRATION, Effort by role and model](ORCHESTRATION.md#effort-by-role-and-model).
 
 The templates carry `{{model}}`, `{{effort}}` and `{{maxTurns}}` where those values go, and **`rules --agents` renders from the config as it is at that moment**. So a change here does not reach a session until you re-render:
 

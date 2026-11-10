@@ -11,6 +11,7 @@ What has actually been measured on this project, how each number was taken, and 
 | What does a task lead cost against the session running the coder and tester itself? | [A task lead between the session and the coder](#a-task-lead-between-the-session-and-the-coder) |
 | Does a coder's effort level change what it builds? | [Coder effort: medium, high, xhigh on one task](#coder-effort-medium-high-xhigh-on-one-task) |
 | Does medium hold against xhigh when the coder has to judge, not follow? | [The matched repeat: medium and xhigh on a judgement-heavy task](#the-matched-repeat-medium-and-xhigh-on-a-judgement-heavy-task) |
+| Which effort should a Fable coder run at, and what does a step above the Opus coder cost? | [The hard coders: Fable 5.2 by effort on a public index](#the-hard-coders-fable-52-by-effort-on-a-public-index) |
 | Which effort should the tester run at, and does a second pass or an advisor buy more depth? | [The tester's effort, a second pass and an advisor](#the-testers-effort-a-second-pass-and-an-advisor) |
 | Where do sub-agent tokens go, by role? | [Sub-agents by role](#sub-agents-by-role) |
 | What fills a sub-agent's context — reading, its own output, the harness? | [Where a sub-agent's context goes](#where-a-sub-agents-context-goes) |
@@ -278,6 +279,22 @@ The release's largest security fix — the guard's git classifier, T4 of the P0 
 | B | `omelette-coder` · `claude-opus-5-5` · xhigh | 67 | 16.38M | 785k | 373k | 46.5 min round 1 + ~12 min round 2 | $7.28 | 2 | 39/39 | 2 narrow missed writes (a value-less global option before the subcommand; split quoting) and 1 maintainability, fixed in round 2 — shipped |
 
 Reading: the acceptance tests could not tell the arms apart (39/39 each); the blind review could; N = 1. Arm A cost a fifth of arm B and left a fail-open class in the guard; arm B cost 5.5× and shipped after one fix round. Bucket log: 21 plan-driven tasks ran at medium in one round each with 0 acceptance defects and 1 tester-found defect (a line-splitting disagreement the printed diff missed), 4 stopped for a ruling the plan lacked (all stale test pins), and docs went to Sonnet 5 times. The coder default does not move: the spec moves it only if the matched repeat holds for medium, and it did not — `omelette-coder` stays at xhigh, and `omelette-coder-medium` is the plan-driven bucket. The shipped reviewer's release review of 1.3.0 found 14 findings, all accepted (the reviewer's share of the 34 in the yield table's 1.3.0 row), against 1.2.0's three reviews together at 24 found / 17 accepted (that release did not record the Opus review's own share).
+
+## The hard coders: Fable 5.2 by effort on a public index
+
+Read off Artificial Analysis's model pages on 2026-11-10: the Intelligence Index per effort level — the general index, not a coding one, at API list prices, in one vendor's harness. Not measured on this project: the first real dispatch of `omelette-coder-hard` is that measurement, and it rides the next release.
+
+| Variant | Index | $ per task | Minutes per task |
+|---|---:|---:|---:|
+| Opus 5.5 `high` | 52 | 3.46 | 9.5 |
+| Opus 5.5 `xhigh` — `omelette-coder` | 57 | 6.05 | 16.2 |
+| Fable 5.2 `low` | 54 | 3.10 | 6.5 |
+| Fable 5.2 `medium` | 56 | 3.80 | 8.3 |
+| Fable 5.2 `high` — `omelette-coder-hard` | 62 | 9.08 | 17.4 |
+| Fable 5.2 `xhigh` — `omelette-coder-xhard` | 62 | 14.83 | 26.3 |
+| Fable 5.2 `max` | 65 | 26.54 | 44.6 |
+
+Reading: `high` is where Fable's lead over the Opus coder arrives (62 against 57). `xhigh` adds nothing on this index for 63% more per task and nine more minutes. Anthropic reports a slight gain on coding evaluations at `xhigh` for many more tokens, so it ships as the rung after `high`, never as a first dispatch. `medium` equals `omelette-coder` (56 against 57) at about 60% of its price: a faster same-grade coder, not a harder one, and it would move routine work into Fable's smaller pool, so it does not ship. One independent single-task test had Opus medium and high and Fable medium and high all pass 59/59, with Fable `high` at 4.5× Opus `high`'s cost: on a task the Opus coder already solves, Fable buys nothing.
 
 ## The tester's effort, a second pass and an advisor
 

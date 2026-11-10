@@ -32,7 +32,7 @@ ctx 31% · 5h 11% · 7d 71%
         └─────────────────┼─────────────────┘
              ┌────────────┴────────────┐
              │ ● orchestrator          │
-             │ fable-5-1 · high · 31%  │
+             │ fable-5-2 · high · 31%  │
              └────────────┬────────────┘
         ┌─────────────────┼─────────────────┐
 ┌───────┴───────┐ ┌───────┴───────┐ ┌───────┴───────┐
@@ -84,7 +84,7 @@ The pane keeps two counts per day in its own state, for the measurement and not 
 
 The mod hooks `tool.call` for `Bash`, `Write`, `Edit` and `NotebookEdit` and asks the rendered guard script about the call, before the engine runs it. It finds the script at `.claude/hooks/omelette-guard.mjs` in the session's directory, else in the user's `$HOME`, runs it with `node` (looked up in the absolute entries of `PATH` only) with the call as a `PreToolUse` event on stdin, and waits at most 2 s. Exit 2 refuses the call, the script's stderr — stripped of ANSI escapes and control characters, 2 KB at most — being the reason the model reads. **Any other outcome lets the call go on**: another exit code, a timeout, no rendered script (said once, `guard v2: no rendered script — omelette-fleet rules --hooks`), no `node` (said once). The mod has no rule of its own and refuses nothing the script does not.
 
-The call goes to the script for the main thread too, with `agent_type` only when the pane knows the loop's role (the script's curated-file rules apply to every caller, its git and fence rules to the four roles). When the settings hook is wired as well, the mod answers first and a refusal reaches the hook never, so a call both would refuse is refused once, with the same text. What the script refuses: [ORCHESTRATION, "Guard v2: the rules"](ORCHESTRATION.md#guard-v2-the-rules); why running a project's script is the designed answer: [SECURITY, "Wiring, and what the guard is not"](SECURITY.md#wiring-and-what-the-guard-is-not). The guard is containment for the sub-agent roles, not a security boundary. `doctor`'s `guard` line names which of the two deliveries is wired: [ORCHESTRATION, "The two deliveries"](ORCHESTRATION.md#the-two-deliveries).
+The call goes to the script for the main thread too, with `agent_type` only when the pane knows the loop's role (the script's curated-file rules apply to every caller, its git and fence rules to the six roles). When the settings hook is wired as well, the mod answers first and a refusal reaches the hook never, so a call both would refuse is refused once, with the same text. What the script refuses: [ORCHESTRATION, "Guard v2: the rules"](ORCHESTRATION.md#guard-v2-the-rules); why running a project's script is the designed answer: [SECURITY, "Wiring, and what the guard is not"](SECURITY.md#wiring-and-what-the-guard-is-not). The guard is containment for the sub-agent roles, not a security boundary. `doctor`'s `guard` line names which of the two deliveries is wired: [ORCHESTRATION, "The two deliveries"](ORCHESTRATION.md#the-two-deliveries).
 
 ## The handoff entry and the compaction skip
 
