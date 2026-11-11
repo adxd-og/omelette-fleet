@@ -73,10 +73,11 @@ const DUTIES = [
 // 1.8.0: 16 400 -> 18 850 — the review brief (the plan header, the touched record, BASE and base..HEAD, no pre-judging, what a coder fixes, the yield split), the handoff's six fields, tried:, the gate's HH:MM, the curated files and the guard's two deliveries (+2 512: 18 700 / 18 668), plus headroom.
 // 1.9.0: 18 850 -> 19 403 — the Mistral routing row and its "never a sole source" bullet (+410: 19 253 / 19 221), plus headroom.
 // 1.10.0: 19 403 -> 20 468 — the hard coders: the coder line's two Fable routes, the tester flow's third round to hard then one to xhard, then the operator, one fix round on each Fable rung and a new finding after it to the operator, the same round in the superpowers paragraph, six definitions with claude-fable-5-2, six guarded names (+1065: 20 318 / 20 286), plus headroom.
-test('the rendered rules file is at most 20 468 characters under either merge policy', () => {
+// 1.10.1: 20 468 -> 20 788 — three sentences (operator, 2026-11-10 and 11): a report with the same finding standing and a new one goes to the operator whole, no `xhard` round meanwhile; a release-review finding in code a Fable coder built or fixed goes to the operator; the branch is pushed and seen green on CI before the merge (+320: 20 638 / 20 606), plus headroom.
+test('the rendered rules file is at most 20 788 characters under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(text.length <= 20468, `${merge}: ${text.length} characters`);
+    assert.ok(text.length <= 20788, `${merge}: ${text.length} characters`);
   }
 });
 
@@ -172,6 +173,8 @@ for (const merge of ['session', 'pr']) {
  * merge sentence, so it is pinned with each policy's own.
  */
 const P1_BRANCH_LINE_HEAD = "- **Branch per feature; main is gated.** Work on a `feat/<name>` branch. The session commits each task on that branch once its review passes; no shipped sub-agent role commits — the coder reports its diff, the tester reports what it ran, the reviewer reports its findings, and the guard hook refuses any of their `git commit`. ";
+/** 1.10.1: the line's last sentence, after either policy's merge sentence (spec 2026-11-10 guard debt, "5. Rules text"; 1.9.0's first CI run on main was red). */
+const BRANCH_LINE_CI_1_10_1 = " Where the project has CI and pushing is the session's, the branch is pushed and seen green there before the merge.";
 const P1_NESTING_LINE = "- Sub-agents may nest up to three levels deep, but every shipped definition carries `disallowedTools: Agent`: they cannot spawn anything, so the **orchestrator** spawns the tester, never the coder.";
 // 1.3.0 P2: the fourth name, and only that (the session's ruling). 1.10.0: the fifth and sixth.
 const P1_GUARD_LINE = "Full text with the model catalogs and escalation rules: `docs/ORCHESTRATION.md` in the omelette-fleet package. The git guard and the compaction hook are one script: `omelette-fleet rules --hooks` writes it and prints the settings snippet that calls it, and omelette-fleet never edits your settings files itself. The guard covers `omelette-coder`, `omelette-coder-medium`, `omelette-coder-hard`, `omelette-coder-xhard`, `omelette-tester` and `omelette-reviewer` and names the one it caught.";
@@ -179,7 +182,7 @@ const P1_GUARD_LINE = "Full text with the model catalogs and escalation rules: `
 for (const merge of ['session', 'pr']) {
   test(`the three lines that counted two roles name every shipped role, each whole (${merge})`, () => {
     const text = renderRulesFile('1.2.0', { merge });
-    assert.ok(section(text, '## Operating model for the session').split('\n').includes(P1_BRANCH_LINE_HEAD + MERGE_SENTENCES[merge]), 'the branch-per-feature line');
+    assert.ok(section(text, '## Operating model for the session').split('\n').includes(P1_BRANCH_LINE_HEAD + MERGE_SENTENCES[merge] + BRANCH_LINE_CI_1_10_1), 'the branch-per-feature line');
     assert.ok(section(text, '## Spawning sub-agents: model and effort').split('\n').includes(P1_NESTING_LINE), 'the nesting line');
     assert.ok(section(text, '## Briefing a unit').split('\n').includes(P1_GUARD_LINE), 'the guard line');
     for (const stale of ['neither shipped sub-agent role', 'either one\'s', 'both shipped definitions', '**both** shipped roles']) {
@@ -238,7 +241,7 @@ const LINES_1_8_0 = {
     "- **When a coder or tester reports, open `.omelette/reports/touched-<role>-<id>.md`** — the files its loop wrote, recorded by the guard from its transcript when it stops — and compare it with the report's `## DIFF` by eye.",
     "- **Write BASE in the dispatch's ledger line before a coder starts** (the commit it builds on), and give a re-review the diff `base..HEAD`, never `HEAD~1`: a fix round can span several commits.",
     "- **A review brief never pre-judges:** no \"do not flag X\", no \"nothing above minor\" — the reviewer finds, the session rules.",
-    "- **A coder fixes `important` + `introduced` findings only:** a `nit` or a `pre-existing` one goes to the ledger as one line and to the release's whole-branch review, and a release's final review gets one fix dispatch for all its findings, not one per finding.",
+    "- **A coder fixes `important` + `introduced` findings only:** a `nit` or a `pre-existing` one goes to the ledger as one line and to the release's whole-branch review, and a release's final review gets one fix dispatch for all its findings, not one per finding — save a finding in code a Fable coder built or fixed, which goes to the operator (step 6).",
   ],
   '## Briefing a unit': [
     "The guard has two deliveries, the settings hook and the `omelette-fleet` mod: the mod answers first, a stale installed mod carries no guard, and `omelette-fleet doctor`'s guard line says which one is wired.",
@@ -266,7 +269,7 @@ for (const merge of ['session', 'pr']) {
 // ── 1.10.0: the hard coders' route in the tester flow ───────────────────────
 
 /** Tester flow step 6 with the two Fable rungs (spec 2026-11-10, "2. Routing", row 3), pinned whole. */
-const STEP_6_1_10_0 = "6. The ruling, with the findings, goes back to the coder (continue the same sub-agent where the harness supports resuming one, so its context is kept), **at most 2–3 rounds**, then escalate to the operator. After a review past five minutes the coder's cache is gone: brief a fresh coder (task, diff, findings) — a 30–50 k write, not a 310 k rewrite. After two rounds failed on the same finding the third may go to a fresh `omelette-coder-hard`; if the tester's or reviewer's finding still stands after it, one more to a fresh `omelette-coder-xhard`, then the operator. A Fable coder gets one fix round — also on a task it built: the same finding still standing goes to the next rung, a new finding to the operator.";
+const STEP_6_1_10_0 = "6. The ruling, with the findings, goes back to the coder (continue the same sub-agent where the harness supports resuming one, so its context is kept), **at most 2–3 rounds**, then escalate to the operator. After a review past five minutes the coder's cache is gone: brief a fresh coder (task, diff, findings) — a 30–50 k write, not a 310 k rewrite. After two rounds failed on the same finding the third may go to a fresh `omelette-coder-hard`; if the tester's or reviewer's finding still stands after it, one more to a fresh `omelette-coder-xhard`, then the operator. A Fable coder gets one fix round — also on a task it built: the same finding still standing goes to the next rung, a new finding to the operator. A report that holds both sends the whole task to the operator: no `xhard` round starts while a new finding waits.";
 
 test('1.10.0: the tester flow sends the third round to a fresh hard coder, then one more to the extra-hard one, then the operator, under either merge policy', () => {
   for (const merge of ['session', 'pr']) {
