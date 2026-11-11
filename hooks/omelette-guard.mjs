@@ -143,9 +143,10 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  *     the walk cannot place, and a glob where the subcommand goes (`git
  *     c?mmit`), while a braced subcommand is the one the shell makes of it
  *     (1.9.0 review fix round); a heredoc body is read as a command unless its
- *     line hands it to a program that runs nothing (NON_EXEC), and so is one
- *     inside a substitution whose output runs; a git that xargs hands its
- *     subcommand is unread.
+ *     line hands it to a program that runs nothing (NON_EXEC, without `awk`
+ *     and `sed` since 1.10.1), and so is one inside a substitution whose output
+ *     runs or on a line inside a group still open at its end (1.10.1); a git
+ *     that xargs hands its subcommand is unread.
  *
  * NOT a security boundary: this is containment for a delegated agent that is
  * asked to behave, so an argv-array spawn, a backslash-escaped `g\it`, an alias
