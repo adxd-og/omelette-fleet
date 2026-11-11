@@ -114,16 +114,20 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
 
 /**
  * What a guarded role is never allowed to run, whatever it was asked to do: a
- * `git` invocation that writes history, a ref, a stash or a worktree. Matched
+ * `git` invocation that writes history, a ref, a stash or a worktree, or writes
+ * git config (1.10.1). Matched
  * against real git syntax rather than its tidiest form, and read the way the
  * shell reads the command — words, separators, comments, heredocs,
  * redirections and command and process substitutions in one pass (tokenize),
  * and every `git … <subcommand>` in those words is found with its own
  * arguments (invocations). Then:
  *   - a subcommand in WRITES_HISTORY writes, whatever follows it;
- *   - `branch`, `checkout`, `switch`, `tag`, `rebase`, `reset` and
- *     `symbolic-ref` are read by their ARGUMENTS, because a flag or a name
- *     among them decides what they do — see WRITES_BY_ARGUMENTS below;
+ *   - `branch`, `checkout`, `switch`, `tag`, `rebase`, `reset`,
+ *     `symbolic-ref` and `config` are read by their ARGUMENTS, because a flag
+ *     or a name among them decides what they do — see WRITES_BY_ARGUMENTS below;
+ *   - the key of a `-c` or `--config-env` global option is read, and an
+ *     `alias`, `include` or `includeIf` key refuses the invocation (1.10.1,
+ *     configKeyVerdict): `git -c alias.ci=commit ci` commits;
  *   - and a longer word that merely starts like one of these is NOT it:
  *     `git commit-tree` writes an object and commits nothing, `merge-base`
  *     only computes, and `grep -c git commit.mjs` greps — SUBCOMMAND takes
@@ -144,7 +148,7 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  *
  * NOT a security boundary: this is containment for a delegated agent that is
  * asked to behave, so an argv-array spawn, a backslash-escaped `g\it`, an alias
- * or `$(which git)` are deliberately out of scope. See docs/SECURITY.md.
+ * already in the config or `$(which git)` are deliberately out of scope. See docs/SECURITY.md.
  */
 
 /**
@@ -153,6 +157,15 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  * read-only.
  */
 const WRITES_HISTORY = new Set(['commit', 'merge', 'cherry-pick', 'revert', 'am', 'pull', 'push', 'stash', 'worktree', 'update-ref']);
+
+/**
+ * WHAT A REFUSAL IS FOR: the class a verdict carries (forbidden), which picks the sentence the role reads (REFUSALS).
+ * HISTORY is a write to history, a ref, a stash or a worktree — the guard's sentence before 1.10.1; CONFIG is a `git
+ * config` write, or an alias or an include set with `-c` or `--config-env` (1.10.1). A class is a name here and one
+ * entry of REFUSALS.
+ */
+const HISTORY = 'history';
+const CONFIG = 'config';
 
 /**
  * The options git accepts BEFORE the subcommand, one word each. GLOBAL_VALUED
@@ -1431,6 +1444,68 @@ function xargsCommand(tokens, at) {
 }
 
 /**
+ * A word as the shell hands it to git — its quotes and escapes off, `$'…'` decoded — with each expansion or
+ * substitution in it, quoted or not, as one UNQUOTED_MARK: what it makes is not known. Where withExpansionsMarked keeps
+ * a single-quoted span that holds a `$` as one mark, this keeps its text, so `-c 'core.pager=less $X'` still names its
+ * key; and an escape outside quotes comes off, as the shell takes it off (`al\ias` is `alias`). Linear in the word.
+ */
+function shellWord(text) {
+  let out = '';
+  let double = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const end = expansionEnd(text, i);
+    if (end >= 0) { out += UNQUOTED_MARK; i = end; continue; }
+    if (c === '\\') {
+      const e = text[++i] ?? '';
+      // Inside double quotes a backslash escapes only these, and stays before anything else.
+      if (double && !'"\\$`\n'.includes(e)) out += c + e;
+      else if (e !== '\n') out += e;
+      continue;
+    }
+    if (c === '"') { double = !double; continue; }
+    if (double) { out += c; continue; }
+    if (c === "'") {
+      const close = text.indexOf("'", i + 1);
+      const stop = close < 0 ? text.length : close;
+      out += text.slice(i + 1, stop);
+      i = stop;
+    } else if (c === '$' && text[i + 1] === "'") {
+      const a = ansiC(text, i + 2);
+      out += a.value;
+      i = a.end;
+    } else if (c === '$' && text[i + 1] === '"') {
+      double = true;
+      i++;
+    } else out += c;
+  }
+  return out;
+}
+
+/** The config sections a `-c` or `--config-env` key may not name (1.10.1): an alias renames a subcommand the guard would refuse, an include brings a file of them. */
+const CONFIG_SECTIONS_REFUSED = new Set(['alias', 'include', 'includeif']);
+
+/**
+ * What a `-c` or `--config-env` value, as shellWord reads it, does to the invocation. Its key is the value up to its
+ * first `=` — all of it where there is none: `-c alias.x` gives the key no value, which an alias cannot run (`git -c
+ * alias.x x` answers `error: missing value for 'alias.x'` on 2.38.1 and 2.54), refused all the same — and its
+ * section the key up to its first `.`, compared case-insensitively, as git compares it (`-c Alias.CI=commit`). CONFIG
+ * for a section of CONFIG_SECTIONS_REFUSED; UNREAD_SUBCOMMAND when an expansion or a substitution stands in the key
+ * (`-c "$X"`, `-c "$K=v"`), which the shell may make any key; false for every other key — `core.hooksPath`,
+ * `core.pager` and `core.fsmonitor` included, which run a program for this one invocation, as the role could run it
+ * itself.
+ * `--config-env` ends its key at the LAST `=`, where `-c` ends it at the first: the section before the first `=` is
+ * the same, or git refuses the key as invalid.
+ */
+function configKeyVerdict(value) {
+  const eq = value.indexOf('=');
+  const key = eq < 0 ? value : value.slice(0, eq);
+  const dot = key.indexOf('.');
+  if (CONFIG_SECTIONS_REFUSED.has((dot < 0 ? key : key.slice(0, dot)).toLowerCase())) return CONFIG;
+  return key.includes(UNQUOTED_MARK) ? UNREAD_SUBCOMMAND : false;
+}
+
+/**
  * The subcommand of the `git` word at `at`, as `{ name, from }` — `from` is the
  * index its arguments start at — or null when the words after it name none.
  *
@@ -1467,12 +1542,25 @@ function xargsCommand(tokens, at) {
  * `-C$(pwd)`, `-C$DIR`, `--git-dir=$(pwd)/.git`) is read as a detached one is,
  * `unread` where it can vanish or split — and `-C"$x"` can: empty, it is `-C`,
  * which takes the next word.
+ *
+ * A `-c` OR `--config-env` KEY IS READ ON THE WAY (1.10.1, configKeyVerdict), detached or glued, and the verdict goes
+ * into `slot.config`, the first refusal standing: `git -c alias.ci=commit ci` commits. A detached value is read even
+ * where the run stops at it — `-c alias.x=!git` ends like a git word, and that alias runs `git` with the words behind
+ * it — and so is a glued option the run stops at (`--config-env=alias.x=git`). What the walk returns is unchanged.
  */
 function subcommandAt(tokens, at, slot = {}) {
   slot.at = -1;
+  slot.config = false;
   const holds = (k) => SUBSTITUTED.test(tokens[k].text);
   const braced = (k) => tokenBraces(tokens[k]) !== null;
   const quotedWhole = (k) => !withExpansionsMarked(tokens[k].text).includes(UNQUOTED_MARK);
+  const readKey = (value) => { slot.config ||= configKeyVerdict(value); };
+  // A `-c` or `--config-env=` option with its value glued on (`-calias.x=y`): the value is what follows the name.
+  const readGlued = (k) => {
+    const word = shellWord(tokens[k].text);
+    if (word.startsWith('--config-env=')) readKey(word.slice('--config-env='.length));
+    else if (word.startsWith('-c') && word.length > 2) readKey(word.slice(2));
+  };
   if (holds(at) || braced(at)) return { name: UNREAD_SUBCOMMAND, from: at + 1 };
   let j = at + 1;
   let fallback = -1;
@@ -1484,6 +1572,7 @@ function subcommandAt(tokens, at, slot = {}) {
       if (!GLUED_OPTION.test(glued)) return { name: UNREAD_SUBCOMMAND, from: j + 1 };
       // Only a value behind `=` is held whole by its quotes: `-C"$x"` empty is a bare `-C`.
       if (glued.includes(UNQUOTED_MARK) || !glued.startsWith('--')) unread = true;
+      readGlued(j);
       j++;
       continue;
     }
@@ -1493,6 +1582,7 @@ function subcommandAt(tokens, at, slot = {}) {
     const text = unquote(tokens[j].text);
     if (GLOBAL_VALUED.test(text) && !GLOBAL_NO_VALUE.has(text)) {
       j++;
+      if ((text === '-c' || text === '--config-env') && j < tokens.length && !tokens[j].separator) readKey(shellWord(tokens[j].text));
       // git takes the next word as the value whatever it opens with: `git -C -foo commit`.
       if (isWord()) {
         // A braced value may be several words, the subcommand among them: `git -C {.,commit} -m x`.
@@ -1500,9 +1590,12 @@ function subcommandAt(tokens, at, slot = {}) {
         else if (subcommandOf(tokens[j])) fallback = j;
         j++;
       }
-    } else if (GLOBAL_FLAG.test(text) || GLOBAL_NO_VALUE.has(text)) j++;
-    else break;
+    } else if (GLOBAL_FLAG.test(text) || GLOBAL_NO_VALUE.has(text)) {
+      readGlued(j);
+      j++;
+    } else break;
   }
+  if (j < tokens.length && !tokens[j].separator && isGitWord(tokens[j])) readGlued(j);
   if (isWord()) {
     slot.at = j;
     const read = slotSubcommand(tokens[j]);
@@ -1550,6 +1643,10 @@ function subcommandOf({ text }) {
  * up to the next separator, and 32 000 of them in one command ran V8 out of heap
  * before the refusal was written. One thing it costs: `git tag git tag -l`,
  * which git reads as one listing, is refused as a tag called `git`.
+ *
+ * A `-c` or `--config-env` key the walk refused (subcommandAt's `slot.config`)
+ * is a call of its own, `{ name: null, args: [], config }`: it names no
+ * subcommand and takes no argument, so every word is collected where it was.
  */
 function invocations(tokens) {
   const calls = [];
@@ -1565,6 +1662,7 @@ function invocations(tokens) {
     const slot = {};
     const atProgram = i === program || (fed !== null && fed.program === i);
     let found = isGitWord(tokens[i], atProgram) ? subcommandAt(tokens, i, slot) : null;
+    if (slot.config) calls.push({ name: null, args: [], config: slot.config });
     // The git xargs runs, with no subcommand of its own or the placeholder in its place: xargs hands it one.
     if (!found && fed && fed.program === i && isGitWord(tokens[i], true)
       && (slot.at < 0 || fed.replace.some((r) => unquote(tokens[slot.at].text).includes(r)))) {
@@ -1983,7 +2081,139 @@ function symbolicRefWrites(args) {
   return names >= 2;
 }
 
-/** The subcommands read by their arguments, and the question each one is asked. */
+/**
+ * `git config` words (1.10.1): the long options that write and those that only read, the long options that take a
+ * value — attached by `=` or as the next word — and the first positionals git 2.46 made subcommands. The short
+ * spellings are read in a cluster: `-e` writes, `-l` reads, `-f` takes a value.
+ */
+const CONFIG_WRITE_LONG = ['--add', '--edit', '--remove-section', '--rename-section', '--replace-all', '--unset', '--unset-all'];
+const CONFIG_READ_LONG = new Set(['--get', '--get-all', '--get-color', '--get-colorbool', '--get-regexp', '--get-urlmatch', '--list']);
+const CONFIG_VALUE_LONG = new Set(['--blob', '--comment', '--default', '--file', '--type', '--url', '--value']);
+const CONFIG_WRITE_FIRST = new Set(['edit', 'remove-section', 'rename-section', 'set', 'unset']);
+const CONFIG_READ_FIRST = new Set(['get', 'list']);
+
+/**
+ * …and a long option git reads as a write word: one of CONFIG_WRITE_LONG, or an abbreviation of one — git takes any
+ * unambiguous prefix, and on 2.38.1 `--unset-a` unset the key and `--ad` added one. Two letters and up behind the
+ * dashes, as rebaseTakesValue reads one; an ambiguous prefix (`--un`) is git's usage error, refused at no cost.
+ */
+const configWriteWord = (name) => name.length >= 4 && CONFIG_WRITE_LONG.some((word) => word.startsWith(name));
+
+/** Every long option the reader knows, in one list: git matches an abbreviation against all of them at once. */
+const CONFIG_LONG = [...CONFIG_WRITE_LONG, ...CONFIG_READ_LONG, ...CONFIG_VALUE_LONG];
+/** …and an abbreviation of two or more of them, a read mode or a valued option among them: git's usage error. */
+const CONFIG_AMBIGUOUS = Symbol('an abbreviation of two git config long options');
+
+/**
+ * The long option git takes `name` for (1.10.1 fix round): the name where it is one, otherwise the one it abbreviates
+ * — git takes any unambiguous prefix, valued options included: on 2.38.1 `git config --fil --get x.q v` wrote a file
+ * named `--get`, and on 2.54 `--comm --get user.name x` set the key with the comment `--get`. A prefix of write words
+ * alone is configWriteWord's, null below its length; a prefix of no option the reader knows is null; one of two or
+ * more is CONFIG_AMBIGUOUS — each such prefix abbreviates two of git's own options too, which git refuses as
+ * ambiguous (`--get-c`: `--get-color` or `--get-colorbool`; `--u`: `--unset` or `--unset-all`).
+ */
+function configLong(name) {
+  if (CONFIG_LONG.includes(name)) return name;
+  const matches = CONFIG_LONG.filter((word) => word.startsWith(name));
+  if (matches.every((word) => CONFIG_WRITE_LONG.includes(word))) return configWriteWord(name) ? matches[0] : null;
+  return matches.length === 1 ? matches[0] : CONFIG_AMBIGUOUS;
+}
+
+/**
+ * A negated read mode (1.10.1 fix round 2): `--no-` and a prefix of a read mode's name, ambiguous or not. On 2.38.1 it
+ * clears the mode and the positionals decide again — `git config --get --no-get a.b two` set a.b — so it counts as a
+ * write word; 2.54 refuses it as an unknown option. A negated valued option takes no value on either git
+ * (`--no-file a.b two` set a.b), and configLong knows no `--no-` name, so none is stepped over.
+ */
+const configNegatedRead = (name) => name.startsWith('--no-')
+  && [...CONFIG_READ_LONG].some((mode) => mode.startsWith(`--${name.slice(5)}`));
+
+/** A word the shell may split or drop: an expansion or substitution outside quotes, or one quotes do not keep whole. */
+const mayVanishOrSplit = (text) => SUBSTITUTED.test(text) && withExpansionsMarked(text).includes(UNQUOTED_MARK);
+
+/**
+ * Does this `git config` write (1.10.1)? Only a read passes.
+ *
+ * GIT READS OPTIONS UP TO THE FIRST POSITIONAL, OR A BARE `--`, AND NO FURTHER (1.10.1 fix round, measured on
+ * 2.38.1 and 2.54): from there every word is a positional, whatever it opens with — `git config core.fsmonitor
+ * /tmp/x.sh --get` sets the key, `--get` its value pattern, and `git config a.b --` sets `a.b` to `--`. So an option
+ * counts only before it. A write word there writes, and so does a first positional CONFIG_WRITE_FIRST names, and
+ * either wins over a read mode. Otherwise a read mode there — a long one, `-l`, or a first positional
+ * CONFIG_READ_FIRST names — reads, whatever positionals follow: they are its name and value pattern, so `git config
+ * --get a.b --unset` reads. Otherwise the positionals decide: none is git's usage, one is a key read, two or more set
+ * one. A long option is read by its prefix (configLong); an ambiguous one counts as a write word, and so does a
+ * negated read mode (configNegatedRead).
+ *
+ * AN ARGUMENT HOLDING A BRACE EXPANSION IS NOT READ, read mode or not: the shell may make an option of it or two
+ * positionals (`git config {--unset,a.b}`, `git config user.name{,}`).
+ *
+ * NOR IS AN EXPANSION AMONG THE OPTIONS (1.10.1 fix round 2): in an option word it may name the option (`--$X`,
+ * `"-$X"`), and in a value the shell may split or drop it may put positionals ahead of the mode — `git config --file
+ * $F --get`, with F `.git/config core.fsmonitor /tmp/x.sh`, sets the key. A value that stays one word passes, as
+ * subcommandAt reads a global one: detached and quoted whole (`--file "$F"`), or glued behind a long option's `=`
+ * (`--file="$F"`); `-f"$F"` does not, empty it is a bare `-f`. Behind the first positional an expansion is a name or
+ * a pattern, and only where the positionals decide is it read (`git config $X`).
+ *
+ * ONE READING SERVES GIT BEFORE AND AFTER 2.46, where `get`, `set`, `list`, `unset` and the rest became
+ * subcommands: before it `git config set x` sets a key named `set`, which has no section, and `git config get` reads
+ * one — both errors, so neither the refusal of the first nor the pass of the second costs a thing. After it `get` and
+ * `list` take no write option (2.54: `git config list --edit` is an unknown option).
+ *
+ * @returns {string|symbol|false} CONFIG; UNREAD_SUBCOMMAND for a braced argument, an expansion among the options, or
+ *   where the positionals decide and one may split or vanish — an unquoted expansion or substitution (`git config
+ *   $X`); false for a read
+ */
+function configWrites(args) {
+  let write = false;
+  let read = false;
+  let options = true; // until the first positional or a bare `--`
+  let takesValue = false;
+  const positionals = [];
+  for (const arg of args) {
+    if (tokenBraces(arg) !== null) return UNREAD_SUBCOMMAND;
+    const { text } = arg;
+    if (takesValue) { // the previous option's value
+      takesValue = false;
+      if (mayVanishOrSplit(text)) return UNREAD_SUBCOMMAND;
+      continue;
+    }
+    const token = unquote(text);
+    if (!options || token === '-' || !token.startsWith('-')) {
+      options = false;
+      positionals.push({ text, token });
+      continue;
+    }
+    if (token === '--') { options = false; continue; }
+    if (SUBSTITUTED.test(text)) {
+      const glued = withExpansionsMarked(text);
+      if (!GLUED_OPTION.test(glued) || !glued.startsWith('--') || glued.includes(UNQUOTED_MARK)) return UNREAD_SUBCOMMAND;
+    }
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      const name = eq < 0 ? token : token.slice(0, eq);
+      const option = configLong(name);
+      if (option === CONFIG_AMBIGUOUS || CONFIG_WRITE_LONG.includes(option) || configNegatedRead(name)) write = true;
+      else if (CONFIG_READ_LONG.has(option)) read = true;
+      else if (eq < 0 && CONFIG_VALUE_LONG.has(option)) takesValue = true;
+      continue;
+    }
+    for (let k = 1; k < token.length; k++) {
+      if (token[k] === 'e') write = true;
+      else if (token[k] === 'l') read = true;
+      else if (token[k] === 'f') { takesValue = k === token.length - 1; break; }
+    }
+  }
+  const first = positionals.length ? positionals[0].token : null;
+  if (write || CONFIG_WRITE_FIRST.has(first)) return CONFIG;
+  if (read || CONFIG_READ_FIRST.has(first)) return false;
+  if (positionals.some(({ text }) => mayVanishOrSplit(text))) return UNREAD_SUBCOMMAND;
+  return positionals.length >= 2 ? CONFIG : false;
+}
+
+/**
+ * The subcommands read by their arguments, and the question each one is asked. A reader answers false; true, a write
+ * of HISTORY; the class of another write (CONFIG); or UNREAD_SUBCOMMAND, where what decides it cannot be read.
+ */
 const WRITES_BY_ARGUMENTS = new Map([
   ['branch', branchWrites],
   ['checkout', createsBranch(CHECKOUT_CREATES)],
@@ -1992,6 +2222,7 @@ const WRITES_BY_ARGUMENTS = new Map([
   ['rebase', rebaseWrites],
   ['reset', resetWrites],
   ['symbolic-ref', symbolicRefWrites],
+  ['config', configWrites],
 ]);
 
 /**
@@ -2016,9 +2247,13 @@ const SUBCOMMAND_BRACED = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUM
  * refuses every rebase but an undo or explain word, and git takes that word
  * only as the whole argument list, so anything xargs appends turns it into a
  * usage error. Nor does `reset`: it writes only by one of three mode flags, and
- * what xargs hands it is paths or a commit.
+ * what xargs hands it is paths or a commit. `config` (1.10.1) writes by its
+ * positionals or a flag, as `tag` does. Each maps to the class of its write.
  */
-const FED_BY_XARGS_WRITES = new Set(['branch', 'checkout', 'switch', 'symbolic-ref', 'tag']);
+const FED_BY_XARGS_WRITES = new Map([
+  ['branch', HISTORY], ['checkout', HISTORY], ['switch', HISTORY], ['symbolic-ref', HISTORY], ['tag', HISTORY],
+  ['config', CONFIG],
+]);
 
 /**
  * How deep a quoted word or a command or process substitution is read again
@@ -2038,7 +2273,7 @@ const QUOTE_DEPTH = 4;
  * are quoted: `echo hi` six `$(…)` or six `sh -c "…"` levels down.
  */
 const pastDepth = (span) => {
-  if (/\bgit\b/.test(span)) return true;
+  if (/\bgit\b/.test(span)) return HISTORY;
   const joined = span.replace(/['"\\]/g, '');
   return /\bgit\b/.test(joined) || SUBSTITUTED.test(joined) || /[<>]\(/.test(joined) || braceScan(joined) !== null ? UNREAD_SUBCOMMAND : false;
 };
@@ -2057,24 +2292,45 @@ class TooWide extends TooDeep {}
  * 'git commit'`, `$(git commit)` and `>(git commit)` run it. Each step is a single pass and there are at most QUOTE_DEPTH + 1
  * levels, so a 10 KB command costs milliseconds and is never tiled.
  *
- * @returns {boolean|symbol} false when it may run; true when an invocation it
- *   read writes; UNREAD_SUBCOMMAND when none does but one has a substitution
- *   where git or its subcommand goes (subcommandAt) — its refusal says so
+ * A CLASS ADDED AFTER 1.10.0 NEVER CHANGES WHAT 1.10.0 PRINTED (1.10.1). A history write and an invocation read as
+ * unread are answered as they always were, level by level; the first write of a later class — CONFIG, and the
+ * UNREAD_SUBCOMMAND a reader or a `-c` key answers, which 1.10.0 passed — is kept in `later` and is the answer only
+ * where neither is found anywhere in the command: `git config --unset x; sh -c 'git commit'` still reads as a commit.
+ *
+ * @returns {string|symbol|false} false when it may run; the class of the write it read (HISTORY, CONFIG), whose
+ *   sentence REFUSALS holds; UNREAD_SUBCOMMAND when none does but one has a substitution where git or its subcommand
+ *   goes (subcommandAt), or a `git config` positional or `-c` key it cannot read — its refusal says so
  */
-const forbidden = (raw, depth = 0, fed = NOT_FED) => {
+const forbidden = (raw, depth = 0, fed = NOT_FED, later = { verdict: false }) => {
   if (depth === 0) braceSpent = { groups: 0, words: 0 };
   const { tokens, spans, feeds, exhausted } = tokenize(raw, fed);
   if (exhausted) throw new TooDeep();
   const calls = invocations(tokens);
-  if (calls.some(({ name, args, xargs }) => name !== UNREAD_SUBCOMMAND && (WRITES_HISTORY.has(name)
-    || (xargs && FED_BY_XARGS_WRITES.has(name)) || WRITES_BY_ARGUMENTS.get(name)(args)))) return true;
+  const writes = calls.map(writeOf);
+  if (writes.includes(HISTORY)) return HISTORY;
   if (calls.some(({ name, unread }) => unread || name === UNREAD_SUBCOMMAND)) return UNREAD_SUBCOMMAND;
+  later.verdict ||= writes.find(Boolean) ?? false;
   for (let k = 0; k < spans.length; k++) {
-    const verdict = depth < QUOTE_DEPTH ? forbidden(spans[k], depth + 1, feeds[k]) : pastDepth(spans[k]);
+    const verdict = depth < QUOTE_DEPTH ? forbidden(spans[k], depth + 1, feeds[k], later) : pastDepth(spans[k]);
     if (verdict) return verdict;
   }
-  return false;
+  return depth === 0 && later.verdict;
 };
+
+/**
+ * What one invocation writes: the class of its write, UNREAD_SUBCOMMAND where its reader cannot tell, or false. A
+ * refused `-c` key's call answers its own verdict (invocations); a WRITES_HISTORY subcommand writes HISTORY, one fed by
+ * xargs what FED_BY_XARGS_WRITES maps it to, and every other what its reader answers (WRITES_BY_ARGUMENTS), `true`
+ * being HISTORY.
+ */
+function writeOf({ name, args, xargs, config }) {
+  if (config) return config;
+  if (name === UNREAD_SUBCOMMAND) return false;
+  if (WRITES_HISTORY.has(name)) return HISTORY;
+  if (xargs && FED_BY_XARGS_WRITES.has(name)) return FED_BY_XARGS_WRITES.get(name);
+  const verdict = WRITES_BY_ARGUMENTS.get(name)(args);
+  return verdict === true ? HISTORY : verdict;
+}
 /**
  * THE ROLES THIS GUARD CONTAINS. Every shipped definition runs the same Bash
  * tool and the operating model asks the same thing of each — the coder reports
@@ -2107,6 +2363,9 @@ const forbidden = (raw, depth = 0, fed = NOT_FED) => {
 const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-coder-medium', 'omelette-coder-hard', 'omelette-coder-xhard', 'omelette-tester', 'omelette-reviewer']);
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
 const UNREAD_REFUSAL = (agent) => `${REFUSAL(agent)} — a command substitution where git or its subcommand goes is not read`;
+const CONFIG_REFUSAL = (agent) => `${agent} never writes git config (a git config write, or an alias or include set with -c or --config-env); report instead`;
+/** The sentence each verdict of forbidden is refused with: one entry per class, and the unread verdict's. */
+const REFUSALS = new Map([[HISTORY, REFUSAL], [CONFIG, CONFIG_REFUSAL], [UNREAD_SUBCOMMAND, UNREAD_REFUSAL]]);
 const TOO_DEEP = (agent) => `${agent}: command too deep to read (over 1 MiB of bracket scanning) — split it, or write the file with Write`;
 const TOO_WIDE = (agent) => `${agent}: command too wide to read (over 4096 brace groups or 65536 brace words) — split it, or write the file with Write`;
 const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';
@@ -2798,7 +3057,8 @@ async function preToolUse(event) {
     try {
       const verdict = forbidden(str(input.command));
       if (!verdict) return;
-      if (verdict === UNREAD_SUBCOMMAND) reason = UNREAD_REFUSAL(agent);
+      // A verdict REFUSALS does not name refuses all the same, with the history sentence: the guard fails closed.
+      reason = (REFUSALS.get(verdict) ?? REFUSAL)(agent);
     } catch (e) {
       if (!(e instanceof TooDeep)) throw e;
       reason = e instanceof TooWide ? TOO_WIDE(agent) : TOO_DEEP(agent);

@@ -45,6 +45,19 @@ function rows(list) {
   }
 }
 
+const CONFIG_REFUSAL = 'omelette-coder never writes git config (a git config write, or an alias or include set with -c or --config-env); report instead';
+const UNREAD_REFUSAL = `${REFUSAL} — a command substitution where git or its subcommand goes is not read`;
+
+/** Each row `[command, sentence]`: refused with that sentence, or passing in silence where it is ''. */
+function said(list) {
+  const path = guard();
+  for (const [command, sentence] of list) {
+    const r = fire(path, preToolUse(command));
+    assert.equal(r.code, sentence ? 2 : 0, `${JSON.stringify(command)} → ${r.code} ${r.err}`);
+    assert.equal(r.err.trim(), sentence, JSON.stringify(command));
+  }
+}
+
 /** `head <<'EOF'`, the git write as its body, the terminator, then `tail`. */
 const doc = (head, tail = '') => `${head} <<'EOF'\n${WRITE}\nEOF\n${tail}`;
 /** The same heredoc piped to a shell by the group `open` leaves open and `close` closes two lines later. */
@@ -219,5 +232,252 @@ test('open group: what a line of an open group prints is taken as run — a here
     // A quoted word of a program that runs nothing is text, whatever group it spells.
     [`echo '( cat <<EOF\n${WRITE}\nEOF\n) | sh'`, 0],
     [`bash -c '( cat <<EOF\n${WRITE}\nEOF\n) | sh'`, 2],
+  ]);
+});
+
+test('git config: a write word among the options, or a write subcommand first, writes — in either spelling, and over a read mode', () => {
+  said([
+    ['git config --add a.b c', CONFIG_REFUSAL],
+    ['git config --replace-all a.b c', CONFIG_REFUSAL],
+    ['git config --unset a.b', CONFIG_REFUSAL],
+    ['git config unset a.b', CONFIG_REFUSAL],
+    ['git config --unset-all a.b', CONFIG_REFUSAL],
+    ['git config --rename-section a b', CONFIG_REFUSAL],
+    ['git config rename-section a b', CONFIG_REFUSAL],
+    ['git config --remove-section a', CONFIG_REFUSAL],
+    ['git config remove-section a', CONFIG_REFUSAL],
+    ['git config -e', CONFIG_REFUSAL],
+    ['git config --edit', CONFIG_REFUSAL],
+    ['git config edit', CONFIG_REFUSAL],
+    ['git config -ze', CONFIG_REFUSAL],
+    ['git config set a.b c', CONFIG_REFUSAL],
+    ['git config --global set a.b c', CONFIG_REFUSAL],
+    ['git config a.b --unset', CONFIG_REFUSAL],
+    ['git config --get --unset a.b', CONFIG_REFUSAL],
+    ['git config --list --edit', CONFIG_REFUSAL],
+    ['git config "--unset" a.b', CONFIG_REFUSAL],
+    ['git config --get a.b', ''],
+    ['git config get a.b', ''],
+  ]);
+});
+
+test('git config: a read mode reads, in either spelling, whatever positionals follow it', () => {
+  said([
+    ['git config --get a.b', ''],
+    ['git config get a.b', ''],
+    ['git config --get a.b pattern', ''],
+    ['git config --get-all a.b', ''],
+    ['git config --get-regexp a', ''],
+    ['git config --get-urlmatch http https://x', ''],
+    ['git config --get-color color.diff.new red', ''],
+    ['git config --get-colorbool color.ui', ''],
+    ['git config -l', ''],
+    ['git config --list', ''],
+    ['git config list', ''],
+    ['git config --global --list --show-origin', ''],
+    ['git config --get a.b --unset-all', ''], // git 2.38.1: a read of a.b with the value pattern `--unset-all`
+  ]);
+});
+
+test('git config: options end at the first positional — a read mode or a write word behind it is a positional, and the count decides', () => {
+  said([
+    ['git config core.fsmonitor /tmp/x.sh --get', CONFIG_REFUSAL], // git 2.38.1: sets core.fsmonitor
+    ['git config a.b --get', CONFIG_REFUSAL], // …sets a.b to `--get`
+    ['git config a.b --unset', CONFIG_REFUSAL],
+    ['git config a.b -e', CONFIG_REFUSAL],
+    ['git config a.b --add z', CONFIG_REFUSAL],
+    ['git config a.b --', CONFIG_REFUSAL], // …sets a.b to `--`
+    ['git config --get a.b --unset', ''], // a read with a value pattern
+    ['git config --get a.b', ''],
+    ['git config get a.b --unset', ''],
+    ['git config set a.b --get', CONFIG_REFUSAL],
+  ]);
+});
+
+test('git config: a long option is read by its unambiguous prefix — an abbreviated valued option takes the next word', () => {
+  said([
+    ['git config --fil --get x.q v', CONFIG_REFUSAL], // git 2.38.1: `--file=--get`, and sets x.q in it
+    ['git config --comm --get user.name x', CONFIG_REFUSAL], // git 2.54: `--comment=--get`, and sets user.name
+    ['git config --fil f --get x.q', ''],
+    ['git config --file=f --get x.q', ''],
+    ['git config --fil=--get x.q', ''],
+    ['git config --get-c x', CONFIG_REFUSAL], // two read modes start so: git's usage error, refused
+    ['git config --u a.b', CONFIG_REFUSAL],
+  ]);
+});
+
+test('git config: a negated read mode among the options is a write word — a negated valued option takes no value, as git reads it', () => {
+  said([
+    ['git config --get --no-get a.b two', CONFIG_REFUSAL], // git 2.38.1: clears --get and sets a.b
+    ['git config -l --no-list a.b two', CONFIG_REFUSAL],
+    ['git config --get --no-get-all a.b', CONFIG_REFUSAL],
+    ['git config --get --no-li a.b', CONFIG_REFUSAL],
+    ['git config --get --no-g a.b', CONFIG_REFUSAL], // git's usage error: ambiguous
+    ['git config --get --no-includes a.b', ''],
+    ['git config --no-show-origin --get a.b', ''],
+    ['git config --no-file --get a.b', ''], // git 2.38.1 and 2.54: `--no-file` takes no value, and reads a.b
+    ['git config --no-type a.b two', CONFIG_REFUSAL], // …and `--no-type` none: a.b is set
+    ['git config --get a.b --no-get', ''], // behind the name it is a value pattern
+  ]);
+});
+
+test('git config: an expansion among the options is refused unread — in an option word, or a value the shell may split or drop', () => {
+  said([
+    ['git config --file $F --get a.b', UNREAD_REFUSAL], // F='.git/config core.fsmonitor /tmp/x.sh' sets the key
+    ['git config -f $F -l', UNREAD_REFUSAL],
+    ['git config --type $T --get a.b', UNREAD_REFUSAL],
+    ['git config --file $(pwd)/f --get a.b', UNREAD_REFUSAL],
+    ['git config --$X a.b', UNREAD_REFUSAL],
+    ['git config "-$X" a.b', UNREAD_REFUSAL],
+    ['git config -$X --get a.b', UNREAD_REFUSAL],
+    ['git config --file=$F --get a.b', UNREAD_REFUSAL],
+    ['git config -f"$F" --get a.b', UNREAD_REFUSAL], // empty, it is a bare `-f` taking `--get`
+    ['git config --file "$F" --get a.b', ''],
+    ['git config --file="$F" --get a.b', ''],
+    ['git config -f "$HOME/.gitconfig" -l', ''],
+    ["git config --file '$F' --get a.b", ''],
+    ['git config --get $KEY', ''],
+    ['git config --get "remote.$r.url"', ''],
+    ['git config $X', UNREAD_REFUSAL],
+  ]);
+});
+
+test('git config: an argument holding a brace expansion is refused unread, read mode or not; a quoted brace is text', () => {
+  said([
+    ['git config user.name{,}', UNREAD_REFUSAL], // the shell makes it two positionals
+    ['git config {--unset,a.b}', UNREAD_REFUSAL], // …or an option and a name
+    ['git config --get user.{name,email}', UNREAD_REFUSAL],
+    ["git config --get 'user.{name}'", ''],
+    ["git config --get 'user.{name,email}'", ''],
+    ['git config --get user.name', ''],
+  ]);
+});
+
+test('git config: the bare form reads one key and sets one with a value; with nothing at all it prints usage', () => {
+  said([
+    ['git config user.name', ''],
+    ['git config user.name x', CONFIG_REFUSAL],
+    ['git config user.name x pattern', CONFIG_REFUSAL],
+    ['git config --global user.name', ''],
+    ['git config --global user.name x', CONFIG_REFUSAL],
+    ['git config core.fsmonitor /tmp/x.sh', CONFIG_REFUSAL],
+    ['git config --global core.hooksPath /tmp/h', CONFIG_REFUSAL],
+    ['git config alias.ci commit', CONFIG_REFUSAL],
+    ['git config', ''],
+    ['git config -- a.b', ''],
+    ['git config -- a.b c', CONFIG_REFUSAL],
+  ]);
+});
+
+test('git config: a valued option takes its value attached or as the next word, and the value is no positional', () => {
+  const valued = ['-f', '--file', '--blob', '--type', '--default', '--value', '--url', '--comment'];
+  said([
+    ...valued.map((option) => [`git config ${option} set user.name`, '']),
+    ...valued.map((option) => [`git config ${option} v user.name x`, CONFIG_REFUSAL]),
+    ...valued.filter((option) => option.startsWith('--')).map((option) => [`git config ${option}=set user.name`, '']),
+    ...valued.filter((option) => option.startsWith('--')).map((option) => [`git config ${option}=v user.name x`, CONFIG_REFUSAL]),
+    ['git config -fset user.name', ''],
+    ['git config -zf set user.name', ''],
+    ['git config --default --unset --get a.b', ''],
+  ]);
+});
+
+test('git config: where the positionals decide, one the shell may split or drop is refused unread; a read mode still reads', () => {
+  said([
+    ['git config $X', UNREAD_REFUSAL],
+    ['git config user.name $(whoami)', UNREAD_REFUSAL],
+    ['git config user.name "$X"', CONFIG_REFUSAL],
+    ['git config --get $X', ''],
+    ['git config get $X', ''],
+  ]);
+});
+
+test('git config: fed by xargs, it writes whatever the arguments xargs hands it', () => {
+  said([
+    ['xargs git config', CONFIG_REFUSAL],
+    ['xargs git config --get', CONFIG_REFUSAL],
+    ['xargs git log', ''],
+  ]);
+});
+
+test('git config: an abbreviated write word is the write word — git 2.38.1 reads `--unset-a` as `--unset-all` and `--ad` as `--add`', () => {
+  said([
+    ['git config --unset-a a.b', CONFIG_REFUSAL],
+    ['git config --ad a.b c', CONFIG_REFUSAL],
+    ['git config --ed', CONFIG_REFUSAL],
+    ['git config --rem a', CONFIG_REFUSAL],
+    ['git config --get-a a.b', ''],
+  ]);
+});
+
+test('git -c / --config-env: a key in alias, include or includeIf is refused wherever it sits — any other key passes as it did', () => {
+  said([
+    ['git -c alias.ci=commit ci -m x', CONFIG_REFUSAL],
+    ['git -c Alias.CI=commit ci -m x', CONFIG_REFUSAL],
+    ['git -c aliases.ci=commit ci -m x', ''],
+    ['git -c alias.x=y status', CONFIG_REFUSAL],
+    ['git -c user.x=y -c alias.x=y status', CONFIG_REFUSAL],
+    ['git -calias.x=y status', CONFIG_REFUSAL],
+    ['git -cuser.name=y status', ''],
+    ['git -c "alias.x=y" status', CONFIG_REFUSAL],
+    ["git -c 'ALIAS.x=y' status", CONFIG_REFUSAL],
+    ['git -c "user.name=A B" log', ''],
+    ['git -c alias.x status', CONFIG_REFUSAL],
+    ['git -c core.bare status', ''],
+    ['git -c include.path=f status', CONFIG_REFUSAL],
+    ['git -c INCLUDE.Path=f status', CONFIG_REFUSAL],
+    ['git -c includeIf."gitdir:x".path=f status', CONFIG_REFUSAL],
+    ["git -c 'includeIf.gitdir:x.path=f' status", CONFIG_REFUSAL],
+    ['git -c user.include=f status', ''],
+    ['git --config-env=alias.ci=X ci', CONFIG_REFUSAL],
+    ['git --config-env alias.ci=X ci', CONFIG_REFUSAL],
+    ['git --config-env=user.name=N log', ''],
+    ['git --config-env user.name=N log', ''],
+    ['git -c user.name=a log', ''],
+    ['git -c core.pager=cat log', ''],
+    ['git -c core.hooksPath=/tmp/h status', ''],
+    ['git -c core.fsmonitor=/tmp/x status', ''],
+    ['git -c core.sshCommand=ssh status', ''],
+    ['git -c core.quotepath=off diff', ''],
+    ['git -c color.ui=never status', ''],
+  ]);
+});
+
+test('git -c / --config-env: a key the shell may make anything of is refused unread — an expansion after the `=` is a value', () => {
+  said([
+    ['git -c "$X" status', UNREAD_REFUSAL],
+    ['git -c $X status', UNREAD_REFUSAL],
+    ['git -c "$K=v" status', UNREAD_REFUSAL],
+    ['git -c "$(printf alias.x)=y" status', UNREAD_REFUSAL],
+    ['git -c "user.$K=v" status', UNREAD_REFUSAL],
+    ['git --config-env="$K=V" status', UNREAD_REFUSAL],
+    ['git -c user.name="$N" log', ''],
+    ['git -c "user.name=$N" log', ''],
+    ["git -c 'core.pager=less $X' log", ''],
+    ['git -C "$DIR" status', ''],
+  ]);
+});
+
+test('git -c: the key is read as the shell hands it to git — past a value that ends in `git`, and with its escapes off', () => {
+  said([
+    ['git -c alias.x=!git x commit -m y', CONFIG_REFUSAL], // the alias runs `git commit -m y`
+    ['git -c user.name=git log', ''],
+    ['git -c al\\ias.x=y status', CONFIG_REFUSAL],
+    ['git -c us\\er.name=y status', ''],
+  ]);
+});
+
+test('the refusal names the role and the class; a command 1.10.0 refused prints what it printed', () => {
+  for (const agent of ['omelette-tester', 'omelette-reviewer']) {
+    const r = fire(guard(), { ...preToolUse('git config --unset a.b'), agent_type: agent });
+    assert.equal(r.code, 2, r.err);
+    assert.match(r.err.trim(), new RegExp(`^${agent} never writes git config\\b.*; report instead$`));
+  }
+  said([
+    ['git commit -m x', REFUSAL],
+    ['git -c alias.x=y commit -m x', REFUSAL],
+    ["git config --unset a.b; sh -c 'git commit -m x'", REFUSAL],
+    ["git -c 'alias.x=!git commit' x", REFUSAL], // the quoted value is read again, and runs `git commit`
+    ['git config --unset a.b; git -C $(pwd) status', UNREAD_REFUSAL],
   ]);
 });
