@@ -528,3 +528,141 @@ test('checkout: a bracket glob is a pathspec like `*` and `?`', () => {
     ['git checkout feat/x', ''],
   ]);
 });
+
+// 1.10.1 fix round, second set (clean-context tester): forms the release-review fixes imply and the first set leaves unpinned.
+
+test('checkout: a word with two slashes in a row is no ref name — git restores the path, so it is refused as one', () => {
+  // Measured on git 2.38.1 and 2.54.0: `git checkout src//a.txt` rewrites the modified tracked src/a.txt ("Updated 1 path
+  // from the index"), and `git check-ref-format --branch src//a.txt` refuses the name. The release fix reads a word "no
+  // ref name can be" at the dot, `.lock`, blank, backslash and final-dot rules; this is the same class (check-ref-format
+  // rule 6), unlisted. A defect found by this tester, not a line of the spec's list.
+  said([
+    ['git checkout src//a.txt', TREE_SENTENCE()],
+    ['git checkout src///a.txt', TREE_SENTENCE()],
+    ['git checkout a//b', TREE_SENTENCE()],
+    ['git checkout -q src//a.txt', TREE_SENTENCE()],
+    ['git checkout src/a.txt', ''], // a name a branch could have (D2)
+    ['git checkout feat/x', ''],
+  ]);
+});
+
+test('checkout: revision syntax is taken off before the path rules — what its braces hold is no component, what stands outside them still is', () => {
+  // The braces of `@{…}` and `^{…}` may hold a dot, `..`, `.lock`, a final dot or a backslash (a date, a log message);
+  // outside them every rule of the word still applies, whichever side the braces stand on.
+  said([
+    ["git checkout 'HEAD^{/a..b}'", ''],
+    ["git checkout 'HEAD^{/.hidden}'", ''],
+    ["git checkout 'HEAD^{/x.lock}'", ''],
+    ["git checkout 'HEAD^{/end.}'", ''],
+    ["git checkout 'HEAD^{/a....b}'", ''],
+    ["git checkout 'HEAD^{/a\\b}'", ''],
+    ['git checkout HEAD@{2.days.ago}', ''],
+    ['git checkout main@{upstream}', ''],
+    ["git checkout 'src/.env@{1}'", TREE_SENTENCE()],
+    ["git checkout 'x.lock^{/a b}'", TREE_SENTENCE()],
+    ["git checkout 'a..b^{/ok}'", TREE_SENTENCE()],
+    ["git checkout 'a b^{/ok}'", TREE_SENTENCE()],
+    ["git checkout 'HEAD^{/a b}.lock'", TREE_SENTENCE()],
+    ["git checkout 'HEAD^{/a b}/.x'", TREE_SENTENCE()],
+    ["git checkout 'HEAD^{/a b}..x'", TREE_SENTENCE()],
+    ["git checkout 'HEAD^{/a b}.'", TREE_SENTENCE()],
+  ]);
+});
+
+test('checkout: the path rules hold with options around the word, behind wrappers and in a quoted re-read; a name only like a lock or a version passes', () => {
+  said([
+    ['git checkout -q src/.env', TREE_SENTENCE()],
+    ['git checkout --detach x.lock', TREE_SENTENCE()],
+    ['git checkout -m yarn.lock', TREE_SENTENCE()],
+    ['git checkout --conflict merge src/.env', TREE_SENTENCE()],
+    ['git checkout --no-guess yarn.lock', TREE_SENTENCE()],
+    ['git checkout --end-of-options src/.env', TREE_SENTENCE()],
+    ['git -C sub checkout src/.env', TREE_SENTENCE()],
+    ['env git checkout yarn.lock', TREE_SENTENCE()],
+    ['time git checkout x.lock', TREE_SENTENCE()],
+    ["sh -c 'git checkout src/.env'", TREE_SENTENCE()],
+    ['bash -c "git checkout yarn.lock"', TREE_SENTENCE()],
+    ['git checkout "yarn".lock', TREE_SENTENCE()], // the shell joins the pieces
+    ['git checkout y\\arn.lock', TREE_SENTENCE()],
+    ["git checkout $'src/.env'", TREE_SENTENCE()],
+    ["git checkout $'a\\x20b'", TREE_SENTENCE()],
+    ['git checkout x.lock; git status', TREE_SENTENCE()],
+    ['git checkout x.lock.bak', ''], // ends with .bak: a legal branch name on both gits
+    ['git checkout a.lockfile', ''],
+    ['git checkout x.LOCK', ''], // git compares ".lock" in lower case
+    ['git checkout my.lock.branch', ''],
+    ['git checkout user/jane.doe/fix-1.2', ''],
+    ['git checkout v1.2.3-rc.1+build.5', ''],
+    ['git switch src/.env', ''], // switch restores no path
+    ['git switch --detach x.lock', ''],
+  ]);
+});
+
+test('restore and clean: a glob glued to an option or in an earlier option is refused; a quoted or escaped one, and any behind `--`, is not', () => {
+  said([
+    ['git restore --staged --source=HEAD~* f', TREE_SENTENCE()],
+    ['git restore --staged -sHEAD* f', TREE_SENTENCE()],
+    ['git restore --stag* f', TREE_SENTENCE()],
+    ['git restore --staged f* -- x', TREE_SENTENCE()],
+    ['git restore --staged f*.md --end-of-options x', TREE_SENTENCE()],
+    ['git clean -n --exclude=*.o', TREE_SENTENCE()],
+    ['git clean -n -e*.o', TREE_SENTENCE()],
+    ['git clean --dry-run [a-z]', TREE_SENTENCE()],
+    ["git restore --staged --source=HEAD~'*' f", ''],
+    ['git restore --staged --source="HEAD*" f', ''],
+    ["git restore --staged $'f\\x2a'", ''], // ANSI-C quoting: a literal `*`
+    ['git restore --staged f\\[a]', ''],
+    ['git restore --staged f[a', ''], // no closing bracket: the shell keeps the word
+    ['git restore --staged -- f* --worktree', ''], // behind `--` every word is a path
+    ['git restore --staged --end-of-options f* --worktree', ''],
+    ['git restore --staged f -- x*', ''],
+    ["git clean -n --exclude='*.o'", ''],
+    ["git clean -n -e'*.o'", ''],
+    ['git clean -nd -- *', ''],
+    ['git clean -n -- -f *', ''],
+  ]);
+});
+
+test('open group: `function NAME` opens its group behind a prefix that leads a command, whatever the NAME is spelled with', () => {
+  // bash 4 and later: the compound command behind `function NAME` is the function's body. Not run under such a bash here.
+  const loop = (head) => `${head} while true\ndo cat <<'EOF'\n${WRITE}\nEOF\nbreak; done\nf | sh`;
+  rows([
+    [loop('time function f'), 2],
+    [loop('! function f'), 2],
+    [loop('true && function f'), 2],
+    [loop('echo x; function f'), 2],
+    [loop('if true; then function f'), 2],
+    [loop('function f\u0009'), 2], // a tab between the NAME and the word
+    [loop('function  f  '), 2],
+    [loop('function f$(echo)'), 2], // a NAME that holds a substitution is still one word
+    [loop('function ${f}'), 2],
+    [loop('function "f g"'), 2],
+    [loop('function f; function g'), 2],
+    [`function f while true\ndo cat <<'EOF'\necho hello\nEOF\nbreak; done\nf | sh`, 0], // a harmless body stays text
+  ]);
+});
+
+// 1.10.1 fix round, second pass (mutation check): rows for the mutants the first two sets let through.
+
+test('restore and clean: a `]` that stands before every `[` closes nothing — the word is kept as written, no glob', () => {
+  // The shell needs a `]` AFTER the `[` to read a bracket expression; "brackets without a closer" pass (requirement 2).
+  said([
+    ['git restore --staged ]x[', ''],
+    ['git restore --staged ][', ''],
+    ['git clean -n a]b[c', ''],
+    ['git restore --staged [x]', TREE_SENTENCE()],
+    ['git restore --staged ]x[y]', TREE_SENTENCE()], // a closer after the second `[`
+    ['git clean -n []x', TREE_SENTENCE()],
+  ]);
+});
+
+test('git config: every short letter but the six it knows (e f h l t z) is a write word in a cluster or alone — none is read as inert or valued', () => {
+  // `git config -h` lists them on 2.38.1; a one-letter probe of a-z, A-Z on 2.38.1 and 2.54 finds exactly e, f, h, l, t, z.
+  const known = new Set([...'efhltz']);
+  const rows = [];
+  for (const c of 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+    if (known.has(c)) continue;
+    rows.push([`git config -${c} --get a.b`, CONFIG_SENTENCE()], [`git config -l${c} a.b`, CONFIG_SENTENCE()]);
+  }
+  said(rows);
+});
