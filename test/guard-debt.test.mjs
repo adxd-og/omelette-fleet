@@ -788,6 +788,43 @@ test('restore and clean: the one passing form is read from plain words only — 
   ]);
 });
 
+test('restore and clean: an unquoted glob before `--` or `--end-of-options` may expand to an option — refused; behind either it is a pathspec', () => {
+  // Measured on git 2.38.1 and 2.54.0: `restore --staged --worktree f` overwrites f and `clean -n --no-dry-run -f`
+  // deletes, while behind `--end-of-options` both words are pathspecs and nothing is lost.
+  said([
+    ['git restore --staged *', TREE_REFUSAL], // a file `--worktree` planted
+    ['git restore --staged f?', TREE_REFUSAL],
+    ['git restore --staged f[12]', TREE_REFUSAL],
+    ['git restore --staged --wor*', TREE_REFUSAL],
+    ['git restore --staged -s HEAD* f', TREE_REFUSAL], // a value the shell may make several words
+    ['git restore --staged -- *', ''],
+    ['git restore --staged -- *.md', ''],
+    ['git restore --staged --end-of-options *', ''],
+    ["git restore --staged '*.md'", ''], // git reads the pathspec itself
+    ['git restore --staged \\*', ''],
+    ['git restore --staged f[', ''], // no closing bracket: the shell keeps the word
+    ['git clean -n *', TREE_REFUSAL], // a file `--no-dry-run` planted
+    ['git clean -n -e *', TREE_REFUSAL],
+    ['git clean -n d?', TREE_REFUSAL],
+    ['git clean -n -- *', ''],
+    ['git clean -n --end-of-options *', ''],
+    ["git clean -n -e '*.log'", ''],
+  ]);
+});
+
+test('restore and clean: an argument of 1 MiB of `[` with no `]` is read for a glob in linear time', () => {
+  // Budget at three times the local time (532 ms), the fastest of up to three runs: looking for a `]` behind each `[`
+  // took 13.3 s.
+  const path = guard();
+  let fastest = Infinity;
+  for (let k = 0; k < 3 && fastest >= 1600; k++) {
+    const r = fire(path, preToolUse(`git restore --staged ${'['.repeat(1 << 20)}`));
+    assert.equal(r.code, 0, r.err);
+    fastest = Math.min(fastest, r.ms);
+  }
+  assert.ok(fastest < 1600, `1 MiB of [ took ${fastest.toFixed(0)} ms`);
+});
+
 test('checkout and switch: a brace, or an expansion in an option word or a value the shell may split, is refused unread', () => {
   said([
     ['git checkout -{f,q} main', UNREAD_REFUSAL],

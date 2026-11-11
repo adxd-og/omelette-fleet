@@ -1340,13 +1340,14 @@ function spliced(text, from, to, groups) {
  * character itself (`a.b[`, the test builtin's `[`).
  */
 function globbed(text, closed = false) {
+  const lastClose = closed ? text.lastIndexOf(']') : -1; // a `]` after a `[` is one before this: one scan, not one per `[`
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (c === '\\') { i++; continue; }
     if (c === '$' && text[i + 1] === "'") { i = ansiC(text, i + 2).end; continue; }
     if (c === "'") { const e = text.indexOf("'", i + 1); if (e < 0) return false; i = e; continue; }
     if (c === '"') { for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++; continue; }
-    if (c === '?' || c === '*' || (c === '[' && (!closed || text.indexOf(']', i + 1) > i))) return true;
+    if (c === '?' || c === '*' || (c === '[' && (!closed || lastClose > i))) return true;
   }
   return false;
 }
@@ -2294,13 +2295,18 @@ function gitLong(name, longs) {
  * `expanded`, an expansion or a substitution in an option word — save a long option's value glued behind `=` and
  * quoted whole (`--source="$R"`), as configWrites reads one — or in an option's value the shell may split or drop
  * (`--conflict $S`); `expandedPositional`, one in a positional before `--` or `--end-of-options`, which the shell may
- * make an option (`git restore --staged "$F"`, F `--worktree`).
+ * make an option (`git restore --staged "$F"`, F `--worktree`); `globbed` (1.10.1 release fix), an argument before
+ * either holding an unquoted glob, which the shell may make an option too (`git restore --staged *`, a file
+ * `--worktree` planted).
  *
  * @returns {object} `options` in order — a long one as gitLong reads it, a short one as its letter; `positionals` as
- *   shellWord reads them; `paths`, the count behind `--`; and the three notes `braced`, `expanded`, `expandedPositional`
+ *   shellWord reads them; `paths`, the count behind `--`; and the four notes `braced`, `expanded`,
+ *   `expandedPositional`, `globbed`
  */
 function gitArguments(args, { longs, valued, shortValued }) {
-  const read = { options: [], positionals: [], paths: 0, braced: false, expanded: false, expandedPositional: false };
+  const read = {
+    options: [], positionals: [], paths: 0, braced: false, expanded: false, expandedPositional: false, globbed: false,
+  };
   let separated = false; // past a bare `--`
   let ended = false; //     past `--end-of-options`
   let takesValue = false;
@@ -2308,6 +2314,7 @@ function gitArguments(args, { longs, valued, shortValued }) {
     if (tokenBraces(arg) !== null) read.braced = true;
     const { text } = arg;
     if (separated) { read.paths++; continue; }
+    if (!ended && globbed(text, true)) read.globbed = true;
     if (takesValue) { // the previous option's value
       takesValue = false;
       if (mayVanishOrSplit(text)) read.expanded = true;
@@ -2419,11 +2426,14 @@ function switchDiscards(args) {
  * restores the index only, and the file stays as `git status` shows it — with `-p` or `--source` too. A negated
  * `--staged` refuses and an ambiguous option refuses; a negated `--worktree` alone changes nothing (fail-closed:
  * `--staged --worktree --no-worktree`, which git reads as the index only, is refused). The one passing form is read
- * from plain words only: an argument holding a brace expansion, or an expansion before `--`, refuses.
+ * from words the shell hands over as they stand — a plain word, an option's value quoted whole (`-s "$R"`,
+ * `--source="$R"`), and anything behind `--`, where every word is a path (`-- "$F"`, `-- *.md`): an argument holding a
+ * brace expansion refuses, and so does an expansion or an unquoted glob before `--` or `--end-of-options` (gitArguments'
+ * notes).
  */
 function restoreDiscards(args) {
   const read = gitArguments(args, RESTORE_ARGUMENTS);
-  if (read.braced || read.expanded || read.expandedPositional) return TREE;
+  if (read.braced || read.expanded || read.expandedPositional || read.globbed) return TREE;
   let staged = false;
   for (const option of read.options) {
     if (option === 'S' || (option?.name === 'staged' && !option.negated)) staged = true;
@@ -2436,11 +2446,13 @@ function restoreDiscards(args) {
  * Does this `git clean` delete (1.10.1)? In every form but `-n`/`--dry-run`, which wins over `-f` and `-i` on both
  * gits. No `-n` refuses whatever else stands there: `git -c clean.requireForce=false clean` deletes with no flag at
  * all. A negated `--dry-run` refuses (git: `-n --no-dry-run -f` deletes), and so does an ambiguous option; the one
- * passing form is read from plain words only, as restoreDiscards reads its own.
+ * passing form is read from the words restoreDiscards reads its own from — a plain word, a value quoted whole (`-e
+ * "$P"`), anything behind `--` — and a brace, an expansion or an unquoted glob before `--` or `--end-of-options`
+ * refuses (`git clean -n *`, a file `--no-dry-run` planted).
  */
 function cleanDiscards(args) {
   const read = gitArguments(args, CLEAN_ARGUMENTS);
-  if (read.braced || read.expanded || read.expandedPositional) return TREE;
+  if (read.braced || read.expanded || read.expandedPositional || read.globbed) return TREE;
   let dryRun = false;
   for (const option of read.options) {
     if (option === 'n' || (option?.name === 'dry-run' && !option.negated)) dryRun = true;
