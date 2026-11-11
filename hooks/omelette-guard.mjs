@@ -2386,7 +2386,7 @@ const REVISION_BRACES = /[@^]\{[^{}]*\}/g;
  * …and, by the same ref-name rules (1.10.1 release fix, measured on both: each restores a modified tracked file of that
  * name, and `git check-ref-format --branch` refuses it), a component that opens with a dot anywhere (`src/.env`,
  * `a/../b`), a component that ends with `.lock` (`yarn.lock`, `a.lock/b`), two dots (`foo..bar` — `main..other` is a
- * range checkout never takes: a pathspec error, nothing moves), a blank (`'docs/My Notes.md'`) or a backslash as git
+ * range checkout never takes: a pathspec error, nothing moves) or four in a row (`a....b`: no revision spells them), a blank (`'docs/My Notes.md'`) or a backslash as git
  * receives the word, or a final dot (`notes.`). These are read with the revision syntax that may hold them taken off,
  * and on both gits each such revision moves and keeps the work: a date or a message in `@{…}` or `^{…}`
  * (`HEAD@{1 minute ago}`, `HEAD^{/fix it}`), and the three dots of a merge base (`main...other`, `main...`). A name a
@@ -2396,7 +2396,7 @@ const REVISION_BRACES = /[@^]\{[^{}]*\}/g;
 const readsAsPath = (word) => {
   if (/^[./~:]/.test(word) || word.endsWith('/') || /[*?[]/.test(word)) return true;
   const named = word.replace(REVISION_BRACES, '');
-  return /(?:^|\/)\./.test(named) || /\.lock(?:\/|$)/.test(named) || /(?<!\.)\.\.(?!\.)/.test(named)
+  return /(?:^|\/)\./.test(named) || /\.lock(?:\/|$)/.test(named) || /(?<!\.)\.\.(?!\.)|\.{4}/.test(named)
     || /[ \t\n\\]/.test(named) || (named.endsWith('.') && !named.endsWith('...'));
 };
 

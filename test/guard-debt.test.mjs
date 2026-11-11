@@ -581,6 +581,9 @@ test('checkout: a dot opening any component, a `.lock` component, two dots, a bl
     ['git checkout foo..bar', TREE_REFUSAL],
     ['git checkout a..b/c', TREE_REFUSAL],
     ['git checkout main..other', TREE_REFUSAL], // a range checkout never takes: a pathspec error, nothing moves
+    ['git checkout a....b', TREE_REFUSAL], // four dots or more: neither a range nor a merge base
+    ['git checkout main....other', TREE_REFUSAL],
+    ['git checkout x....', TREE_REFUSAL],
     ["git checkout 'a\\b'", TREE_REFUSAL],
     ['git checkout a\\\\b', TREE_REFUSAL], // the shell hands git `a\b`…
     ['git checkout a\\b', ''], //               …and here `ab`
