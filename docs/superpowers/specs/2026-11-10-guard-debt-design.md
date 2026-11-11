@@ -71,6 +71,8 @@ A heredoc whose line stands inside a group that is still open at that line's end
 
 Valued options (`-f`/`--file`, `--blob`, `--type`, `--default`, `--value`, `--url`, `--comment`) are stepped over with their values, attached or detached; a write word wins over a read mode on the same line.
 
+**Amended at T2's review (2026-11-11, measured on git 2.38.1):** `git config` stops reading options at its first positional, so a read mode or a write word counts only BEFORE it — `git config core.fsmonitor /tmp/x.sh --get` is a write of two values and is refused by the count, `git config --get a.b --unset` is a read with a pattern; a long option is matched by its unambiguous prefix, valued ones included (`--fil` takes the next word); an argument that holds a brace expansion is refused unread, read mode or not (`git config {--unset,a.b}`).
+
 **`git -c` and `--config-env`: the key is read, and three sections are refused** — `alias.*`, `include.*`, `includeIf.*` (case-insensitive, as git reads them). An alias renames a subcommand the guard would have refused; an include brings a file of them.
 
 - A `-c` whose key cannot be read — an expansion or substitution before the `=`, or the whole value (`-c "$X"`) — is refused unread. `-C "$DIR"` is untouched.
