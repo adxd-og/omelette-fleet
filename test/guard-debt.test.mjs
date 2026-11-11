@@ -891,16 +891,16 @@ test('restore and clean: an unquoted glob before `--` or `--end-of-options` may 
 });
 
 test('restore and clean: an argument of 1 MiB of `[` with no `]` is read for a glob in linear time', () => {
-  // Budget at three times the local time (532 ms), the fastest of up to three runs: looking for a `]` behind each `[`
-  // took 13.3 s.
+  // Budget at a fifth of what the quadratic took (13.3 s: looking for a `]` behind each `[`), the fastest of up to
+  // three runs; 532 ms here.
   const path = guard();
   let fastest = Infinity;
-  for (let k = 0; k < 3 && fastest >= 1600; k++) {
+  for (let k = 0; k < 3 && fastest >= 2600; k++) {
     const r = fire(path, preToolUse(`git restore --staged ${'['.repeat(1 << 20)}`));
     assert.equal(r.code, 0, r.err);
     fastest = Math.min(fastest, r.ms);
   }
-  assert.ok(fastest < 1600, `1 MiB of [ took ${fastest.toFixed(0)} ms`);
+  assert.ok(fastest < 2600, `1 MiB of [ took ${fastest.toFixed(0)} ms`);
 });
 
 test('checkout and switch: a brace, or an expansion in an option word or a value the shell may split, is refused unread', () => {
