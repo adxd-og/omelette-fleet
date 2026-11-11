@@ -2505,7 +2505,8 @@ const SUBCOMMAND_BRACED = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUM
 /**
  * The subcommands that WRITE when xargs feeds them: what decides each one is in
  * its arguments — a name for `tag` and `branch`, a second name for
- * `symbolic-ref`, a flag anywhere for all five — and under xargs those
+ * `symbolic-ref`, a flag anywhere for those three and `checkout` and `switch`,
+ * the five that write history — and under xargs those
  * arguments are lines of input the command never shows: `xargs git tag <
  * names.txt` creates a tag per line. `rebase` needs no entry: its own reading
  * refuses every rebase but an undo or explain word, and git takes that word
@@ -2514,7 +2515,8 @@ const SUBCOMMAND_BRACED = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUM
  * what xargs hands it is paths or a commit. `config` (1.10.1) writes by its
  * positionals or a flag, as `tag` does; `restore` and `clean` (1.10.1) discard
  * work in every form but one, and what xargs appends may be the flag that
- * undoes it (`--no-dry-run -f`). Each maps to the class of its write.
+ * undoes it (`--worktree` behind restore's `--staged`, `--no-dry-run -f` behind
+ * clean's `-n`). Each of the eight maps to the class of its write.
  */
 const FED_BY_XARGS_WRITES = new Map([
   ['branch', HISTORY], ['checkout', HISTORY], ['switch', HISTORY], ['symbolic-ref', HISTORY], ['tag', HISTORY],
@@ -2558,10 +2560,17 @@ class TooWide extends TooDeep {}
  * 'git commit'`, `$(git commit)` and `>(git commit)` run it. Each step is a single pass and there are at most QUOTE_DEPTH + 1
  * levels, so a 10 KB command costs milliseconds and is never tiled.
  *
- * A CLASS ADDED AFTER 1.10.0 NEVER CHANGES WHAT 1.10.0 PRINTED (1.10.1). A history write and an invocation read as
- * unread are answered as they always were, level by level; the first write of a later class — CONFIG, TREE, and the
- * UNREAD_SUBCOMMAND a reader or a `-c` key answers, which 1.10.0 passed — is kept in `later` and is the answer only
- * where neither is found anywhere in the command: `git config --unset x; sh -c 'git commit'` still reads as a commit.
+ * A CLASS ADDED AFTER 1.10.0 CHANGES WHAT 1.10.0 PRINTED ONLY FOR FORMS GIT ITSELF REJECTS (1.10.1). A history write
+ * and an invocation read as unread are answered as they always were, level by level; the first write of a later class
+ * — CONFIG, TREE, and the UNREAD_SUBCOMMAND a reader or a `-c` key answers, which 1.10.0 passed — is kept in `later`
+ * and is the answer only where neither is found anywhere in the command: `git config --unset x; sh -c 'git commit'`
+ * still reads as a commit. What changed comes from `config`, `restore` and `clean` being names the guard now knows,
+ * and every such form is one git rejects (measured on 2.38.1 and 2.54: exit 129, nothing written): a braced subcommand
+ * that names one of them first — `git {clean,commit} -m x`, unread on 1.10.0, prints the tree sentence; `git
+ * {clean,commit} -n -m x`, refused unread on 1.10.0, passes (git: `clean commit -n -m x`, an unknown switch) — and one
+ * of them behind a `-c` value or an unknown global option — `git -c checkout -b config`, refused on 1.10.0, passes;
+ * `xargs git -c config -S -e`, unread on 1.10.0, prints the config sentence; `git --bogus config a.b c`, passed on
+ * 1.10.0, is refused.
  *
  * @returns {string|symbol|false} false when it may run; the class of the write it read (HISTORY, CONFIG, TREE), whose
  *   sentence REFUSALS holds; UNREAD_SUBCOMMAND when none does but one has a substitution where git or its subcommand
