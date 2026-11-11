@@ -164,6 +164,52 @@ test('open group: an opener is counted where either shell reads one', () => {
   ]);
 });
 
+test('open group: an opener is counted after `function NAME` and `coproc NAME`, where bash 4 and later read a reserved word', () => {
+  // bash 3.2 and zsh reject every refused form here (a syntax error); to bash 4 and later the compound command is
+  // the function's or the coprocess's body, and the line under the heredoc feeds what it prints to a shell.
+  const body = (open, close, feed = 'f | sh') => `${open} cat <<'EOF'\n${WRITE}\nEOF\n${close}\n${feed}`;
+  const fromCoproc = 'sh <&"${C[0]}"';
+  said([
+    [body('function f while true\ndo', 'break; done'), REFUSAL],
+    [body('function f if true\nthen', 'fi'), REFUSAL],
+    [body('function f until false\ndo', 'break; done'), REFUSAL],
+    [body('function f for i in 1\ndo', 'done'), REFUSAL],
+    [body('coproc C while true\ndo', 'break; done', fromCoproc), REFUSAL],
+    [body('function f select i in 1\ndo', 'break; done'), REFUSAL],
+    [body('coproc C if true\nthen', 'fi', fromCoproc), REFUSAL],
+    [body('coproc C for i in 1\ndo', 'done', fromCoproc), REFUSAL],
+    // The NAME is one word whatever it spells, and the word after it the opener.
+    [body('function if if true\nthen', 'fi', 'if | sh'), REFUSAL],
+    [body('function -x while true\ndo', 'break; done', '-x | sh'), REFUSAL],
+    [body('coproc function f while true\ndo', 'break; done'), REFUSAL], // `function` past `coproc` is the keyword, not its NAME
+    // To bash a no-break space or a `\r` ends no word, nor does extglob's parenthesis: the NAME goes on past each.
+    [body('function f\u00a0g while true\ndo', 'break; done'), REFUSAL],
+    [body('function f\rg while true\ndo', 'break; done'), REFUSAL],
+    [body('function +(x)c while true\ndo', 'break; done'), REFUSAL],
+    // Refused before this rule: the heredoc's own line runs a program outside NON_EXEC — `function` or `coproc` when
+    // the header stands on it, a pattern's `x)`.
+    [body('function f while true; do', 'break; done'), REFUSAL],
+    [body('function f case x in\nx)', ';; esac'), REFUSAL],
+    [body('function f () if true; then', 'fi'), REFUSAL],
+    [body('coproc C until false; do', 'break; done', fromCoproc), REFUSAL],
+    // In argument position the two are plain words, and so is what follows them: the body is text.
+    [doc('echo function while\ncat'), ''],
+    [after('echo function f while true'), ''],
+    [after('echo coproc C while true'), ''],
+    // A NAME stands on its keyword's line, opens nothing by itself, and the group it leads closes where it did.
+    [after('function\nf while'), ''],
+    ['coproc cat', ''],
+    ['coproc C { cat; }', ''],
+    [after('coproc cat'), ''],
+    [after('coproc C { cat; }'), ''],
+    [after('coproc (grep {a,b} f)'), ''], //               a `(` that starts a word is no NAME, and none follows it
+    [after('function cleanup { rm -f /tmp/{a,b}; }'), ''], // one word after the NAME, no more
+    [after('function f g { :; }'), ''],
+    [after('function f while false; do :; done'), ''],
+    [after('coproc C while false; do :; done'), ''],
+  ]);
+});
+
 test('open group: a closer is counted only where both shells read one', () => {
   const NBSP = '\u00a0';
   rows([

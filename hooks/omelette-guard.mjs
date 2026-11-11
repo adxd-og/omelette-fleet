@@ -696,7 +696,12 @@ function endsAlike(command, from, to) {
  *     function header's `)`), a reserved word that leads a command
  *     (LEADS_A_COMMAND; not an assignment, after which neither shell reads
  *     one), an option (`time -p if`) or zsh's `coproc`, and past any
- *     redirection (zsh reads `>f if`). zsh's own loops count: `repeat`, and
+ *     redirection (zsh reads `>f if`). At ONE point the shells are three:
+ *     after the NAME behind `function` or `coproc` bash 4 and later read a
+ *     reserved word (parse.y, reserved_word_acceptable), where bash 3.2 and
+ *     zsh reject the line — `function f while true` + newline + `do cat <<X`
+ *     is a function whose body is the loop — so the word after that NAME is
+ *     read as one too (`named`). zsh's own loops count: `repeat`, and
  *     `foreach` as UNREAD_GROUP. `{` is counted as a word wherever it stands
  *     (zsh's `always {`, `function f g {`); glued to a word where a reserved
  *     word may be it opens a group in zsh — and whatever the rest of the word
@@ -768,6 +773,7 @@ function tokenize(command, fed = NOT_FED) {
   const groups = []; //        innermost last: a GROUP_OPENERS kind, `(`, `{` or UNREAD_GROUP
   let cond = false; //         inside a `[[ … ]]`, as either shell may read one
   let reserved = true; //      either shell may read a reserved word where the piece being read starts
+  let named = 0; //            1: the next word is the NAME behind `function` or `coproc`; 2: the word just read was it (bash 4 and later)
   let boundary = '\n'; //      what stands before the word being read: a separator or an odd blank (a closer only after `;`, `\n`, `&`), or '' (a word)
   // The piece being read, kept per character — `text` is never indexed for it (a rope read at every parenthesis is quadratic):
   let pieceAt = 0; //          where in `text` it starts: the word's start, or past a counted parenthesis
@@ -801,6 +807,9 @@ function tokenize(command, fed = NOT_FED) {
     if (c === '(') groups.push('(');
     // A `)` whose innermost group is a `case` closes a pattern, and one with any other group there closes nothing the guard can place.
     else if (groups[groups.length - 1] === '(') groups.pop();
+    // A `(` that starts a word is no NAME and none follows it (`coproc (cat)`, `function f ()`); one inside a word
+    // may be the NAME's own to bash (extglob's `+(a)b`), and the word is read as that NAME when it ends.
+    if (c === '(' && text.length === 1) named = 0;
     reserved = true;
     boundary = '';
     startPiece(text.length);
@@ -833,7 +842,21 @@ function tokenize(command, fed = NOT_FED) {
       if (position !== 'argument' && lead && !LEADS_A_COMMAND.has(lead) && !ASSIGNMENT_WORD.test(lead)) position = 'argument';
       // A reserved word may still follow one that leads a command, an option (`time -p if`) or zsh's `coproc`.
       const piece = text.slice(pieceAt);
-      if (piece && piece[0] !== '-' && piece !== 'coproc' && !LEADS_A_COMMAND.has(piece)) reserved = false;
+      // `function` and `coproc` are the keyword only where a reserved word may stand, unquoted and the whole piece:
+      // `echo function while` is three plain words. The word behind either is read as a NAME whatever it spells
+      // (`-x`, `if`); behind `coproc` it may be an opener instead (`coproc while`, no NAME: `reserved` stays set), and
+      // the two readings share the rest — a reserved word may follow an opener as it may follow a NAME.
+      if (reserved && (piece === 'function' || piece === 'coproc')) { named = 1; reserved = piece === 'coproc'; }
+      // ONE word is the NAME, and the word after it may be a reserved word (bash 4 and later; zsh takes several names,
+      // `function f g {`, and reads no reserved word after any, and its `{` is counted wherever it stands). To bash an
+      // odd blank or a `\r` ends no word: what follows one (`boundary`) is that NAME still. A header's parentheses,
+      // `function f()` or `function f ()`, need nothing: a counted one leaves `reserved` set, and no word of
+      // theirs (an empty piece) takes it back.
+      else if (named === 1 || (named === 2 && boundary)) { named = 2; reserved = true; }
+      else {
+        named = 0;
+        if (piece && piece[0] !== '-' && !LEADS_A_COMMAND.has(piece)) reserved = false;
+      }
     } else {
       const op = redirectOp === '>&' && !FD_DUPLICATE.test(plain) ? '&>' : redirectOp;
       if (WRITE_REDIRECTS.has(op)) targets.push({ path: plain, op, at: tokens.length });
@@ -991,6 +1014,7 @@ function tokenize(command, fed = NOT_FED) {
       tokens.push({ text: c, quoted: false, separator: true });
       position = c === '\r' ? 'unknown' : 'command'; // bash separates nothing on a `\r`: the word it glues on is anywhere
       reserved = true;
+      if (c !== '\r') named = 0; // a NAME stands on its keyword's line; a `\r` ends no word of bash's
       boundary = c;
       if (c === '\n') {
         const shell = endLine();
