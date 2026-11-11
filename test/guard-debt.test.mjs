@@ -630,6 +630,12 @@ test('checkout: a dot opening any component, a `.lock` component, two dots, a bl
     ['git checkout a....b', TREE_REFUSAL], // four dots or more: neither a range nor a merge base
     ['git checkout main....other', TREE_REFUSAL],
     ['git checkout x....', TREE_REFUSAL],
+    ['git checkout src//a.txt', TREE_REFUSAL], // two slashes in a row: git folds them and restores `src/a.txt`
+    ['git checkout a//b', TREE_REFUSAL],
+    ["git checkout $'a\\x01b'", TREE_REFUSAL], // a control character
+    ["git checkout $'a\\x7fb'", TREE_REFUSAL],
+    ['git checkout a@{b', TREE_REFUSAL], // an `@{` no revision closes
+    ["git checkout 'a@{b c'", TREE_REFUSAL],
     ["git checkout 'a\\b'", TREE_REFUSAL],
     ['git checkout a\\\\b', TREE_REFUSAL], // the shell hands git `a\b`…
     ['git checkout a\\b', ''], //               …and here `ab`
