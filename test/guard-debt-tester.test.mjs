@@ -258,21 +258,30 @@ test('the config sentence names whichever role was caught, for all six guarded r
   }
 });
 
-test('the config scan is linear — 32 000 options, positionals, -c keys or glued values answer in a few seconds, not minutes', () => {
+test('the config scan is linear — 128 000 options, positionals or -c keys, and 256 000 invocations, each in three times the local time', () => {
+  // Budgets at three times the local time (in the comments), the fastest of up to three runs (1.10.1 release fix). One
+  // `lastIndexOf` per item of the loop a row reads — configWrites' arguments, the global-option walk's words, the
+  // invocations answered — took 13.8-28 s on the 128 000 rows and over 55 s on the 256 000 ones, where tokenizing the
+  // command is most of the guard's time. The row of a `-c` value of 64 000 `$` is gone: a rescan of the rest of that
+  // word per character cost at most 7 times the guard's own time, short of the 15 a budget at three times needs.
   const path = guard();
-  const shapes = [
-    `git ${'-c user.x=y '.repeat(32000)}-c alias.x=y status`,
-    `${'git -calias.x=y '.repeat(32000)}status`,
-    `git config ${'--get '.repeat(32000)}a.b`,
-    `git config ${'a.b '.repeat(32000)}`,
-    `${'git config --get a.b; '.repeat(32000)}`,
-    `git -c user.x=${'$'.repeat(64000)} status`,
-  ];
-  for (const command of shapes) {
-    const started = Date.now();
-    const r = fire(path, command);
-    assert.equal(r.signal, null, 'the guard hung');
-    assert.ok(Date.now() - started < 8000, `${command.slice(0, 40)}… took ${Date.now() - started} ms`);
+  const N = 128000;
+  for (const [command, code, budget] of [
+    [`git ${'-c user.x=y '.repeat(N)}-c alias.x=y status`, 2, 1400], // 454 ms
+    [`${'git -calias.x=y '.repeat(2 * N)}status`, 2, 3400], //          1101 ms
+    [`git config ${'--get '.repeat(N)}a.b`, 0, 800], //                  240 ms
+    [`git config ${'a.b '.repeat(N)}`, 2, 700], //                       204 ms
+    [`${'git config --get a.b; '.repeat(2 * N)}`, 0, 5500], //           1804 ms
+  ]) {
+    let fastest = Infinity;
+    for (let k = 0; k < 3 && fastest >= budget; k++) {
+      const started = process.hrtime.bigint();
+      const r = fire(path, command);
+      fastest = Math.min(fastest, Number(process.hrtime.bigint() - started) / 1e6);
+      assert.equal(r.signal, null, `${command.slice(0, 40)}… hung`);
+      assert.equal(r.status, code, `${command.slice(0, 40)}… → ${r.status} ${r.stderr}`);
+    }
+    assert.ok(fastest < budget, `${command.slice(0, 40)}… took ${fastest.toFixed(0)} ms`);
   }
 });
 
@@ -452,26 +461,33 @@ test('tree forms: the same sentence for every guarded role, and a word that only
   ]);
 });
 
-test('tree forms: 32 000 repeated options and chained invocations are answered in linear time', () => {
+test('tree forms: 128 000 repeated options and 256 000 chained invocations are answered in three times the local time', () => {
+  // Budgets at three times the local time (in the comments), the fastest of up to three runs (1.10.1 release fix). One
+  // `lastIndexOf` per argument in gitArguments, per letter of a cluster, or per invocation answered took 13.7-57 s on
+  // the 128 000 rows and over 55 s on the 256 000 ones, where tokenizing the command is most of the guard's time.
   const path = guard();
-  for (const [command, code] of [
-    ['git checkout main' + ' -q'.repeat(32000), 0],
-    ['git checkout main' + ' --no-force'.repeat(32000), 0],
-    ['git switch main' + ' --no-force'.repeat(32000), 0],
-    ['git restore --staged' + ' --stag'.repeat(32000) + ' f', 0],
-    ['git restore --staged' + ' -sX'.repeat(32000) + ' f', 0],
-    ['git clean -n' + ' -e x'.repeat(32000), 0],
-    ['git clean -' + 'n'.repeat(32000), 0],
-    ['git restore --staged f ; '.repeat(32000), 0],
-    ['git clean -n ; '.repeat(32000), 0],
-    ['git checkout main -f' + ' -q'.repeat(32000), 2],
+  const N = 128000;
+  for (const [command, code, budget] of [
+    ['git checkout main' + ' -q'.repeat(N), 0, 900], //                  270 ms
+    ['git checkout main' + ' --no-force'.repeat(N), 0, 1100], //         360 ms
+    ['git switch main' + ' --no-force'.repeat(N), 0, 1100], //           355 ms
+    ['git restore --staged' + ' --stag'.repeat(N) + ' f', 0, 1000], //   311 ms
+    ['git restore --staged' + ' -sX'.repeat(N) + ' f', 0, 700], //       211 ms
+    ['git clean -n' + ' -e x'.repeat(N), 0, 900], //                     290 ms
+    ['git clean -' + 'n'.repeat(N), 0, 600], //                          171 ms
+    ['git restore --staged f ; '.repeat(2 * N), 0, 5500], //             1806 ms
+    ['git clean -n ; '.repeat(2 * N), 0, 4000], //                       1308 ms
+    ['git checkout main -f' + ' -q'.repeat(N), 2, 600], //               191 ms
   ]) {
-    const started = process.hrtime.bigint();
-    const r = fire(path, command);
-    const ms = Number(process.hrtime.bigint() - started) / 1e6;
-    assert.equal(r.signal, null, `${command.slice(0, 30)}… hung`);
-    assert.equal(r.status, code, `${command.slice(0, 30)}… → ${r.status} ${r.stderr}`);
-    assert.ok(ms < 6000, `${command.slice(0, 30)}… took ${ms.toFixed(0)} ms`); // measured 60-500 ms
+    let fastest = Infinity;
+    for (let k = 0; k < 3 && fastest >= budget; k++) {
+      const started = process.hrtime.bigint();
+      const r = fire(path, command);
+      fastest = Math.min(fastest, Number(process.hrtime.bigint() - started) / 1e6);
+      assert.equal(r.signal, null, `${command.slice(0, 30)}… hung`);
+      assert.equal(r.status, code, `${command.slice(0, 30)}… → ${r.status} ${r.stderr}`);
+    }
+    assert.ok(fastest < budget, `${command.slice(0, 30)}… took ${fastest.toFixed(0)} ms`);
   }
 });
 
