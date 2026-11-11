@@ -538,6 +538,50 @@ test('checkout: one positional no ref name can be — opening with a dot or endi
   ]);
 });
 
+test('checkout: a dot opening any component, a `.lock` component, two dots, a blank, a backslash or a final dot is a path — a revision that spells one is not', () => {
+  // Measured on git 2.38.1 and 2.54.0: each refused word restores a modified tracked file of that name; each passing
+  // revision moves HEAD (or stays) and keeps the change.
+  said([
+    ['git checkout src/.env', TREE_REFUSAL],
+    ['git checkout packages/web/.eslintrc.js', TREE_REFUSAL],
+    ['git checkout a/../b', TREE_REFUSAL], // the path `b`, with or without a directory `a`
+    ['git checkout x.lock', TREE_REFUSAL],
+    ['git checkout yarn.lock', TREE_REFUSAL],
+    ['git checkout a.lock/b', TREE_REFUSAL],
+    ["git checkout 'docs/My Notes.md'", TREE_REFUSAL],
+    ['git checkout docs/My\\ Notes.md', TREE_REFUSAL], // the shell hands git one word with a blank
+    ["git checkout $'a\\tb'", TREE_REFUSAL],
+    ["git checkout $'a\\nb'", TREE_REFUSAL],
+    ['git checkout notes.', TREE_REFUSAL],
+    ['git checkout src/notes.', TREE_REFUSAL],
+    ['git checkout other..', TREE_REFUSAL], // no revision: git answers a pathspec error
+    ['git checkout foo..bar', TREE_REFUSAL],
+    ['git checkout a..b/c', TREE_REFUSAL],
+    ['git checkout main..other', TREE_REFUSAL], // a range checkout never takes: a pathspec error, nothing moves
+    ["git checkout 'a\\b'", TREE_REFUSAL],
+    ['git checkout a\\\\b', TREE_REFUSAL], // the shell hands git `a\b`…
+    ['git checkout a\\b', ''], //               …and here `ab`
+    ['git checkout main', ''],
+    ['git checkout feat/x', ''],
+    ['git checkout origin/main', ''],
+    ['git checkout v1.0.0-rc.1', ''],
+    ['git checkout HEAD^', ''],
+    ['git checkout HEAD~1^2', ''],
+    ['git checkout @{u}', ''],
+    ['git checkout main@{1}', ''],
+    ['git checkout stash@{0}', ''],
+    ['git checkout main...other', ''], // the merge base of the two
+    ['git checkout other...', ''], //     …of `other` and HEAD
+    ["git checkout 'HEAD@{1 minute ago}'", ''],
+    ["git checkout 'HEAD^{/fix the bug}'", ''],
+    ['git checkout 0123abc', ''],
+    ['git checkout tags/v1', ''],
+    ['git checkout Makefile', ''], // the residual kept: a file name a branch could have (D2)
+    ['git checkout src/app.js', ''],
+    ['git checkout dir./file', ''], // a component may end with a dot mid-name: `git branch dir./file` succeeds
+  ]);
+});
+
 test('checkout: a forced one, a side of a conflict, a hunk or a path list discards work — `-m` keeps it, other options pass', () => {
   said([
     ['git checkout -f main', TREE_REFUSAL],
