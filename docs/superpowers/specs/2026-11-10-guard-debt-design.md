@@ -126,7 +126,7 @@ Each pins a line of this spec through the rendered guard; none reads source text
 - Section 3: every row of the `git config` table, both spellings (`--unset` and `unset`); `-c alias.x=…`, `-c Alias.X=…`, `--config-env=alias.x=V`, `-c include.path=f`, `-c "$X"` refused; `-c user.name=a log`, `-c core.pager=cat log`, `-C "$DIR" status` pass.
 - Section 4: every cell of the table, the cluster forms (`-qf`, `-SW`) and a bare `--` included; `checkout main`, `checkout -`, `switch main`, `restore --staged f`, `clean -n` pass.
 - The second refusal sentence names the role and the class.
-- The linear-scan budgets of the heredoc tests hold with the group depth counted (budget at ×3 of the local time).
+- The linear-scan budgets of the heredoc tests hold with the group depth counted (budget at ×3 of the local time). Amended at the release's fix round: ×3 went red twice on shared CI runners (958 ms against 800, 1331 against 1300), so a linear-time row's budget is at most ×10 of the local time, and a fifth of its quadratic's time where one was measured.
 - The rendered rules file fits the new cap.
 
 ## 8. Who does what

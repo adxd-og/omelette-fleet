@@ -256,9 +256,9 @@ test('open group: where the shells may end a nested text elsewhere, the group st
 test('open group: the depth is kept per character — 1 MB of parentheses in one word, or of nested texts in a group, is read in linear time', () => {
   const path = guard();
   const fill = (unit) => unit.repeat(Math.ceil((1 << 20) / unit.length));
-  // Budgets at three times the local time (630, 310 and 410 ms): the first row took over a minute while each
-  // parenthesis read the growing word.
-  for (const [command, budget] of [[fill('a)'), 2000], [`( ${fill('$(echo \\)) ')}`, 1000], [`( ${fill('"$(a "b")" ')}`, 1300]]) {
+  // Budgets at ten times the local time (630, 310 and 410 ms; three times went red on a shared CI runner, 1331 ms
+  // against 1300): the first row took over a minute while each parenthesis read the growing word.
+  for (const [command, budget] of [[fill('a)'), 6300], [`( ${fill('$(echo \\)) ')}`, 3100], [`( ${fill('"$(a "b")" ')}`, 4100]]) {
     let fastest = Infinity;
     for (let k = 0; k < 3; k++) {
       const r = fire(path, preToolUse(command));
