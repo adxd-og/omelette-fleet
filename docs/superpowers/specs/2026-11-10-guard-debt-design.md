@@ -53,6 +53,7 @@ It stays containment for a role that is asked to behave, not a security boundary
 A heredoc whose line stands inside a group that is still open at that line's end — `(`, `{`, or a compound command (`if`, `while`, `until`, `for`, `case`, a function body) — has its body read as a command: what the group's output feeds is written after the body, where `lineFeeds` has already answered.
 
 - It fails closed, like the rest of the heredoc rule: the guard does not look ahead for the pipe.
+- The line is read as a line that feeds: its substitutions and quoted words too, as on a line that pipes to `sh` (`( echo "$(cat <<'EOF'` … `EOF` `)"` + `) | sh` is the same body one level down). Ruled by the session at T1's review, 2026-11-11.
 - **The price:** a `cat <<'EOF'` inside a loop, an `if` or a function, with git-write text in the body, is refused. `while read …; done <<'EOF'` is refused today for another reason and stays so.
 
 ## 3. Config
