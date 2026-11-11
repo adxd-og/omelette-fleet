@@ -382,6 +382,29 @@ test('git config: a valued option takes its value attached or as the next word, 
   ]);
 });
 
+test('git config: `-t` takes a value as `-f` does, the rest of its cluster or the next word; an unknown letter in a cluster is a write word', () => {
+  // Measured on git 2.38.1 and 2.54.0: each refused row but the last two writes the repository's config; `git config`
+  // knows the short letters e, f, h, l, t and z, and `-h` anywhere in a cluster prints usage and writes nothing.
+  said([
+    ['git config -tbool user.name true', CONFIG_REFUSAL], // `bool` is the type, not `-b -o -o -l`
+    ['git config -tbool-or-str core.hooksPath /tmp/x.sh', CONFIG_REFUSAL],
+    ['git config -tcolor color.ui blue', CONFIG_REFUSAL],
+    ['git config -t bool a.b true', CONFIG_REFUSAL],
+    ['git config -zt bool a.b true', CONFIG_REFUSAL],
+    ['git config -t $T --get a.b', UNREAD_REFUSAL], // a value the shell may split, as `-f $F`
+    ['git config -tbool --get a.b', ''],
+    ['git config -t bool --get a.b', ''],
+    ['git config -t "$T" --get a.b', ''],
+    ['git config -lz', ''],
+    ['git config -zl', ''],
+    ['git config -l', ''],
+    ['git config -fx --get a.b', ''],
+    ['git config -h', ''],
+    ['git config -xl a.b', CONFIG_REFUSAL], // an unknown letter may be a valued one that takes the mode behind it
+    ['git config -lx', CONFIG_REFUSAL],
+  ]);
+});
+
 test('git config: where the positionals decide, one the shell may split or drop is refused unread; a read mode still reads', () => {
   said([
     ['git config $X', UNREAD_REFUSAL],

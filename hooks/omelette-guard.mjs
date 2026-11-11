@@ -2089,11 +2089,17 @@ function symbolicRefWrites(args) {
 /**
  * `git config` words (1.10.1): the long options that write and those that only read, the long options that take a
  * value — attached by `=` or as the next word — and the first positionals git 2.46 made subcommands. The short
- * spellings are read in a cluster: `-e` writes, `-l` reads, `-f` takes a value.
+ * spellings are read in a cluster: `-e` writes, `-l` reads, `-f` and `-t` (`--type`, 1.10.1 release fix) take a value
+ * — the rest of the cluster or the next word, so `-tbool` is a type and not `-b -o -o -l` — and `-z` and `-h` change
+ * nothing it reads (`-h` prints usage, anywhere in a cluster). These six are every letter git config knows on 2.38.1
+ * and 2.54; any other in a cluster is a write word, as an ambiguous long option is: it may be a valued letter of a
+ * later git that takes the mode behind it (`-xl a.b`).
  */
 const CONFIG_WRITE_LONG = ['--add', '--edit', '--remove-section', '--rename-section', '--replace-all', '--unset', '--unset-all'];
 const CONFIG_READ_LONG = new Set(['--get', '--get-all', '--get-color', '--get-colorbool', '--get-regexp', '--get-urlmatch', '--list']);
 const CONFIG_VALUE_LONG = new Set(['--blob', '--comment', '--default', '--file', '--type', '--url', '--value']);
+const CONFIG_VALUE_SHORT = new Set([...'ft']);
+const CONFIG_INERT_SHORT = new Set([...'hz']);
 const CONFIG_WRITE_FIRST = new Set(['edit', 'remove-section', 'rename-section', 'set', 'unset']);
 const CONFIG_READ_FIRST = new Set(['get', 'list']);
 
@@ -2203,9 +2209,9 @@ function configWrites(args) {
       continue;
     }
     for (let k = 1; k < token.length; k++) {
-      if (token[k] === 'e') write = true;
-      else if (token[k] === 'l') read = true;
-      else if (token[k] === 'f') { takesValue = k === token.length - 1; break; }
+      if (token[k] === 'l') read = true;
+      else if (CONFIG_VALUE_SHORT.has(token[k])) { takesValue = k === token.length - 1; break; }
+      else if (!CONFIG_INERT_SHORT.has(token[k])) write = true; // `-e`, and a letter the reader does not know
     }
   }
   const first = positionals.length ? positionals[0].token : null;
