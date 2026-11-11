@@ -114,8 +114,8 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
 
 /**
  * What a guarded role is never allowed to run, whatever it was asked to do: a
- * `git` invocation that writes history, a ref, a stash or a worktree, or writes
- * git config (1.10.1). Matched
+ * `git` invocation that writes history, a ref, a stash or a worktree, writes
+ * git config, or throws work in the tree away (1.10.1). Matched
  * against real git syntax rather than its tidiest form, and read the way the
  * shell reads the command — words, separators, comments, heredocs,
  * redirections and command and process substitutions in one pass (tokenize),
@@ -123,8 +123,9 @@ const NONBLOCK = constants.O_NONBLOCK || 0;
  * arguments (invocations). Then:
  *   - a subcommand in WRITES_HISTORY writes, whatever follows it;
  *   - `branch`, `checkout`, `switch`, `tag`, `rebase`, `reset`,
- *     `symbolic-ref` and `config` are read by their ARGUMENTS, because a flag
- *     or a name among them decides what they do — see WRITES_BY_ARGUMENTS below;
+ *     `symbolic-ref`, `config`, `restore` and `clean` are read by their
+ *     ARGUMENTS, because a flag or a name among them decides what they do — see
+ *     WRITES_BY_ARGUMENTS below;
  *   - the key of a `-c` or `--config-env` global option is read, and an
  *     `alias`, `include` or `includeIf` key refuses the invocation (1.10.1,
  *     configKeyVerdict): `git -c alias.ci=commit ci` commits;
@@ -161,11 +162,13 @@ const WRITES_HISTORY = new Set(['commit', 'merge', 'cherry-pick', 'revert', 'am'
 /**
  * WHAT A REFUSAL IS FOR: the class a verdict carries (forbidden), which picks the sentence the role reads (REFUSALS).
  * HISTORY is a write to history, a ref, a stash or a worktree — the guard's sentence before 1.10.1; CONFIG is a `git
- * config` write, or an alias or an include set with `-c` or `--config-env` (1.10.1). A class is a name here and one
- * entry of REFUSALS.
+ * config` write, or an alias or an include set with `-c` or `--config-env` (1.10.1); TREE is work thrown away — a
+ * checkout of paths or a forced one, a forced switch, a restore of the work tree, a clean (1.10.1, checkoutDiscards).
+ * A class is a name here and one entry of REFUSALS.
  */
 const HISTORY = 'history';
 const CONFIG = 'config';
+const TREE = 'tree';
 
 /**
  * The options git accepts BEFORE the subcommand, one word each. GLOBAL_VALUED
@@ -2211,18 +2214,242 @@ function configWrites(args) {
 }
 
 /**
+ * WORK THROWN AWAY (1.10.1), by the rule `reset --hard` follows (RESET_REWRITES_TREE): a form that rewrites tracked
+ * files from the index or a commit, or deletes untracked ones, leaves `git status` showing nothing of the work; a form
+ * that only moves between branches or only touches the index passes. What `checkout`, `switch`, `restore` and `clean`
+ * take, as git 2.38.1 and 2.54 list it (`git <sub> -h`, both lists in one): the long options, those of them that take
+ * a value — behind `=` or as the next word — and the short letters that take one, the rest of their cluster or the
+ * next word. `-U`, `--unified`, `--inter-hunk-context` and checkout's `--auto-advance` are 2.54's.
+ */
+const CHECKOUT_ARGUMENTS = {
+  longs: [
+    'auto-advance', 'conflict', 'detach', 'force', 'guess', 'ignore-other-worktrees', 'ignore-skip-worktree-bits',
+    'inter-hunk-context', 'merge', 'orphan', 'ours', 'overlay', 'overwrite-ignore', 'patch', 'pathspec-file-nul',
+    'pathspec-from-file', 'progress', 'quiet', 'recurse-submodules', 'theirs', 'track', 'unified',
+  ],
+  valued: new Set(['conflict', 'inter-hunk-context', 'orphan', 'pathspec-from-file', 'unified']),
+  shortValued: new Set([...'bBU']),
+};
+const SWITCH_ARGUMENTS = {
+  longs: [
+    'conflict', 'create', 'detach', 'discard-changes', 'force', 'force-create', 'guess', 'ignore-other-worktrees',
+    'merge', 'orphan', 'overwrite-ignore', 'progress', 'quiet', 'recurse-submodules', 'track',
+  ],
+  valued: new Set(['conflict', 'create', 'force-create', 'orphan']),
+  shortValued: new Set([...'cC']),
+};
+const RESTORE_ARGUMENTS = {
+  longs: [
+    'conflict', 'ignore-skip-worktree-bits', 'ignore-unmerged', 'inter-hunk-context', 'merge', 'ours', 'overlay',
+    'patch', 'pathspec-file-nul', 'pathspec-from-file', 'progress', 'quiet', 'recurse-submodules', 'source', 'staged',
+    'theirs', 'unified', 'worktree',
+  ],
+  valued: new Set(['conflict', 'inter-hunk-context', 'pathspec-from-file', 'source', 'unified']),
+  shortValued: new Set([...'sU']),
+};
+const CLEAN_ARGUMENTS = {
+  longs: ['dry-run', 'exclude', 'force', 'interactive', 'quiet'],
+  valued: new Set(['exclude']),
+  shortValued: new Set([...'e']),
+};
+/** …the long options git does not negate: `--no-ours` is an unknown option on 2.38.1 and 2.54, `--exclude` lists no `--no-`. */
+const NOT_NEGATED = new Set(['exclude', 'ours', 'theirs']);
+/** …and an abbreviation of two or more of them — `--n`, `--no` and `--no-` abbreviate every negation: git's usage error. */
+const AMBIGUOUS_OPTION = Symbol('an abbreviation of two long options');
+
+/**
+ * The long option git's parse-options reads `name` as — the word behind its `--`, up to any `=` (1.10.1, measured on
+ * 2.38.1 and 2.54): `{ name, negated }` for one of `longs`, exact, `no-` and exact, or an unambiguous prefix of either
+ * (`--forc` is `--force`, `--no-dr` is `--no-dry-run`, `--st` is `--staged`); AMBIGUOUS_OPTION for a prefix of two or
+ * more (`git switch --d`: `--detach` or `--discard-changes`); null for none, git's unknown option. An exact name wins
+ * over the longer one it starts: `git switch --force` is no prefix of `--force-create`.
+ */
+function gitLong(name, longs) {
+  const negation = name.startsWith('no-') ? name.slice(3) : null;
+  if (longs.includes(name)) return { name, negated: false };
+  if (longs.includes(negation) && !NOT_NEGATED.has(negation)) return { name: negation, negated: true };
+  const found = [];
+  for (const long of longs) {
+    if (long.startsWith(name)) found.push({ name: long, negated: false });
+    else if (!NOT_NEGATED.has(long) && ('no-'.startsWith(name) || (negation !== null && long.startsWith(negation)))) {
+      found.push({ name: long, negated: true });
+    }
+  }
+  return found.length > 1 ? AMBIGUOUS_OPTION : found[0] ?? null;
+}
+
+/**
+ * The arguments of a `checkout`, `switch`, `restore` or `clean` as git reads them (1.10.1, measured on 2.38.1 and
+ * 2.54), each word as the shell hands it over (shellWord: `\.` is `.`).
+ *
+ * OPTIONS ARE READ ANYWHERE UP TO A BARE `--` OR `--end-of-options`: `git checkout main -f` forces, `git restore f
+ * --staged` restores the index only, `git clean d -n` lists. Behind `--` every word is a path (`paths` counts them);
+ * behind `--end-of-options` a positional — 2.54 reads `git checkout --end-of-options f` as the path, 2.38.1 keeps the
+ * word and errors. A long option is read by gitLong; a short run is a cluster, and a letter that takes a value ends it
+ * with the rest of the run (`-sS` is `--source=S`, `-en` is `--exclude=n`) or, last, with the next word, whatever it
+ * opens with: `git clean -e -n -f` excludes `-n` and deletes.
+ *
+ * WHAT THE SHELL MAY MAKE ANOTHER WORD OF IS NOTED, NOT READ: `braced`, an argument holding a brace expansion;
+ * `expanded`, an expansion or a substitution in an option word — save a long option's value glued behind `=` and
+ * quoted whole (`--source="$R"`), as configWrites reads one — or in an option's value the shell may split or drop
+ * (`--conflict $S`); `expandedPositional`, one in a positional before `--` or `--end-of-options`, which the shell may
+ * make an option (`git restore --staged "$F"`, F `--worktree`).
+ *
+ * @returns {object} `options` in order — a long one as gitLong reads it, a short one as its letter; `positionals` as
+ *   shellWord reads them; `paths`, the count behind `--`; and the three notes `braced`, `expanded`, `expandedPositional`
+ */
+function gitArguments(args, { longs, valued, shortValued }) {
+  const read = { options: [], positionals: [], paths: 0, braced: false, expanded: false, expandedPositional: false };
+  let separated = false; // past a bare `--`
+  let ended = false; //     past `--end-of-options`
+  let takesValue = false;
+  for (const arg of args) {
+    if (tokenBraces(arg) !== null) read.braced = true;
+    const { text } = arg;
+    if (separated) { read.paths++; continue; }
+    if (takesValue) { // the previous option's value
+      takesValue = false;
+      if (mayVanishOrSplit(text)) read.expanded = true;
+      continue;
+    }
+    const word = shellWord(text);
+    if (ended || word === '-' || !word.startsWith('-')) {
+      if (!ended && SUBSTITUTED.test(text)) read.expandedPositional = true;
+      read.positionals.push(word);
+      continue;
+    }
+    if (word === '--') { separated = true; continue; }
+    if (word === '--end-of-options') { ended = true; continue; }
+    if (SUBSTITUTED.test(text)) {
+      const marked = withExpansionsMarked(text);
+      if (!GLUED_OPTION.test(marked) || !marked.startsWith('--') || marked.includes(UNQUOTED_MARK)) { read.expanded = true; continue; }
+    }
+    if (word.startsWith('--')) {
+      const eq = word.indexOf('=');
+      const option = gitLong(word.slice(2, eq < 0 ? word.length : eq), longs);
+      read.options.push(option);
+      // A negated option takes no value: `--no-conflict` is none.
+      if (eq < 0 && option?.negated === false && valued.has(option.name)) takesValue = true;
+      continue;
+    }
+    for (let k = 1; k < word.length; k++) {
+      read.options.push(word[k]);
+      if (shortValued.has(word[k])) { takesValue = k === word.length - 1; break; }
+    }
+  }
+  return read;
+}
+
+/**
+ * Does one of these options discard work — a long one of `longs`, a short one of `shorts`, or an abbreviation git
+ * refuses as ambiguous? A NEGATION NEVER UNDOES ONE (fail-closed, 1.10.1): git reads the last word, so `checkout -f
+ * --no-force main` would not force, but `switch --discard-changes --no-force main` still discards (measured: the two
+ * are separate switches), and nobody writes either; the negation alone turns nothing on and passes.
+ */
+const discards = (options, longs, shorts) => options.some((option) => option === AMBIGUOUS_OPTION
+  || (typeof option === 'string' ? shorts.has(option) : option !== null && !option.negated && longs.has(option.name)));
+
+/**
+ * The checkout options that rewrite tracked files: by force, from a side of a conflict (`-2` is `--ours`, `-3` is
+ * `--theirs` — on a path with no conflict both restore it from the index), a hunk at a time, or from a list of paths.
+ */
+const CHECKOUT_DISCARDS = new Set(['force', 'ours', 'patch', 'pathspec-from-file', 'theirs']);
+const CHECKOUT_DISCARDS_SHORT = new Set([...'f23p']);
+/** …and the switch ones: `-f`/`--force` and `--discard-changes`. */
+const SWITCH_DISCARDS = new Set(['discard-changes', 'force']);
+const SWITCH_DISCARDS_SHORT = new Set([...'f']);
+
+/**
+ * A positional git reads as a path and never as a branch: a word that opens with `/`, `~` or `:` (the top of the tree,
+ * `:/`, and pathspec magic, `:(top)f`), or one no ref name can be — opening with a dot (`.`, `..`, `./f`, and
+ * `.gitignore` or `.github`: a ref's component never begins with one), ending with a slash (`d/`, `src/app/`), or
+ * holding a glob. On 2.38.1 and 2.54 `git checkout .github` and `git checkout d/` restore the tracked paths, and with
+ * no such path git answers a pathspec error; it never takes `feat/` for the branch `feat/x`.
+ */
+const readsAsPath = (word) => /^[./~:]/.test(word) || word.endsWith('/') || /[*?[]/.test(word);
+
+/**
+ * Does this `git checkout` throw work away (1.10.1)? Asked after createsBranch, which answers first. It does with a
+ * word behind a bare `--` (`git checkout -- .`; nothing behind it, `git checkout main --`, moves), two positionals or
+ * more (`git checkout HEAD f`), one that readsAsPath, or an option that discards (CHECKOUT_DISCARDS) — `-m`/`--merge`
+ * does not: it carries the local changes into the branch, or refuses.
+ *
+ * ONE POSITIONAL THAT IS A PLAIN WORD MOVES (D2): `git checkout main`, `git checkout HEAD~1`, `git checkout -`. Where no
+ * ref `docs` exists and a tracked path `docs` does, `git checkout docs` restores that path; the guard reads no
+ * filesystem to tell them apart. Nor does it read an expansion as a flag: `git checkout $REF` moves.
+ *
+ * @returns {string|symbol|false} TREE; UNREAD_SUBCOMMAND for a brace expansion anywhere (`{main,.}` is two words) or
+ *   an expansion in an option word or a value (gitArguments' `expanded`); false where it moves
+ */
+function checkoutDiscards(args) {
+  const read = gitArguments(args, CHECKOUT_ARGUMENTS);
+  if (read.braced || read.expanded) return UNREAD_SUBCOMMAND;
+  if (discards(read.options, CHECKOUT_DISCARDS, CHECKOUT_DISCARDS_SHORT) || read.paths > 0 || read.positionals.length > 1) return TREE;
+  return read.positionals.length === 1 && readsAsPath(read.positionals[0]) ? TREE : false;
+}
+
+/** Does this `git switch` throw work away (1.10.1)? Only by force, asked after createsBranch; braces and expansions as checkoutDiscards reads them. */
+function switchDiscards(args) {
+  const read = gitArguments(args, SWITCH_ARGUMENTS);
+  if (read.braced || read.expanded) return UNREAD_SUBCOMMAND;
+  return discards(read.options, SWITCH_DISCARDS, SWITCH_DISCARDS_SHORT) ? TREE : false;
+}
+
+/**
+ * Does this `git restore` throw work away (1.10.1)? In every form but one: `--staged`/`-S` without `--worktree`/`-W`
+ * restores the index only, and the file stays as `git status` shows it — with `-p` or `--source` too. A negated
+ * `--staged` refuses and an ambiguous option refuses; a negated `--worktree` alone changes nothing (fail-closed:
+ * `--staged --worktree --no-worktree`, which git reads as the index only, is refused). The one passing form is read
+ * from plain words only: an argument holding a brace expansion, or an expansion before `--`, refuses.
+ */
+function restoreDiscards(args) {
+  const read = gitArguments(args, RESTORE_ARGUMENTS);
+  if (read.braced || read.expanded || read.expandedPositional) return TREE;
+  let staged = false;
+  for (const option of read.options) {
+    if (option === 'S' || (option?.name === 'staged' && !option.negated)) staged = true;
+    else if (option === 'W' || option === AMBIGUOUS_OPTION || option?.name === 'staged' || (option?.name === 'worktree' && !option.negated)) return TREE;
+  }
+  return staged ? false : TREE;
+}
+
+/**
+ * Does this `git clean` delete (1.10.1)? In every form but `-n`/`--dry-run`, which wins over `-f` and `-i` on both
+ * gits. No `-n` refuses whatever else stands there: `git -c clean.requireForce=false clean` deletes with no flag at
+ * all. A negated `--dry-run` refuses (git: `-n --no-dry-run -f` deletes), and so does an ambiguous option; the one
+ * passing form is read from plain words only, as restoreDiscards reads its own.
+ */
+function cleanDiscards(args) {
+  const read = gitArguments(args, CLEAN_ARGUMENTS);
+  if (read.braced || read.expanded || read.expandedPositional) return TREE;
+  let dryRun = false;
+  for (const option of read.options) {
+    if (option === 'n' || (option?.name === 'dry-run' && !option.negated)) dryRun = true;
+    else if (option === AMBIGUOUS_OPTION || option?.name === 'dry-run') return TREE;
+  }
+  return dryRun ? false : TREE;
+}
+
+const checkoutCreates = createsBranch(CHECKOUT_CREATES);
+const switchCreates = createsBranch(SWITCH_CREATES);
+
+/**
  * The subcommands read by their arguments, and the question each one is asked. A reader answers false; true, a write
- * of HISTORY; the class of another write (CONFIG); or UNREAD_SUBCOMMAND, where what decides it cannot be read.
+ * of HISTORY; the class of another write (CONFIG, TREE); or UNREAD_SUBCOMMAND, where what decides it cannot be read.
+ * `checkout` and `switch` are asked two questions, the branch one first: `git checkout -f -b x` creates a branch, and
+ * its sentence is the history one.
  */
 const WRITES_BY_ARGUMENTS = new Map([
   ['branch', branchWrites],
-  ['checkout', createsBranch(CHECKOUT_CREATES)],
-  ['switch', createsBranch(SWITCH_CREATES)],
+  ['checkout', (args) => checkoutCreates(args) || checkoutDiscards(args)],
+  ['switch', (args) => switchCreates(args) || switchDiscards(args)],
   ['tag', tagWrites],
   ['rebase', rebaseWrites],
   ['reset', resetWrites],
   ['symbolic-ref', symbolicRefWrites],
   ['config', configWrites],
+  ['restore', restoreDiscards],
+  ['clean', cleanDiscards],
 ]);
 
 /**
@@ -2248,11 +2475,13 @@ const SUBCOMMAND_BRACED = new RegExp(`^(${[...WRITES_HISTORY, ...WRITES_BY_ARGUM
  * only as the whole argument list, so anything xargs appends turns it into a
  * usage error. Nor does `reset`: it writes only by one of three mode flags, and
  * what xargs hands it is paths or a commit. `config` (1.10.1) writes by its
- * positionals or a flag, as `tag` does. Each maps to the class of its write.
+ * positionals or a flag, as `tag` does; `restore` and `clean` (1.10.1) discard
+ * work in every form but one, and what xargs appends may be the flag that
+ * undoes it (`--no-dry-run -f`). Each maps to the class of its write.
  */
 const FED_BY_XARGS_WRITES = new Map([
   ['branch', HISTORY], ['checkout', HISTORY], ['switch', HISTORY], ['symbolic-ref', HISTORY], ['tag', HISTORY],
-  ['config', CONFIG],
+  ['config', CONFIG], ['restore', TREE], ['clean', TREE],
 ]);
 
 /**
@@ -2293,11 +2522,11 @@ class TooWide extends TooDeep {}
  * levels, so a 10 KB command costs milliseconds and is never tiled.
  *
  * A CLASS ADDED AFTER 1.10.0 NEVER CHANGES WHAT 1.10.0 PRINTED (1.10.1). A history write and an invocation read as
- * unread are answered as they always were, level by level; the first write of a later class — CONFIG, and the
+ * unread are answered as they always were, level by level; the first write of a later class — CONFIG, TREE, and the
  * UNREAD_SUBCOMMAND a reader or a `-c` key answers, which 1.10.0 passed — is kept in `later` and is the answer only
  * where neither is found anywhere in the command: `git config --unset x; sh -c 'git commit'` still reads as a commit.
  *
- * @returns {string|symbol|false} false when it may run; the class of the write it read (HISTORY, CONFIG), whose
+ * @returns {string|symbol|false} false when it may run; the class of the write it read (HISTORY, CONFIG, TREE), whose
  *   sentence REFUSALS holds; UNREAD_SUBCOMMAND when none does but one has a substitution where git or its subcommand
  *   goes (subcommandAt), or a `git config` positional or `-c` key it cannot read — its refusal says so
  */
@@ -2364,8 +2593,9 @@ const GUARDED_AGENTS = new Set(['omelette-coder', 'omelette-coder-medium', 'omel
 const REFUSAL = (agent) => `${agent} never commits, merges, rebases, pushes, stashes, tags, branches or opens worktrees; report instead`;
 const UNREAD_REFUSAL = (agent) => `${REFUSAL(agent)} — a command substitution where git or its subcommand goes is not read`;
 const CONFIG_REFUSAL = (agent) => `${agent} never writes git config (a git config write, or an alias or include set with -c or --config-env); report instead`;
+const TREE_REFUSAL = (agent) => `${agent} never discards work in the tree (a checkout of paths, a forced checkout or switch, a restore of the work tree, a clean); report instead`;
 /** The sentence each verdict of forbidden is refused with: one entry per class, and the unread verdict's. */
-const REFUSALS = new Map([[HISTORY, REFUSAL], [CONFIG, CONFIG_REFUSAL], [UNREAD_SUBCOMMAND, UNREAD_REFUSAL]]);
+const REFUSALS = new Map([[HISTORY, REFUSAL], [CONFIG, CONFIG_REFUSAL], [TREE, TREE_REFUSAL], [UNREAD_SUBCOMMAND, UNREAD_REFUSAL]]);
 const TOO_DEEP = (agent) => `${agent}: command too deep to read (over 1 MiB of bracket scanning) — split it, or write the file with Write`;
 const TOO_WIDE = (agent) => `${agent}: command too wide to read (over 4096 brace groups or 65536 brace words) — split it, or write the file with Write`;
 const HANDOFF = 'HANDOFF: re-read .omelette/ledger-*.md before continuing.';

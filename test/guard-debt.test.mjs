@@ -481,3 +481,311 @@ test('the refusal names the role and the class; a command 1.10.0 refused prints 
     ['git config --unset a.b; git -C $(pwd) status', UNREAD_REFUSAL],
   ]);
 });
+
+// Work thrown away (spec section 4). Every git fact below was measured on git 2.38.1 and 2.54 by argv in a throwaway
+// repository: a modified tracked file rewritten, or an untracked one deleted.
+const TREE_REFUSAL = 'omelette-coder never discards work in the tree (a checkout of paths, a forced checkout or switch, a restore of the work tree, a clean); report instead';
+
+test('checkout: any word behind a bare `--`, two positionals, or one that reads as a path discards work; a branch, `-` or a commit moves', () => {
+  said([
+    ['git checkout -- .', TREE_REFUSAL],
+    ['git checkout -- f', TREE_REFUSAL],
+    ['git checkout HEAD -- .', TREE_REFUSAL],
+    ['git checkout main -- f', TREE_REFUSAL],
+    ['git checkout --', ''], // nothing behind it: git prints the status
+    ['git checkout main --', ''],
+    ['git checkout HEAD f', TREE_REFUSAL],
+    ['git checkout main other', TREE_REFUSAL],
+    ['git checkout .', TREE_REFUSAL],
+    ['git checkout ..', TREE_REFUSAL],
+    ['git checkout ./f', TREE_REFUSAL],
+    ['git checkout ../f', TREE_REFUSAL],
+    ['git checkout /tmp/f', TREE_REFUSAL],
+    ['git checkout ~/f', TREE_REFUSAL],
+    ['git checkout :/', TREE_REFUSAL], // the top of the tree: every path
+    ["git checkout ':(top)f'", TREE_REFUSAL],
+    ["git checkout '*.md'", TREE_REFUSAL],
+    ['git checkout f?', TREE_REFUSAL],
+    ['git checkout \\.', TREE_REFUSAL], // the shell hands git `.`
+    ['git checkout main', ''],
+    ['git checkout feat/x', ''],
+    ['git checkout v1.2.3', ''],
+    ['git checkout HEAD~1', ''],
+    ['git checkout @{-1}', ''],
+    ['git checkout -', ''],
+    ['git checkout --detach main', ''],
+    ['git checkout --detach', ''],
+    ['git checkout -q main', ''],
+    ['git checkout', ''],
+    ['git checkout docs', ''], // one plain word stays allowed: the guard reads no filesystem (D2)
+  ]);
+});
+
+test('checkout: one positional no ref name can be — opening with a dot or ending with a slash — is a path', () => {
+  said([
+    ['git checkout .gitignore', TREE_REFUSAL], // git 2.38.1 and 2.54: restores the tracked file
+    ['git checkout .github', TREE_REFUSAL], //    …and the tracked directory
+    ['git checkout .env', TREE_REFUSAL],
+    ['git checkout d/', TREE_REFUSAL],
+    ['git checkout src/app/', TREE_REFUSAL],
+    ['git checkout feat/x', ''],
+    ['git checkout origin/main', ''],
+    ['git checkout v1.2.3', ''],
+    ['git checkout HEAD~1', ''],
+    ['git checkout @{-1}', ''],
+    ['git checkout -', ''],
+    ['git checkout main --', ''],
+  ]);
+});
+
+test('checkout: a forced one, a side of a conflict, a hunk or a path list discards work — `-m` keeps it, other options pass', () => {
+  said([
+    ['git checkout -f main', TREE_REFUSAL],
+    ['git checkout --force main', TREE_REFUSAL],
+    ['git checkout -f', TREE_REFUSAL],
+    ['git checkout --ours f', TREE_REFUSAL],
+    ['git checkout --theirs f', TREE_REFUSAL],
+    ['git checkout -2 f', TREE_REFUSAL], // `-2` is `--ours`, `-3` is `--theirs`
+    ['git checkout -3 f', TREE_REFUSAL],
+    ['git checkout -p', TREE_REFUSAL],
+    ['git checkout --patch main', TREE_REFUSAL],
+    ['git checkout --pathspec-from-file=list', TREE_REFUSAL],
+    ['git checkout --pathspec-from-file list', TREE_REFUSAL],
+    ['git checkout -m main', ''],
+    ['git checkout --merge main', ''],
+    ['git checkout --conflict=diff3 main', ''],
+    ['git checkout --conflict diff3 main', ''], // the style is the option's value, no second positional
+    ['git checkout --recurse-submodules main', ''],
+    ['git checkout --no-guess main', ''],
+    ['git checkout -d main', ''],
+  ]);
+});
+
+test('checkout: git reads an option behind a positional and in a cluster — `checkout main -f` forces', () => {
+  said([
+    ['git checkout main -f', TREE_REFUSAL],
+    ['git checkout main --force', TREE_REFUSAL],
+    ['git checkout f --ours', TREE_REFUSAL],
+    ['git checkout -qf main', TREE_REFUSAL],
+    ['git checkout -fq main', TREE_REFUSAL],
+    ['git checkout -qd main', ''],
+    ['git checkout main -q', ''],
+  ]);
+});
+
+test('checkout: a long option is read by its unambiguous prefix, an ambiguous one is refused, a negation never undoes a refusal', () => {
+  said([
+    ['git checkout --f main', TREE_REFUSAL], // git: `--force`
+    ['git checkout --forc main', TREE_REFUSAL],
+    ['git checkout --our f', TREE_REFUSAL],
+    ['git checkout --th f', TREE_REFUSAL],
+    ['git checkout --patc f', TREE_REFUSAL],
+    ['git checkout --pathspec-from list', TREE_REFUSAL],
+    ['git checkout --o f', TREE_REFUSAL], // `--ours` or `--overwrite-ignore`: git's usage error
+    ['git checkout --pa f', TREE_REFUSAL],
+    ['git checkout --det main', ''],
+    ['git checkout --pr main', ''], // `--progress`
+    ['git checkout --no-force main', ''],
+    ['git checkout --no-force -f main', TREE_REFUSAL], // the last word wins: git forces
+    ['git checkout -f --no-force main', TREE_REFUSAL], // fail-closed: git would not force
+    ['git checkout -p --no-patch f', TREE_REFUSAL],
+  ]);
+});
+
+test('checkout: behind `--end-of-options` every word is a positional, as git 2.54 reads it', () => {
+  said([
+    ['git checkout --end-of-options .', TREE_REFUSAL],
+    ['git checkout --end-of-options -f main', TREE_REFUSAL],
+    ['git checkout --end-of-options main', ''],
+  ]);
+});
+
+test('checkout and switch: the branch question answers first — a tree form on the same line keeps the history sentence', () => {
+  said([
+    ['git checkout -b x', REFUSAL],
+    ['git checkout -f -b x', REFUSAL],
+    ['git checkout -qfb x', REFUSAL],
+    ['git checkout -b x -- f', REFUSAL],
+    ['git switch -c x --discard-changes', REFUSAL],
+    ['git switch -fc x', REFUSAL],
+    ['git checkout x', ''],
+  ]);
+});
+
+test('switch: `-f`/`--force` and `--discard-changes` discard work, wherever they sit and however abbreviated; other forms pass', () => {
+  said([
+    ['git switch -f main', TREE_REFUSAL],
+    ['git switch --force main', TREE_REFUSAL],
+    ['git switch --discard-changes main', TREE_REFUSAL],
+    ['git switch main --discard-changes', TREE_REFUSAL],
+    ['git switch -qf main', TREE_REFUSAL],
+    ['git switch --disc main', TREE_REFUSAL],
+    ['git switch --di main', TREE_REFUSAL],
+    ['git switch --d main', TREE_REFUSAL], // `--detach` or `--discard-changes`: git's usage error
+    ['git switch --f main', TREE_REFUSAL], // `--force` or `--force-create`
+    ['git switch --discard-changes --no-force main', TREE_REFUSAL], // git: still discards
+    ['git switch -f --no-force main', TREE_REFUSAL], // fail-closed
+    ['git switch main', ''],
+    ['git switch -', ''],
+    ['git switch -m main', ''],
+    ['git switch --detach main', ''],
+    ['git switch -d HEAD~1', ''],
+    ['git switch --no-force main', ''],
+    ['git switch --conflict merge main', ''],
+    ['git switch --conflict -f main', ''], // `-f` is the style git refuses, no force
+  ]);
+});
+
+test('restore: every form discards work but `--staged`/`-S` without `--worktree`/`-W` — the index moves, the file stays', () => {
+  said([
+    ['git restore .', TREE_REFUSAL],
+    ['git restore f', TREE_REFUSAL],
+    ['git restore --source=HEAD~1 -- .', TREE_REFUSAL],
+    ['git restore -s HEAD f', TREE_REFUSAL],
+    ['git restore --worktree f', TREE_REFUSAL],
+    ['git restore --staged --worktree f', TREE_REFUSAL],
+    ['git restore -S -W f', TREE_REFUSAL],
+    ['git restore -SW f', TREE_REFUSAL],
+    ['git restore -WS f', TREE_REFUSAL],
+    ['git restore -p f', TREE_REFUSAL],
+    ['git restore', TREE_REFUSAL],
+    ['git restore --staged f', ''],
+    ['git restore -S f', ''],
+    ['git restore --staged .', ''],
+    ['git restore --staged -- f', ''],
+    ['git restore --staged -p f', ''],
+    ['git restore --staged --source=HEAD~1 f', ''],
+    ['git restore -Sq f', ''],
+    ['git restore -qS f', ''],
+  ]);
+});
+
+test('restore: options are read anywhere before `--`, by prefix, with their values — a value is never `--staged`', () => {
+  said([
+    ['git restore f --staged', ''], // git reads the option behind the path
+    ['git restore --stag f', ''],
+    ['git restore --st f', ''],
+    ['git restore -Ss HEAD f', ''],
+    ['git restore -SsHEAD f', ''],
+    ['git restore --staged --sour HEAD f', ''],
+    ['git restore --staged --end-of-options f', ''],
+    ['git restore --staged --no-w f', ''], // a negated worktree: the index only
+    ['git restore -sS f', TREE_REFUSAL], // `--source=S`: the work tree
+    ['git restore -s --staged f', TREE_REFUSAL], // `--source=--staged`
+    ['git restore --stag --work f', TREE_REFUSAL],
+    ['git restore --s f', TREE_REFUSAL], // `--source` or `--staged`: git's usage error
+    ['git restore -- --staged f', TREE_REFUSAL], // behind `--` it is a path
+    ['git restore --end-of-options --staged f', TREE_REFUSAL],
+    ['git restore --staged --no-staged f', TREE_REFUSAL],
+    ['git restore --staged --no-st f', TREE_REFUSAL],
+    ['git restore --staged --n f', TREE_REFUSAL], // every negation: ambiguous
+    ['git restore --staged --worktree --no-worktree f', TREE_REFUSAL], // fail-closed: git restores the index only
+  ]);
+});
+
+test('clean: every form deletes but `-n`/`--dry-run`, which wins over `-f` and `-i` — and no `-n` refuses whatever the config says', () => {
+  said([
+    ['git clean -fd', TREE_REFUSAL],
+    ['git clean -f', TREE_REFUSAL],
+    ['git clean -fdx', TREE_REFUSAL],
+    ['git clean -ffdx', TREE_REFUSAL],
+    ['git clean -X -f', TREE_REFUSAL],
+    ['git clean -i', TREE_REFUSAL],
+    ['git clean', TREE_REFUSAL],
+    ['git -c clean.requireForce=false clean', TREE_REFUSAL], // deletes with no flag at all
+    ['git clean -d', TREE_REFUSAL],
+    ['git clean -n', ''],
+    ['git clean --dry-run', ''],
+    ['git clean -nd', ''],
+    ['git clean -ndx', ''],
+    ['git clean -nf', ''],
+    ['git clean -fn', ''],
+    ['git clean -f -n', ''],
+    ['git clean -n -i', ''],
+    ['git clean d -n', ''],
+  ]);
+});
+
+test('clean: `-e` takes a value — `-e -n` is a pattern; a prefix of `--dry-run` is one; a negation of it after `-n` deletes', () => {
+  said([
+    ['git clean -e -n -f', TREE_REFUSAL], // git: excludes `-n`, deletes
+    ['git clean -en -f', TREE_REFUSAL],
+    ['git clean -fen', TREE_REFUSAL],
+    ['git clean --exclude -n -f', TREE_REFUSAL],
+    ['git clean --ex -n -f', TREE_REFUSAL],
+    ['git clean --exclude=-n -f', TREE_REFUSAL],
+    ['git clean -f -- -n', TREE_REFUSAL],
+    ['git clean -f --end-of-options -n', TREE_REFUSAL],
+    ['git clean -n --no-dry-run -f', TREE_REFUSAL],
+    ['git clean -n --no-d -f', TREE_REFUSAL],
+    ['git clean -n --n -f', TREE_REFUSAL],
+    ['git clean -e pat -n', ''],
+    ['git clean -ne x', ''],
+    ['git clean -n -e -f', ''], // `-f` is the pattern
+    ['git clean --dry -f', ''],
+    ['git clean --d -f', ''], // git: `--dry-run`
+    ['git clean -n --no-quiet', ''],
+  ]);
+});
+
+test('restore and clean: the one passing form is read from plain words only — an expansion or a brace before `--` refuses', () => {
+  said([
+    ['git restore --staged $F', TREE_REFUSAL], // F='--worktree f'
+    ['git restore --staged "$F"', TREE_REFUSAL], // F='--worktree'
+    ['git restore --staged {f,g}', TREE_REFUSAL],
+    ['git restore --staged -s $R f', TREE_REFUSAL],
+    ['git restore -$X f', TREE_REFUSAL],
+    ['git restore --staged -- "$F"', ''],
+    ['git restore --staged -s "$R" f', ''],
+    ['git restore --staged --source="$R" f', ''],
+    ['git clean -n $D', TREE_REFUSAL],
+    ['git clean -n {a,b}', TREE_REFUSAL],
+    ['git clean -n -- "$D"', ''],
+  ]);
+});
+
+test('checkout and switch: a brace, or an expansion in an option word or a value the shell may split, is refused unread', () => {
+  said([
+    ['git checkout -{f,q} main', UNREAD_REFUSAL],
+    ['git checkout {main,.}', UNREAD_REFUSAL],
+    ['git checkout -$X main', UNREAD_REFUSAL],
+    ['git checkout "-$X" main', UNREAD_REFUSAL],
+    ['git checkout --conflict $S main', UNREAD_REFUSAL], // S='merge .'
+    ['git switch --$X main', UNREAD_REFUSAL],
+    ['git switch -{f,q} main', UNREAD_REFUSAL],
+    ['git checkout $REF', ''], // what an expansion prints is not read as a flag: the residual kept
+    ['git checkout "$REF"', ''],
+    ['git checkout $A $B', TREE_REFUSAL],
+    ['git checkout ./$X', TREE_REFUSAL],
+    ['git switch "$B"', ''],
+  ]);
+});
+
+test('restore and clean fed by xargs discard work; checkout and switch fed so keep the history sentence', () => {
+  said([
+    ['xargs git restore', TREE_REFUSAL],
+    ['xargs git restore --staged', TREE_REFUSAL],
+    ['xargs git clean', TREE_REFUSAL],
+    ['xargs git clean -n', TREE_REFUSAL],
+    ['xargs git checkout', REFUSAL],
+    ['xargs git log', ''],
+  ]);
+});
+
+test('the tree refusal names the role and the class; reset and every history write print the sentence they printed', () => {
+  for (const agent of ['omelette-tester', 'omelette-reviewer']) {
+    const r = fire(guard(), { ...preToolUse('git restore .'), agent_type: agent });
+    assert.equal(r.code, 2, r.err);
+    assert.match(r.err.trim(), new RegExp(`^${agent} never discards work in the tree\\b.*; report instead$`));
+  }
+  said([
+    ['git reset --hard', REFUSAL],
+    ['git reset --merge', REFUSAL],
+    ['git reset --keep', REFUSAL],
+    ['git commit -m x', REFUSAL],
+    ['git checkout -b x', REFUSAL],
+    ["git restore .; sh -c 'git commit -m x'", REFUSAL], // a history write anywhere prints first
+    ['git clean -fd; git -C $(pwd) status', UNREAD_REFUSAL],
+    ['git reset --soft HEAD~1', ''],
+  ]);
+});

@@ -170,7 +170,8 @@ test('G7: 32 000 invocations in one separator-free command are answered in linea
   for (const [command, code, label] of [
     ['git tag -l '.repeat(32000), 0, 'git tag -l ×32000'],
     ['git branch -l '.repeat(32000), 0, 'git branch -l ×32000'],
-    ['git checkout x '.repeat(32000), 0, 'git checkout x ×32000'],
+    // 1.10.1: `git checkout x git checkout x …` is a tree-ish and paths, refused since; `switch` takes no paths and keeps the row's point.
+    ['git switch x '.repeat(32000), 0, 'git switch x ×32000'],
     ['git rebase --abort '.repeat(32000), 0, 'git rebase --abort ×32000'],
     [`echo ${'git tag x '.repeat(32000)}; git tag v1`, 2, 'echo …git tag x×32000; git tag v1'],
     [`echo ${'git checkout x '.repeat(32000)}; git checkout -b v1`, 2, 'echo …git checkout x×32000; git checkout -b v1'],

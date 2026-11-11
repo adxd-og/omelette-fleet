@@ -396,3 +396,119 @@ test('git config: an option-shaped word the shell fills in, quoted or not, is re
     ['git config --file "$F" --get a.b', ''],
   ]);
 });
+
+// ---- 1.10.1 T3, work thrown away ----------------------------------------------------------------------------------
+// Every git fact was measured on git 2.38.1 and 2.54.0 by argv in throwaway repositories (a modified tracked file
+// overwritten, or an untracked one deleted).
+
+const TREE_SENTENCE = (agent = 'omelette-coder') => `${agent} never discards work in the tree (a checkout of paths, a forced checkout or switch, a restore of the work tree, a clean); report instead`;
+
+test('tree forms: a word the shell unquotes reaches git as the same option — quoted, escaped or $-quoted, the verdict holds', () => {
+  said([
+    ['git checkout "-f" main', TREE_SENTENCE()],
+    ["git checkout '--force' main", TREE_SENTENCE()],
+    ["git checkout '--' .", TREE_SENTENCE()],
+    ["git checkout $'-f' main", TREE_SENTENCE()],
+    ['git checkout \\-f main', TREE_SENTENCE()],
+    ['git checkout --f"orce" main', TREE_SENTENCE()],
+    ["git switch '-f' main", TREE_SENTENCE()],
+    ['git restore "--worktree" f', TREE_SENTENCE()],
+    ["git clean '-f' -d", TREE_SENTENCE()],
+    ['git restore "--staged" f', ''],
+    ["git restore '-S' f", ''],
+    ["git clean '-n'", ''],
+    ['git clean -"n"', ''],
+    ['git checkout "main"', ''],
+  ]);
+});
+
+test('tree forms: a form read inside sh -c, a substitution or a wrapper keeps the tree sentence', () => {
+  said([
+    ['sh -c "git restore ."', TREE_SENTENCE()],
+    ["bash -c 'git checkout -- .'", TREE_SENTENCE()],
+    ['echo $(git clean -fd)', TREE_SENTENCE()],
+    ['timeout 5 git clean -fd', TREE_SENTENCE()],
+    ['env FOO=1 git restore .', TREE_SENTENCE()],
+    ['FOO=1 git switch -f main', TREE_SENTENCE()],
+    ['git -C /tmp/x checkout -- .', TREE_SENTENCE()],
+    ['git -c core.pager=cat restore f', TREE_SENTENCE()],
+    ['sh -c "git restore --staged f"', ''],
+    ['timeout 5 git clean -n', ''],
+  ]);
+});
+
+test('tree forms: the same sentence for every guarded role, and a word that only names a subcommand is not one', () => {
+  for (const agent of ['omelette-coder-medium', 'omelette-coder-hard', 'omelette-coder-xhard']) {
+    said([['git clean -fd', TREE_SENTENCE(agent)]], agent);
+  }
+  said([
+    ['echo restore', ''],
+    ['make clean', ''],
+    ['npm run clean', ''],
+    ['git log --grep=clean', ''],
+    ['git log --grep=restore -- clean', ''],
+    ['git show HEAD:restore', ''],
+    ['git branch --list "clean*"', ''],
+  ]);
+});
+
+test('tree forms: 32 000 repeated options and chained invocations are answered in linear time', () => {
+  const path = guard();
+  for (const [command, code] of [
+    ['git checkout main' + ' -q'.repeat(32000), 0],
+    ['git checkout main' + ' --no-force'.repeat(32000), 0],
+    ['git switch main' + ' --no-force'.repeat(32000), 0],
+    ['git restore --staged' + ' --stag'.repeat(32000) + ' f', 0],
+    ['git restore --staged' + ' -sX'.repeat(32000) + ' f', 0],
+    ['git clean -n' + ' -e x'.repeat(32000), 0],
+    ['git clean -' + 'n'.repeat(32000), 0],
+    ['git restore --staged f ; '.repeat(32000), 0],
+    ['git clean -n ; '.repeat(32000), 0],
+    ['git checkout main -f' + ' -q'.repeat(32000), 2],
+  ]) {
+    const started = process.hrtime.bigint();
+    const r = fire(path, command);
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.equal(r.signal, null, `${command.slice(0, 30)}… hung`);
+    assert.equal(r.status, code, `${command.slice(0, 30)}… → ${r.status} ${r.stderr}`);
+    assert.ok(ms < 6000, `${command.slice(0, 30)}… took ${ms.toFixed(0)} ms`); // measured 60-500 ms
+  }
+});
+
+// ---- 1.10.1 T3, second pass: gaps the mutation sweep found --------------------------------------------------------
+// Each refused form below was run against git 2.38.1 (and 2.54.0 unless noted) by argv in a throwaway repository and
+// overwrote a modified tracked file or deleted an untracked one.
+
+test('tree forms: a value is taken by the right option — a negated option, an attached value and a cluster that ends in its value take no next word', () => {
+  said([
+    ['git checkout --no-conflict HEAD f1', TREE_SENTENCE()], // `--no-conflict` has no value: `HEAD` is a tree-ish, `f1` a path
+    ['git checkout --no-pathspec-from-file HEAD f1', TREE_SENTENCE()],
+    ['git checkout --conflict=merge HEAD f1', TREE_SENTENCE()], // git 2.38.1; 2.54 refuses `--conflict` with paths itself
+    ['git restore -SsHEAD --worktree f1', TREE_SENTENCE()], // `-sHEAD` is the value of `-s`: `--worktree` is an option again
+    ['git checkout --no-conflict main', ''],
+    ['git checkout --conflict=merge main', ''],
+    ['git restore -SsHEAD f1', ''],
+    ['git restore --staged --source=HEAD f1', ''],
+  ]);
+});
+
+test('restore and clean: an unquoted expansion glued to a long option, or the value of `-e`/`--exclude`, may split into more words — refused', () => {
+  said([
+    ['git restore --staged --source=$R f1', TREE_SENTENCE()], // R='HEAD --worktree'
+    ['git clean -n --exclude=$P', TREE_SENTENCE()], // P='x --no-dry-run -f'
+    ['git clean -n -e $P', TREE_SENTENCE()],
+    ['git clean -n --exclude $P', TREE_SENTENCE()],
+    ['git clean -n -$X', TREE_SENTENCE()],
+    ['git restore --staged --source="$R" f1', ''], // quoted whole: one word
+    ['git clean -n -e "$P"', ''],
+    ['git clean -n --exclude="$P"', ''],
+  ]);
+});
+
+test('checkout: a bracket glob is a pathspec like `*` and `?`', () => {
+  said([
+    ["git checkout 'f[12]'", TREE_SENTENCE()],
+    ["git checkout 'src/[a]'", TREE_SENTENCE()],
+    ['git checkout feat/x', ''],
+  ]);
+});

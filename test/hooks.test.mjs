@@ -153,7 +153,6 @@ test('PreToolUse: everything else runs — other git commands, other tools, othe
     preToolUse({ tool_input: { command: 'git commit-tree $t -m x' } }),
     preToolUse({ tool_input: { command: 'git checkout main' } }),
     preToolUse({ tool_input: { command: 'git switch main' } }),
-    preToolUse({ tool_input: { command: 'git checkout -- file.txt' } }),
     preToolUse({ tool_input: { command: 'git merge-base main HEAD' } }),
     // `git branch` READS until it is given a name or a flag that moves a ref:
     // listing, deleting and the remote/all/verbose views are how a coder finds
