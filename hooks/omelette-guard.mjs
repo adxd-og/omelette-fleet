@@ -2587,17 +2587,18 @@ class TooWide extends TooDeep {}
  * 'git commit'`, `$(git commit)` and `>(git commit)` run it. Each step is a single pass and there are at most QUOTE_DEPTH + 1
  * levels, so a 10 KB command costs milliseconds and is never tiled.
  *
- * A CLASS ADDED AFTER 1.10.0 LETS THROUGH NOTHING 1.10.0 REFUSED, SAVE FORMS GIT ITSELF REJECTS (1.10.1). A history
- * write and an invocation read as unread are answered as they always were, level by level; the first write of a later
- * class — CONFIG, TREE, and the UNREAD_SUBCOMMAND a reader or a `-c` key answers, which 1.10.0 passed — is kept in
- * `later` and is the answer only where neither is found anywhere in the command: `git config --unset x; sh -c 'git
- * commit'` still reads as a commit. What changed comes from `config`, `restore` and `clean` being names the guard
- * now knows (measured on 2.38.1 and 2.54). A sentence changed and the refusal stayed: a braced subcommand that names
- * one of them first — `git {clean,commit} -m x` and `git {restore,commit} f`, unread on 1.10.0, print the tree
- * sentence (git runs the second, as `restore commit f`) — and `xargs git -c config -S -e`, unread on 1.10.0, prints
- * the config one. Refused on 1.10.0 and passing now, each a form git rejects with nothing written (exit 128 or 129):
- * `git {clean,commit} -n -m x` (git: `clean commit -n -m x`, an unknown switch) and `git -c checkout -b config` (an
- * unknown option). Passed on 1.10.0 and refused now: `git --bogus config a.b c`.
+ * A CLASS ADDED AFTER 1.10.0 LETS THROUGH NO WRITE 1.10.0 REFUSED (1.10.1). A history write and an invocation read as
+ * unread are answered as they always were, level by level; the first write of a later class — CONFIG, TREE, and the
+ * UNREAD_SUBCOMMAND a reader or a `-c` key answers, which 1.10.0 passed — is kept in `later` and is the answer only
+ * where neither is found anywhere in the command: `git config --unset x; sh -c 'git commit'` still reads as a commit.
+ * What changed comes from `config`, `restore` and `clean` being names the guard now knows (measured on 2.38.1 and
+ * 2.54). A braced subcommand that names one of them first, unread on 1.10.0, is read as that subcommand, which is what
+ * the shell makes of it: `git {clean,commit} -m x` and `git {restore,commit} f` print the tree sentence, `git
+ * {config,commit} a b` the config one, and what that subcommand's reader passes, passes — `git {clean,commit} -n` (a
+ * dry run), `git {restore,commit} --staged f` (the index only), `git {config,commit}` (a read). `xargs git -c config
+ * -S -e`, unread on 1.10.0, prints the config sentence. Refused on 1.10.0 and passing now with no reader behind it:
+ * `git -c checkout -b config`, which git rejects (an unknown option, nothing written). Passed on 1.10.0 and refused
+ * now: `git --bogus config a.b c`.
  *
  * @returns {string|symbol|false} false when it may run; the class of the write it read (HISTORY, CONFIG, TREE), whose
  *   sentence REFUSALS holds; UNREAD_SUBCOMMAND when none does but one has a substitution where git or its subcommand
