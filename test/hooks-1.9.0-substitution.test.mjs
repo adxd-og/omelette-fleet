@@ -483,7 +483,7 @@ test('review fix (heredoc fails closed): a body is data only when every program 
   check([
     ...['rbash', 'pwsh', 'nu', 'xonsh', 'toybox sh', 'python3', 'perl', 'node', 'ssh host', 'su -c', 'docker run -i img']
       .map((program) => [`${program} <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')]),
-    ...['cat', 'tee f', 'grep x', 'sed s/a/b/', 'base64 -d', 'sudo cat', 'cat >f']
+    ...['cat', 'tee f', 'grep x', 'base64 -d', 'sudo cat', 'cat >f']
       .map((program) => [`${program} <<'EOF'${body}`, 0, '']),
     [`sudo -u x $SHELL <<'EOF'${body}`, 2, REFUSAL('omelette-reviewer')],
     // An expansion in a redirection target feeds the body too: an over-refusal, accepted.

@@ -347,8 +347,9 @@ function heredocDelimiter(command, from) {
  * body, and a body that never terminates runs to the end. An unquoted body still
  * expands `$(…)` and backquotes, so what those run is handed back in `spans`.
  * UNLESS IT MAY RUN (1.9.0): when the operator's line hands it to anything but
- * a NON_EXEC program (`shell`, lineFeeds), or stands in a substitution whose
- * output runs (tokenize's `fed`), the body is a script — `bash <<'EOF'` + `git
+ * a NON_EXEC program (`shell`, lineFeeds), stands in a substitution whose
+ * output runs (tokenize's `fed`), or stands inside a group still open at its
+ * end (1.10.1, tokenize), the body is a script — `bash <<'EOF'` + `git
  * commit` commits, quoted delimiter or not — and is handed back whole, to be
  * read as a command of its own.
  *
@@ -448,9 +449,14 @@ function opaqueEnd(command, start, kind, budget) {
  * everywhere else: a shell under any name (`rbash`, `pwsh`, `toybox sh`), an interpreter (`python3`, `perl`, `node`),
  * or a program that hands it to one (`ssh host`, `su -c`, `docker run -i`). Until 1.9.0 it was the other way round,
  * a list of shells.
+ *
+ * `awk` and `sed` are out of the set (1.10.1): each runs what it reads — `awk -f -` and `sed -f /dev/stdin` take the
+ * body as their program, and `awk 'BEGIN{system("sh")}' <<'EOF'` hands it to a shell through the stdin it inherits,
+ * with no `-f` on the line, so no flag separates the forms. `less`, `more`, `tar` and `cpio` stay: none runs a text
+ * body, and an option that would (`--to-command`) is a word of the line, which the guard reads.
  */
 const NON_EXEC = new Set([
-  'cat', 'tee', 'head', 'tail', 'less', 'more', 'wc', 'grep', 'egrep', 'fgrep', 'sed', 'awk', 'sort', 'uniq', 'cut', 'tr',
+  'cat', 'tee', 'head', 'tail', 'less', 'more', 'wc', 'grep', 'egrep', 'fgrep', 'sort', 'uniq', 'cut', 'tr',
   'base64', 'xxd', 'od', 'hexdump', 'md5', 'md5sum', 'shasum', 'sha256sum', 'diff', 'cmp', 'jq', 'yq', 'column', 'fold',
   'paste', 'tac', 'rev', 'nl', 'expand', 'fmt', 'pr', 'gzip', 'bzip2', 'xz', 'zstd', 'tar', 'cpio', 'echo', 'printf',
   'true', ':',
@@ -499,7 +505,8 @@ const mayBeAnyProgram = (text) => SUBSTITUTED.test(text) || text.includes('\\') 
  *     the body on: `cat <<'EOF' > $OUT` (an over-refusal, accepted), `tee >(sh) <<'EOF'`. An argument is not read
  *     so (`echo $HOME <<'EOF'` passes), and a substitution of such a line is not run: `echo "$(cat <<'EOF' … EOF)"`
  *     prints its body.
- *   - Neither otherwise: `cat > f <<'EOF'`, `grep x <<'EOF'`, `sed s/a/b/ <<'EOF'`.
+ *   - Neither otherwise: `cat > f <<'EOF'`, `grep x <<'EOF'`, `sort <<'EOF'`.
+ * A line inside a group still open at its end is fed whatever this answers (tokenize, A GROUP STILL OPEN).
  */
 function lineFeeds(tokens, from, targets, procSub) {
   const [before, last] = tokens.slice(-2);
@@ -517,6 +524,72 @@ function lineFeeds(tokens, from, targets, procSub) {
 const LEADS_A_COMMAND = new Set(['!', '{', '(', 'if', 'then', 'elif', 'else', 'do', 'while', 'until', 'time']);
 /** An assignment word, `name=…`, `name+=…` or `name[…]=…`: the command position goes on after it. */
 const ASSIGNMENT_WORD = /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/;
+
+/** A group nothing closes: from where the guard cannot place a close as both shells do, every later line stands in one. */
+const UNREAD_GROUP = '?';
+/**
+ * THE GROUPS A LINE MAY STAND IN (1.10.1; tokenize, A GROUP STILL OPEN). The reserved words that open a compound
+ * command, each with the kind of group it opens, and the words that close one: `if` … `fi`, `case` … `esac`, a loop
+ * … `done`, a brace group … `}`. `repeat` and `foreach` are zsh's alone and bash's ordinary words; they are counted
+ * because zsh would run them, and `foreach` … `end` as a group nothing closes. `(` and `{` open the two kinds that
+ * have no word.
+ */
+const GROUP_OPENERS = new Map([
+  ['if', 'if'], ['case', 'case'], ['for', 'loop'], ['while', 'loop'], ['until', 'loop'], ['select', 'loop'], ['repeat', 'loop'],
+  ['foreach', UNREAD_GROUP],
+]);
+const GROUP_CLOSERS = new Map([['fi', 'if'], ['esac', 'case'], ['done', 'loop'], ['}', '{']]);
+/** The longest word of the two maps and of `[[` / `]]`: a longer piece of a word is none of them. */
+const LONGEST_RESERVED = 7;
+
+/**
+ * DO BOTH SHELLS END THIS NESTED TEXT WHERE THE GUARD ENDED IT? The guard ends a `$(…)` by counting parentheses
+ * outside quotes (substitutionEnd), a `${…}` or `((…))` likewise (opaqueEnd), and a `"…"` at its first unescaped
+ * quote; bash 3.2 and zsh read what is inside, and end it later — or earlier — where it holds something that hides
+ * a delimiter from them or shows them one: `$(echo \))`, `$(echo a # )` + newline + `)`, `$(case x in a) …)` (zsh),
+ * `"$(echo ")")"`, `"${x:-")"}"`. The text between the two ends is then read here as the outer command's, and a `)`,
+ * a `}` or a `fi` in it would close a group the shell still holds open.
+ *
+ * So `from`..`to` (a substitution's inside, an opaque region whole, or a double-quoted span with its quotes) is
+ * read alike only when it holds none of: a backslash or a backquote anywhere; outside single quotes, a `${` whose
+ * braces hold a quote, a parenthesis or a brace; in a `"…"`, a `$(` that the same quotes do not see closed, or one
+ * whose single-quoted span is left open or holds a `"`; and, where a command is read (outside quotes, or in a
+ * quoted `$(`), a `#` that starts a word, a `<<`, or the word `case`; nor may it end inside a `${`.
+ * Whatever it cannot follow, the answer is no, and the caller keeps every group open (UNREAD_GROUP).
+ *
+ * One pass, no recursion: linear in the region.
+ */
+function endsAlike(command, from, to) {
+  let quote = '';
+  let nested = 0; //     inside "…": how deep in the parentheses of a `$(` it holds
+  let brace = false; //  inside a `${…}`
+  for (let j = from; j < to; j++) {
+    const c = command[j];
+    if (c === '\\' || c === '`') return false;
+    if (quote === "'") { if (c === "'") quote = ''; continue; }
+    if (brace) {
+      if (c === '}') brace = false;
+      else if (c === '"' || c === "'" || c === '(' || c === ')' || c === '{') return false;
+      continue;
+    }
+    if (c === '$' && command[j + 1] === '{') { brace = true; j++; continue; }
+    if (quote) {
+      if (c === '"') { if (nested) return false; quote = ''; continue; }
+      if (!nested) { if (c === '$' && command[j + 1] === '(') { nested = 1; j++; } continue; }
+      if (c === "'") {
+        for (j++; j < to && command[j] !== "'"; j++) if (command[j] === '"' || command[j] === '\\') return false;
+        if (j >= to) return false;
+        continue;
+      }
+      if (c === '(') nested++;
+      else if (c === ')') nested--;
+    } else if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === '#' && (j === from || /[\s;&|(){}<>]/.test(command[j - 1]))) return false;
+    if (c === '<' && command[j + 1] === '<') return false;
+    if (c === 'c' && command.startsWith('case', j) && !/\w/.test(command[j - 1] ?? ' ') && !/\w/.test(command[j + 4] ?? ' ')) return false;
+  }
+  return !brace; // a quote is closed here wherever the guard closed it: the two read quotes alike up to this point
+}
 
 /**
  * The whole command as WORDS and SEPARATORS, in one left-to-right pass. A quoted
@@ -585,6 +658,52 @@ const ASSIGNMENT_WORD = /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/;
  * line, because a body boundary read differently lets a later `<<X` hide the
  * lines the shell runs.
  *
+ * A GROUP STILL OPEN (1.10.1). A heredoc whose line stands inside a group that
+ * is open at that line's end has its body read as a command, and what the
+ * line's substitutions print is taken as run: what the group's output feeds —
+ * `) | sh`, `} | sh`, `fi | sh`, or `f | sh` three lines after `f() {` — is
+ * written after the body, where lineFeeds has answered, and the guard does not
+ * look ahead for it. The groups (`groups`, innermost last): `(` … `)`, `{` …
+ * `}`, `if` … `fi`, a loop (`for`, `while`, `until`, `select`) … `done`, `case`
+ * … `esac`; a function's body is the group that follows its `()`. The word is
+ * read per PIECE — a word, or the part of one between two counted parentheses
+ * (`(if`, `fi)`, `a)case`).
+ *   - NOT groups: `((…))`, `$(…)`, backquotes, `<(…)`, `${…}` and a subscript
+ *     (never counted: read elsewhere), an array assignment's parentheses
+ *     (arrayDepth; the words inside one are no reserved words), a `)` that
+ *     closes a `case` pattern (the innermost group is that `case`), a `{…}`
+ *     that is no word of its own, anything quoted or escaped. A
+ *     backslash-newline inside a reserved word joins it, as both shells do.
+ *   - AN OPENER IS COUNTED WHERE EITHER SHELL MAY READ ONE (`reserved`): after
+ *     a separator, a counted parenthesis (a subshell's `(`, a pattern's or a
+ *     function header's `)`), a reserved word that leads a command
+ *     (LEADS_A_COMMAND; not an assignment, after which neither shell reads
+ *     one), an option (`time -p if`) or zsh's `coproc`, and past any
+ *     redirection (zsh reads `>f if`). zsh's own loops count: `repeat`, and
+ *     `foreach` as UNREAD_GROUP. `{` is counted as a word wherever it stands
+ *     (zsh's `always {`, `function f g {`); glued to a word where a reserved
+ *     word may be it opens a group in zsh — and whatever the rest of the word
+ *     opens, `{[[` — and is a command's name in bash, so it opens
+ *     UNREAD_GROUP. A group counted that no shell opened is an over-refusal.
+ *   - A CLOSER IS COUNTED ONLY WHERE BOTH SHELLS READ ONE: the whole word,
+ *     unquoted, the first after a `;`, a newline or an `&` with nothing but
+ *     spaces and tabs between (`boundary`: not after `|`, where a `case`
+ *     pattern may stand, `a|esac)`; not after a `\r`; not past a redirection,
+ *     where bash runs `>f fi` as a command named `fi` — the target's word is
+ *     a word), ended by a blank, a separator, a
+ *     redirection or a `)`, outside `[[ … ]]` (`cond`: both shells take a line
+ *     of one as a word, `[[` + newline + `fi ]]`), and matching the innermost
+ *     group. zsh also closes on a `}` in argument position, bash does not; a
+ *     word followed by a no-break space is a closer to neither. A `)` closes
+ *     the innermost `(` only.
+ *   - WHERE THE GUARD CANNOT PLACE A CLOSE, NOTHING CLOSES: a closer that does
+ *     not match stays unread, and a nested text the shells may end elsewhere
+ *     (endsAlike), read while a group is open, opens UNREAD_GROUP, which
+ *     nothing closes. Every later heredoc is then in a group: an
+ *     over-refusal, never a depth counted too low.
+ * A quoted word of a NON_EXEC program (QUOTED_WORD) is text whatever group it
+ * names: its heredocs stay bodies.
+ *
  * A TARGET THAT IS A FILE is handed back too, in `targets`, for the curated
  * rule (bashWrites): its path with the quotes off, its operator without the fd
  * number (`2>` is `>`), and `at`, the number of words before it — which is how
@@ -628,14 +747,55 @@ function tokenize(command, fed = NOT_FED) {
   let lineSpans = 0; //          …and of the first span read on it
   let lineTargets = []; //       …its redirection targets, its heredocs' words not among them (lineFeeds)
   let lineProcSub = false; //    …and whether it holds a process substitution
+  // A GROUP STILL OPEN: the groups open where the scan stands, and what reading a piece of a word takes.
+  const groups = []; //        innermost last: a GROUP_OPENERS kind, `(`, `{` or UNREAD_GROUP
+  let cond = false; //         inside a `[[ … ]]`, as either shell may read one
+  let reserved = true; //      either shell may read a reserved word where the piece being read starts
+  let boundary = '\n'; //      what stands before the word being read: a separator or an odd blank (a closer only after `;`, `\n`, `&`), or '' (a word)
+  // The piece being read, kept per character — `text` is never indexed for it (a rope read at every parenthesis is quadratic):
+  let pieceAt = 0; //          where in `text` it starts: the word's start, or past a counted parenthesis
+  let plainLength = 0; //      how many of its characters are plain ones (the last branch of the loop)
+  let pieceWord = ''; //       …those characters, while they are few enough to spell a reserved word
+  let pieceBrace = false; //   its first character is a plain `{`
+  let quoteAt = -1; //         the index of the open quote's first character
+  let quoteNests = false; //   the open `"…"` holds a `$(`, a `${` or a backquote
+  let i = 0; //                the scan: a piece ends at `command[i]`
   const span = (text, kind) => { spans.push(text); kinds.push(kind); };
+  const unreadGroups = () => { if (groups.length || cond) groups.push(UNREAD_GROUP); };
+  const startPiece = (at) => { pieceAt = at; plainLength = 0; pieceWord = ''; pieceBrace = false; };
+  // The piece that ends here — at its word's end (`end` is ''), or at the `(` or `)` in `end`, `stop` its end in `text`.
+  const readPiece = (end, stop = text.length) => {
+    const length = stop - pieceAt;
+    if (!length || redirect || arrayDepth > 0) return;
+    if (pieceBrace && (length === 1 || reserved)) { groups.push(length === 1 ? '{' : UNREAD_GROUP); return; }
+    if (length !== plainLength || length > LONGEST_RESERVED) return;
+    const word = pieceWord;
+    const ended = end === ')' || (end === '' && (i >= command.length || ' \t\n;&|<>'.includes(command[i])));
+    if (word === '[[') { cond = true; return; }
+    if (word === ']]') { if (ended) cond = false; return; }
+    const opens = GROUP_OPENERS.get(word);
+    if (opens) { if (reserved && end !== ')') groups.push(opens); return; }
+    const closes = GROUP_CLOSERS.get(word);
+    if (closes && ended && !cond && (boundary === ';' || boundary === '\n' || boundary === '&') && groups[groups.length - 1] === closes) groups.pop();
+  };
+  // A parenthesis both shells read as an operator, `text` ending in it: the piece before it, then the group it opens or closes.
+  const countParenthesis = (c) => {
+    readPiece(c, text.length - 1);
+    if (c === '(') groups.push('(');
+    // A `)` whose innermost group is a `case` closes a pattern, and one with any other group there closes nothing the guard can place.
+    else if (groups[groups.length - 1] === '(') groups.pop();
+    reserved = true;
+    boundary = '';
+    startPiece(text.length);
+  };
   // The line just read: are its heredoc bodies commands, and is what its substitutions print run (lineFeeds, or this
   // text is one whose output runs)? Then the line's substitutions are read with FEEDS_ALL — the heredoc bodies of the
   // commands inside them are commands too — and its quoted words with FEEDS_SUBS; otherwise its quoted words with
-  // QUOTED_WORD.
+  // QUOTED_WORD. A line inside a group still open at its end is read as one that feeds both.
   const endLine = () => {
     if (spans.length === lineSpans && !pendingHeredocs.length) return false;
-    const line = fed.word ? { bodies: false, subs: false } : lineFeeds(tokens, lineStart, lineTargets, lineProcSub);
+    const open = !fed.word && groups.length > 0;
+    const line = fed.word || open ? { bodies: open, subs: open } : lineFeeds(tokens, lineStart, lineTargets, lineProcSub);
     const subs = fed.bodies || fed.subs || line.subs;
     for (let k = lineSpans; k < spans.length; k++) {
       if (subs) feeds[k] = kinds[k] === 'sub' ? FEEDS_ALL : FEEDS_SUBS;
@@ -650,9 +810,13 @@ function tokenize(command, fed = NOT_FED) {
     if (!text) return;
     const plain = unquote(text); // only a word that held a quote loses a character here
     if (!redirect) {
+      readPiece('');
       tokens.push({ text, quoted, separator: false });
       const lead = text.replace(/^\(+/, '');
       if (position !== 'argument' && lead && !LEADS_A_COMMAND.has(lead) && !ASSIGNMENT_WORD.test(lead)) position = 'argument';
+      // A reserved word may still follow one that leads a command, an option (`time -p if`) or zsh's `coproc`.
+      const piece = text.slice(pieceAt);
+      if (piece && piece[0] !== '-' && piece !== 'coproc' && !LEADS_A_COMMAND.has(piece)) reserved = false;
     } else {
       const op = redirectOp === '>&' && !FD_DUPLICATE.test(plain) ? '&>' : redirectOp;
       if (WRITE_REDIRECTS.has(op)) targets.push({ path: plain, op, at: tokens.length });
@@ -664,12 +828,19 @@ function tokenize(command, fed = NOT_FED) {
     redirect = false;
     operatorEnd = false;
     wordShape = 0;
+    startPiece(0);
+    boundary = '';
   };
-  for (let i = 0; i < command.length; i++) {
+  for (; i < command.length; i++) {
     const c = command[i];
     if (quote) {
       if (c === '\\' && (quote === '"' || ansi) && i + 1 < command.length) { text += c + command[++i]; continue; }
-      if (c === quote) { quote = ''; ansi = false; }
+      if (c === quote) {
+        if (quoteNests && !endsAlike(command, quoteAt, i + 1)) unreadGroups();
+        quote = '';
+        ansi = false;
+        quoteNests = false;
+      } else if (quote === '"' && (c === '`' || (c === '$' && (command[i + 1] === '(' || command[i + 1] === '{')))) quoteNests = true;
       text += c;
       continue;
     }
@@ -685,12 +856,13 @@ function tokenize(command, fed = NOT_FED) {
       wordShape = 2;
       continue;
     }
-    if (c === '"' || c === "'") { quoted = quoted || !text; text += c; quote = c; operatorEnd = false; wordShape = 2; continue; }
+    if (c === '"' || c === "'") { quoted = quoted || !text; text += c; quote = c; quoteAt = i; operatorEnd = false; wordShape = 2; continue; }
     if (c === '$' && next === '$') { text += '$$'; i++; operatorEnd = false; wordShape = 2; continue; }
     if (c === '$' && (next === "'" || next === '"')) {
       quoted = quoted || !text;
       text += c + next;
       quote = next;
+      quoteAt = i + 1;
       ansi = next === "'";
       i++;
       operatorEnd = false;
@@ -721,6 +893,7 @@ function tokenize(command, fed = NOT_FED) {
     if (budget.left < 0) return { tokens, spans, targets, exhausted: true }; // no partial reading: refused whole
     if (opaque >= 0) {
       // Part of the word, `<<` and all; only its substitutions are commands.
+      if (!endsAlike(command, i, opaque + 1)) unreadGroups();
       let inner = '';
       for (let k = i; k <= opaque; k++) {
         const ch = command[k];
@@ -744,6 +917,7 @@ function tokenize(command, fed = NOT_FED) {
     if (((c === '$' || c === '<' || c === '>') && next === '(') || c === '`') {
       const end = substitutionEnd(command, i);
       const open = c === '`' ? '`' : `${c}(`;
+      if (c !== '`' && end < command.length && !endsAlike(command, i + 2, end)) unreadGroups();
       span(command.slice(i + open.length, end), 'sub');
       if (c !== '$' && c !== '`') lineProcSub = true;
       // Its bare delimiters, never longer than what they stand for, so a word
@@ -755,7 +929,7 @@ function tokenize(command, fed = NOT_FED) {
       continue;
     }
     if (c === '<' || c === '>' || (c === '&' && next === '>')) {
-      if (/^\d+$/.test(text)) { text = ''; wordShape = 0; } else push(); // `2>`: the fd number is part of the operator
+      if (/^\d+$/.test(text)) { text = ''; wordShape = 0; startPiece(0); } else push(); // `2>`: the fd number is part of the operator
       if (position === 'command') position = 'argument'; // bash reads no subscript after a redirection
       const opAt = i;
       if (c === '&') i++; //                             `&>`, `&>>`: the `>` comes next
@@ -787,6 +961,7 @@ function tokenize(command, fed = NOT_FED) {
         // `()`), what it runs is handed back.
         const end = substitutionEnd(command, i);
         span(command.slice(i + 2, end), 'sub');
+        if (end < command.length && !endsAlike(command, i + 2, end)) unreadGroups();
         lineProcSub = true;
         text += end < command.length ? '()' : '(';
         i = end;
@@ -798,6 +973,8 @@ function tokenize(command, fed = NOT_FED) {
       redirect = false;
       tokens.push({ text: c, quoted: false, separator: true });
       position = c === '\r' ? 'unknown' : 'command'; // bash separates nothing on a `\r`: the word it glues on is anywhere
+      reserved = true;
+      boundary = c;
       if (c === '\n') {
         const shell = endLine();
         // A body is a script or text of its own: its spans are read as any command is (no kind, NOT_FED).
@@ -810,7 +987,12 @@ function tokenize(command, fed = NOT_FED) {
       }
       continue;
     }
-    if (/\s/.test(c)) { push(); continue; }
+    if (/\s/.test(c)) {
+      push();
+      if (c !== ' ' && c !== '\t') boundary = c; // any other blank is part of the next word to bash: no closer after it
+      continue;
+    }
+    if (text.length === pieceAt) pieceBrace = c === '{';
     text += c;
     if (c === '(' && assignAt >= 0 && real(assignAt + 1) === i) { arrayDepth = 1; operatorEnd = false; } // `a=(`
     else if (arrayDepth > 0 && (c === '(' || c === ')')) {
@@ -819,7 +1001,11 @@ function tokenize(command, fed = NOT_FED) {
       arrayDepth += c === '(' ? 1 : -1;
       operatorEnd = false;
       if (!arrayDepth && command[real(i + 1)] === '#') skipBodies = false;
-    } else operatorEnd = c === '(' || c === ')';
+    } else {
+      operatorEnd = c === '(' || c === ')';
+      if (operatorEnd) countParenthesis(c);
+    }
+    if (!operatorEnd && plainLength++ < LONGEST_RESERVED) pieceWord += c;
     if (c === '=' && (wordShape === 1 || (plusAt >= 0 && real(plusAt + 1) === i))) assignAt = i;
     if (c === '+' && wordShape === 1) plusAt = i;
     if (wordShape === 0) wordShape = c === '(' ? 0 : /[A-Za-z_]/.test(c) ? 1 : 2;
