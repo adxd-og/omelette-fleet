@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.11.0 — 2026-11-13
+
+The Gemini catalog after agy 1.5.8: Gemini 4 Hydrogen replaces Gemini 3.8 Flash, and Gemini 4 Argon's entries are re-read on today's sources. Map: the `gemini_models` tool for every entry and its figures; [ORCHESTRATION, "Model and effort escalation"](docs/ORCHESTRATION.md#model-and-effort-escalation) for when to go down or up.
+
+- **Catalog.** `Gemini 4 Hydrogen (Low|Medium|High|XHigh)` replace the three 3.8 Flash ids. `(High)` is the fleet default, as it is Google's; `(XHigh)` is new, a named step up — never the default, a sweep, a deep-research stage or `gemini.model`. `gemini_deep_research` with no model runs its stages on Hydrogen Medium and High. A call that names a 3.8 Flash id is refused with the list of valid ids.
+- **Upgrading — check `gemini.model`.** A config that still names `Gemini 3.8 Flash (…)` is not an error: the unit prints one warning and every call without `model` then runs on agy's own default. If that default is Argon, those calls spend Argon's small weekly window. Run `omelette-fleet set gemini.model="Gemini 4 Hydrogen (High)"`; `examples/fleet.config.json` already names it. Then `omelette-fleet rules` for the routing row.
+- **What is measured, and at which level.** Hydrogen at high has four Artificial Analysis figures (Index 51, $1.87 and 7.9 minutes per Index task, 110M output tokens over the Index); the per-benchmark rows are published for xhigh only, and the DeepMind card states no level. Low and Medium are unmeasured. The entries say which is which.
+- **A caveat on image and PDF reads.** They stay on `gemini_research` and its default. The card reports unjustified refusals up 5.57 percentage points against 3.8 Flash, "particularly for multimodal prompts".
+- **Argon.** Still the tie-breaker, now as the heavier Gemini 4. Its entries keep what a source shows today: three AA rows where Argon at high leads Hydrogen at xhigh (Terminal-Bench 4.0, Terminal-Bench-Science, AutomationBench-AA), and its card's repository and long-input rows. Every figure read on 2026-10-14 is gone: it came from an earlier version of AA's Index.
+- **Routing.** ORCHESTRATION's Gemini paragraph and the tie-breaker row of the rules file follow the catalog. GPT-OSS 120B's announced removal moved to 2026-11-18; it leaves the catalog when agy stops listing it.
+- **Not in this release.** The eval scripts do not know the XHigh level or the word Hydrogen yet (round two). agy's `Orchestrator (Argon)` and the Claude Low tiers stay out of the catalog.
+
 ## 1.10.2 — 2026-11-13
 
 A security patch for the Gemini unit: under agy 1.5.8 a research run executed a shell command no allow rule named, and agy's changelog names the cause — 1.5.7 made Auto, which approves file edits and "safe" commands with nobody asked, the default agent mode. Map: [SECURITY, "Gemini — the weakest posture"](docs/SECURITY.md#gemini--the-weakest-posture-documented-as-such) for what is pinned, what was measured and what still rests on your agy settings.
