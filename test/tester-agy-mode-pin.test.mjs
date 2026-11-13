@@ -57,10 +57,17 @@ test('research under an open ceiling WITHOUT a cwd stays read-only: pinned', asy
   assertPinned(spawns[0]);
 });
 
-test('deep research with an explicit model and a cwd: decompose (schema), every gather and the synthesis are pinned', async () => {
+test('read-only research with a cwd — the run that sits in a project — is pinned and never accept-edits', async () => {
   const { runtime, spawns, dir } = rt();
+  await runtime.callTool('gemini_research', { prompt: 'q', cwd: dir });
+  assert.equal(spawns.length, 1);
+  assertPinned(spawns[0]);
+});
+
+test('deep research with an explicit model: decompose (schema), every gather and the synthesis are pinned', async () => {
+  const { runtime, spawns } = rt();
   const model = unit.catalog.ids[1];
-  const r = await runtime.callTool('gemini_deep_research', { question: 'why', model, cwd: dir });
+  const r = await runtime.callTool('gemini_deep_research', { question: 'why', model });
   assert.ok(!r.isError, r.text);
   // decompose + two gathers + synthesis
   assert.equal(spawns.length, 4, `spawned ${spawns.length}`);
