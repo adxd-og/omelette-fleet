@@ -208,7 +208,7 @@ test('the shipped example carries only what an operator decides: no agents block
   assert.ok(!('agents' in example), JSON.stringify(example));
   assert.deepEqual(Object.keys(example.units.codex).sort(), ['enabled', 'mode', 'timeoutS', 'webSearch']);
   assert.equal(geminiUnit.builtin.model, undefined, 'gemini has no built-in model, so the example keeps the operator\'s choice');
-  assert.equal(example.units.gemini.model, 'Gemini 3.8 Flash (High)');
+  assert.equal(example.units.gemini.model, 'Gemini 4 Hydrogen (High)');
   assert.deepEqual(example.defaults, { status: true });
 });
 

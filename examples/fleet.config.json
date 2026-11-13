@@ -7,7 +7,7 @@
     "gemini": {
       "enabled": true,
       "mode": "read-only",
-      "model": "Gemini 3.8 Flash (High)",
+      "model": "Gemini 4 Hydrogen (High)",
       "timeoutS": 300
     },
     "grok": {

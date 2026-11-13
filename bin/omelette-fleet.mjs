@@ -327,7 +327,7 @@ const HELP = [
   '  omelette-fleet doctor',
   '  omelette-fleet rules            # this project',
   '  omelette-fleet rules --global',
-  '  omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"',
+  '  omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 4 Hydrogen (High)"',
   '  omelette-fleet set agents.tester.maxTurns=120 && omelette-fleet rules --agents',
   "  omelette-fleet call codex codex_models '{}'",
 ].join('\n');
