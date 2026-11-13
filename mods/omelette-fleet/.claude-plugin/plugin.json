@@ -1,6 +1,6 @@
 {
   "name": "omelette-fleet",
-  "version": "1.10.1",
+  "version": "1.10.2",
   "description": "A pane that draws the fleet (the orchestrator, its sub-agents and the units) and who is calling whom, and the delivery of the guard (it refuses what the guard refuses and pins a guarded role's model) and of the handoff block",
   "author": { "name": "adxd-og" },
   "types": "./types/index.d.ts",
