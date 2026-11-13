@@ -1115,7 +1115,7 @@ function configRows(name, cfg, indent = '  ') {
   const w = Math.max(...keys.map((k) => k.length), 5);
   const vw = Math.max(...keys.map((k) => shown(k).length), 5);
   const lines = [`${indent}${pad('KEY', w)}  ${pad('VALUE', vw)}  SOURCE`];
-  for (const k of keys) lines.push(`${indent}${pad(k, w)}  ${pad(shown(k), vw)}  ${cfg.sources[k]}${k === 'effort' ? effortMark(name, cfg) : ''}`);
+  for (const k of keys) lines.push(`${indent}${pad(k, w)}  ${pad(shown(k), vw)}  ${cfg.sources[k]}${k === 'effort' ? effortMark(name, cfg) : k === 'model' ? modelMark(name, cfg) : ''}`);
   return lines;
 }
 
@@ -1131,6 +1131,22 @@ function effortMark(name, cfg) {
   const v = cfg.values.effort;
   if (!catalog.efforts.length || !v || catalog.isAllowedEffort(v)) return '';
   return ` — not in the catalog's list: ignored at call time, ${UNITS[name].pairedEffort ? "the model's pairing applies" : 'the vendor default applies'}`;
+}
+
+/**
+ * A configured model the unit's catalog does not list is ignored at call time
+ * (core/unit.mjs warns once, on the server's stderr) — a catalog sweep (1.11.0
+ * retired the 3.8 Flash ids) leaves an older config naming an id that no
+ * longer resolves, and this row is where an operator sees it. It names no
+ * fallback because what runs instead differs by unit: gemini and grok leave it
+ * to the vendor CLI's default, codex and mistral take their catalog head
+ * (core/unit.mjs `pinnedModel`, units/mistral/adapter.mjs `pickAlias`).
+ */
+function modelMark(name, cfg) {
+  const { catalog } = UNITS[name];
+  const v = cfg.values.model;
+  if (!catalog.ids.length || typeof v !== 'string' || !v || catalog.isAllowedModel(v)) return '';
+  return " — not in the catalog's list: ignored at call time";
 }
 
 /**
