@@ -235,7 +235,7 @@ The unit runs agy with no kernel sandbox, and **this package pins one thing from
 What the unit does enforce:
 
 - **Every research spawn asks for agy's Default mode.** agy's changelog for 1.5.7: the default agent mode for a session with no saved mode, headless `-p` included, became Auto, which approves file edits and the commands it calls safe without asking. Since 1.10.2 every spawn that is not accept-edits carries `--settings {"agentMode":""}`, agy's own spelling of Default; your file is not written. **On 1.10.1 or earlier with agy 1.5.7 or later**, set `Agent Mode` to Default in agy's `/config` until you upgrade.
-  - **Measured** on 2026-11-13, agy 1.5.8, a `settings.json` holding no `agentMode`, a prompt asking for `touch marker.txt` — a command no allow rule named: with the argv the unit sent until 1.10.1 the command ran and the file was on disk; with the pin it was auto-denied. With the pin, `read_url` from your allow list still runs: the session object is merged over your file, not put in its place.
+  - **Measured** on 2026-11-13, agy 1.5.8, a `settings.json` holding no `agentMode`, a prompt asking for `touch marker.txt` — a command no allow rule named: with the argv the unit sent until 1.10.1 the command ran and the file was on disk; with the pin it was auto-denied. With the pin, your allow list still applies: a `read_file` of a file outside the run's directory ran. The session object replaces only the keys it names — a session `permissions.allow` of `[]` denied that same read, and a session `deny` refused it. (1.10.2 printed `read_url` as the rule that still ran; no Gemini model is given a URL reader on agy 1.5.8, see [below](#recommended-agy-allow-rules).)
   - **agy checks what it is handed.** An unknown key (`agentModeX`) and an unknown value (`"default"`, `"bogus"`) are each an error before any turn runs; an unknown flag is exit 2 with the error on stderr. On 1.5.8, then, a key or a value agy does not know fails the spawn rather than dropping the pin. A later agy that keeps `""` valid and changes what it means would not be caught by any of this.
   - **Not read from the run's directory.** A `.agents/settings.json` or `.gemini/settings.json` under the `cwd` changed neither the mode nor the permissions (the same day). The hooks and MCP files of that directory are another matter: the [Threat model](#threat-model).
   - **Not measured: a mode saved in your `settings.json`.** A session setting did override a saved one for the `model` key; that it does for `agentMode` when your file holds a saved mode is expected and was not run. If you ever chose a mode in agy's `/config`, set `Agent Mode` back to Default there.
@@ -586,7 +586,7 @@ agy in headless mode (`agy -p`) cannot prompt, so **any tool that would ask for 
 
 Two rule sets, named for what they allow. In `~/.gemini/antigravity-cli/settings.json`:
 
-**Web research** — what `gemini_research` and `gemini_deep_research` need for grounded research, and nothing more:
+**Web research** — what `gemini_research` and `gemini_deep_research` needed for grounded research, and nothing more. Measured 2026-11-13 on agy 1.5.8: no Gemini model (Hydrogen, Argon, 3.8 Flash) is given a URL-reading tool in a headless run, with or without this unit's flags and whatever the allow list says; each names `search_web` as its only web tool, and it asks for no permission. The rule below costs nothing and stays right for an agy that offers the tool again:
 
 ```json
 {
