@@ -33,9 +33,16 @@
  * "raise gemini.timeoutS" would send the operator after a limit that held.
  *
  * READ-ONLY POSTURE — agy has no kernel sandbox; its `--mode` is a permission
- * policy. Research runs in agy's STANDARD mode: any tool that would prompt is
- * auto-denied headless (and the reason lands on stderr — surfaced here as a
- * loud error, see the "produced no output" branch). The operator's
+ * policy. Research runs in agy's Default mode BECAUSE THE UNIT PINS IT: every
+ * spawn that is not accept-edits passes `--settings {"agentMode":""}`
+ * (DEFAULT_MODE_PIN), since agy 1.5.7 made Auto — file edits and "safe" shell
+ * commands approved — the default for headless runs. An agy that does not know
+ * `--settings` fails the spawn on the unknown flag: the failure is closed
+ * (agy 1.5.8 answers an unknown flag with exit 2, the error on stderr and an
+ * empty stdout — measured 2026-11-13; an older build is assumed to do the same). In
+ * Default mode any tool that would prompt is auto-denied headless (and the
+ * reason lands on stderr — surfaced here as a loud error, see the "produced no
+ * output" branch). The operator's
  * ~/.gemini/antigravity-cli/settings.json `permissions.allow` decides what
  * needs no prompt (read_file, read_url for web research). Git/deploy intent is
  * rejected before spawn (mutateGate) and every prompt carries NO_GIT_PREFIX.
@@ -44,7 +51,10 @@
  *   permission-shaped flags it accepts are `--mode accept-edits|plan`,
  *   `--dangerously-skip-permissions` (never passed) and
  *   `--disable-slash-commands` (checked against agy 1.1.25's own --help,
- *   2026-09-03). There is no equivalent of Codex's kernel sandbox.
+ *   2026-09-03), and, read off agy 1.5.8's --help on 2026-11-13, `--mode
+ *   auto` (never passed) and `--settings` (the mode pin above, and nothing
+ *   else: the allow and deny rules are not sent through it). There is no
+ *   equivalent of Codex's kernel sandbox.
  *   `--disable-slash-commands` IS passed on every spawn: without it, prompt
  *   text containing `/something` gets slash-command and skill expansion in
  *   print mode — a prompt-injection path into agy's own command surface, for
@@ -52,8 +62,9 @@
  *   `--mode plan` (agy's read-only planning mode) was evaluated live on
  *   2026-09-03 and NOT adopted: it adds nothing demonstrable over headless
  *   auto-deny — the model reached for the shell `command` tool and was denied
- *   either way. The hook where a research-mode flag would go is marked in
- *   runAgy.
+ *   either way. A research-mode flag would REPLACE the mode pin in
+ *   runAgyRaw, not join it: which of `--mode` and `--settings` wins in agy
+ *   is not measured.
  *   workspace-write (fleet ceiling open + mode set) maps to `--mode
  *   accept-edits` for research given a `cwd` (without one the run stays
  *   read-only): file edits are auto-approved by agy's OWN
@@ -197,6 +208,12 @@ const IMAGE_PREFIX =
 
 const HARD_KILL_GRACE_MS = 60000;
 
+// agy 1.5.7 made Auto the default agent mode for sessions with no saved mode,
+// headless `-p` included. `--settings` is session-only and never saved, and
+// `"agentMode": ""` is agy's own spelling of the Default mode (its changelog,
+// 1.5.7).
+const DEFAULT_MODE_PIN = JSON.stringify({ agentMode: '' });
+
 /**
  * Parse agy's `--output-format json` payload, or null when stdout is not that.
  * The output cap keeps the TAIL, so an over-cap run arrives front-truncated and
@@ -322,9 +339,11 @@ async function runAgyRaw(ctx, { prompt, model, acceptEdits = false, schema, cwd 
     // and leaving it on makes the prompt an injection path (see header).
     '--disable-slash-commands',
   ];
-  // RESEARCH-MODE HOOK: a read-only research flag (`--mode plan`) would go here — evaluated 2026-09-03, not adopted; see header.
   if (typeof model === 'string' && model.trim()) args.push('--model', model.trim());
+  // MODE PIN: every spawn that is not accept-edits pins agy's Default mode for this session,
+  // because agy 1.5.7 made Auto (edits and "safe" shell approved) the headless default; see header.
   if (acceptEdits) args.push('--mode', 'accept-edits');
+  else args.push('--settings', DEFAULT_MODE_PIN);
   if (schema) args.push('--json-schema', JSON.stringify(schema));
   ctx.log(`agy spawn · model=${model || '(agy default)'} · acceptEdits=${acceptEdits} · schema=${schema ? 'yes' : 'no'} · cwd=${cwd || '(process cwd)'}`);
   const res = await ctx.spawn({ args, cwd, hardKillMs: timeoutS * 1000 + HARD_KILL_GRACE_MS });
