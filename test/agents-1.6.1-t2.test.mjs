@@ -16,6 +16,7 @@ import { agentSettings, renderAgentFile, renderRulesFile } from '../core/rules.m
 import { createUnitRuntime } from '../core/unit.mjs';
 import codexUnit from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
+import { isAllowedModel as isGeminiModel } from '../units/gemini/models.js';
 
 process.env.OMELETTE_HOME = mkdtempSync(join(tmpdir(), 'omelette-t2-'));
 
@@ -209,6 +210,7 @@ test('the shipped example carries only what an operator decides: no agents block
   assert.deepEqual(Object.keys(example.units.codex).sort(), ['enabled', 'mode', 'timeoutS', 'webSearch']);
   assert.equal(geminiUnit.builtin.model, undefined, 'gemini has no built-in model, so the example keeps the operator\'s choice');
   assert.equal(example.units.gemini.model, 'Gemini 4 Hydrogen (High)');
+  assert.ok(isGeminiModel(example.units.gemini.model), `the example's gemini.model ${example.units.gemini.model} is not a catalog id`);
   assert.deepEqual(example.defaults, { status: true });
 });
 
