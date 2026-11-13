@@ -80,7 +80,7 @@ Gemini, Grok, Codex and Mistral are wired into this session as **read-only units
 | Research that depends on running things | Codex `codex_research` |
 | Final pre-release security audit | Codex on `gpt-6-astra` (heavy reviews only; the default is `gpt-6.1-sol`) — 2–3 runs per release, not per PR |
 | Security review by a model that reproduces | Mistral `mistral_security_review`, then `mistral_security_repro` under `OMELETTE_ALLOW_REPRO=1` — a disposable clone under a kernel sandbox, a diff the session applies |
-| Tie-breaker when Grok and Gemini Flash disagree | Gemini `Gemini 4 Argon (High)`; if refused, Codex `gpt-6.1-sol` |
+| Tie-breaker when Grok and Gemini disagree | Gemini `Gemini 4 Argon (High)`; if refused, Codex `gpt-6.1-sol` |
 | Image generation / editing | any `_image` tool / Grok `grok_image_edit` |
 | Architecture, planning, UI taste, any file edit, git, deploy, publish | **this session** |
 | A client timeout dropped an answer | `<unit>_result` on that unit (no id = the newest) — it was spooled before the response was sent; nothing is re-run |

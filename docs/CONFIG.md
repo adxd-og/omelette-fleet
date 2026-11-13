@@ -65,7 +65,7 @@ The shipped `examples/fleet.config.json`, which `install` copies into a new flee
     "gemini": {
       "enabled": true,
       "mode": "read-only",
-      "model": "Gemini 3.8 Flash (High)",
+      "model": "Gemini 4 Hydrogen (High)",
       "timeoutS": 300
     },
     "grok": {
@@ -103,7 +103,7 @@ The full map of keys:
   "handoff": { "enabled": true },
   "workflow": { "merge": "session" },
   "units": {
-    "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 3.8 Flash (High)", "timeoutS": 300 },
+    "gemini": { "enabled": true, "mode": "read-only", "model": "Gemini 4 Hydrogen (High)", "timeoutS": 300 },
     "grok":   { "enabled": true, "mode": "read-only", "timeoutS": 1800, "maxTurns": 30 },
     "codex":  { "enabled": true, "mode": "read-only", "model": "gpt-6.1-sol", "webSearch": true, "timeoutS": 600 }
   }
@@ -449,7 +449,7 @@ An invalid value does not poison the key — it warns and falls through to the n
 
 | Form | Example | Edits | Reaches a session on |
 |---|---|---|---|
-| `<unit>.<key>=<value>` | `omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 3.8 Flash (High)"` | `units.<unit>`, merged | The next call ([Live reload](#live-reload)) |
+| `<unit>.<key>=<value>` | `omelette-fleet set codex.timeoutS=900 gemini.model="Gemini 4 Hydrogen (High)"` | `units.<unit>`, merged | The next call ([Live reload](#live-reload)) |
 | A three-part path with `agents` in front | `omelette-fleet set agents.tester.maxTurns=120` | The [agent block](#agent-settings) | `rules --agents` |
 | A two-part path with `handoff` or `workflow` in front | `omelette-fleet set handoff.enabled=false`, `omelette-fleet set workflow.merge=pr` | The [handoff block](#handoff-settings) or the [workflow block](#workflow-settings) | `rules --hooks` (handoff), `rules` (workflow) |
 | A bare `key=value` with no dot at all | `omelette-fleet set contract=short` | A [fleet-wide key](#top-level-settings) | The next server start (`contract`; `updateCheck` also on the next `doctor` or `update`) |

@@ -135,7 +135,7 @@ mcp timeout   wall-clock: MCP_TOOL_TIMEOUT unset (default ~28 h) ≥ 1800000 nee
               KEY              VALUE                    SOURCE
               enabled          true                     file
               mode             read-only                file
-              model            Gemini 3.8 Flash (High)  file
+              model            Gemini 4 Hydrogen (High) file
               timeoutS         300                      file
   notice      Antigravity's FAQ calls wrapping agy inside another coding agent "not supported under consumer plans" (read 2026-10-21): a grey zone, and your account's risk — docs/SECURITY.md, "Antigravity's terms: a grey zone"
   mcp         omelette-gemini registered (user) → node ~/omelette-fleet/servers/gemini.mjs [file exists]
