@@ -20,7 +20,7 @@ const CLAUDE_IDS = [
   'Claude Sonnet 5.5 (Medium)',
 ];
 
-const REFUSAL = (id) => 'Error: gemini_deep_research does not run on a Claude model ("' + id + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Gemini id — a configured Claude `gemini.model` applies whenever `model` is omitted.';
+const REFUSAL = (id) => 'Error: gemini_deep_research does not run on a Claude model ("' + id + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Hydrogen id — a configured Claude `gemini.model` applies whenever `model` is omitted.';
 
 const res = (over) => Promise.resolve({ stdout: '', stderr: '', code: 0, signal: null, killed: false, capped: false, ...over });
 

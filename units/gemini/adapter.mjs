@@ -774,7 +774,7 @@ export default defineUnit({
       kind: 'catalog',
       description:
         'List the Gemini/GPT-OSS/Claude models you can pass as `model` to gemini_research / ' +
-        'gemini_image, with a "which model for what" cheat-sheet (speed/cost/strengths ' +
+        'gemini_image / gemini_deep_research, with a "which model for what" cheat-sheet (speed/cost/strengths ' +
         'and when to avoid each). No arguments. Call this first if unsure which model ' +
         'to pick. Claude Opus 5.5 and Sonnet 5.5 (High and Medium) are listed too: Antigravity\'s separate, small Claude quota — one named call per question, never a sweep, refused by gemini_deep_research.',
       inputSchema: { type: 'object', properties: {} },
@@ -812,7 +812,7 @@ export default defineUnit({
         const asked = ctx.model || '';
         const entry = asked ? ctx.catalog.find(asked) : null;
         if (entry && entry.family === 'claude') {
-          return { text: 'Error: gemini_deep_research does not run on a Claude model ("' + asked + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Gemini id — a configured Claude `gemini.model` applies whenever `model` is omitted.', isError: true };
+          return { text: 'Error: gemini_deep_research does not run on a Claude model ("' + asked + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Hydrogen id — a configured Claude `gemini.model` applies whenever `model` is omitted.', isError: true };
         }
         // One empty directory for every stage of this call (see the header).
         const cwd = mkdtempSync(join(tmpdir(), 'omelette-gemini-research-'));

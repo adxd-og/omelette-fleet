@@ -87,7 +87,7 @@ function deepRuntime(config, answer) {
   return { rt, calls };
 }
 
-const refusal = (id) => 'Error: gemini_deep_research does not run on a Claude model ("' + id + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Gemini id — a configured Claude `gemini.model` applies whenever `model` is omitted.';
+const refusal = (id) => 'Error: gemini_deep_research does not run on a Claude model ("' + id + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Hydrogen id — a configured Claude `gemini.model` applies whenever `model` is omitted.';
 
 test('gemini_deep_research refuses an explicit Claude model before any spawn', async () => {
   const { rt, calls } = deepRuntime({});
