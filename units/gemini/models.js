@@ -7,82 +7,81 @@
  * rejects an unknown --model, written verbatim as `agy --model "<id>"`. Spawn
  * uses an args ARRAY (no shell), so spaces/parens in an id are one safe argv
  * element. Note `agy models` prints both forms, slug then display name
- * (gemini-3.8-flash-high, Gemini 3.8 Flash (High)); --model accepts both, and the display names are kept here because they carry
+ * (gemini-4-hydrogen-high, Gemini 4 Hydrogen (High)); --model accepts both, and the display names are kept here because they carry
  * the effort level readably.
  *
- * SYNCED TO agy (verified 2026-10-16, agy 1.4.0). This sync: Gemini 4 Argon
- * (Low|Medium|High) added — agy lists all three, and (Low) ran headless on
- * 2026-10-16; Gemini 3.1 Pro removed — agy no longer lists it; GPT-OSS 120B's
- * removal date recorded (Antigravity's model page: 2026-11-02). If agy
- * adds/renames/removes a model, re-check and update GEMINI_MODELS below (and
- * re-confirm the bench notes in useFor/avoid). The (Low/Medium/High) suffix is
- * the model's reasoning/thinking-effort level (Low=fast/cheap, High=more
- * deliberation).
+ * SYNCED TO agy (verified 2026-11-13, agy 1.5.8). This sync: Gemini 4 Hydrogen
+ * (Low|Medium|High|XHigh) added — agy lists all four, and (Low) and (XHigh) ran
+ * headless on 2026-11-13; Gemini 3.8 Flash removed by the sweep below — agy
+ * 1.5.8 still lists it and Antigravity names no removal date for it; GPT-OSS
+ * 120B's announced removal date moved to 2026-11-18 (Antigravity's models page).
+ * Listed by agy and not in this catalog: Orchestrator (Argon) and the Claude Low
+ * tiers. If agy adds/renames/removes a model, re-check and update GEMINI_MODELS
+ * below (and re-confirm the bench notes in useFor/avoid). The (Low/Medium/High/
+ * XHigh) suffix is the model's reasoning/thinking-effort level (Low=lightest,
+ * XHigh=most deliberation; Antigravity's docs call XHigh "Extra"). How agy's
+ * levels map to the API's thinking levels is not published.
  *
- * GENERATION SWEEP 2026-10-16: Gemini 4 Argon (DeepMind model card, published
- * 2026-10-13) replaced the two 3.1 Pro entries outright — operator decision, the
- * same standing policy as for Flash (the newer generation replaces the older).
- * It is not a like-for-like swap. 3.1 Pro was kept for long inputs and formal
- * reasoning and was NOT a code or agentic model; Argon is one — DeepSWE v1.1 77.9
- * (card), AutomationBench-AA 78 (Artificial Analysis) — so the heavy Gemini tier
- * now means agentic depth, not a bigger window. On a Google AI Pro subscription
- * its quota is small (operator, 2026-10-16), which makes it a named one-call
- * route there; see SCOPE. The 2M window left with 3.1 Pro: Argon's 1M is shared
- * by input and output (card), and nothing in this catalog now takes inputs past
- * 1M tokens.
+ * GENERATION SWEEP 2026-11-13: Gemini 4 Hydrogen (released by Google
+ * 2026-11-12) replaced the three 3.8 Flash entries outright — operator decision,
+ * the standing policy (the newer generation replaces the older), and Google's
+ * launch post calls it "a major standalone upgrade for teams migrating from
+ * Gemini 3.8 Flash". High stays the fleet default, as it is Google's; XHigh is
+ * new, a named step up. The two generations' benchmark sets do not overlap:
+ * Hydrogen's card publishes none of the rows the 3.8 Flash entries held, so
+ * there is no same-harness delta beyond what Google's launch post states against
+ * 3.8 Flash and the Artificial Analysis rows (Hydrogen at xhigh against 3.8 Flash
+ * at high — not the same level). Restoring a retired generation means re-adding
+ * its entry here by hand.
  *
- * ARGON SOURCES (checked this sweep): the DeepMind card for DeepSWE v1.1,
- * FrontierSWE v2, the window, the March 2026 knowledge cutoff and the modalities
- * (text, image, audio and video in; text out); Artificial Analysis, read
- * 2026-10-14, for every other figure — Argon at High only, Flash at High, GPT-6.1
- * Sol and Opus 5.5 at Max. Each comparison below stays inside one source. AA
- * measured neither Argon (Medium) nor (Low): those entries inherit High's
- * profile, unmeasured. AA's Terminal-Bench 4.0 (Flash High 20) is a different
- * version from the Terminal-Bench 2.1 in the Flash entries (89.4); do not compare
- * the two.
+ * HYDROGEN SOURCES (read 2026-11-13): the DeepMind model card (published
+ * 2026-11-12) for the model's shape — adapted from Gemini 4 Carbon; 1M tokens
+ * for input and output together, 64K synchronous output; knowledge cutoff March
+ * 2026; text, image, audio and video in — and one table against Claude Sonnet
+ * 5.5 and GPT-6.1 Terra that states no thinking level for any column; Google's
+ * launch post for the levels and its sentences against 3.8 Flash; Artificial
+ * Analysis, Intelligence Index v5.0.1 (third party), whose per-benchmark rows
+ * are published as text for Hydrogen at xhigh only (against Argon and 3.8 Flash,
+ * both at high). Hydrogen at high has four AA figures, and its per-benchmark rows
+ * are not published as text: Index 51, $1.87 per task, 7.9 minutes per task,
+ * 110M output tokens over the Index. The card's AutomationBench-AA 76.1 and
+ * HLE-Diamond 58.8 equal AA's xhigh rows to the decimal, so the card's column is
+ * probably xhigh on those rows — an inference, not a published fact. No card row
+ * is filed under (High) as that level's measurement. AA's figures at Low and
+ * Medium are not published: those entries
+ * inherit High's profile, unmeasured. The card's Terminal-Bench 4.1
+ * (cheating-adjusted, a term whose meaning is not confirmed) and AA's
+ * Terminal-Bench 4.0 are different versions; do not compare the two. Each
+ * comparison below stays inside one source.
  *
- * GENERATION SWEEP 2026-09-03: 3.8 Flash (GA, released 2026-09-02) replaced the
- * 3.7 Flash entries outright — operator decision, standing policy (the current
- * Flash generation is the default, the previous one leaves the catalog).
- * This sweep is NOT the same shape as the last one. 3.7 was a strict upgrade
- * over 3.6 — cheaper AND fewer output tokens. 3.8 is built ON 3.7 rather than a
- * new base model, costs exactly the same per token, and deliberately spends MORE
- * thinking tokens; Google's own launch guidance is that efficiency-first callers
- * "utilize lower effort levels to minimize token overhead or continue to rely on
- * Gemini 3.7 Flash". We keep the clean sweep because the first half of that
- * sentence is available to us — 3.8 Low/Medium ARE the efficiency exit — but the
- * cost is recorded in the High entry's `avoid` instead of being dropped.
- * Restoring a retired generation means re-adding its entry here by hand.
- *
- * COMPARABILITY (checked this sweep): the 3.7 figures in the comparison source
- * matched the ones already in this file verbatim (DeepSWE v1.1 65.3, HLE-Verified
- * 53.6, Terminal-Bench 2.1 85.8), so the 3.8 deltas below are same-harness. A
- * secondary blog quoted Terminal-Bench 90.8 vs 81.6 for the same pair — those do
- * NOT reconcile with our verified 3.7 number and are deliberately not used here.
- *
- * NOT PUBLISHED for 3.8 Flash as of this sweep: GPQA Diamond, ARC-AGI-2,
- * FrontierCode 1.1, MRCR v2 128K, WebDev Arena Elo. Claims about those axes
- * below are carried over from 3.7 and labelled as such — do not silently
- * upgrade them to 3.8 on the next sweep without a source.
- *
- * Gemini 3.8 Flash Cyber exists but is NOT available to us: it ships through the
- * Fairwind Program to government and critical-infrastructure defenders only, and
- * agy does not list it.
+ * ARGON (rewritten 2026-11-13): Gemini 4 Argon replaced the two 3.1 Pro entries
+ * on 2026-10-16 and is now the heavier Gemini 4 tier — the tie-breaker, the step
+ * up from Hydrogen for terminal agents, terminal science and multi-step
+ * automation (AA, Argon at high against Hydrogen at xhigh), and the model whose
+ * card (published 2026-10-13) holds repository-level and long-input rows
+ * (DeepSWE v1.1, FrontierSWE v2, GraphWalks 256k–1M) that Hydrogen's card does
+ * not publish. Its figures are now that card's and AA Index v5.0.1's, Argon at
+ * high only. Every Argon figure read 2026-10-14 left: it came from an earlier
+ * Index (v5.0 dropped HLE, SciCode and AA-LCR; v5.0.1 regraded CritPt) and
+ * compares with nothing above.
  *
  * SCOPE: Gemini family + GPT-OSS + Claude Opus 5.5 and Sonnet 5.5 via Antigravity.
  * The Claude family runs on Antigravity's OWN quota bucket, separate from the shared
  * Gemini pool (confirmed 2026-08-02 by two independent deep-research runs and operator
- * decision) — and that bucket is SMALL (operator, 2026-10-03), where the Gemini pool is
- * effectively unlimited for this fleet. So Claude-via-agy is a deliberate, named,
+ * decision) — and that bucket is SMALL (operator, 2026-10-03), where the Gemini pool was
+ * effectively unlimited for this fleet on 3.8 Flash. So Claude-via-agy is a deliberate, named,
  * one-call route: never the default, never a sweep, never a deep-research stage (the
  * adapter refuses it). Sonnet joined on 2026-10-03, reversing the 2026-08-02 exclusion:
  * a Sonnet 5.5 call on the Antigravity bucket costs the Claude Code pool nothing, and
  * that pool is the expensive one. Neither is a fleet role — the coder, tester and
  * reviewer stay native (guard, diff, transcript).
+ * Gemini 4 Hydrogen draws on the Gemini pool: Antigravity's usage on Google AI Pro
+ * (read 2026-11-13) shows a Gemini pool with a 5-hour and a weekly window, a weekly
+ * window of Argon's own and a Claude/GPT pool, and no Hydrogen window. How fast
+ * Hydrogen spends the Gemini pool is not yet measured.
  * Gemini 4 Argon's quota is small too on a Google AI Pro subscription (operator,
- * 2026-10-16: half of it gone after a day of light use); "effectively unlimited"
- * above was observed on Flash, and whether Argon draws on its own bucket is not
- * known. There it is the same kind of named one-call route: never the default,
+ * 2026-10-16: half of it gone after a day of light use), and it has its own weekly
+ * window there. There it is the same kind of named one-call route: never the default,
  * never a sweep, never a deep-research stage, never gemini.model. Unlike Claude,
  * no tool refuses it: the rule lives in the entries and the GUIDE.
  *
@@ -96,51 +95,93 @@
  * @property {string} id      Exact agy model string (the --model value).
  * @property {string} label   Short human label for the picker.
  * @property {'gemini'|'gpt'|'claude'} family
- * @property {'Low'|'Medium'|'High'} effort  Reasoning/thinking-effort level.
+ * @property {'Low'|'Medium'|'High'|'XHigh'} effort  Reasoning/thinking-effort level.
  * @property {'fast'|'balanced'|'heavy'} tier
  * @property {string} useFor  When to pick it.
  * @property {string} avoid   When NOT to pick it.
  */
 
-/** The quota rule every Argon entry's `avoid` ends on (operator, 2026-10-16; see SCOPE). */
+/** The quota rule every Argon entry's `avoid` ends on (operator, 2026-10-16; the window, 2026-11-13; see SCOPE). */
 const ARGON_QUOTA =
-  'On a Google AI Pro subscription Argon\'s quota is small: there it is a named one-call route like Claude via agy — ' +
-  'never a sweep, a deep-research stage, gemini.model or the default.';
+  'On a Google AI Pro subscription Argon\'s quota is small and has its own weekly window: there it is a named ' +
+  'one-call route like Claude via agy — never a sweep, a deep-research stage, gemini.model or the default.';
 
 /** @type {GeminiModel[]} */
 export const GEMINI_MODELS = [
   {
-    id: 'Gemini 3.8 Flash (Low)',
-    label: 'Gemini 3.8 Flash · Low',
+    id: 'Gemini 4 Hydrogen (Low)',
+    label: 'Gemini 4 Hydrogen · Low',
     family: 'gemini',
     effort: 'Low',
     tier: 'fast',
     useFor:
-      'Quick lookups, fact-checking, short summaries, single-doc skims, and fast routing — the cheapest/fastest pick in the fleet. Pricing is UNCHANGED from 3.7: $0.75/$3.75 per Mtok in/out through 2026-12-31, then $1.50/$7.50. This is also the FIRST of the two efficiency exits Google names for 3.8: since 3.8 spends more thinking tokens than 3.7 at equal effort, dropping the effort level is how you buy that back.',
+      'The cheap lookup: quick facts, fact-checks, short summaries and single-document skims. Unmeasured: AA\'s figures ' +
+      'at Low are not published and the card states no level, so it inherits High\'s profile; how agy\'s (Low) maps to ' +
+      'the API\'s thinking levels is not published.',
     avoid:
-      'Multi-step reasoning, expert analysis, and dense long-context retrieval — Low effort under-thinks hard problems; step up to Medium/High.',
+      'Multi-step reasoning, hard analysis and anything that leans on a measured figure — step up to Medium or High. ' +
+      'Hydrogen (High)\'s caveat on image and PDF reads applies here too.',
   },
   {
-    id: 'Gemini 3.8 Flash (Medium)',
-    label: 'Gemini 3.8 Flash · Medium',
+    id: 'Gemini 4 Hydrogen (Medium)',
+    label: 'Gemini 4 Hydrogen · Medium',
     family: 'gemini',
     effort: 'Medium',
     tier: 'balanced',
     useFor:
-      'Explicit pick when High-effort latency or token overhead is unwanted — synthesis, structured summaries, light analysis, and multi-file/agentic tool work where speed outranks depth. The fleet default is High (operator policy), so Medium is a deliberate exit, not a fallback — and on 3.8 it is the one that matters most, because this generation trades tokens for depth at every effort level.',
+      'High\'s profile at a lighter level: synthesis, structured summaries and light analysis when High\'s latency or ' +
+      'token spend is unwanted, and the decompose and gather stages of gemini_deep_research. The fleet default is High, so ' +
+      'Medium is a deliberate exit, not a fallback. Unmeasured: AA\'s figures at Medium are not published and the card ' +
+      'states no level, so it inherits High\'s profile; how agy\'s (Medium) maps to the API\'s thinking levels is not ' +
+      'published.',
     avoid:
-      'Hard knowledge and science questions — Argon (High) leads Flash High there (HLE 57 vs 48, SciCode 62 vs 57; AA, read 2026-10-14; on a Pro subscription one named call, see Argon). Don\'t use it for long-horizon engineering where High\'s first-pass accuracy pays for itself in fewer retries.',
+      'As Hydrogen (High). A question that leans on a measured figure wants High, the measured default.',
   },
   {
-    id: 'Gemini 3.8 Flash (High)',
-    label: 'Gemini 3.8 Flash · High',
+    id: 'Gemini 4 Hydrogen (High)',
+    label: 'Gemini 4 Hydrogen · High',
     family: 'gemini',
     effort: 'High',
     tier: 'balanced',
     useFor:
-      'The FLEET DEFAULT for all delegated research/agentic work (GA 2026-09-02). Same-harness gains over 3.7 Flash: DeepSWE v1.1 73.8 vs 65.3; Terminal-Bench 2.1 89.4 vs 85.8; OSWorld 2.0 (agentic) 59.0 vs 47.9; BioMysteryBench human-difficult 56.5 vs 43.5; LAB-Bench2 86.2 vs 82.1; CharXiv w/o tools 86.2 vs 84.5; LVBench 87.1 vs 85.4; HLE-Verified 54.9 vs 53.6. The reason that matters most for THIS fleet is not in that table: Gray Swan prompt-injection robustness took a significant leap over 3.7 (vendor blog), and every unit here ingests untrusted web content by design. Price per token is unchanged from 3.7.',
+      'The FLEET DEFAULT for delegated research and agentic work, and Google\'s own default level. Artificial Analysis ' +
+      '(Index v5.0.1, read 2026-11-13), Hydrogen at high: Intelligence Index 51 at $1.87 and 7.9 minutes per Index task, ' +
+      'above Argon (high)\'s 50 at $4.97 and 30.0 minutes. Google\'s launch post, against 3.8 Flash: tasks finished 2.5 ' +
+      'times faster at the high default, and more than 2.3x more resilient on the Gray Swan IPI (prompt-injection) ' +
+      'benchmark — the one that matters most here, since every unit reads untrusted web pages. Its shape, from the ' +
+      'DeepMind card: adapted from Gemini 4 Carbon; 1M tokens for input and output together, 64K synchronous output; ' +
+      'knowledge cutoff March 2026; text, image, audio and video in. The card\'s table states no thinking level and is ' +
+      'not this level\'s measurement (two of its rows equal AA\'s xhigh figures): on it Hydrogen leads Claude Sonnet 5.5 ' +
+      'and GPT-6.1 Terra on SWE-sweep, Agents\' Last Exam v1.1, AutomationBench-AA, Vending-Bench 2, MKA, Chartography ' +
+      'and HLE-Diamond. AA\'s per-benchmark rows at high are not published as text; the xhigh ones are in Hydrogen (XHigh).',
     avoid:
-      'Routine work on a shared subscription quota. 3.8 is built ON 3.7 and deliberately spends MORE thinking tokens for its depth; Google\'s own guidance is that efficiency-first callers "utilize lower effort levels to minimize token overhead or continue to rely on Gemini 3.7 Flash" — the first half is our exit, so drop to Low/Medium rather than paying High for lookups. Hard knowledge and science research, terminal agents and multi-step automation go up to Argon (High): HLE 57 vs 48, SciCode 62 vs 57, Terminal-Bench 4.0 57 vs 20, AutomationBench-AA 78 vs 60 (AA, read 2026-10-14, both at High); on a Pro subscription that is one named call (see Argon). Long-context retrieval stays here: AA-LCR 81 against Argon\'s 80 (AA). FrontierCode 1.1, AutomationBench, MRCR v2 128K and WebDev Arena Elo are ALSO unpublished for 3.8 (AA\'s own AutomationBench-AA is the 60 above) — the fleet\'s UI-prompt routing rests on 3.7-generation evidence, so treat that call as inherited, not re-verified.',
+      'A caveat, not a reroute, for image and PDF reads: they stay on this unit and this default (no entry here has a ' +
+      'measured lower refusal rate), but the card reports unjustified refusals up 5.57 percentage points against 3.8 ' +
+      'Flash (lower is better), "particularly for multimodal prompts" — a refused read is the model\'s refusal, not a ' +
+      'missing permission: reword it once before going elsewhere. The card\'s full safety report was not published as ' +
+      'of 2026-11-13. Computer use and terminal science, where Claude Sonnet 5.5 leads it on the same card table (OSWorld-2.1 ' +
+      '83.9 vs 77.6, Terminal-Bench-Science 0.1 59.9 vs 51.4; no level stated). Terminal agents and multi-step automation ' +
+      'go up to Argon (High), one named call: on those AA rows Argon at high leads even Hydrogen at xhigh (see Argon).',
+  },
+  {
+    id: 'Gemini 4 Hydrogen (XHigh)',
+    label: 'Gemini 4 Hydrogen · XHigh',
+    family: 'gemini',
+    effort: 'XHigh',
+    tier: 'heavy',
+    useFor:
+      'The named step up from High — one call when depth pays. The only Hydrogen level with per-benchmark rows published: ' +
+      'Artificial Analysis (Index v5.0.1, read 2026-11-13), Hydrogen at xhigh against Argon at high: Intelligence Index ' +
+      '54 vs 50, FrontierCode-AA 2.0 39.0 vs 25.7, GDP.pdf 27.6 vs 21.8, CritPt v2 (Hard Subset) 66.0 vs 52.5, ' +
+      'HLE-Diamond 58.8 vs 56.7, AA-Omniscience v1.1 46 vs 46, at $3.16 and 13.7 minutes per Index task against $4.97 ' +
+      'and 30.0 (3.8 Flash at high, same pages: Index 31). Against Hydrogen at high (AA): Index 54 vs 51, at $3.16 vs ' +
+      '$1.87 and 13.7 vs 7.9 minutes per task.',
+    avoid:
+      'The default, a sweep, a deep-research stage or gemini.model: High is the default and the stages are Medium and ' +
+      'High. It spends more output tokens than Argon (AA: 154k per Index task at xhigh against Argon at high\'s 116k). ' +
+      'Terminal agents, terminal science and multi-step automation go to Argon (High), which leads it there on the same ' +
+      'AA pages (Terminal-Bench 4.0 57.1 vs 53.5, Terminal-Bench-Science 0.1 52.9 vs 49.5, AutomationBench-AA 77.5 vs ' +
+      '76.1). Hydrogen (High)\'s caveat on image and PDF reads applies here too.',
   },
   {
     id: 'Gemini 4 Argon (Low)',
@@ -149,11 +190,11 @@ export const GEMINI_MODELS = [
     effort: 'Low',
     tier: 'heavy',
     useFor:
-      'The lightest Argon read: a simpler question that still wants Argon rather than Flash. How agy\'s (Low) maps to ' +
-      'Google\'s API thinking levels is not published; no figures — AA measured only High — so it inherits High\'s ' +
-      'profile, unmeasured.',
+      'The lightest Argon read: a simpler question that still wants Argon rather than Hydrogen. How agy\'s (Low) maps to ' +
+      'Google\'s API thinking levels is not published; no figures — the AA rows read 2026-11-13 are Argon at high — so it ' +
+      'inherits High\'s profile, unmeasured.',
     avoid:
-      'As Argon (High); a quick lookup or a short summary is Flash Low\'s, not Argon\'s. ' + ARGON_QUOTA,
+      'As Argon (High); a quick lookup or a short summary is Hydrogen Low\'s, not Argon\'s. ' + ARGON_QUOTA,
   },
   {
     id: 'Gemini 4 Argon (Medium)',
@@ -163,11 +204,11 @@ export const GEMINI_MODELS = [
     tier: 'heavy',
     useFor:
       'Argon between Low and High, for coding and agent work that wants Argon\'s profile without High\'s depth. How ' +
-      'agy\'s (Medium) maps to Google\'s API thinking levels is not published; no figures — AA measured only High — so it ' +
-      'inherits High\'s profile, unmeasured.',
+      'agy\'s (Medium) maps to Google\'s API thinking levels is not published; no figures — the AA rows read 2026-11-13 ' +
+      'are Argon at high — so it inherits High\'s profile, unmeasured.',
     avoid:
-      'As Argon (High). Anything that leans on a measured figure, the tie-breaker included, wants High: it is the only level ' +
-      'measured. ' + ARGON_QUOTA,
+      'As Argon (High). Anything that leans on a measured figure, the tie-breaker included, wants High: it is the only ' +
+      'Argon level with figures. ' + ARGON_QUOTA,
   },
   {
     id: 'Gemini 4 Argon (High)',
@@ -176,20 +217,19 @@ export const GEMINI_MODELS = [
     effort: 'High',
     tier: 'heavy',
     useFor:
-      'The fleet\'s TIE-BREAKER when Grok and Flash disagree, and the step up from Flash where depth pays: multi-step ' +
-      'automation and agent workflows (AutomationBench-AA 78, the best of the four AA compared — Opus 5.5 Max 70, GPT-6.1 Sol ' +
-      'Max 65, Flash High 60); hard knowledge and science research where Flash falls short (HLE 57 vs 48, SciCode 62 vs 57, ' +
-      'AA-Omniscience 42 vs 30 — fewer confident errors); terminal agents, where Flash collapses (Terminal-Bench 4.0 57 vs 20); ' +
-      'repository-level code (DeepSWE v1.1 77.9 against GPT-6 Astra 74.1 and Opus 5.5 74.2, DeepMind card). AA, read ' +
-      '2026-10-14, Argon at High: Intelligence Index 53 at $1.99 per Index task (GPT-6.1 Sol Max 52 at $0.72). The depth ' +
-      'does not cost more output tokens: Flash High spends 71k per AA task against Argon\'s 62k. 1M tokens for input and ' +
-      'output together, knowledge cutoff March 2026, text/image/audio/video in, text out (card).',
+      'The fleet\'s TIE-BREAKER when Grok and Hydrogen disagree — the heavier Gemini 4, a model that is neither — and ' +
+      'the step up from Hydrogen for terminal agents, terminal science and multi-step automation. Artificial Analysis ' +
+      '(Index v5.0.1, read 2026-11-13), Argon at high against Hydrogen at xhigh: Terminal-Bench 4.0 57.1 vs 53.5, ' +
+      'Terminal-Bench-Science 0.1 52.9 vs 49.5, AutomationBench-AA 77.5 vs 76.1 (about level). Repository-level code and ' +
+      'long inputs on its DeepMind card (published 2026-10-13): DeepSWE v1.1 77.9 against GPT-6 Astra 74.1 and Opus 5.5 ' +
+      '74.2, GraphWalks 256k–1M 84.2 against Astra 71.8. Hydrogen\'s card publishes neither row, so how the two compare ' +
+      'there is open.',
     avoid:
-      'PDF and document-heavy knowledge work (GDP.pdf 22, against GPT-6.1 Sol 31 and Opus 5.5 26 — route to Codex); ' +
-      'long-context retrieval (AA-LCR 80, level with Flash High\'s 81 — no reason to go up); the hardest software engineering ' +
-      '(FrontierSWE v2 55.0 against GPT-6 Astra 65.5, card — route to Codex); frontier physics (CritPt 27 vs GPT-6.1 Sol 32); ' +
-      'quick lookups (Flash Low). Opus 5.5 (Max) leads it on almost every AA row but AutomationBench, at three times the cost ' +
-      'per task. ' + ARGON_QUOTA,
+      'Anything Hydrogen (XHigh) does better for less — AA, Argon at high against Hydrogen at xhigh: FrontierCode-AA 2.0 ' +
+      '25.7 vs 39.0, GDP.pdf 21.8 vs 27.6, CritPt v2 (Hard Subset) 52.5 vs 66.0, HLE-Diamond 56.7 vs 58.8, Intelligence ' +
+      'Index 50 vs 54, at $4.97 and 30.0 minutes per Index task against $3.16 and 13.7. The hardest software engineering ' +
+      '(FrontierSWE v2 55.0 against GPT-6 Astra 65.5, Argon\'s card — route to Codex). Quick lookups (Hydrogen Low). ' +
+      ARGON_QUOTA,
   },
   {
     id: 'Claude Opus 5.5 (High)',
@@ -200,7 +240,7 @@ export const GEMINI_MODELS = [
     useFor:
       'An independent Opus-class second opinion or a hard verification pass on Antigravity\'s SEPARATE Claude quota — the same generation as the fleet\'s own coder and reviewer, so it adds an independent read, not a stronger one. One named call per question, when the Claude Code pool is the constraint or the question deserves two Opus reads. Opus 5.5 (Medium) and Sonnet 5.5 (High) ran headless via agy 1.2.14 on 2026-10-03; the other two ids are listed by agy models and share the id form, and did not run — the bucket answered RESOURCE_EXHAUSTED to both that afternoon, after three calls, which is the point.',
     avoid:
-      'Anything routine, any sweep, any loop, and every deep-research stage (gemini_deep_research refuses Claude ids) and never as the configured default (gemini_research and gemini_image refuse it): the Antigravity Claude bucket is small and shared by all four Claude entries, where the Gemini pool is effectively unlimited for this fleet. Not a fleet role: the guard, the diff and the transcript live in Claude Code. Citation-heavy research goes to Gemini (web grounding via agy is unverified for the Claude family).',
+      'Anything routine, any sweep, any loop, and every deep-research stage (gemini_deep_research refuses Claude ids) and never as the configured default (gemini_research and gemini_image refuse it): the Antigravity Claude bucket is small and shared by all four Claude entries, apart from the Gemini pool. Not a fleet role: the guard, the diff and the transcript live in Claude Code. Citation-heavy research goes to Gemini (web grounding via agy is unverified for the Claude family).',
   },
   {
     id: 'Claude Opus 5.5 (Medium)',
@@ -222,7 +262,7 @@ export const GEMINI_MODELS = [
     useFor:
       'A cheap second opinion or a volume read on the Antigravity Claude quota instead of the native Claude Code pool — reviewing a document, checking a set of claims, a second read of a tester report. Listed since 2026-10-03: the two pools are separate and the native one is the expensive one.',
     avoid:
-      'Sweeps and loops all the same — the bucket is small and shared with Opus. Not a tester or a coder: those roles need the guard and the diff. Flash stays the default for research, Flash Low for anything cheap.',
+      'Sweeps and loops all the same — the bucket is small and shared with Opus. Not a tester or a coder: those roles need the guard and the diff. Hydrogen (High) stays the default for research, Hydrogen (Low) for anything cheap.',
   },
   {
     id: 'Claude Sonnet 5.5 (Medium)',
@@ -231,9 +271,9 @@ export const GEMINI_MODELS = [
     effort: 'Medium',
     tier: 'heavy',
     useFor:
-      'The lightest Claude read on the Antigravity bucket: a summary, a sanity check, a short classification — when Flash\'s answer wants a Claude cross-check and the native pool should stay untouched.',
+      'The lightest Claude read on the Antigravity bucket: a summary, a sanity check, a short classification — when a Gemini answer wants a Claude cross-check and the native pool should stay untouched.',
     avoid:
-      'As Sonnet 5.5 (High); prefer Flash Low or Medium for anything that does not need a Claude voice.',
+      'As Sonnet 5.5 (High); prefer Hydrogen Low or Medium for anything that does not need a Claude voice.',
   },
   {
     id: 'GPT-OSS 120B (Medium)',
@@ -244,7 +284,7 @@ export const GEMINI_MODELS = [
     useFor:
       'Non-Google open-weights SECOND OPINION — cross-check a Gemini answer with a different model family, math-heavy reasoning (strong on AIME/competition math), and de-biasing when you suspect single-vendor blind spots. Apache-2.0 MoE (~5.1B active params); near-parity with o4-mini on core reasoning (MMLU ~90%).',
     avoid:
-      'Primary frontier work and long-context tasks — it trails the frontier Gemini models on overall reasoning/agentic depth and has no long-context retrieval advantage. Use as a corroborating voice, not the lead researcher. Antigravity removes it on 2026-11-02; the release after that date takes it out of the catalog.',
+      'Primary frontier work and long-context tasks — it trails the frontier Gemini models on overall reasoning/agentic depth and has no long-context retrieval advantage. Use as a corroborating voice, not the lead researcher. Antigravity announces its removal for 2026-11-18 (it was 2026-11-02; agy 1.5.8 still lists it); it leaves the catalog when agy stops listing it.',
   },
 ];
 
@@ -308,20 +348,18 @@ export function modelEnum() {
  */
 export const GUIDE =
   'Pick by task, not by name. ' +
-  'Gemini 3.8 Flash (High)=the FLEET DEFAULT for all research/agentic delegation ' +
-  '(DeepSWE v1.1 73.8, Terminal-Bench 2.1 89.4, OSWorld 2.0 59.0, LAB-Bench2 86.2, ' +
-  'HLE-Verified 54.9) with strong Gray Swan prompt-injection robustness, which matters here ' +
-  'because every unit reads untrusted web content. It spends many thinking tokens at High, so ' +
-  'drop the effort level for routine work: ' +
-  '3.8 Flash (Low)=quick facts, lookups & short summaries (fastest, cheapest — ' +
-  '$0.75/$3.75 per Mtok in/out through 2026-12-31, then $1.50/$7.50); ' +
-  '3.8 Flash (Medium)=when High-effort latency or token overhead is unwanted (the fleet default ' +
-  'is High); ' +
-  'Gemini 4 Argon (High)=the tie-breaker when Grok and Flash disagree, and the step up from Flash for agentic, ' +
-  'terminal and repository-code work and hard science (DeepSWE v1.1 77.9, Google; AA Index 53 at $1.99 per task ' +
-  'vs GPT-6.1 Sol\'s 52 at $0.72); Argon (Medium|Low)=the same profile at lighter levels, unmeasured; on a Google AI ' +
-  'Pro subscription Argon\'s quota is small: there it is a named one-call route like Claude via agy — never a sweep, ' +
-  'a deep-research stage, gemini.model or the default; ' +
+  'Gemini 4 Hydrogen (High)=the FLEET DEFAULT for research/agentic delegation (AA at high: Index 51, $1.87 and ' +
+  '7.9 min per task; Argon (High) 50, $4.97, 30 min); per Google >2.3x more resilient than 3.8 Flash on Gray Swan ' +
+  'prompt injection, which matters: every unit reads untrusted web content; ' +
+  'Hydrogen (Low)=quick facts, lookups & short summaries; ' +
+  'Hydrogen (Medium)=when High\'s latency or token spend is unwanted (Low and Medium are unmeasured); ' +
+  'Hydrogen (XHigh)=the named step up, one call when depth pays (AA at xhigh: Index 54 at $3.16 and 13.7 min), ' +
+  'never the default or a deep-research stage; ' +
+  'Gemini 4 Argon (High)=the tie-breaker when Grok and Hydrogen disagree, and the step up for terminal agents, ' +
+  'terminal science and multi-step automation (AA: ahead of Hydrogen XHigh there, behind it on the Index) and ' +
+  'repository code (DeepSWE v1.1 77.9, Argon\'s card); Argon (Medium|Low)=the same profile at lighter levels, ' +
+  'unmeasured; on a Google AI Pro subscription Argon\'s quota is small: there it is a named one-call route like ' +
+  'Claude via agy — never a sweep, a deep-research stage, gemini.model or the default; ' +
   'Claude Opus 5.5 (High|Medium) and Claude Sonnet 5.5 (High|Medium)=Antigravity\'s SEPARATE Claude quota, and a ' +
   'SMALL one: one named call per question — an independent Opus read, a hard verification pass, a cheap Sonnet ' +
   'cross-check — when the Claude Code pool is the constraint; never the default, never a sweep, never a ' +

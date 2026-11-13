@@ -115,8 +115,8 @@ const quiet = () => {};
 // ─── the arm ─────────────────────────────────────────────────────────────────
 
 test('an arm names a catalog model; Gemini carries its effort in the model id, Codex and Grok as an effort', () => {
-  assert.deepEqual(parseArm('gemini:Gemini 3.8 Flash:high'), { arm: 'gemini:Gemini 3.8 Flash (High)', unit: 'gemini', model: 'Gemini 3.8 Flash (High)', effort: null });
-  assert.deepEqual(parseArm('gemini:Gemini 3.8 Flash (Low)'), { arm: 'gemini:Gemini 3.8 Flash (Low)', unit: 'gemini', model: 'Gemini 3.8 Flash (Low)', effort: null });
+  assert.deepEqual(parseArm('gemini:Gemini 4 Hydrogen:high'), { arm: 'gemini:Gemini 4 Hydrogen (High)', unit: 'gemini', model: 'Gemini 4 Hydrogen (High)', effort: null });
+  assert.deepEqual(parseArm('gemini:Gemini 4 Hydrogen (Low)'), { arm: 'gemini:Gemini 4 Hydrogen (Low)', unit: 'gemini', model: 'Gemini 4 Hydrogen (Low)', effort: null });
   assert.deepEqual(parseArm('codex:gpt-6.1-sol'), { arm: 'codex:gpt-6.1-sol', unit: 'codex', model: 'gpt-6.1-sol', effort: null });
   assert.deepEqual(parseArm('codex:gpt-6-astra:xhigh'), { arm: 'codex:gpt-6-astra:xhigh', unit: 'codex', model: 'gpt-6-astra', effort: 'xhigh' });
   assert.deepEqual(parseArm('grok:grok-4.7'), { arm: 'grok:grok-4.7', unit: 'grok', model: 'grok-4.7', effort: null });
@@ -132,10 +132,10 @@ test('an arm names a catalog model; Gemini carries its effort in the model id, C
 // ─── the call plan ───────────────────────────────────────────────────────────
 
 test('R: one research call per question, through each unit\'s research tool, with model and (Codex, Grok) effort', () => {
-  const g = planCalls({ suite: 'R', arm: parseArm('gemini:Gemini 3.8 Flash:medium'), tasks: R_TASKS });
+  const g = planCalls({ suite: 'R', arm: parseArm('gemini:Gemini 4 Hydrogen:medium'), tasks: R_TASKS });
   assert.deepEqual(g, [
-    { taskIds: ['q1'], tool: 'gemini_research', args: { prompt: R_TASKS[0].prompt, model: 'Gemini 3.8 Flash (Medium)' } },
-    { taskIds: ['q2'], tool: 'gemini_research', args: { prompt: R_TASKS[1].prompt, model: 'Gemini 3.8 Flash (Medium)' } },
+    { taskIds: ['q1'], tool: 'gemini_research', args: { prompt: R_TASKS[0].prompt, model: 'Gemini 4 Hydrogen (Medium)' } },
+    { taskIds: ['q2'], tool: 'gemini_research', args: { prompt: R_TASKS[1].prompt, model: 'Gemini 4 Hydrogen (Medium)' } },
   ]);
   const k = planCalls({ suite: 'R', arm: parseArm('grok:grok-4.7:high'), tasks: R_TASKS });
   assert.deepEqual(k.map((c) => [c.tool, c.args]), [
@@ -151,11 +151,11 @@ test('R: one research call per question, through each unit\'s research tool, wit
 });
 
 test('R --batch: one call holding every question, numbered, asking for an answer per number', () => {
-  const [call, ...rest] = planCalls({ suite: 'R', arm: parseArm('gemini:Gemini 3.8 Flash:high'), tasks: R_TASKS, batch: true });
+  const [call, ...rest] = planCalls({ suite: 'R', arm: parseArm('gemini:Gemini 4 Hydrogen:high'), tasks: R_TASKS, batch: true });
   assert.equal(rest.length, 0);
   assert.deepEqual(call.taskIds, ['q1', 'q2']);
   assert.equal(call.tool, 'gemini_research');
-  assert.equal(call.args.model, 'Gemini 3.8 Flash (High)');
+  assert.equal(call.args.model, 'Gemini 4 Hydrogen (High)');
   const p = call.args.prompt;
   assert.ok(p.includes(`1. ${R_TASKS[0].prompt}`), p);
   assert.ok(p.includes(`2. ${R_TASKS[1].prompt}`), p);
@@ -170,7 +170,7 @@ test('V: Codex and Grok review the snapshot as cwd; Gemini gets the file\'s text
   assert.deepEqual(c, [{ taskIds: ['v1'], tool: 'codex_code_review', args: { prompt: task.prompt, model: 'gpt-6-astra', effort: 'xhigh', cwd: '/abs/snap' } }]);
   const k = planCalls({ suite: 'V', arm: parseArm('grok:grok-4.7'), tasks: [task] });
   assert.deepEqual(k, [{ taskIds: ['v1'], tool: 'grok_code_review', args: { prompt: task.prompt, model: 'grok-4.7', cwd: '/abs/snap' } }]);
-  const [g] = planCalls({ suite: 'V', arm: parseArm('gemini:Gemini 3.8 Flash:low'), tasks: [task] });
+  const [g] = planCalls({ suite: 'V', arm: parseArm('gemini:Gemini 4 Hydrogen:low'), tasks: [task] });
   assert.equal(g.tool, 'gemini_research');
   assert.equal(g.args.cwd, undefined);
   assert.ok(g.args.prompt.startsWith(task.prompt));

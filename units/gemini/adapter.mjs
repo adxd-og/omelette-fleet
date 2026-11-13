@@ -387,9 +387,9 @@ export function parseSubquestions(text, cap) {
 /** Stage models by catalog shape, not by id — survives generation sweeps. */
 export function stageModels(cat, explicit) {
   if (explicit) return { decompose: explicit, gather: explicit, synth: explicit };
-  const flash = (effort) => cat.models.find((m) => m.family === 'gemini' && m.tier === 'balanced' && m.effort === effort);
-  const medium = flash('Medium') || flash('High');
-  const high = flash('High') || medium;
+  const balancedGemini = (effort) => cat.models.find((m) => m.family === 'gemini' && m.tier === 'balanced' && m.effort === effort);
+  const medium = balancedGemini('Medium') || balancedGemini('High');
+  const high = balancedGemini('High') || medium;
   return { decompose: medium && medium.id, gather: medium && medium.id, synth: high && high.id };
 }
 
@@ -400,7 +400,7 @@ export function stageModels(cat, explicit) {
  * `<id> (decompose, gather) + <id> (synth)` — and collapses to the id alone
  * when the two are the same, which is every explicit `model` and any catalog
  * offering a single balanced entry. An id is a non-empty string and nothing
- * else: a catalog that offers no balanced Flash produces no report, and no
+ * else: a catalog that offers no balanced Gemini entry produces no report, and no
  * report leaves the result filed under `(vendor default)`, exactly as it was
  * before this existed. Exported for tests.
  */
@@ -590,7 +590,7 @@ const MODEL_PROP = {
   enum: catalog.modelEnum(),
   description:
     'Optional. Pick a model per the cheat-sheet below; OMIT to use the fleet default ' +
-    '(`gemini.model` in the fleet config, else the tool\'s own default: agy\'s for gemini_research and gemini_image, the Flash stages for gemini_deep_research — a configured Claude id is refused here; Claude is named per call, where the tool takes it). ' +
+    '(`gemini.model` in the fleet config, else the tool\'s own default: agy\'s for gemini_research and gemini_image, the balanced Gemini stages for gemini_deep_research — a configured Claude id is refused here; Claude is named per call, where the tool takes it). ' +
     'Must be an exact id (call gemini_models for the full guide). ' + GUIDE,
 };
 
@@ -812,7 +812,7 @@ export default defineUnit({
         const asked = ctx.model || '';
         const entry = asked ? ctx.catalog.find(asked) : null;
         if (entry && entry.family === 'claude') {
-          return { text: 'Error: gemini_deep_research does not run on a Claude model ("' + asked + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Flash id — a configured Claude `gemini.model` applies whenever `model` is omitted.', isError: true };
+          return { text: 'Error: gemini_deep_research does not run on a Claude model ("' + asked + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Gemini id — a configured Claude `gemini.model` applies whenever `model` is omitted.', isError: true };
         }
         // One empty directory for every stage of this call (see the header).
         const cwd = mkdtempSync(join(tmpdir(), 'omelette-gemini-research-'));

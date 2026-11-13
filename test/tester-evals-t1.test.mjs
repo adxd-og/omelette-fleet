@@ -207,9 +207,9 @@ test('V on Gemini: the brief carries the file as it stood at the commit, not the
     '  else if (m.id === 3) send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: JSON.stringify(m.params.arguments) }] } }); } });',
   ].join('\n'));
   const snapshot = join(tmp('t1-snap-'), commit);
-  const { lines } = await runArm({ suite: 'V', arm: parseArm('gemini:Gemini 3.8 Flash:low'), dir, repo, snapshot, serverPath: server, env: baseEnv(home), out: quiet });
+  const { lines } = await runArm({ suite: 'V', arm: parseArm('gemini:Gemini 4 Hydrogen:low'), dir, repo, snapshot, serverPath: server, env: baseEnv(home), out: quiet });
   const sent = JSON.parse(lines[0].answer);
-  assert.equal(sent.model, 'Gemini 3.8 Flash (Low)');
+  assert.equal(sent.model, 'Gemini 4 Hydrogen (Low)');
   assert.equal(sent.cwd, undefined);
   assert.ok(sent.prompt.includes('the reviewed state'));
   assert.ok(!sent.prompt.includes('the later fix'));
@@ -389,6 +389,6 @@ test('the line records the model and the effort the unit reports it used, not th
   const c = await runArm({ suite: 'R', arm: parseArm('codex:gpt-6.1-sol:low'), dir, serverPath: server, env, out: quiet });
   assert.deepEqual([c.lines[0].model, c.lines[0].effort], ['gpt-6.1-sol', 'xhigh']);
   // Gemini's record carries no effort field: it is the level in the model id the unit reports.
-  const g = await runArm({ suite: 'R', arm: parseArm('gemini:Gemini 3.8 Flash:high'), dir, serverPath: server, env, out: quiet });
+  const g = await runArm({ suite: 'R', arm: parseArm('gemini:Gemini 4 Hydrogen:high'), dir, serverPath: server, env, out: quiet });
   assert.deepEqual([g.lines[0].model, g.lines[0].effort], ['Gemini 3.8 Flash (Medium)', 'medium']);
 });

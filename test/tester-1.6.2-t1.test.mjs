@@ -20,7 +20,7 @@ const CLAUDE_IDS = [
   'Claude Sonnet 5.5 (Medium)',
 ];
 
-const REFUSAL = (id) => 'Error: gemini_deep_research does not run on a Claude model ("' + id + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Flash id — a configured Claude `gemini.model` applies whenever `model` is omitted.';
+const REFUSAL = (id) => 'Error: gemini_deep_research does not run on a Claude model ("' + id + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Gemini id — a configured Claude `gemini.model` applies whenever `model` is omitted.';
 
 const res = (over) => Promise.resolve({ stdout: '', stderr: '', code: 0, signal: null, killed: false, capped: false, ...over });
 
@@ -106,13 +106,13 @@ test('every tool that takes `model` offers the four Claude ids in its enum', () 
 
 // --- the deep-research refusal ------------------------------------------------
 
-test('an explicit Flash id overrides a configured Claude id: the call runs', async () => {
+test('an explicit Hydrogen id overrides a configured Claude id: the call runs', async () => {
   const { rt, calls } = rig({ model: 'Claude Opus 5.5 (High)' });
-  const r = await rt.callTool('gemini_deep_research', { question: 'why', model: 'Gemini 3.8 Flash (Medium)' });
+  const r = await rt.callTool('gemini_deep_research', { question: 'why', model: 'Gemini 4 Hydrogen (Medium)' });
   assert.ok(!r.isError, r.text);
   assert.match(r.text, /## Summary/);
   assert.ok(calls.spawn.length >= 2);
-  for (const argv of calls.spawn) assert.equal(modelArg(argv), 'Gemini 3.8 Flash (Medium)');
+  for (const argv of calls.spawn) assert.equal(modelArg(argv), 'Gemini 4 Hydrogen (Medium)');
 });
 
 test('a surrounding-whitespace Claude id is still refused, named without the whitespace', async () => {
@@ -137,20 +137,20 @@ test('a Claude Low id (agy lists it, the catalog does not) is the runtime\'s "un
   assert.equal(calls.spawn.length, 0);
 });
 
-test('a configured Claude id the catalog does not admit is ignored (vendor default) and deep research proceeds on the Flash stages', async () => {
+test('a configured Claude id the catalog does not admit is ignored (vendor default) and deep research proceeds on the Hydrogen stages', async () => {
   const { rt, calls } = rig({ model: 'Claude Opus 5.5 (Low)' });
   const r = await rt.callTool('gemini_deep_research', { question: 'why' });
   assert.ok(!r.isError, r.text);
   assert.match(r.text, /## Summary/);
-  for (const argv of calls.spawn) assert.match(modelArg(argv), /^Gemini 3\.8 Flash \(/);
+  for (const argv of calls.spawn) assert.match(modelArg(argv), /^Gemini 4 Hydrogen \(/);
 });
 
-test('deep research with no model uses Flash for every spawn (no Claude id leaks into the stages)', async () => {
+test('deep research with no model uses Hydrogen for every spawn (no Claude id leaks into the stages)', async () => {
   const { rt, calls } = rig();
   const r = await rt.callTool('gemini_deep_research', { question: 'why' });
   assert.ok(!r.isError, r.text);
   assert.ok(calls.spawn.length >= 2);
-  for (const argv of calls.spawn) assert.match(modelArg(argv), /^Gemini 3\.8 Flash \(/);
+  for (const argv of calls.spawn) assert.match(modelArg(argv), /^Gemini 4 Hydrogen \(/);
   assert.equal(calls.usedModel.length, 1);
 });
 
@@ -194,8 +194,8 @@ test('R5: the refusal comes before the cwd check (a relative cwd does not mask i
   assert.equal(calls.spawn.length, 0);
 });
 
-test('R5: a Claude id named in the call runs when it differs from the configured one, and with a Flash default', async () => {
-  for (const config of [{ model: 'Claude Opus 5.5 (Medium)' }, { model: 'Gemini 3.8 Flash (High)' }, {}]) {
+test('R5: a Claude id named in the call runs when it differs from the configured one, and with a Hydrogen default', async () => {
+  for (const config of [{ model: 'Claude Opus 5.5 (Medium)' }, { model: 'Gemini 4 Hydrogen (High)' }, {}]) {
     const { rt, calls } = rig(config);
     const r = await rt.callTool('gemini_research', { prompt: 'a question', model: 'Claude Sonnet 5.5 (High)' });
     assert.ok(!r.isError, r.text);
@@ -204,19 +204,19 @@ test('R5: a Claude id named in the call runs when it differs from the configured
   }
 });
 
-test('R5: a configured Claude default with a Flash id named in the call runs on the Flash id', async () => {
+test('R5: a configured Claude default with a Hydrogen id named in the call runs on the Hydrogen id', async () => {
   const { rt, calls } = rig({ model: 'Claude Opus 5.5 (High)' });
-  const r = await rt.callTool('gemini_research', { prompt: 'a question', model: 'Gemini 3.8 Flash (Medium)' });
+  const r = await rt.callTool('gemini_research', { prompt: 'a question', model: 'Gemini 4 Hydrogen (Medium)' });
   assert.ok(!r.isError, r.text);
   assert.equal(calls.spawn.length, 1);
-  assert.equal(modelArg(calls.spawn[0]), 'Gemini 3.8 Flash (Medium)');
+  assert.equal(modelArg(calls.spawn[0]), 'Gemini 4 Hydrogen (Medium)');
 });
 
-test('R5: a configured Flash default, no model in the call, runs on it; no config at all runs on agy\'s default (no --model)', async () => {
-  const a = rig({ model: 'Gemini 3.8 Flash (High)' });
+test('R5: a configured Hydrogen default, no model in the call, runs on it; no config at all runs on agy\'s default (no --model)', async () => {
+  const a = rig({ model: 'Gemini 4 Hydrogen (High)' });
   const ra = await a.rt.callTool('gemini_research', { prompt: 'q' });
   assert.ok(!ra.isError, ra.text);
-  assert.equal(modelArg(a.calls.spawn[0]), 'Gemini 3.8 Flash (High)');
+  assert.equal(modelArg(a.calls.spawn[0]), 'Gemini 4 Hydrogen (High)');
   const b = rig({});
   const rb = await b.rt.callTool('gemini_research', { prompt: 'q' });
   assert.ok(!rb.isError, rb.text);
@@ -237,9 +237,9 @@ test('R5: an empty prompt is still the "prompt is required" error even with a co
   assert.equal(r.text, 'Error: "prompt" is required.');
 });
 
-test('R7: a Flash run, the default run and a deep-research Flash stage all keep the unchanged Gemini message', async () => {
+test('R7: a Hydrogen run, the default run and a deep-research Hydrogen stage all keep the unchanged Gemini message', async () => {
   for (const [tool, args] of [
-    ['gemini_research', { prompt: 'q', model: 'Gemini 3.8 Flash (High)' }],
+    ['gemini_research', { prompt: 'q', model: 'Gemini 4 Hydrogen (High)' }],
     ['gemini_research', { prompt: 'q' }],
     ['gemini_deep_research', { question: 'q' }],
   ]) {
@@ -276,14 +276,14 @@ test('R9: gemini_image with a configured Claude default and no model is refused:
   }
 });
 
-test('R9: gemini_image with no config, and with a configured Flash default, still spawns (no regression)', async () => {
+test('R9: gemini_image with no config, and with a configured Hydrogen default, still spawns (no regression)', async () => {
   const a = rig({});
   await a.rt.callTool('gemini_image', { prompt: 'a cat' });
   assert.equal(a.calls.spawn.length, 1);
   assert.ok(!a.calls.spawn[0].includes('--model'));
-  const b = rig({ model: 'Gemini 3.8 Flash (High)' });
+  const b = rig({ model: 'Gemini 4 Hydrogen (High)' });
   await b.rt.callTool('gemini_image', { prompt: 'a cat' });
-  assert.equal(modelArg(b.calls.spawn[0]), 'Gemini 3.8 Flash (High)');
+  assert.equal(modelArg(b.calls.spawn[0]), 'Gemini 4 Hydrogen (High)');
 });
 
 test('R9: gemini_image with an empty prompt is still "prompt is required", even with a configured Claude default', async () => {

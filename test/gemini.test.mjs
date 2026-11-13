@@ -142,8 +142,8 @@ test('stageModels picks by catalog shape so a generation sweep never strands an 
   const s = stageModels(catalog);
   assert.ok(catalog.isAllowedModel(s.decompose));
   assert.ok(catalog.isAllowedModel(s.synth));
-  assert.match(s.decompose, /Flash \(Medium\)$/);
-  assert.match(s.synth, /Flash \(High\)$/);
+  assert.match(s.decompose, /Hydrogen \(Medium\)$/);
+  assert.match(s.synth, /Hydrogen \(High\)$/);
   assert.deepEqual(stageModels(catalog, 'X'), { decompose: 'X', gather: 'X', synth: 'X' });
 });
 
@@ -160,7 +160,7 @@ test('deepResearchModel: the stage ids the run asked for, collapsed when every s
   // Against the REAL catalog: exactly the pair stageModels picks, in that order.
   const s = stageModels(catalog);
   assert.equal(deepResearchModel(s), `${s.gather} (decompose, gather) + ${s.synth} (synth)`);
-  assert.match(deepResearchModel(s), /Flash \(Medium\) \(decompose, gather\) \+ .*Flash \(High\) \(synth\)$/);
+  assert.match(deepResearchModel(s), /Hydrogen \(Medium\) \(decompose, gather\) \+ .*Hydrogen \(High\) \(synth\)$/);
   // Half a pair is still an id; no id at all is not a report, and core/unit.mjs
   // ignores an empty string — the result stays filed under `(vendor default)`.
   assert.equal(deepResearchModel({ decompose: 'M', gather: 'M', synth: undefined }), 'M');

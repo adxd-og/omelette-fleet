@@ -53,10 +53,10 @@ test('the guide and gemini_models name the small separate Claude quota and the d
   assert.ok(deep.description.includes('Claude ids are refused here — small separate quota, about five runs per call; use gemini_research for a single Claude read.'));
 });
 
-test('stageModels still picks Flash for every stage: the Claude entries are heavy, not balanced', () => {
+test('stageModels still picks Hydrogen for every stage: the Claude entries are heavy, not balanced', () => {
   const s = stageModels(catalog);
   for (const id of [s.decompose, s.gather, s.synth]) {
-    assert.match(id, /^Gemini 3\.8 Flash \(/);
+    assert.match(id, /^Gemini 4 Hydrogen \(/);
   }
 });
 
@@ -87,7 +87,7 @@ function deepRuntime(config, answer) {
   return { rt, calls };
 }
 
-const refusal = (id) => 'Error: gemini_deep_research does not run on a Claude model ("' + id + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Flash id — a configured Claude `gemini.model` applies whenever `model` is omitted.';
+const refusal = (id) => 'Error: gemini_deep_research does not run on a Claude model ("' + id + '"): a deep-research call is about five agy runs, and Antigravity\'s Claude quota is small and separate. Ask gemini_research with that model for one question, or name a Gemini id — a configured Claude `gemini.model` applies whenever `model` is omitted.';
 
 test('gemini_deep_research refuses an explicit Claude model before any spawn', async () => {
   const { rt, calls } = deepRuntime({});
@@ -107,8 +107,8 @@ test('gemini_deep_research refuses a configured Claude model before any spawn', 
   assert.equal(calls.usedModel.length, 0);
 });
 
-test('gemini_deep_research with a Flash id or no model still reaches the stages', async () => {
-  for (const args of [{ question: 'why', model: 'Gemini 3.8 Flash (Medium)' }, { question: 'why' }]) {
+test('gemini_deep_research with a Hydrogen id or no model still reaches the stages', async () => {
+  for (const args of [{ question: 'why', model: 'Gemini 4 Hydrogen (Medium)' }, { question: 'why' }]) {
     const { rt, calls } = deepRuntime({});
     const r = await rt.callTool('gemini_deep_research', args);
     assert.ok(!r.isError, r.text);
@@ -140,12 +140,12 @@ test('gemini_research runs a Claude id named in the call, even when the same id 
   assert.equal(modelArg(calls.spawn[0]), 'Claude Opus 5.5 (Medium)');
 });
 
-test('gemini_research with a configured Flash default and no model runs on it', async () => {
-  const { rt, calls } = deepRuntime({ model: 'Gemini 3.8 Flash (Medium)' });
+test('gemini_research with a configured Hydrogen default and no model runs on it', async () => {
+  const { rt, calls } = deepRuntime({ model: 'Gemini 4 Hydrogen (Medium)' });
   const r = await rt.callTool('gemini_research', { prompt: 'a question' });
   assert.ok(!r.isError, r.text);
   assert.equal(calls.spawn.length, 1);
-  assert.equal(modelArg(calls.spawn[0]), 'Gemini 3.8 Flash (Medium)');
+  assert.equal(modelArg(calls.spawn[0]), 'Gemini 4 Hydrogen (Medium)');
 });
 
 // --- Round 2: an exhausted Claude run names the Claude bucket (R7) ---
@@ -159,19 +159,19 @@ test('interpretAgy names the Claude bucket for a Claude run and the Gemini bucke
   assert.throws(() => interpretAgy(failed, { timeoutS: 30 }), (e) => e.message === GEMINI_EXHAUSTED);
 });
 
-test('an exhausted Claude run says so once, with no retry; a Flash run keeps the Gemini message', async () => {
+test('an exhausted Claude run says so once, with no retry; a Hydrogen run keeps the Gemini message', async () => {
   const exhausted = { stderr: 'error: Individual quota reached. AGY_ERROR RESOURCE_EXHAUSTED', code: 1 };
   const claude = deepRuntime({}, exhausted);
   const r = await claude.rt.callTool('gemini_research', { prompt: 'a question', model: 'Claude Sonnet 5.5 (High)' });
   assert.equal(r.isError, true);
   assert.ok(r.text.includes(CLAUDE_EXHAUSTED), r.text);
   assert.equal(claude.calls.spawn.length, 1);
-  const flash = deepRuntime({}, exhausted);
-  const f = await flash.rt.callTool('gemini_research', { prompt: 'a question', model: 'Gemini 3.8 Flash (High)' });
+  const gemini = deepRuntime({}, exhausted);
+  const f = await gemini.rt.callTool('gemini_research', { prompt: 'a question', model: 'Gemini 4 Hydrogen (High)' });
   assert.equal(f.isError, true);
   assert.ok(f.text.includes(GEMINI_EXHAUSTED), f.text);
   assert.ok(!f.text.includes('Claude'), f.text);
-  assert.equal(flash.calls.spawn.length, 1);
+  assert.equal(gemini.calls.spawn.length, 1);
 });
 
 // --- Round 2: texts (R2, R3, R4, R5, R6, R8) ---
@@ -199,11 +199,11 @@ test('gemini_image refuses a Claude id that arrives only from the configured gem
   assert.ok(!calls.log.some((m) => /temp cwd=/.test(m)), calls.log.join('\n'));
 });
 
-test('gemini_image with a configured Claude default and a Flash id named spawns on the Flash id', async () => {
+test('gemini_image with a configured Claude default and a Hydrogen id named spawns on the Hydrogen id', async () => {
   const { rt, calls } = deepRuntime({ model: 'Claude Sonnet 5.5 (High)' });
-  await rt.callTool('gemini_image', { prompt: 'a cat', model: 'Gemini 3.8 Flash (High)' });
+  await rt.callTool('gemini_image', { prompt: 'a cat', model: 'Gemini 4 Hydrogen (High)' });
   assert.equal(calls.spawn.length >= 1, true);
-  assert.equal(modelArg(calls.spawn[0]), 'Gemini 3.8 Flash (High)');
+  assert.equal(modelArg(calls.spawn[0]), 'Gemini 4 Hydrogen (High)');
 });
 
 test('gemini_image with a Claude id named in the call spawns on that id (one image call is one call)', async () => {
@@ -217,6 +217,6 @@ test('the served model schema of gemini_research, gemini_image and gemini_deep_r
   const { rt } = deepRuntime({});
   for (const name of ['gemini_research', 'gemini_image', 'gemini_deep_research']) {
     const tool = rt.tools.find((t) => t.name === name);
-    assert.ok(tool.inputSchema.properties.model.description.includes('(`gemini.model` in the fleet config, else the tool\'s own default: agy\'s for gemini_research and gemini_image, the Flash stages for gemini_deep_research — a configured Claude id is refused here; Claude is named per call, where the tool takes it). '), name);
+    assert.ok(tool.inputSchema.properties.model.description.includes('(`gemini.model` in the fleet config, else the tool\'s own default: agy\'s for gemini_research and gemini_image, the balanced Gemini stages for gemini_deep_research — a configured Claude id is refused here; Claude is named per call, where the tool takes it). '), name);
   }
 });

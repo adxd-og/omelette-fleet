@@ -51,7 +51,7 @@ test('coerce: a `line` spec is one printable line — no blank, no control chara
   assert.deepEqual(coerce({ type: 'line' }, '   '), { ok: false });
   assert.deepEqual(coerce({ type: 'line' }, ''), { ok: false });
   assert.deepEqual(coerce({ type: 'line' }, ' opus '), { ok: true, value: 'opus' });
-  assert.deepEqual(coerce({ type: 'line' }, 'Gemini 3.8 Flash (High)'), { ok: true, value: 'Gemini 3.8 Flash (High)' });
+  assert.deepEqual(coerce({ type: 'line' }, 'Gemini 4 Hydrogen (High)'), { ok: true, value: 'Gemini 4 Hydrogen (High)' });
   for (const bad of ['opus\n---\ninjected: 1', 'opus\r\nx', 'opus\tx', 'opus\u000bx', 'opus\fx', 'opus\u0000x', 'opus\u001b[0m']) {
     assert.deepEqual(coerce({ type: 'line' }, bad), { ok: false }, JSON.stringify(bad));
   }
