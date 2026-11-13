@@ -2,11 +2,11 @@
 
 ## 1.10.2 — 2026-11-13
 
-A security patch for the Gemini unit: under agy 1.5.7 or later a research run started in Auto mode, which approves file edits and shell commands with nobody asked. Map: [SECURITY, "Gemini — the weakest posture"](docs/SECURITY.md#gemini--the-weakest-posture-documented-as-such) for what is pinned, what was measured and what still rests on your agy settings.
+A security patch for the Gemini unit: under agy 1.5.8 a research run executed a shell command no allow rule named, and agy's changelog names the cause — 1.5.7 made Auto, which approves file edits and "safe" commands with nobody asked, the default agent mode. Map: [SECURITY, "Gemini — the weakest posture"](docs/SECURITY.md#gemini--the-weakest-posture-documented-as-such) for what is pinned, what was measured and what still rests on your agy settings.
 
 - **What was open.** agy's changelog for 1.5.7: Auto became the default agent mode for a session with no saved mode, headless `-p` included. The unit passed no mode for `gemini_research` and the stages of `gemini_deep_research`. Measured on agy 1.5.8, 2026-11-13: with the unit's argv, a prompt asking for `touch marker.txt` — a command no allow rule named — ran. A research run reads untrusted web pages; with a `cwd` it sits in your project. 1.10.1 was live-gated on agy 1.5.5 two days earlier.
 - **What closes it.** Every spawn that is not accept-edits carries `--settings {"agentMode":""}`: agy's Default mode for that session, merged over your `settings.json` and never saved to it. The same prompt is auto-denied, and `read_url` from your allow list still runs. `gemini_image` and workspace-write research pass `--mode accept-edits` as before; under it a shell command is denied (measured the same day).
-- **What was not measured.** A mode you saved in `settings.json` yourself: a session setting overrides a saved `model`, and the same is expected of `agentMode`, not run. If you chose a mode in agy's `/config`, check the file.
+- **What was not measured.** A mode you saved in `settings.json` yourself: a session setting overrides a saved `model`, and the same is expected of `agentMode`, not run. If you ever chose a mode in agy's `/config`, set `Agent Mode` back to Default there.
 - **If you stay on 1.10.1 or earlier:** set `Agent Mode` to Default in agy's `/config`. It writes `"agentMode": ""` and applies to your interactive agy sessions too.
 - **An agy that does not know `--settings`** fails the spawn with its own error, as does one that no longer knows the key or the value: agy 1.5.8 rejects an unknown flag, an unknown setting and an unknown value before any turn runs. The first version that accepts the flag is not determined: agy's changelog does not date it.
 

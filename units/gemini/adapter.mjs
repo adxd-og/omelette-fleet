@@ -32,11 +32,13 @@
  * identical; only the wording changes, because neither bound was reached and
  * "raise gemini.timeoutS" would send the operator after a limit that held.
  *
- * READ-ONLY POSTURE — agy has no kernel sandbox; its `--mode` is a permission
- * policy. Research runs in agy's Default mode BECAUSE THE UNIT PINS IT: every
- * spawn that is not accept-edits passes `--settings {"agentMode":""}`
- * (DEFAULT_MODE_PIN), since agy 1.5.7 made Auto — file edits and "safe" shell
- * commands approved — the default for headless runs. An agy that does not know
+ * READ-ONLY POSTURE — the unit runs agy with no kernel sandbox; its `--mode`
+ * is a permission policy. Research asks for agy's Default mode BECAUSE THE
+ * UNIT PINS IT: every spawn that is not accept-edits passes `--settings
+ * {"agentMode":""}` (DEFAULT_MODE_PIN), since agy 1.5.7's changelog made Auto
+ * — file edits and "safe" shell commands approved — the default for headless
+ * runs (measured on 1.5.8: without the pin a shell command no allow rule named
+ * ran, with it the command is auto-denied). An agy that does not know
  * `--settings` fails the spawn on the unknown flag: the failure is closed
  * (agy 1.5.8 answers an unknown flag with exit 2, the error on stderr and an
  * empty stdout — measured 2026-11-13; an older build is assumed to do the same). In
@@ -52,8 +54,9 @@
  *   `--dangerously-skip-permissions` (never passed) and
  *   `--disable-slash-commands` (checked against agy 1.1.25's own --help,
  *   2026-09-03), and, read off agy 1.5.8's --help on 2026-11-13, `--mode
- *   auto` (never passed) and `--settings` (the mode pin above, and nothing
- *   else: the allow and deny rules are not sent through it). There is no
+ *   auto` (never passed), `--sandbox` ("terminal restrictions"; never passed,
+ *   not evaluated) and `--settings` (the mode pin above, and nothing else:
+ *   the allow and deny rules are not sent through it). Nothing here is the
  *   equivalent of Codex's kernel sandbox.
  *   `--disable-slash-commands` IS passed on every spawn: without it, prompt
  *   text containing `/something` gets slash-command and skill expansion in
@@ -68,7 +71,8 @@
  *   workspace-write (fleet ceiling open + mode set) maps to `--mode
  *   accept-edits` for research given a `cwd` (without one the run stays
  *   read-only): file edits are auto-approved by agy's OWN
- *   permission layer inside that cwd. That is WEAKER than Codex's
+ *   permission layer — whether it keeps them inside that cwd is not
+ *   measured. That is WEAKER than Codex's
  *   kernel sandbox and is documented as such. agy's `skip` / `sandbox` modes
  *   are never used by this unit.
  *   gemini_image always runs with `--mode accept-edits` regardless of mode —
