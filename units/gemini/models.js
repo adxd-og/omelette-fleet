@@ -56,8 +56,8 @@
  *
  * ARGON (rewritten 2026-11-13): Gemini 4 Argon replaced the two 3.1 Pro entries
  * on 2026-10-16 and is now the heavier Gemini 4 tier — the tie-breaker, the step
- * up from Hydrogen for terminal agents, terminal science and multi-step
- * automation (AA, Argon at high against Hydrogen at xhigh), and the model whose
+ * up from Hydrogen for terminal agents and terminal science (AA, Argon at high
+ * against Hydrogen at xhigh; multi-step automation is about level), and the model whose
  * card (published 2026-10-13) holds repository-level and long-input rows
  * (DeepSWE v1.1, FrontierSWE v2, GraphWalks 256k–1M) that Hydrogen's card does
  * not publish. Its figures are now that card's and AA Index v5.0.1's, Argon at
@@ -76,11 +76,13 @@
  * that pool is the expensive one. Neither is a fleet role — the coder, tester and
  * reviewer stay native (guard, diff, transcript).
  * WEB ACCESS (measured 2026-11-13, agy 1.5.8, headless, with and without the unit's
- * flags): no Gemini model here — Hydrogen, Argon, 3.8 Flash — is given a URL-reading
- * tool; each names search_web as its only web tool, though agy's init event still
- * lists read_url_content. "Web research" on this unit is search-grounded: an answer
- * about one exact page is built from search summaries. Since which agy version is
- * not known.
+ * flags): every Gemini level run — Hydrogen (Low), (Medium) and (High), Argon (High),
+ * 3.8 Flash (High) — reported search_web as its only web tool and fetched nothing when
+ * asked for one exact page, though agy's init event still lists read_url_content.
+ * Hydrogen (XHigh) and Argon (Low), (Medium) were not run. This is the models' own
+ * report plus the absence of a fetch, not agy's documentation. "Web research" on
+ * this unit is search-grounded as far as measured. Since which agy version is not
+ * known.
  * Gemini 4 Hydrogen draws on the Gemini pool: Antigravity's usage on Google AI Pro
  * (read 2026-11-13) shows a Gemini pool with a 5-hour and a weekly window, a weekly
  * window of Argon's own and a Claude/GPT pool, and no Hydrogen window. One reading
@@ -168,15 +170,16 @@ export const GEMINI_MODELS = [
       'and GPT-6.1 Terra on SWE-sweep, Agents\' Last Exam v1.1, AutomationBench-AA, Vending-Bench 2, MKA, Chartography ' +
       'and HLE-Diamond. AA\'s per-benchmark rows at high are not published as text; the xhigh ones are in Hydrogen (XHigh).',
     avoid:
-      'Reading one exact URL: on agy 1.5.8 no Gemini model is given a URL-reading tool headless, only search_web, so a ' +
-      '"fetch this page" answer is built from search summaries (measured 2026-11-13: Hydrogen, Argon and 3.8 Flash ' +
-      'alike) — send an exact-page read to Grok or Codex research. ' +
+      'Reading one exact URL: on agy 1.5.8, headless, this model reported search_web as its only web tool and fetched ' +
+      'nothing when asked for one page — as did Hydrogen (Low) and (Medium), Argon (High) and 3.8 Flash (High), ' +
+      'measured 2026-11-13 — so a "read this page" answer comes from search; send an exact-page read to Grok or ' +
+      'Codex research. ' +
       'A caveat, not a reroute, for image and PDF reads: they stay on this unit and this default (no entry here has a ' +
       'measured lower refusal rate), but the card reports unjustified refusals up 5.57 percentage points against 3.8 ' +
       'Flash (lower is better), "particularly for multimodal prompts" — a refused read is the model\'s refusal, not a ' +
       'missing permission: reword it once before going elsewhere. The card\'s full safety report was not published as ' +
       'of 2026-11-13. Computer use and terminal science, where Claude Sonnet 5.5 leads it on the same card table (OSWorld-2.1 ' +
-      '83.9 vs 77.6, Terminal-Bench-Science 0.1 59.9 vs 51.4; no level stated). Terminal agents and multi-step automation ' +
+      '83.9 vs 77.6, Terminal-Bench-Science 0.1 59.9 vs 51.4; no level stated). Terminal agents and terminal science ' +
       'go up to Argon (High), one named call: on those AA rows Argon at high leads even Hydrogen at xhigh (see Argon).',
   },
   {
@@ -196,9 +199,9 @@ export const GEMINI_MODELS = [
       'The default, a sweep, a deep-research stage or gemini.model: High is the default, and deep research takes Medium ' +
       'and High when no model is configured. It spends more output tokens than Argon (AA: 154k per Index task at xhigh ' +
       'against Argon at high\'s 116k) and than High (304M over the Index against 110M). ' +
-      'Terminal agents, terminal science and multi-step automation go to Argon (High), which leads it there on the same ' +
-      'AA pages (Terminal-Bench 4.0 57.1 vs 53.5, Terminal-Bench-Science 0.1 52.9 vs 49.5, AutomationBench-AA 77.5 vs ' +
-      '76.1, about level). Hydrogen (High)\'s caveats on exact-URL and image and PDF reads apply here too.',
+      'Terminal agents and terminal science go to Argon (High), which leads it there on the same AA pages ' +
+      '(Terminal-Bench 4.0 57.1 vs 53.5, Terminal-Bench-Science 0.1 52.9 vs 49.5); multi-step automation is about level ' +
+      '(AutomationBench-AA 76.1 vs 77.5). Hydrogen (High)\'s caveats on exact-URL and image and PDF reads apply here too.',
   },
   {
     id: 'Gemini 4 Argon (Low)',
@@ -235,9 +238,10 @@ export const GEMINI_MODELS = [
     tier: 'heavy',
     useFor:
       'The fleet\'s TIE-BREAKER when Grok and Hydrogen disagree — the heavier Gemini 4, a model that is neither — and ' +
-      'the step up from Hydrogen for terminal agents, terminal science and multi-step automation. Artificial Analysis ' +
+      'the step up from Hydrogen for terminal agents and terminal science. Artificial Analysis ' +
       '(Index v5.0.1, read 2026-11-13), Argon at high against Hydrogen at xhigh: Terminal-Bench 4.0 57.1 vs 53.5, ' +
-      'Terminal-Bench-Science 0.1 52.9 vs 49.5, AutomationBench-AA 77.5 vs 76.1 (about level). Repository-level code and ' +
+      'Terminal-Bench-Science 0.1 52.9 vs 49.5; multi-step automation is about level (AutomationBench-AA 77.5 vs 76.1), ' +
+      'not a reason to go up. Repository-level code and ' +
       'long inputs on its DeepMind card (published 2026-10-13): DeepSWE v1.1 77.9 against GPT-6 Astra 74.1 and Opus 5.5 ' +
       '74.2, GraphWalks 256k–1M 84.2 against Astra 71.8. Hydrogen\'s card publishes neither row, so how the two compare ' +
       'there is open.',

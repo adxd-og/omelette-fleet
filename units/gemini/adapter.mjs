@@ -631,6 +631,8 @@ export default defineUnit({
         'READ-ONLY: Gemini must not edit files, run git, or mutate the repo. Returns ' +
         "Gemini's plain-text answer. Use for web-style research, fact synthesis, " +
         'reading & summarizing, or a second-opinion analysis — NOT for code changes. ' +
+        'Web access is search-grounded: on agy 1.5.8 the Gemini models run had no URL-reading tool (measured ' +
+        '2026-11-13) — do not rely on it to fetch one exact page. ' +
         'The run happens where `cwd` points when you give one, else in a fresh ' +
         'empty directory. ' +
         'MULTIMODAL: Gemini can read local files INCLUDING IMAGES and PDFs — give the ' +
