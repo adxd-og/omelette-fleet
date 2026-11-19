@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.12.0 — 2026-11-19
+
+The Gemini catalog after agy 1.5.12: Gemini 4 Neon enters at four levels, and Gemini 4 Argon and Hydrogen (XHigh) leave. Map: the `gemini_models` tool for every entry and its figures; [ORCHESTRATION, "Model and effort escalation"](docs/ORCHESTRATION.md#model-and-effort-escalation) for when to go down or up.
+
+- **Catalog.** `Gemini 4 Neon (Low|Medium|High|XHigh)` are new; `Gemini 4 Argon (Low|Medium|High)` and `Gemini 4 Hydrogen (XHigh)` are gone, and Argon's quota rule with them. The three Hydrogen entries are refreshed on today's sources. `Gemini 4 Hydrogen (High)` is still the fleet default. `gemini_deep_research` with no model named and none configured still runs its stages on Hydrogen Medium, Medium and High.
+- **Upgrading.** A call that names `Gemini 4 Argon (...)` or `Gemini 4 Hydrogen (XHigh)` is refused before any spawn, with the list of valid ids. A `gemini.model` that still names one is not an error, as with the retired 3.8 Flash ids in 1.11.0: one warning on the unit's stderr, and calls without `model` run on agy's own default. The tie-breaker call moves to `Gemini 4 Neon (High)`.
+- **What is measured, and at which level.** Artificial Analysis, Index v5.0.1, read 2026-11-19. Neon at low: Index 44 at $0.75 and 3.7 minutes per Index task, 28.3M output tokens. At medium: 55 at $1.90 and 8.3 minutes, 62.9M. At high: 60 at $3.74 and 14.8 minutes, 123M. At xhigh: 61 at $6.44 and 21.5 minutes, 283M. Hydrogen at low: 27 at $0.29 and 1.5 minutes, 20.3M; at medium: 41 at $0.80 and 4.2 minutes, 54.4M; at high: 51 at $1.87 and 8.6 minutes, 110M (the minutes were re-measured since 1.11.0). The DeepMind card's table states no level, and no row of it is filed under one.
+- **Quota.** Neon draws on the shared Gemini pool and has no window of its own (the operator, 2026-11-19). What a Neon call costs that pool against a Hydrogen call is not measured.
+- **Exact-page prompts on agy 1.5.12.** Two direct runs with the unit's flags, one exact-page prompt: Neon (High) and Hydrogen (High) each reached for `run_command` with `curl`; agy auto-denied it and the run ended empty, which the unit reports as `agy produced no output`. On 1.5.8 the same kind of prompt came back as a search answer. One prompt, one run per model, so how often is not known. Not fixed in this release: send an exact-page read to Grok or Codex research.
+- **Routing.** ORCHESTRATION's Gemini paragraph and the tie-breaker row of the rules file follow the catalog.
+- **Not in this release.** The fleet default does not change: an eval decides it. agy's `Orchestrator (Neon)`, Gemini 4 Carbon and the Claude Low tiers stay out of the catalog.
+
 ## 1.11.0 — 2026-11-13
 
 The Gemini catalog after agy 1.5.8: Gemini 4 Hydrogen replaces Gemini 3.8 Flash, and Gemini 4 Argon's entries are re-read on today's sources. Map: the `gemini_models` tool for every entry and its figures; [ORCHESTRATION, "Model and effort escalation"](docs/ORCHESTRATION.md#model-and-effort-escalation) for when to go down or up.
