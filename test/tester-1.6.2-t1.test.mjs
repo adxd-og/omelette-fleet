@@ -77,12 +77,13 @@ test('ids are unique across the catalog and the ALLOWLIST is exactly the catalog
   for (const id of ids) assert.ok(!/Claude.*\(Low\)/.test(id), id);
 });
 
-test('the Claude entries sit between Gemini 4 Argon (High) and GPT-OSS 120B (Medium)', () => {
+// 1.12.0: re-anchored on Gemini 4 Neon (XHigh), the last Gemini entry since Argon left.
+test('the Claude entries sit between Gemini 4 Neon (XHigh) and GPT-OSS 120B (Medium)', () => {
   const ids = GEMINI_MODELS.map((m) => m.id);
-  const argon = ids.indexOf('Gemini 4 Argon (High)');
+  const neon = ids.indexOf('Gemini 4 Neon (XHigh)');
   const oss = ids.indexOf('GPT-OSS 120B (Medium)');
-  assert.ok(argon >= 0 && oss >= 0);
-  assert.equal(oss, argon + 5);
+  assert.ok(neon >= 0 && oss >= 0);
+  assert.equal(oss, neon + 5);
 });
 
 test('gemini_models renders all four Claude ids with their tags, the GUIDE, and no 4.6', async () => {

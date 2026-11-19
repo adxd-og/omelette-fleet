@@ -2,6 +2,8 @@
  * omelette-fleet :: test/tester-1.7.1-t1.test.mjs
  * Independent behaviour tests for 1.7.1 T1-T2 (Gemini 4 Argon in, 3.1 Pro out).
  * Written from the spec, not from the implementer's tests. Runtime behaviour only.
+ * Re-anchored in 1.12.0 (spec 2026-11-19-gemini-neon-design.md): Argon left the
+ * catalog, so the heavy-Gemini rows run on Gemini 4 Neon, its successor there.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,8 +13,8 @@ import { join } from 'node:path';
 import unit from '../units/gemini/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
 
-// One id of each set: the other Argon levels and 3.1 Pro (Low) take the same path (clean-up gate T1).
-const ARGON = ['Gemini 4 Argon (High)'];
+// One id of each set: the other Neon levels and 3.1 Pro (Low) take the same path (clean-up gate T1).
+const NEON = ['Gemini 4 Neon (High)'];
 const PRO = ['Gemini 3.1 Pro (High)'];
 
 const res = (over) => Promise.resolve({ stdout: '', stderr: '', code: 0, signal: null, killed: false, capped: false, ...over });
@@ -38,7 +40,7 @@ function rig(config = {}) {
 }
 const modelArg = (argv) => argv[argv.indexOf('--model') + 1];
 
-for (const id of ARGON) {
+for (const id of NEON) {
   test(`an explicit ${id} reaches agy as the exact --model on gemini_research, gemini_image and every deep-research stage`, async () => {
     const { rt, calls } = rig();
     const r = await rt.callTool('gemini_research', { prompt: 'hi', model: id });
@@ -55,21 +57,21 @@ for (const id of ARGON) {
 }
 
 for (const id of PRO) {
-  test(`${id} is refused by all three tools as an unknown model, with no spawn, and the error offers Argon`, async () => {
+  test(`${id} is refused by all three tools as an unknown model, with no spawn, and the error offers Neon`, async () => {
     const { rt, calls } = rig();
     for (const [tool, args] of [['gemini_research', { prompt: 'hi' }], ['gemini_image', { prompt: 'a cat' }], ['gemini_deep_research', { question: 'why' }]]) {
       const r = await rt.callTool(tool, { ...args, model: id });
       assert.equal(r.isError, true, tool);
       assert.ok(r.text.startsWith(`Error: unknown model "${id}". Allowed: `), r.text);
-      assert.ok(r.text.includes('Gemini 4 Argon (High)'), tool);
+      assert.ok(r.text.includes('Gemini 4 Neon (High)'), tool);
       assert.ok(!r.text.slice(r.text.indexOf('Allowed:')).includes('3.1 Pro'), tool);
     }
     assert.equal(calls.spawn.length, 0);
   });
 }
 
-test('a configured Argon gemini.model is not refused: research, image and deep research all run on it when no model is named', async () => {
-  const id = 'Gemini 4 Argon (Medium)';
+test('a configured Neon gemini.model is not refused: research, image and deep research all run on it when no model is named', async () => {
+  const id = 'Gemini 4 Neon (Medium)';
   const { rt, calls } = rig({ model: id });
   const r = await rt.callTool('gemini_research', { prompt: 'hi' });
   assert.ok(!r.isError, r.text);
