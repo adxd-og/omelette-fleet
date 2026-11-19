@@ -206,8 +206,8 @@ export const GEMINI_MODELS = [
       'reports unjustified refusals up 5.57 percentage points against 3.8 ' +
       'Flash (lower is better), "particularly for multimodal prompts" — a refused read is the model\'s refusal, not a ' +
       'missing permission: reword it once before going elsewhere. The card\'s full safety report was not published as ' +
-      'of 2026-11-13. A read still refused after the rewording goes to Neon (High), one named call: Neon\'s card puts ' +
-      'its unjustified refusals 3.00 points below Hydrogen\'s (no level stated). ' +
+      'of 2026-11-13. Neon\'s card puts its unjustified refusals 3.00 points below Hydrogen\'s overall (no level ' +
+      'stated; not a measurement of image or PDF reads) — a fact, not a reroute. ' +
       'Computer use and terminal science, where Claude Sonnet 5.5 leads it on the same card table (OSWorld-2.1 ' +
       '83.9 vs 77.6, Terminal-Bench-Science 0.1 59.9 vs 51.4; no level stated). The step up from Hydrogen, terminal ' +
       'agents and terminal science included, is Neon (High), named per call (AA at high: Index 60 vs 51).',
@@ -271,7 +271,7 @@ export const GEMINI_MODELS = [
       'measurement: on it Neon leads Claude Opus 5.5 and GPT-6.2 Sol on the AA Index v5.0.1 (61 vs 59 and 57 — that 61 equals AA\'s xhigh figure, not this level\'s 60), ' +
       'Agents\' Last Exam v1.1 (75.8 vs 71.6 and 73.0), Terminal-Bench-Science 0.1 (70.5 vs 63.3 and 68.0), ' +
       'HLE-Diamond (71.3 vs 67.9 and 64.0), GraphWalks 256k–1M (95.2 vs 66.8 and 80.1) and LVBench (89.0 vs 83.7 and ' +
-      '87.6). Its safety section, against Hydrogen: unjustified refusals 3.00 percentage points lower (lower is better).',
+      '87.6). Its safety section, against Hydrogen: unjustified refusals 3.00 percentage points lower (lower is better; no level stated).',
     avoid:
       'Sweeps and quick lookups: they are Hydrogen\'s — AA prices Neon at high at twice Hydrogen at high per Index ' +
       'task, and what a Neon call costs the shared Gemini pool is not measured. The card\'s rows it trails on (no ' +
