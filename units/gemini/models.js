@@ -237,7 +237,7 @@ export const GEMINI_MODELS = [
     effort: 'Medium',
     tier: 'heavy',
     useFor:
-      'Neon between Low and High: Hydrogen (High)\'s cost and time with four Index points more — Artificial Analysis ' +
+      'Neon between Low and High: about Hydrogen (High)\'s cost and time with four Index points more — Artificial Analysis ' +
       '(Index v5.0.1, read 2026-11-19), Neon at medium against Hydrogen at high: Intelligence Index 55 vs 51, at ' +
       '$1.90 vs $1.87 and 8.3 vs 8.6 minutes per Index task, 62.9M vs 110M output tokens over the Index. Its own rows at ' +
       'medium: Terminal-Bench 4.0 54.5, Terminal-Bench-Science 0.1 54.8, AutomationBench-AA 77.8, FrontierCode-AA 2.0 ' +
@@ -427,7 +427,7 @@ export const GUIDE =
   'when depth pays, and the tie-breaker when Grok and Hydrogen disagree (AA at high: Index 60 at $3.74 and 14.8 ' +
   'min); on the shared Gemini pool, but not the default and not for sweeps; ' +
   'Neon (XHigh)=one Index point over High (AA at xhigh: 61) for 1.7x its cost; ' +
-  'Neon (Medium)=Hydrogen (High)\'s AA cost and time, Index 55 to its 51; ' +
+  'Neon (Medium)=about Hydrogen (High)\'s AA cost and time, Index 55 to its 51; ' +
   'Neon (Low)=the lightest Neon (AA at low: Index 44, $0.75), weak on terminal work; ' +
   'Claude Opus 5.5 (High|Medium) and Claude Sonnet 5.5 (High|Medium)=Antigravity\'s SEPARATE Claude quota, and a ' +
   'SMALL one: one named call per question — an independent Opus read, a hard verification pass, a cheap Sonnet ' +
