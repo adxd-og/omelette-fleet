@@ -45,11 +45,11 @@ const GEMINI_TOKENS_NOTE = "Gemini's token counts exclude thinking tokens: the u
 const STYLE = `<style>
 text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 .t{fill:#0b0b0b}.t2{fill:#52514e}.grid{stroke:#e1e0d9}.base{stroke:#c3c2b7}
-.c1{fill:#2a78d6}.c2{fill:#eb6834}.c3{fill:#1baf7a}.k1{stroke:#2a78d6}.k2{stroke:#eb6834}.k3{stroke:#1baf7a}
+.c1{fill:#2a78d6}.c2{fill:#eb6834}.c3{fill:#1baf7a}.c4{fill:#8e56c8}.k1{stroke:#2a78d6}.k2{stroke:#eb6834}.k3{stroke:#1baf7a}.k4{stroke:#8e56c8}
 .ring{stroke:#ffffff;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.run{fill-opacity:0.45}
 @media (prefers-color-scheme: dark){
 .t{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.base{stroke:#383835}
-.c1{fill:#3987e5}.c2{fill:#d95926}.c3{fill:#199e70}.k1{stroke:#3987e5}.k2{stroke:#d95926}.k3{stroke:#199e70}
+.c1{fill:#3987e5}.c2{fill:#d95926}.c3{fill:#199e70}.c4{fill:#a070dc}.k1{stroke:#3987e5}.k2{stroke:#d95926}.k3{stroke:#199e70}.k4{stroke:#a070dc}
 .ring{stroke:#0d1117}
 }
 </style>`;
