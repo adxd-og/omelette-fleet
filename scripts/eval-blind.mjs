@@ -82,12 +82,39 @@ export function redactionTerms(extra = []) {
   return [...seen.values()].sort((a, b) => b.length - a.length || a.localeCompare(b));
 }
 
-// A version, a level (in brackets, after a middle dot, or hyphenated as in a
-// slug: `gemini-3.8-flash-high`), or another mask, right after a mask: the rest
-// of the same name. Any whitespace (a newline and every Unicode space too), a
-// hyphen or dash (U+2010–U+2015 among them) and · _ / join them; a full stop
-// never does. Inside a version, a dash may stand for the dot (`6‑1`).
-const COLLAPSE = /\[model\](?:[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\-\u2010-\u2015·_/]*(?:v?\d+(?:[.\u2010-\u2015]\d+)*|\((?:low|medium|high|xhigh|max|ultra)\)|·\s*(?:low|medium|high|xhigh)|\[model\])|[-_\u2010-\u2015](?:low|medium|high|xhigh|max|ultra)(?!\p{L}))+/giu;
+// What follows a mask and is the rest of the same name, collapsed into it:
+// - a version or another mask, joined by a space that is not a line break, a
+//   hyphen or dash (U+2010–U+2015 among them), · _ or / — never by a line break,
+//   so a numbered list keeps its numbers, and never by a full stop. Inside a
+//   version a dash may stand for the dot (`6‑1`);
+// - a level in brackets, or after a middle dot as a whole word that starts no
+//   compound (`· highlights`, `· high-level` stay), on the same line or the next;
+// - a level hyphenated as in a slug: `gemini-3.8-flash-high`;
+// - a level as its own word: `XHigh` (no English word) after a space, / or a
+//   comma; Low, Medium or High after / in any case, after a comma in any case
+//   or after a space capitalised (`High`, `HIGH`) — those two only where the
+//   clause ends with it (`Neon, high.`), never before another word (`Neon High
+//   recall`, `Neon high-level`), since there an ordinary word reads the same.
+// The pattern is case-sensitive so that the capitalised form can be told
+// apart; every other word in it is spelt in any case.
+const anyCase = (w) => w.replace(/[a-z]/g, (c) => `[${c}${c.toUpperCase()}]`);
+const SPACE = '[ \\t\\u00a0\\u1680\\u2000-\\u200a\\u202f\\u205f\\u3000]';
+const JOIN = `(?:${SPACE}|[\\-\\u2010-\\u2015·_/])`;
+const LINE_BREAK = '(?:\\r\\n|\\n|\\r)';
+const levels = (...words) => `(?:${words.map(anyCase).join('|')})`;
+const LEVEL = levels('low', 'medium', 'high', 'xhigh');
+const LEVEL_SLUG = levels('low', 'medium', 'high', 'xhigh', 'max', 'ultra');
+const WORD = levels('low', 'medium', 'high');
+const WORD_ENDS = '(?![\\p{L}\\p{N}]|[-_\\u2010-\\u2015][\\p{L}\\p{N}])';
+const CLAUSE_ENDS = `(?=${SPACE}*(?:$|${LINE_BREAK}|[.,;!?)\\]}"'\\u2019\\u201d\\u2026]))`;
+const COLLAPSE = new RegExp(`\\[model\\](?:${[
+  `${JOIN}*(?:${anyCase('v')}?\\d+(?:[.\\u2010-\\u2015]\\d+)*|\\[model\\])`,
+  `${JOIN}*(?:${LINE_BREAK}${JOIN}*)?(?:\\(${LEVEL_SLUG}\\)|·\\s*${LEVEL}${WORD_ENDS})`,
+  `[-_\\u2010-\\u2015]${LEVEL_SLUG}(?!\\p{L})`,
+  `(?:${SPACE}+|${SPACE}*[/,]${SPACE}*)${anyCase('xhigh')}${WORD_ENDS}`,
+  `${SPACE}*/${SPACE}*${WORD}${WORD_ENDS}`,
+  `(?:${SPACE}*,${SPACE}*${WORD}|${SPACE}+(?:Low|LOW|Medium|MEDIUM|High|HIGH))${CLAUSE_ENDS}`,
+].join('|')})+`, 'gu');
 const PARTIAL_ALL = new RegExp(PARTIAL_MARK_RE.source, 'g');
 
 /** `text` with every term masked; see the header. */

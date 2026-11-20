@@ -372,3 +372,32 @@ test('a failed line from before `empty` was recorded is not recorded, never 0: i
   assert.deepEqual([arm.runs[0].failed, arm.runs[0].empty], [1, null]);
   assert.deepEqual([arm.total.failed, arm.total.empty], [1, null]);
 });
+
+// ─── a level left beside a masked name (two arms of the round differ by level only) ───
+
+test('a level after a middle dot collapses as a whole word only: a longer word or a compound keeps its text', () => {
+  const terms = redactionTerms();
+  assert.equal(redact('Neon · highlights the bug', terms), '[model] · highlights the bug');
+  assert.equal(redact('Neon · high-level design', terms), '[model] · high-level design');
+  assert.equal(redact('Neon · XHigh found it', terms), '[model] found it');
+});
+
+test('a level in brackets or after a middle dot on the next line collapses with the name', () => {
+  const terms = redactionTerms();
+  assert.equal(redact('Neon\n(XHigh) found it', terms), '[model] found it');
+  assert.equal(redact('Neon\r\n· XHigh found it', terms), '[model] found it');
+  // A bare word on the next line is a severity label as often as a level: it stays.
+  assert.equal(redact('Neon\nHigh: the retry never ends', terms), '[model]\nHigh: the retry never ends');
+});
+
+test('a level as its own word right after the name collapses, and an ordinary sentence word stays', () => {
+  const terms = redactionTerms();
+  assert.equal(redact('Gemini 4 Neon XHigh', terms), '[model]');
+  assert.equal(redact('Neon/XHigh', terms), '[model]');
+  assert.equal(redact('Neon/high, then', terms), '[model], then');
+  assert.equal(redact('Neon, high', terms), '[model]');
+  assert.equal(redact('As Gemini 4 Neon High, I checked.', terms), 'As [model], I checked.');
+  for (const kept of ['Neon high-level design', 'Neon is high on recall', 'We rated Neon high.', 'Neon, high recall', 'Neon High recall']) {
+    assert.equal(redact(kept, terms), kept.replace('Neon', '[model]'), kept);
+  }
+});
