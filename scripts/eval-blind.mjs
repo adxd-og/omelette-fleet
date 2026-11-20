@@ -33,13 +33,15 @@
  * counted in the arm's `failedRuns`, and stays out of every score's mean.
  * A grade the session overturned (`overturned: {from, to}`) counts as `to`.
  * `--merge D2` carries into the aggregate every arm of `aggregates/<D2>.json`
- * that this date did not run (a partial re-run keeps the other arms): each
- * carried arm says `carriedFrom`, the `date` says how many, and `grades` and
- * `overturned` count this date's grades only.
+ * that this date did not run (a partial re-run keeps the other arms) — an R
+ * arm only when both aggregates record the same R question set (`sets.R`, the
+ * ids and prompts of `suites/R/tasks.jsonl`): each carried arm says
+ * `carriedFrom`, the `date` says how many, and `grades` and `overturned` count
+ * this date's grades only.
  *
  * This file holds no task text, no key and no answer.
  */
-import { randomInt } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -467,6 +469,12 @@ function cmdBlind({ dir, date, seed, out }) {
   out('give the grader blinded.jsonl, rubric.md and the keys — never mapping.json');
 }
 
+/** A suite's question set: its task ids and prompts, the file's order aside, as 16 hex characters. */
+export function setFingerprint(tasks) {
+  const canon = tasks.map((t) => [String(t.id), String(t.prompt)]).sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  return createHash('sha256').update(JSON.stringify(canon)).digest('hex').slice(0, 16);
+}
+
 function cmdAggregate({ dir, date, merge, out }) {
   const g = join(dir, 'grading', date);
   for (const f of ['mapping.json', 'grades.jsonl']) if (!existsSync(join(g, f))) throw new Error(`no ${f} at ${g}`);
@@ -480,11 +488,19 @@ function cmdAggregate({ dir, date, merge, out }) {
     keys[s] = existsSync(p) ? readJsonl(p) : [];
   }
   const agg = aggregate({ grades, mapping, keys });
+  const rTasks = join(dir, 'suites', 'R', 'tasks.jsonl');
+  agg.sets = { R: existsSync(rTasks) ? setFingerprint(readJsonl(rTasks)) : null };
   if (merge) {
     const prevPath = join(dir, 'aggregates', `${merge}.json`);
     if (!existsSync(prevPath)) throw new Error(`no aggregate to merge at ${prevPath}`);
+    const prev = JSON.parse(readFileSync(prevPath, 'utf8'));
     const ran = new Set(agg.arms.map((a) => `${a.suite}\u0000${a.arm}`));
-    const carried = JSON.parse(readFileSync(prevPath, 'utf8')).arms.filter((a) => !ran.has(`${a.suite}\u0000${a.arm}`)).map((a) => ({ ...a, carriedFrom: merge }));
+    const notRun = prev.arms.filter((a) => !ran.has(`${a.suite}\u0000${a.arm}`));
+    // No --merge across a change of R's question set (spec, Scripts): its arms answered other questions.
+    const sameR = agg.sets.R !== null && !!prev.sets && prev.sets.R === agg.sets.R;
+    const carried = notRun.filter((a) => a.suite !== 'R' || sameR).map((a) => ({ ...a, carriedFrom: merge }));
+    const leftOut = notRun.length - carried.length;
+    if (leftOut) out(`R: ${leftOut} arm(s) of ${merge} not carried — its question set ${prev.sets && prev.sets.R ? 'differs from' : 'was not recorded beside'} this one's (no --merge across a change of question set)`);
     agg.arms = [...agg.arms, ...carried].sort((x, y) => x.suite.localeCompare(y.suite) || x.arm.localeCompare(y.arm));
     agg.date = `${date} (${ran.size} arm${ran.size === 1 ? '' : 's'}; ${carried.length} carried from ${merge})`;
     agg.carriedFrom = merge;

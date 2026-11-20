@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { CODEX_MODELS } from '../units/codex/models.js';
 import { GEMINI_MODELS } from '../units/gemini/models.js';
 import { GROK_MODELS } from '../units/grok/models.js';
-import { aggregate, blind, redact, redactionTerms } from '../scripts/eval-blind.mjs';
+import { aggregate, blind, redact, redactionTerms, setFingerprint } from '../scripts/eval-blind.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRIPT = join(ROOT, 'scripts', 'eval-blind.mjs');
@@ -231,7 +231,7 @@ test('--aggregate writes aggregates/<date>.json from grades.jsonl, the mapping a
   assert.equal(res.status, 0, res.stderr);
   const out = join(dir, 'aggregates', '2026-10-16.json');
   assert.ok(existsSync(out));
-  assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS }));
+  assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), { ...aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS }), sets: { R: null } });
 });
 
 test('--aggregate --merge D2 carries D2\'s arms this date did not run, marked carriedFrom, and names the count in date', () => {
@@ -240,7 +240,8 @@ test('--aggregate --merge D2 carries D2\'s arms this date did not run, marked ca
   mkdirSync(g, { recursive: true });
   mkdirSync(join(dir, 'aggregates'), { recursive: true });
   const prev = aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS });
-  writeFileSync(join(dir, 'aggregates', '2026-10-16.json'), JSON.stringify(prev));
+  const RT = [{ id: 'q1', prompt: 'Invented question one.' }, { id: 'q2', prompt: 'Invented question two.' }, { id: 'q3', prompt: 'Invented question three.' }];
+  writeFileSync(join(dir, 'aggregates', '2026-10-16.json'), JSON.stringify({ ...prev, sets: { R: setFingerprint(RT) } }));
   // This date re-ran only the first arm of the earlier round.
   const [rerun] = prev.arms;
   const blinds = Object.fromEntries(Object.entries(MAPPING.blinds).filter(([, e]) => e.suite === rerun.suite && e.arm === rerun.arm));
@@ -250,6 +251,7 @@ test('--aggregate --merge D2 carries D2\'s arms this date did not run, marked ca
     mkdirSync(join(dir, 'suites', suite), { recursive: true });
     writeFileSync(join(dir, 'suites', suite, 'key.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
   }
+  writeFileSync(join(dir, 'suites', 'R', 'tasks.jsonl'), RT.map((l) => JSON.stringify(l)).join('\n') + '\n');
   const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-10-21', '--dir', dir, '--aggregate', '--merge', '2026-10-16'], { encoding: 'utf8' });
   assert.equal(res.status, 0, res.stderr);
   const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-10-21.json'), 'utf8'));
@@ -435,4 +437,35 @@ test('a run that is one failed call (a task\'s second answer) still counts its t
   };
   const [arm] = aggregate({ grades: [ans('b1', 'q3', 'correct')], mapping, keys: KEYS }).arms;
   assert.deepEqual([arm.total.traps, arm.total.trapsPassed, arm.total.net, arm.total.failed, arm.total.empty], [2, 1, 1, 1, 0]);
+});
+
+test('a question set is its ids and prompts: a changed prompt is another set, a reordered file is not', () => {
+  const a = [{ id: 'q1', prompt: 'Invented one.' }, { id: 'q2', prompt: 'Invented two.' }];
+  assert.equal(setFingerprint(a), setFingerprint([a[1], a[0]]));
+  assert.notEqual(setFingerprint(a), setFingerprint([a[0], { id: 'q2', prompt: 'Invented two!' }]));
+  assert.match(setFingerprint(a), /^[0-9a-f]{16}$/);
+});
+
+test('--merge leaves out the R arms of another question set, says so, and still carries the V arms', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-evals-sets-'));
+  const g = join(dir, 'grading', '2026-11-20');
+  mkdirSync(g, { recursive: true });
+  mkdirSync(join(dir, 'aggregates'), { recursive: true });
+  // Round one's aggregate: written before sets existed.
+  writeFileSync(join(dir, 'aggregates', '2026-10-16.json'), JSON.stringify(aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS })));
+  const N = 'gemini:Gemini 4 Neon (High)';
+  writeFileSync(join(g, 'mapping.json'), JSON.stringify({ date: '2026-11-20', seed: 1, blinds: { b1: blindOf('R', N, 1, ['q1'], 1000, null) }, failed: [] }));
+  writeFileSync(join(g, 'grades.jsonl'), JSON.stringify(ans('b1', 'q1', 'correct')) + '\n');
+  for (const [suite, lines] of Object.entries(KEYS)) {
+    mkdirSync(join(dir, 'suites', suite), { recursive: true });
+    writeFileSync(join(dir, 'suites', suite, 'key.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  }
+  const RT = [{ id: 'q1', prompt: 'Invented new question one.' }];
+  writeFileSync(join(dir, 'suites', 'R', 'tasks.jsonl'), RT.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate', '--merge', '2026-10-16'], { encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8'));
+  assert.deepEqual(agg.arms.map((a) => [a.suite, a.arm, a.carriedFrom || null]), [['R', N, null], ['V', C, '2026-10-16']]);
+  assert.match(res.stdout, /R: 2 arm\(s\) of 2026-10-16 not carried/);
+  assert.equal(agg.sets.R, setFingerprint(RT));
 });
