@@ -129,6 +129,18 @@ process.exit(r.status);
   return bin;
 }
 
+/** A docker that hands every call to the fake and then, where the call ran the step `at`, dies of a signal: a client killed from outside. */
+function dockerKilledAt({ home, fake, at }) {
+  const bin = join(home, `docker-killed-at-${at}`);
+  writeFileSync(bin, `#!${process.execPath}
+const r = require('child_process').spawnSync(${JSON.stringify(fake.bin)}, process.argv.slice(2), { stdio: 'inherit', timeout: 4000 });
+if (process.argv[2] === 'run' && process.argv[process.argv.length - 1] === ${JSON.stringify(at)}) process.kill(process.pid, 'SIGKILL');
+process.exit(r.status);
+`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
 /** Every plain file under `root`, as [relative path, text]; a link is not followed. */
 function plainFiles(root) {
   const found = [];
@@ -1237,6 +1249,81 @@ test('a timed-out test step is the diff\'s failure; a daemon error is re-checked
   const [gone] = checksAt(midway.dir);
   assert.deepEqual([gone.outcome, gone.method, gone.failToPass.exit, gone.passToPass.exit], ['error', 'git', 125, 125]);
   assert.match(gone.error, /f2p step exited 125/);
+});
+
+test('a test step that ends with no exit code and did not time out is the harness\'s failure: error, checked again', async () => {
+  for (const [at, field] of [['f2p', 'failToPass'], ['p2p', 'passToPass']]) {
+    const { dir, fake, env, run, printed } = await proven([pRunLine({ answer: answerWith(goldWith('FAKE: fixes')) })]);
+    await check({ dir, date: DATE, docker: dockerKilledAt({ home: env.HOME, fake, at }), env, out: quiet });
+    const [killed] = checksAt(dir);
+    assert.deepEqual([killed.outcome, killed.method, killed[field], killed.error], ['error', 'git', { exit: null, ms: killed[field].ms, timedOut: false }, `the ${at} step ended with no exit code`]);
+    assert.equal(await run(), 0, printed.join('\n'));
+    assert.deepEqual(checksAt(dir).map((l) => l.outcome), ['error', 'green'], at);
+  }
+});
+
+test('a diff --git line gives a name only where its end is told — both sides the same; a rename\'s names are its rename lines\' or its file header\'s', async () => {
+  const diff = [
+    goldWith('FAKE: fixes').trimEnd(),
+    'diff --git a/my dir/old name.go b/my dir/new name.go', 'similarity index 100%', 'rename from my dir/old name.go', 'rename to my dir/new name.go',
+    'diff --git a/my dir/run me.sh b/my dir/run me.sh', 'old mode 100644', 'new mode 100755',
+    'diff --git "a/tools/na\\303\\257ve.sh" "b/tools/na\\303\\257ve.sh"', 'old mode 100644', 'new mode 100755',
+    'diff --git a/widget/was.go b/widget/now.go', '--- a/widget/was.go', '+++ b/widget/now.go', '@@ -1 +1 @@', '-a', '+b',
+    // Two names and nothing beside them that tells where the first ends: the line adds no path.
+    'diff --git a/lone/one.go b/lone/two.go',
+    'diff --git "a/lone/thr\\303\\251e.go" "b/lone/four.go"',
+    'diff --git "a/lone/five.go" b/lone/five.go', '',
+  ].join('\n');
+  const { dir, run, printed } = await proven([pRunLine({ answer: answerWith(diff) })]);
+  assert.equal(await run(), 0, printed.join('\n'));
+  const named = ['my dir/new name.go', 'my dir/old name.go', 'my dir/run me.sh', 'tools/naÃ¯ve.sh', 'widget/now.go', 'widget/was.go', 'widget/widget.go'];
+  assert.deepEqual(checksAt(dir).map((l) => [l.outcome, l.paths, l.outsideGold]), [['green', named, named.slice(0, -1)]]);
+  assert.equal(printed[0], checkLineOf(ARM, 1, 'green*'));
+});
+
+test('a megabyte-long diff --git line is read in linear time, and a climb at its very end is still refused on the host', async () => {
+  // `a/ b/ b/ …`, an even number of ` b/`: no split of it has two equal sides, and every split is one a backtracking reader tries.
+  const long = `diff --git a/${' b/'.repeat(350000)}`;
+  const diff = (gitLine) => `${gitLine}\n--- a/widget/widget.go\n+++ b/widget/widget.go\n@@ -1 +1 @@\n-a\n+b\n`;
+  const { dir, fake, env, log0 } = await proven([pRunLine({ answer: diff(long) }), pRunLine({ run: 2, answer: diff(`${long} b/../x.go`) })]);
+  try {
+    const started = Date.now();
+    await check({ dir, date: DATE, docker: fake.bin, env, out: quiet });
+    const ms = Date.now() - started;
+    const [whole, climbing] = checksAt(dir);
+    assert.deepEqual([whole.outcome, whole.paths, whole.linesChanged], ['red', ['widget/widget.go'], 2]);
+    assert.deepEqual([climbing.outcome, climbing.paths, climbing.applyLog.slice(0, 60)], ['does-not-apply', ['widget/widget.go'], 'refused on the host, no container ran: P01: the change names']);
+    assert.equal(fake.log().length, log0 + 3, 'three steps for the first, none for the second');
+    // About 195 ms for the two calls where this was written, the three fake steps among them: the budget is ten times that.
+    // The pattern this reading replaced tried every split of the line: some 11 s for one such line.
+    assert.ok(ms < 2000, `${ms} ms`);
+  } finally {
+    // Megabytes of run line, staged copies and check line: not left in the OS temp dir.
+    for (const made of [dir, env.HOME]) rmSync(made, { recursive: true, force: true });
+  }
+});
+
+test('two run lines of one call are refused before any container, each named by its file and its line', async () => {
+  const fixing = answerWith(goldWith('FAKE: fixes'));
+  const other = 'gemini:Another Invented Model (High)';
+  const refusal = (a, b) => `eval-patch: ${a} and ${b}: two P run lines of one call (the same arm, run and task): nothing was checked`;
+  const { dir, fake, run, printed, log0 } = await proven([pRunLine({ answer: fixing }), pRunLine({ run: 2, answer: fixing }), pRunLine({ answer: answerWith(goldWith('an invented comment')) })]);
+  const mine = join(dir, 'runs', DATE, 'P-gemini-invented-model-high.jsonl');
+  fileRuns(dir, [pRunLine({ arm: other, answer: fixing })], 'P-gemini-another-invented-model-high.jsonl');
+  // Whatever the call selects: such a date was edited by hand.
+  for (const args of [[], ['--arm', other]]) {
+    printed.length = 0;
+    assert.equal(await run(args), 1);
+    assert.deepEqual(printed, [refusal(`${mine}:1`, `${mine}:3`)], args.join(' '));
+  }
+  // The second line in another file of the date.
+  fileRuns(dir, [pRunLine({ answer: fixing }), pRunLine({ run: 2, answer: fixing })]);
+  put(dir, `runs/${DATE}/P-filed-by-hand.jsonl`, `\n${JSON.stringify(pRunLine({ run: 2, answer: fixing }))}\n`);
+  printed.length = 0;
+  assert.equal(await run(), 1);
+  assert.deepEqual(printed, [refusal(`${join(dir, 'runs', DATE, 'P-filed-by-hand.jsonl')}:2`, `${mine}:2`)]);
+  assert.equal(fake.log().length, log0, 'docker was not called');
+  assert.equal(existsSync(checksFile(dir)), false, 'nothing was filed');
 });
 
 test('check refuses a task without a fresh proof before any container runs', async () => {

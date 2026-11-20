@@ -23,9 +23,12 @@
  * winning; a call whose last line is not `error` is not checked again. It
  * prints the arm, the run, the task and the outcome: never a diff, an answer
  * or an apply log. A model's stage holds its own diff and never the gold.
- * `green*` is a green whose diff touches a path the maintainers' fix does not
- * (`outsideGold` in its line): the tests it turned green may be ones it
- * rearranged, and the session reads that diff itself.
+ * `green*` is a green whose diff touches a path that neither the maintainers'
+ * fix nor their tests diff does (`outsideGold` in its line): the tests it
+ * turned green may be ones it rearranged, and the session reads that diff
+ * itself. A path of the tests diff is not such a path: every step restores it
+ * and applies the maintainers' tests over it, so a model's edit there is
+ * discarded before a test runs.
  *
  * THIRD-PARTY CODE RUNS IN ONE PLACE: a container step (`dockerRunArgs`) — no
  * network, no pull, no capability, no new privilege, the host's uid, one
@@ -430,24 +433,40 @@ function refuseUnsafeChange(change) {
   }
 }
 
+/** Where the quoted name that opens at `from` ends — the index after its closing quote — or -1 when none opens there or it does not end. */
+function quotedEnd(text, from) {
+  if (text[from] !== '"') return -1;
+  for (let i = from + 1; i < text.length; i++) {
+    if (text[i] === '\\') i += 1;
+    else if (text[i] === '"') return i + 1;
+  }
+  return -1;
+}
+
 /**
- * The names of a `diff --git` line: one when both sides are the same path
- * (`a/x b/x`, the form of every line that is no rename — a path with a blank
- * in it is whole only there); else each quoted name and each word, without its
- * `a/` or `b/`.
+ * The name a `diff --git` line tells, as a list of one, or of none. Where a
+ * name ends is not written, so the line tells one only when both sides are the
+ * same path — `a/x b/x`, or each side in quotes —, the form of every line that
+ * is no rename: a path with a blank in it is whole there. A line of two
+ * different names tells none, and the names are read where they are written
+ * whole: its `rename` or `copy` lines, its file header. Read in one pass and
+ * by no pattern that backtracks: the line is as long as a model made it.
  */
 function gitLineNames(text) {
-  const same = /^a\/(.+) b\/\1$/.exec(text);
-  if (same) return [same[1]];
-  return [...text.matchAll(/"((?:[^"\\]|\\.)*)"|(\S+)/g)].map(([, quoted, word]) => unprefixed(quoted === undefined ? word : unescaped(quoted)));
+  const half = (text.length - 5) / 2; // `a/` X ` b/` X
+  if (half >= 1 && Number.isInteger(half) && text.startsWith('a/') && text.startsWith(' b/', 2 + half) && text.endsWith(text.slice(2, 2 + half))) return [text.slice(2, 2 + half)];
+  const first = quotedEnd(text, 0);
+  if (first === -1 || text[first] !== ' ' || quotedEnd(text, first + 1) !== text.length) return [];
+  const [old, now] = [text.slice(1, first - 1), text.slice(first + 2, -1)].map((name) => unescaped(name));
+  return old.startsWith('a/') && now.startsWith('b/') && old.slice(2) === now.slice(2) ? [old.slice(2)] : [];
 }
 
 /**
  * The paths a diff's headers name, sorted, every header form: both sides of a
- * file header (`/dev/null` aside), a `diff --git` line's names — a mode
- * change, a pure rename and a binary file have no other —, `rename`, `copy`
- * and `Index:` lines. A record for a reader, not a gate: a name that cannot be
- * read is kept as it is written.
+ * file header (`/dev/null` aside), the name of a `diff --git` line whose two
+ * sides are the same (`gitLineNames`) — a mode change and a binary file have
+ * no other —, `rename`, `copy` and `Index:` lines. A record for a reader, not
+ * a gate: a name that cannot be read is kept as it is written.
  */
 function touchedPaths(diffText, { lenient = false } = {}) {
   const { pairs, gitLines, pathLines } = scanDiff(diffText, { lenient });
@@ -917,6 +936,8 @@ const runState = async (options) => (await runSteps(options)).state;
 /** The fail-to-pass test failed: it ran to its end and the exit code is the test's own, not the harness's. */
 const failed = (step) => !!step && !step.timedOut && Number.isInteger(step.exit) && step.exit !== 0 && !HARNESS_EXITS.includes(step.exit);
 const passed = (step) => !!step && step.exit === 0;
+/** The harness failed the step, not its test: one of the harness's own exit codes, or no exit code and no timeout — the docker client was killed. */
+const harnessFailed = (step) => !!step && !step.timedOut && (step.exit === null || HARNESS_EXITS.includes(step.exit));
 const exitWord = (step) => (!step ? '-' : step.timedOut ? 'timeout' : String(step.exit));
 
 /**
@@ -968,17 +989,24 @@ const callKey = (arm, run, taskId) => `${arm}\u0000${run}\u0000${taskId}`;
  * The date's P run lines, file by file in the order of the files' names
  * (`runs/<date>/P-*.jsonl`, as the aggregate reads them). A line of suite P
  * that names no call — one task, an arm, a run — is refused by its place in
- * its file: nothing of it is quoted.
+ * its file, and so is the second line of one call, with the first: the runner
+ * numbers its runs, so such a date was edited by hand, and the order of its
+ * lines would decide an outcome. Nothing of a line is quoted.
  */
 function pRunLines({ dir, date }) {
   const runsDir = join(dir, 'runs', date);
   const files = existsSync(runsDir) ? readdirSync(runsDir).filter((f) => f.startsWith('P-') && f.endsWith('.jsonl')).sort() : [];
   const lines = [];
+  const placeOf = new Map();
   for (const f of files) {
     for (const { n, value: l } of readNumbered(join(runsDir, f))) {
       if (!l || l.suite !== 'P') continue;
+      const place = `${join(runsDir, f)}:${n}`;
       const names = Array.isArray(l.taskIds) && l.taskIds.length === 1 && typeof l.taskIds[0] === 'string' && typeof l.arm === 'string' && Number.isInteger(l.run);
-      if (!names) throw new Error(`${join(runsDir, f)}:${n}: not a P run line: it needs taskIds holding one id, an arm and a whole run number`);
+      if (!names) throw new Error(`${place}: not a P run line: it needs taskIds holding one id, an arm and a whole run number`);
+      const key = callKey(l.arm, l.run, l.taskIds[0]);
+      if (placeOf.has(key)) throw new Error(`${placeOf.get(key)} and ${place}: two P run lines of one call (the same arm, run and task): nothing was checked`);
+      placeOf.set(key, place);
       lines.push(l);
     }
   }
@@ -1008,13 +1036,16 @@ function appendPrivate(file, line) {
  * — `does-not-apply`, refused on the host, its `applyLog` saying which path.
  * Else the steps, in a stage that holds the model's diff and never the gold:
  * `apply` 121 → `does-not-apply` with the last 2000 characters of its stderr;
- * `apply` 0 → `green` when both test steps exit 0, else `red` (a test step
- * that timed out is the diff's failure); any other end of `apply`, or Docker's
- * own exit (125) from a test step → `error`, checked again next time.
+ * any other end of `apply` but 0 → `error`. After `apply` 0, a test step the
+ * harness failed (`harnessFailed`) → `error` too: the test did not fail. Else
+ * `green` when both test steps exit 0, and `red` when one does not (a test
+ * step that timed out is the diff's failure). An `error` is checked again next
+ * time.
  * Whenever a diff was found: `linesChanged`, counted leniently; `paths`, what
- * its headers name; `outsideGold`, those of them the gold's headers do not.
+ * its headers name; `outsideGold`, those of them that neither the gold's
+ * headers name nor the steps restore (`restoredPaths`, the tests diff's).
  */
-async function checkCall({ dir, line, task, imageId, goldLines, goldPaths, docker, env, out }) {
+async function checkCall({ dir, line, task, imageId, goldLines, goldPaths, restoredPaths, docker, env, out }) {
   const filed = (fields) => ({
     suite: 'P', taskId: task.id, arm: line.arm, run: line.run, hand: line.hand === true, checkedAt: new Date().toISOString(), imageId,
     outcome: null, diffFound: false, method: null, applyLog: null, failToPass: null, passToPass: null, linesChanged: null, goldLines,
@@ -1024,7 +1055,7 @@ async function checkCall({ dir, line, task, imageId, goldLines, goldPaths, docke
   const diff = extractDiff(line.answer);
   if (diff === null) return filed({ outcome: 'no-diff' });
   const paths = touchedPaths(diff, { lenient: true });
-  const found = { diffFound: true, linesChanged: linesChanged(diff, { lenient: true }), paths, outsideGold: paths.filter((path) => !goldPaths.includes(path)) };
+  const found = { diffFound: true, linesChanged: linesChanged(diff, { lenient: true }), paths, outsideGold: paths.filter((path) => !goldPaths.includes(path) && !restoredPaths.includes(path)) };
   let ran;
   try {
     ran = await runSteps({ dir, task, change: diff, docker, imageId, env, out });
@@ -1037,8 +1068,8 @@ async function checkCall({ dir, line, task, imageId, goldLines, goldPaths, docke
   if (apply.exit === 121) return filed({ ...found, outcome: 'does-not-apply', applyLog: String(applied.stderr).slice(-2000) });
   if (apply.exit !== 0) return filed({ ...found, outcome: 'error', error: `the apply step exited ${apply.exit}` });
   const tests = { method: apply.method, failToPass, passToPass };
-  const dockers = [['f2p', failToPass], ['p2p', passToPass]].find(([, step]) => step.exit === 125);
-  if (dockers) return filed({ ...found, ...tests, outcome: 'error', error: `the ${dockers[0]} step exited 125` });
+  const [name, step] = [['f2p', failToPass], ['p2p', passToPass]].find(([, test]) => harnessFailed(test)) ?? [];
+  if (step) return filed({ ...found, ...tests, outcome: 'error', error: `the ${name} step ${step.exit === null ? 'ended with no exit code' : `exited ${step.exit}`}` });
   return filed({ ...found, ...tests, outcome: passed(failToPass) && passed(passToPass) ? 'green' : 'red' });
 }
 
@@ -1048,11 +1079,13 @@ async function checkCall({ dir, line, task, imageId, goldLines, goldPaths, docke
  * per call to `<dir>/checks/<date>/P.jsonl` (`checkCall`); returns
  * `{ file, checked, skipped }`. A call whose last check line is there and is
  * not an `error` is skipped. Throws before docker is called: for a date with
- * no P run line, a name that selects none, a run line of a task the suite does
- * not have, and a covered task whose gold proof is not `ok`. It never pulls
- * and never builds: every step runs the image id the task's proof recorded.
+ * no P run line or with two of one call, a name that selects none, a run line
+ * of a task the suite does not have, and a covered task whose gold proof is
+ * not `ok`. It never pulls and never builds: every step runs the image id the
+ * task's proof recorded.
  * Prints one line per check — arm, run, task, outcome; `green*` for a green
- * whose diff touches a path the gold does not — and never a diff.
+ * whose diff touches a path that neither the gold nor the maintainers' tests
+ * diff does — and never a diff.
  */
 export async function check({ dir, date, only = [], arms = [], docker, env, out = () => {} }) {
   if (typeof date !== 'string' || !DAY.test(date)) throw new TypeError(`check needs date, YYYY-MM-DD (got ${JSON.stringify(date)})`);
@@ -1078,8 +1111,10 @@ export async function check({ dir, date, only = [], arms = [], docker, env, out 
     if (!IMAGE_ID.test(proof.imageId)) throw new Error(`${task.id}: its proof records no image id`);
     entry.imageId = proof.imageId;
     entry.goldLines = Number.isInteger(proof.goldLines) ? proof.goldLines : null;
-    // Read here for the paths its headers name, and for nothing else: no stage of a check is given it.
-    entry.goldPaths = touchedPaths(readFileSync(taskPaths({ dir, task }).gold, 'utf8'));
+    // The gold is read here for the paths its headers name, and for nothing else: no stage of a check is given it.
+    const paths = taskPaths({ dir, task });
+    entry.goldPaths = touchedPaths(readFileSync(paths.gold, 'utf8'));
+    entry.restoredPaths = testFiles(readFileSync(paths.tests, 'utf8'));
   }
 
   const file = join(dir, 'checks', date, 'P.jsonl');
