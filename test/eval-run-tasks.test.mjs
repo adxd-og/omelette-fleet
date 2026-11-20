@@ -1,12 +1,13 @@
 // scripts/eval-run.mjs — suite V's task kinds, third-party trees and a diff shown (plan
-// docs/superpowers/plans/2026-11-19-evals-neon.md, T8). Every unit is a FAKE and every task, file and diff is invented.
+// docs/superpowers/plans/2026-11-19-evals-neon.md, T8), and suite P (T16). Every unit is a FAKE and every task, file and diff is invented.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { materializeTree, parseArm, readTasks, runArm } from '../scripts/eval-run.mjs';
+import { dirname, join, relative } from 'node:path';
+import { proofInputs } from '../scripts/eval-patch.mjs';
+import { main, materializeTree, P_SUFFIX, parseArm, planCalls, readTasks, runArm } from '../scripts/eval-run.mjs';
 
 const tmp = (p) => mkdtempSync(join(tmpdir(), p));
 
@@ -80,10 +81,11 @@ function fakeAgy(dir) {
   return p;
 }
 
-/** A fake MCP server for `tool` whose every call answers with the arguments it was sent. */
-function echoServer(dir, tool) {
+/** A fake MCP server for `tool` whose every call answers with the arguments it was sent; `marker` records every start. */
+function echoServer(dir, tool, { marker } = {}) {
   const p = join(dir, 'echo-server.mjs');
   writeFileSync(p, [
+    marker ? `(await import("node:fs")).appendFileSync(${JSON.stringify(marker)}, "started\\n");` : '',
     'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
     'let buf = ""; process.stdin.setEncoding("utf8");',
     'process.stdin.on("data", (c) => { buf += c; let nl; while ((nl = buf.indexOf("\\n")) >= 0) { const l = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!l) continue; const m = JSON.parse(l);',
@@ -290,4 +292,142 @@ test('--snapshot names a commit\'s tree only', async () => {
     runArm({ suite: 'V', arm: parseArm('codex:gpt-6.1-sol'), dir, snapshot: join(tmp('omelette-evals-tasks-snap-'), 's'), out: quiet, env: baseEnv(home, { CODEX_BIN: fakeCodex(home) }) }),
     /--snapshot is for tasks at a commit/,
   );
+});
+
+// Suite P (T16): the runner reads eval-patch's proof and copies the tree; no test here calls docker.
+const P_GOLD = [
+  'diff --git a/widget/widget.go b/widget/widget.go',
+  '--- a/widget/widget.go',
+  '+++ b/widget/widget.go',
+  '@@ -1,3 +1,4 @@',
+  ' package widget',
+  ' ',
+  '+// invented: the maintainers\' fix',
+  ' func Last(items []string) string { return "" }',
+  '',
+].join('\n');
+const P_TESTS = [
+  'diff --git a/widget/widget_test.go b/widget/widget_test.go',
+  '--- a/widget/widget_test.go',
+  '+++ b/widget/widget_test.go',
+  '@@ -1,3 +1,5 @@',
+  ' package widget',
+  ' ',
+  ' import "testing"',
+  '+',
+  '+func TestInventedLastItem(t *testing.T) {}',
+  '',
+].join('\n');
+
+/** An invented P task line; its files sit where eval-patch wants them. */
+const pLine = (id, over = {}) => ({
+  id, prompt: `Invented bug report ${id}: the widget drops its last item.`, tree: `third-party/${id.toLowerCase()}/before-fix`,
+  image: `golang@sha256:${'0'.repeat(64)}`, build: null, gold: `suites/P/${id}/gold.diff`, tests: `suites/P/${id}/tests.diff`,
+  failToPass: "go test ./widget -run '^TestInventedLastItem$'", passToPass: 'go test ./widget', timeoutS: 5, ...over,
+});
+
+/** The proof eval-patch writes for a task that held, made of the task's files as they are now: write it after them. */
+function writeProof(dir, task) {
+  mkdirSync(join(dir, 'checks', 'proofs'), { recursive: true });
+  writeFileSync(join(dir, 'checks', 'proofs', `${task.id}.json`), JSON.stringify({ task: task.id, inputs: proofInputs({ dir, task }), ok: true, reps: [{ ok: true }] }));
+}
+
+/** A private dir with suite P's tasks `ids`, each with its tree, gold and tests diff; those in `proven` get a proof. */
+function pSuite(ids, { proven = ids } = {}) {
+  const tasks = ids.map((id) => pLine(id));
+  const dir = evalsDir({ P: tasks });
+  for (const t of tasks) {
+    writeTree(dir, t.tree, { 'widget/widget.go': 'package widget\n\nfunc Last(items []string) string { return "" }\n', 'widget/widget_test.go': 'package widget\n\nimport "testing"\n' });
+    writeTree(dir, `suites/P/${t.id}`, { 'gold.diff': P_GOLD, 'tests.diff': P_TESTS });
+  }
+  for (const t of tasks) if (proven.includes(t.id)) writeProof(dir, t);
+  return { dir, tasks };
+}
+
+/** Every file under `root`, as [relative path, text], sorted. */
+function filesUnder(root) {
+  const found = [];
+  const walk = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(join(d, e.name));
+      else found.push([relative(root, join(d, e.name)), readFileSync(join(d, e.name), 'utf8')]);
+    }
+  };
+  walk(root);
+  return found.sort(([a], [b]) => (a < b ? -1 : 1));
+}
+
+const HYDROGEN = 'gemini:Gemini 4 Hydrogen:high';
+
+test('P: the bug report with the diff instruction, a fresh copy of the tree as cwd, and neither the gold nor the tests in it', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const { dir, tasks: [p01] } = pSuite(['P01']);
+  await withTmpdir(async (fresh) => {
+    const { lines } = await runArm({
+      suite: 'P', arm: parseArm(HYDROGEN), dir, out: quiet,
+      serverPath: echoServer(home, 'gemini_research'), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }),
+    });
+    const copy = join(fresh, 'omelette-evals', 'snapshots', 'P01');
+    assert.deepEqual(lines.map((l) => [l.suite, l.taskIds, l.ok]), [['P', ['P01'], true]]);
+    // The whole of what the call sends: the report, a blank line, the instruction; the copy as cwd; nothing else.
+    assert.deepEqual(JSON.parse(lines[0].answer), { prompt: `${p01.prompt}\n\n${P_SUFFIX}`, model: 'Gemini 4 Hydrogen (High)', cwd: copy });
+    const files = filesUnder(copy);
+    assert.deepEqual(files.map(([rel]) => rel), ['widget/widget.go', 'widget/widget_test.go'], 'a copy of the tree, no more');
+    for (const [rel, text] of files) {
+      assert.ok(!rel.split('/').includes('suites'), rel);
+      for (const secret of [P_GOLD, P_TESTS]) {
+        assert.notEqual(text, secret, rel);
+        assert.ok(!text.includes(secret), rel);
+      }
+    }
+  });
+});
+
+test('P refuses a task without a fresh gold proof before any call', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const marker = join(home, 'server-started');
+  const { dir, tasks: [p01] } = pSuite(['P01', 'P02'], { proven: ['P02'] });
+  const run = (only) => withTmpdir(() => runArm({
+    suite: 'P', arm: parseArm(HYDROGEN), dir, only, out: quiet,
+    serverPath: echoServer(home, 'gemini_research', { marker }), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }),
+  }));
+  await assert.rejects(run(), { message: 'P01 has no fresh gold proof (missing): run node scripts/eval-patch.mjs prove --task P01 first' });
+  writeProof(dir, p01);
+  writeFileSync(join(dir, p01.gold), P_GOLD.replace('the maintainers\' fix', 'an edited fix'));
+  await assert.rejects(run(), /P01 has no fresh gold proof \(stale\)/);
+  assert.equal(existsSync(marker), false, 'no server was started');
+  assert.equal(existsSync(join(dir, 'runs')), false, 'no run file was made');
+  const { lines } = await run(['P02']);
+  assert.deepEqual(lines.map((l) => [l.taskIds[0], l.ok]), [['P02', true]]);
+  assert.equal(existsSync(marker), true);
+});
+
+test('P runs on Gemini only', () => {
+  const t = { ...pLine('P01'), snapshot: '/invented/copy' };
+  assert.throws(() => planCalls({ suite: 'P', arm: parseArm('codex:gpt-6.1-sol'), tasks: [t] }), /no tool for suite "P"/);
+});
+
+test('a P line is read by eval-patch\'s rules: its shape on every line, its files for the tasks the arm runs', () => {
+  const { dir } = pSuite(['P01', 'P02']);
+  rmSync(join(dir, 'third-party', 'p02'), { recursive: true });
+  assert.throws(() => readTasks(dir, 'P'), /task P02: tree third-party\/p02\/before-fix is not a directory/);
+  assert.deepEqual(readTasks(dir, 'P', { only: ['P01'] }).map((t) => t.id), ['P01', 'P02']);
+  const shaped = evalsDir({ P: [pLine('P01'), pLine('P03', { image: 'golang:latest' })] });
+  writeTree(shaped, 'third-party/p01/before-fix', { 'widget/widget.go': 'package widget\n' });
+  writeTree(shaped, 'suites/P/P01', { 'gold.diff': P_GOLD, 'tests.diff': P_TESTS });
+  assert.throws(() => readTasks(shaped, 'P', { only: ['P01'] }), /task P03: image "golang:latest" is not an official image pinned by digest/);
+});
+
+test('the P dry run names each task\'s proof, marks one without a fresh proof, and copies nothing', async () => {
+  const { dir, tasks } = pSuite(['P01', 'P02'], { proven: ['P02'] });
+  const said = [];
+  await withTmpdir(async (fresh) => {
+    const code = await main(['--suite', 'P', '--arm', HYDROGEN, '--dir', dir, '--dry-run'], { out: (l) => said.push(l), err: (l) => said.push(l) });
+    assert.equal(code, 0, said.join('\n'));
+    assert.equal(existsSync(join(fresh, 'omelette-evals')), false, 'no copy is made');
+  });
+  const text = said.join('\n');
+  assert.match(text, /P01 gold proof missing — would be REFUSED: run node scripts\/eval-patch\.mjs prove --task P01 first/);
+  assert.match(text, /P02 gold proof ok$/m);
+  for (const t of tasks) assert.ok(!text.includes(t.prompt), 'no prompt is printed');
 });

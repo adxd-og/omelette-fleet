@@ -4,7 +4,7 @@
  * The evals runner: one suite, one or more arms, every call through the real
  * unit path (plan docs/superpowers/plans/2026-10-16-evals-mvp.md, Task 1).
  *
- *   node scripts/eval-run.mjs --suite R|V --arm <unit>:<model>[:<effort>] [--arm …]
+ *   node scripts/eval-run.mjs --suite R|V|P --arm <unit>:<model>[:<effort>] [--arm …]
  *        [--runs N] [--task ID …] [--batch] [--dir D] [--snapshot PATH] [--dry-run]
  *
  * PRIVATE IN, PRIVATE OUT. It reads `<D>/suites/<suite>/tasks.jsonl` and writes
@@ -43,6 +43,11 @@
  * it in its brief). Gemini, which has no review tool, gets the shown text in
  * its brief and no `cwd`.
  *
+ * SUITE P runs on Gemini only, and only a task whose gold patch is proven
+ * (scripts/eval-patch.mjs, `proofStatus` ok): the bug report and a request for
+ * a unified diff, with a fresh copy of the task's tree as `cwd`. The gold and
+ * the maintainers' tests stay in the private dir, out of the copy and the brief.
+ *
  * The vendor CLI's `--version` is read once per arm, the way `doctor` reads it
  * (core/spawn.mjs, with the unit's env allowlist and billing scrub).
  */
@@ -63,19 +68,24 @@ import codexUnit from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
 import grokUnit from '../units/grok/adapter.mjs';
 import mistralUnit from '../units/mistral/adapter.mjs';
+import { proofStatus, pTaskProblems } from './eval-patch.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
 export const UNITS = { gemini: geminiUnit, grok: grokUnit, codex: codexUnit, mistral: mistralUnit };
-export const SUITES = ['R', 'V'];
+export const SUITES = ['R', 'V', 'P'];
 
-/** The tool each suite calls on each unit: the research tool for R; the review tool for V, Gemini having none. */
+/** The tool each suite calls on each unit: the research tool for R; the review tool for V, Gemini having none; P on Gemini alone. */
 export const TOOL_FOR = {
   R: { gemini: 'gemini_research', grok: 'grok_research', codex: 'codex_research', mistral: 'mistral_security_review' },
   V: { gemini: 'gemini_research', grok: 'grok_code_review', codex: 'codex_code_review', mistral: 'mistral_security_review' },
+  P: { gemini: 'gemini_research' },
 };
 
-const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V --arm <unit>:<model>[:<effort>] [--arm …] [--task ID …] [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]';
+/** What a P brief asks for after the bug report: the fix as a diff, given as text. */
+export const P_SUFFIX = 'Answer with the change that fixes it, as one unified diff against the files in the working directory, paths as `git diff` prints them (a/ and b/), inside one ```diff fenced block.';
+
+const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V|P --arm <unit>:<model>[:<effort>] [--arm …] [--task ID …] [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]';
 const GEMINI_LEVEL = /\((Low|Medium|High|XHigh)\)$/;
 /** The catalog's spelling of each level word an arm may name: `xhigh` is `XHigh`, not `Xhigh`. */
 const GEMINI_LEVEL_WORD = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh' };
@@ -149,12 +159,15 @@ export function inlineDiffPrompt(task) {
 /**
  * The prompt one task's call sends. V: a shown diff is in every arm's brief; a
  * shown file is in the brief when `inline` (Gemini), and otherwise read from the cwd.
+ * P: the bug report, a blank line and `P_SUFFIX` — the tree is the cwd.
  */
 export function briefFor(suite, task, { inline = false } = {}) {
   switch (suite) {
     case 'V':
       if (task.show === 'diff') return inlineDiffPrompt(task);
       return inline ? inlineFilePrompt(task) : task.prompt;
+    case 'P':
+      return `${task.prompt}\n\n${P_SUFFIX}`;
     default:
       throw new Error(`no brief for suite ${suite}`);
   }
@@ -163,7 +176,8 @@ export function briefFor(suite, task, { inline = false } = {}) {
 /**
  * The calls one run of an arm makes: `[{taskIds, tool, args}]`, in order. Pure.
  * V tasks arrive with `snapshot` (an absolute path) for a cwd arm, `fileText`
- * for Gemini, and `diffText` for a task that shows a diff.
+ * for Gemini, and `diffText` for a task that shows a diff; P tasks with
+ * `snapshot`, the copy of their tree.
  */
 export function planCalls({ suite, arm, tasks, batch = false }) {
   const tool = TOOL_FOR[suite] && TOOL_FOR[suite][arm.unit];
@@ -174,6 +188,7 @@ export function planCalls({ suite, arm, tasks, batch = false }) {
   const gemini = arm.unit === 'gemini';
   return tasks.map((t) => {
     if (suite === 'R') return { taskIds: [t.id], tool, args: { prompt: t.prompt, ...base } };
+    if (suite === 'P') return { taskIds: [t.id], tool, args: { prompt: briefFor('P', t), ...base, cwd: t.snapshot } };
     // Gemini V calls keep round one's construction: the shown text inline, no cwd.
     return { taskIds: [t.id], tool, args: { prompt: briefFor('V', t, { inline: gemini }), ...base, ...(gemini ? {} : { cwd: t.snapshot }) } };
   });
@@ -274,6 +289,8 @@ const within = (root, path) => {
 
 /** Where every V tree sits in the private dir: an allowlist, so the keys and the other suites are never a tree. */
 const V_TREES = 'third-party';
+/** Where every P tree sits: the place eval-patch checks a P line's tree against. */
+const P_TREES = 'third-party';
 
 const TREE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -464,13 +481,17 @@ const isFile = (path) => {
 /**
  * What is wrong with one task line of `suite`, as messages (none: it is
  * sound). `all` is every line of the suite's file, `dir` the private dir.
+ * A P line is eval-patch's to judge: its shape always, its files on disk
+ * when `onDisk` (a task the arm runs).
  */
-function taskProblems(suite, task, all, dir) {
+function taskProblems(suite, task, all, dir, { onDisk = true } = {}) {
   if (!task || typeof task !== 'object' || Array.isArray(task)) return ['not a JSON object'];
   const own = typeof task.id !== 'string' || !task.id || typeof task.prompt !== 'string' || !task.prompt ? ['needs an id and a prompt'] : [];
   switch (suite) {
     case 'R':
       return own;
+    case 'P':
+      return pTaskProblems(task, onDisk ? { dir } : {});
     case 'V': {
       const kind = task.kind ?? 'keyed';
       const show = task.show ?? 'file';
@@ -504,16 +525,21 @@ function taskProblems(suite, task, all, dir) {
   }
 }
 
-/** The suite's tasks, every line checked (see taskProblems); ids are unique per suite. */
-export function readTasks(dir, suite) {
+/**
+ * The suite's tasks, every line checked (see taskProblems); ids are unique per
+ * suite. `only` (the ids the arm runs; none: every task) limits a P line's
+ * checks on disk to those tasks, as eval-patch's own reading does: a task
+ * whose tree is not fetched yet must not stop another.
+ */
+export function readTasks(dir, suite, { only } = {}) {
   const path = join(dir, 'suites', suite, 'tasks.jsonl');
   if (!existsSync(path)) throw new Error(`no suite at ${path}`);
   const tasks = readJsonl(path);
   if (!tasks.length) throw new Error(`${path} holds no task`);
   const seen = new Set();
   tasks.forEach((t, i) => {
-    const problems = taskProblems(suite, t, tasks, dir);
     const id = t && typeof t.id === 'string' && t.id ? t.id : `#${i + 1}`;
+    const problems = taskProblems(suite, t, tasks, dir, { onDisk: !only || !only.length || only.includes(id) });
     if (seen.has(id)) problems.push('a second task with this id: ids are unique per suite');
     if (problems.length) throw new Error(`${path}: task ${id}: ${problems.join('; ')}`);
     seen.add(id);
@@ -575,6 +601,9 @@ function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract = true }
         return { ...t, snapshot: path, snapshotPresent: present, fileText: extract || present ? readInside(path, t.file, t.id) : null, diffText };
       });
     }
+    case 'P':
+      // The tree alone: the gold and the tests diff sit under suites/P/, never under the place a tree is copied from.
+      return tasks.map((t) => ({ ...t, snapshot: extract ? materializeTree({ dir, rel: t.tree, id: t.id, under: P_TREES }) : treeCopyPath(t.id) }));
     default:
       return tasks;
   }
@@ -621,11 +650,16 @@ export function evalEnv(env) {
   return out;
 }
 
+/** What the operator runs to give a P task the proof it lacks. */
+const proveFirst = (id) => `run node scripts/eval-patch.mjs prove --task ${id} first`;
+
 /**
  * Run one arm of one suite `runs` times; every call appends its line as soon
  * as it ends. `only` names the task ids to run (all when empty); each task
  * numbers its own runs. Returns `{file, lines, stopped}` — `stopped` is set when
  * a call failed on an exhausted quota and the arm made no call after it.
+ * P: throws before anything is copied or called when a selected task's gold
+ * proof is not `ok` — no model's diff exists before its task is proven.
  * `serverPath` replaces the unit's server (tests); `now` dates the run directory.
  */
 export async function runArm({
@@ -634,7 +668,14 @@ export async function runArm({
 }) {
   env = evalEnv(env);
   const unit = UNITS[arm.unit];
-  const tasks = prepareTasks(suite, selectTasks(readTasks(dir, suite), only), { arm, dir, repo, snapshot });
+  const selected = selectTasks(readTasks(dir, suite, { only }), only);
+  if (suite === 'P') {
+    for (const t of selected) {
+      const status = proofStatus({ dir, task: t });
+      if (status !== 'ok') throw new Error(`${t.id} has no fresh gold proof (${status}): ${proveFirst(t.id)}`);
+    }
+  }
+  const tasks = prepareTasks(suite, selected, { arm, dir, repo, snapshot });
   const calls = planCalls({ suite, arm, tasks, batch });
   const file = join(dir, 'runs', localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -699,9 +740,13 @@ export async function runArm({
   return { file, lines, stopped };
 }
 
-/** The dry run: the calls each arm would make, by task id and prompt length. Writes and spawns nothing. */
+/**
+ * The dry run: the calls each arm would make, by task id and prompt length, and
+ * each P task's proof, a task without a fresh one marked as refused. Writes and
+ * spawns nothing.
+ */
 function printPlan({ suite, arm, runs, batch, dir, repo, snapshot, only, now, out }) {
-  const tasks = prepareTasks(suite, selectTasks(readTasks(dir, suite), only), { arm, dir, repo, snapshot, extract: false });
+  const tasks = prepareTasks(suite, selectTasks(readTasks(dir, suite, { only }), only), { arm, dir, repo, snapshot, extract: false });
   // A Gemini file brief whose commit snapshot is not extracted yet: its length is the brief's alone.
   const pending = new Set(tasks.filter((t) => suite === 'V' && arm.unit === 'gemini' && t.show !== 'diff' && t.fileText === null).map((t) => t.id));
   const calls = planCalls({ suite, arm, tasks: tasks.map((t) => (pending.has(t.id) ? { ...t, fileText: '' } : t)), batch });
@@ -714,6 +759,11 @@ function printPlan({ suite, arm, runs, batch, dir, repo, snapshot, only, now, ou
     const reached = !t.snapshotPresent && arm.unit !== 'gemini' ? reachableGitDir(nearestExisting(t.snapshot)) : null;
     out(`  snapshot ${t.snapshot} ${t.snapshotPresent ? '(present)' : `(absent: would be extracted from ${t.commit})`}` +
       (reached ? ` — would be REFUSED: git reaches ${reached} from there; pass --snapshot outside every git work tree` : ''));
+  }
+  for (const t of suite === 'P' ? tasks : []) {
+    const status = proofStatus({ dir, task: t });
+    out(`  snapshot ${t.snapshot} (a fresh copy of ${t.tree} when it runs)`);
+    out(`  ${t.id} gold proof ${status}${status === 'ok' ? '' : ` — would be REFUSED: ${proveFirst(t.id)}`}`);
   }
   for (let pass = 0; pass < runs; pass++) {
     for (const [i, c] of calls.entries()) {
