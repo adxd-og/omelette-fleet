@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { proofInputs } from '../scripts/eval-patch.mjs';
-import { iTaskProblems, main, materializeTree, P_SUFFIX, parseArm, planCalls, readTasks, runArm, snapshotFor } from '../scripts/eval-run.mjs';
+import { iTaskProblems, main, materializeTree, P_SUFFIX, parseArm, planCalls, readTasks, runArm, snapshotFor, writePrivate } from '../scripts/eval-run.mjs';
 
 const tmp = (p) => mkdtempSync(join(tmpdir(), p));
 
@@ -481,8 +481,9 @@ test('a control character in a task\'s id, file, tree, diff or commit is refused
     ['V', { id: 'V09', commit: 'abc1234\u0085', file: 'src/thing.js', prompt: BRIEF }, 'V09', 'commit'],
     ['V', { id: 'X09', kind: 'recall', tree: 'third-party/x09/at\u007fintro', file: 'lib/widget.js', prompt: BRIEF }, 'X09', 'tree'],
     ['V', { id: 'X09', kind: 'recall', show: 'diff', tree: 'third-party/x09/at-intro', diff: 'suites/V/X09\u001b[2J.diff', prompt: BRIEF }, 'X09', 'diff'],
-    ['V', { id: 'V\t09', commit: 'abc1234', file: 'src/thing.js', prompt: BRIEF }, '"V\\t09"', 'id'],
+    ['V', { id: 'V\t09', commit: 'abc1234', file: 'src/thing.js', prompt: BRIEF }, '"V\\u000909"', 'id'],
     ['R', { id: 'q\u00001', prompt: 'Invented question.' }, '"q\\u00001"', 'id'],
+    ['R', { id: 'q\u009b1', prompt: 'Invented question.' }, '"q\\u009b1"', 'id'],
     ['P', pLine('P09', { tree: 'third-party/p09/before\u009ffix' }), 'P09', 'tree'],
   ];
   for (const [suite, line, named, field] of refused) {
@@ -573,4 +574,43 @@ test('--snapshot names a commit\'s tree only: a P or an I task is refused as a t
     });
     assert.equal(existsSync(join(dir, 'runs')), false, `${suite}: no call`);
   }
+});
+
+test('an arm with no tool for the suite is refused before any copy, snapshot or server: it leaves nothing behind', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const marker = join(home, 'server-started');
+  const { dir: pDir } = pSuite(['P01']);
+  const iDir = evalsDir({ I: [I01] });
+  writeTree(iDir, 'suites/I/docs/I01', { 'NOTES.md': 'Invented release notes.' });
+  for (const [suite, dir] of [['P', pDir], ['I', iDir]]) {
+    await withTmpdir(async (fresh) => {
+      await assert.rejects(
+        runArm({ suite, arm: parseArm('codex:gpt-6.1-sol'), dir, out: quiet, serverPath: echoServer(home, 'codex_research', { marker }), env: baseEnv(home, { CODEX_BIN: fakeCodex(home) }) }),
+        { message: `no tool for suite "${suite}" on unit "codex"` },
+        suite,
+      );
+      assert.equal(existsSync(join(fresh, 'omelette-evals')), false, `${suite}: nothing copied`);
+    });
+    assert.equal(existsSync(join(dir, 'runs')), false, `${suite}: no run file`);
+  }
+  assert.equal(existsSync(marker), false, 'no server was started');
+});
+
+test('a task line that is not JSON is refused by its line number in the file, blank lines counted, and nothing of it is quoted', () => {
+  const dir = evalsDir({ R: [{ id: 'q1', prompt: 'Invented question.' }] });
+  const path = join(dir, 'suites', 'R', 'tasks.jsonl');
+  writeFileSync(path, `${JSON.stringify({ id: 'q1', prompt: 'Invented question.' })}\n\nINVENTED-PLANTED-TEXT {"id":\n`);
+  assert.throws(() => readTasks(dir, 'R'), { message: `${path}:3: not JSON` });
+});
+
+test('writePrivate makes the parent directories 0700 and leaves the file 0600 holding the text alone, whether or not it existed', () => {
+  const root = tmp('omelette-evals-tasks-private-');
+  const file = join(root, 'a', 'b', 'out.json');
+  writePrivate(file, 'invented one\n');
+  for (const d of [join(root, 'a'), join(root, 'a', 'b')]) assert.equal(statSync(d).mode & 0o777, 0o700, d);
+  assert.deepEqual([readFileSync(file, 'utf8'), statSync(file).mode & 0o777], ['invented one\n', 0o600]);
+  writeFileSync(file, 'an invented older text, longer than the new one');
+  chmodSync(file, 0o644);
+  writePrivate(file, 'invented two\n');
+  assert.deepEqual([readFileSync(file, 'utf8'), statSync(file).mode & 0o777], ['invented two\n', 0o600]);
 });

@@ -60,6 +60,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import {
   appendFileSync, closeSync, cpSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync,
+  writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -87,6 +88,13 @@ export const TOOL_FOR = {
   P: { gemini: 'gemini_research' },
   I: { gemini: 'gemini_research' },
 };
+
+/** The tool `suite` calls on `unit`; throws when the unit has none for that suite. */
+function toolFor(suite, unit) {
+  const tool = TOOL_FOR[suite] && TOOL_FOR[suite][unit];
+  if (!tool) throw new Error(`no tool for suite "${suite}" on unit "${unit}"`);
+  return tool;
+}
 
 /** What a P brief asks for after the bug report: the fix as a diff, given as text. */
 export const P_SUFFIX = 'Answer with the change that fixes it, as one unified diff against the files in the working directory, paths as `git diff` prints them (a/ and b/), inside one ```diff fenced block.';
@@ -190,8 +198,7 @@ export function briefFor(suite, task, { inline = false } = {}) {
  * their document's directory.
  */
 export function planCalls({ suite, arm, tasks, batch = false }) {
-  const tool = TOOL_FOR[suite] && TOOL_FOR[suite][arm.unit];
-  if (!tool) throw new Error(`no tool for suite "${suite}" on unit "${arm.unit}"`);
+  const tool = toolFor(suite, arm.unit);
   if (batch && suite !== 'R') throw new Error('--batch is for suite R only: V has one brief per call');
   const base = { model: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) };
   if (batch) return [{ taskIds: tasks.map((t) => t.id), tool, args: { prompt: batchPrompt(tasks), ...base } }];
@@ -487,8 +494,14 @@ export async function cliVersion(unit, env = process.env) {
 /** A local calendar date, `YYYY-MM-DD`: the day the operator ran the arm. */
 export const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').filter((l) => l.trim()).map((l, i) => {
-  try { return JSON.parse(l); } catch (e) { throw new Error(`${path}:${i + 1}: not JSON (${e.message})`); }
+/**
+ * `path`'s JSON lines, blank ones skipped. A line that is not JSON is refused
+ * by its line number in the file (blank lines counted) alone: nothing of it —
+ * a task's or an answer's text — is quoted.
+ */
+const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').flatMap((l, i) => {
+  if (!l.trim()) return [];
+  try { return [JSON.parse(l)]; } catch { throw new Error(`${path}:${i + 1}: not JSON`); }
 });
 
 const V_KINDS = ['keyed', 'recall', 'control'];
@@ -572,8 +585,17 @@ function taskProblems(suite, task, all, dir, { onDisk = true } = {}) {
 const CONTROL_CHAR = /[\u0000-\u001f\u007f-\u009f]/;
 /** The fields of a task line that name something, in every suite. */
 const NAMING_FIELDS = ['id', 'file', 'tree', 'diff', 'commit', 'doc'];
-/** A task id fit for a message: as it is, or quoted with its escapes when it holds a control character. */
-const shownId = (id) => (CONTROL_CHAR.test(String(id)) ? JSON.stringify(id) : id);
+/**
+ * A task id fit for a message: as it is, or, when it holds a control character,
+ * quoted with every control character written as its `\uXXXX` escape (and a
+ * quote or backslash escaped) — `JSON.stringify` alone leaves U+007F–U+009F raw.
+ */
+const shownId = (id) => {
+  const s = String(id);
+  if (!CONTROL_CHAR.test(s)) return id;
+  const escape = (c) => (c === '"' || c === '\\' ? `\\${c}` : `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return `"${s.replace(/["\\\u0000-\u001f\u007f-\u009f]/g, escape)}"`;
+};
 
 /**
  * The suite's tasks, every line checked (see taskProblems); ids are unique per
@@ -738,6 +760,22 @@ export function appendRunLine(file, line) {
   }
 }
 
+/**
+ * `text` to `path`, the operator's alone: the parent directories it makes are
+ * 0700, and the file is 0600 before a byte lands, whatever mode a file already
+ * there had. Every eval script writes a private file through it.
+ */
+export function writePrivate(path, text) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const fd = openSync(path, 'w', 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    writeFileSync(fd, text);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** What the operator runs to give a P task the proof it lacks. */
 const proveFirst = (id) => `run node scripts/eval-patch.mjs prove --task ${id} first`;
 
@@ -759,12 +797,15 @@ export function assertProven({ dir, tasks }) {
  * a call failed on an exhausted quota and the arm made no call after it.
  * P: throws before anything is copied or called when a selected task's gold
  * proof is not `ok` — no model's diff exists before its task is proven.
+ * An arm whose unit has no tool for the suite is refused first, before any
+ * copy, snapshot or server: a refused arm leaves nothing behind.
  * `serverPath` replaces the unit's server (tests); `now` dates the run directory.
  */
 export async function runArm({
   suite, arm, runs = 1, batch = false, dir = DEFAULT_DIR, repo = ROOT, snapshot, only, env = process.env,
   now = () => new Date(), serverPath, out = (l) => console.log(l),
 }) {
+  toolFor(suite, arm.unit);
   env = evalEnv(env);
   const unit = UNITS[arm.unit];
   const selected = selectTasks(readTasks(dir, suite, { only }), only);
