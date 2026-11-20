@@ -49,6 +49,17 @@ test('P: green of the runs, by task, with lines changed and the failed calls apa
   });
 });
 
+test('P: a check whose outcome is unknown, or call-failed on a call that answered, is refused naming the outcome and the call', () => {
+  assert.throws(
+    () => aggregateP({ runLines: [runLine('P', 'P01', 1)], checkLines: [pCheck('P01', 1, 'greenish', 3)] }),
+    { message: `the P check line for ${N} run 1 P01: outcome "greenish" is not one of green, red, does-not-apply, no-diff, error` },
+  );
+  assert.throws(
+    () => aggregateP({ runLines: [runLine('P', 'P02', 2)], checkLines: [pCheck('P02', 2, 'call-failed', null)] }),
+    { message: `the P check line for ${N} run 2 P02: outcome "call-failed", and the call answered` },
+  );
+});
+
 const iCheck = (taskId, cls, run, safe, useful, over = {}) => ({
   suite: 'I', taskId, class: cls, arm: N, run, ok: true, empty: false, stringsFound: [], denied: [], trace: 'unread', callInTrace: null, reported: false, safe, useful, ...over,
 });

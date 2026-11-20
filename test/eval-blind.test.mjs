@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -650,7 +650,7 @@ function excludedFixture() {
     mkdirSync(join(dir, 'exclusions'), { recursive: true });
     writeFileSync(join(dir, 'exclusions', '2026-11-20.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
   };
-  return { run, exclude };
+  return { run, exclude, dir };
 }
 
 test('an excluded V call leaves recall\'s denominator and is counted for its arm', () => {
@@ -700,4 +700,79 @@ test('an exclusion takes a batch call out whole with its grades, and a P or I ru
   assert.deepEqual(left.runLines, [runLines[0]]);
   assert.deepEqual(left.excluded, [{ suite: 'I', arm: N, calls: 1 }, { suite: 'P', arm: N, calls: 1 }, { suite: 'R', arm: A, calls: 1 }, { suite: 'R', arm: B, calls: 1 }]);
   assert.throws(() => applyExclusions({ mapping, grades, runLines, exclusions: [{ suite: 'P', arm: N, run: 3, taskId: 'P01' }], date: '2026-11-20' }), /exclusions line 1 names no call of 2026-11-20/);
+});
+
+test('an exclusions line is named by its line in the file, blank lines counted; a line that is not JSON is refused by that number, nothing of it printed', () => {
+  const { run, dir } = excludedFixture();
+  const path = join(dir, 'exclusions', '2026-11-20.jsonl');
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `\n${JSON.stringify({ suite: 'V', arm: N, run: 9, taskId: 'V02', reason: 'invented' })}\n`);
+  const named = run().res;
+  assert.equal(named.status, 1);
+  assert.match(named.stderr, /exclusions line 2 names no call of 2026-11-20/);
+  writeFileSync(path, '\n\nINVENTED-PLANTED-TEXT {"suite":\n');
+  const bad = run().res;
+  assert.equal(bad.status, 1);
+  assert.equal(bad.stderr, `eval-blind: ${path}:3: not JSON\n`);
+});
+
+/** An earlier aggregate of 2026-10-16 in `dir` with R's question set `setR`: arms V `N` and V `C` on V01, or round one's fixture (R `A`, R `B`, V `C`). */
+function earlierAggregate(dir, { roundOne = false, setR = null } = {}) {
+  const prev = roundOne
+    ? aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS })
+    : aggregate({
+      grades: [keyOn('b1', 'V01', 'K1', 'found'), keyOn('b2', 'V01', 'K1', 'not')],
+      mapping: { date: '2026-10-16', seed: 1, failed: [], blinds: { b1: blindOf('V', N, 1, ['V01'], 1000, null), b2: blindOf('V', C, 1, ['V01'], 1000, null) } },
+      keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V },
+    });
+  mkdirSync(join(dir, 'aggregates'), { recursive: true });
+  writeFileSync(join(dir, 'aggregates', '2026-10-16.json'), JSON.stringify({ ...prev, sets: { R: setR } }));
+}
+const mergeCli = (dir) => spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate', '--merge', '2026-10-16'], { encoding: 'utf8', timeout: 5000 });
+
+test('--merge never carries an arm this date ran and lost whole to exclusions', () => {
+  const { exclude, dir } = excludedFixture();
+  exclude([{ suite: 'V', arm: N, run: 1, taskId: 'V01', reason: 'invented' }, { suite: 'V', arm: N, run: 1, taskId: 'V02', reason: 'invented' }]);
+  earlierAggregate(dir);
+  const res = mergeCli(dir);
+  assert.equal(res.status, 0, res.stderr);
+  const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8'));
+  assert.deepEqual(agg.arms.map((a) => [a.suite, a.arm, a.carriedFrom]), [['V', C, '2026-10-16']]);
+  assert.deepEqual(agg.excluded, [{ suite: 'V', arm: N, calls: 2 }]);
+});
+
+test('--merge on a date with no R question set leaves the earlier R arms out and says the date has none', () => {
+  const { dir } = excludedFixture();
+  earlierAggregate(dir, { roundOne: true, setR: '0123456789abcdef' });
+  const res = mergeCli(dir);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /^R: 2 arm\(s\) of 2026-10-16 not carried — this date has no R question set/m);
+  const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8'));
+  assert.deepEqual(agg.arms.map((a) => [a.suite, a.arm, a.carriedFrom || null]), [['V', C, '2026-10-16'], ['V', N, null]]);
+});
+
+test('blinding and the aggregate leave a file that was there at 0644 the operator\'s alone', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-evals-modes-'));
+  mkdirSync(join(dir, 'runs', '2026-11-20'), { recursive: true });
+  writeFileSync(join(dir, 'runs', '2026-11-20', 'R-a.jsonl'), JSON.stringify(runLine({})) + '\n');
+  const g = join(dir, 'grading', '2026-11-20');
+  mkdirSync(g, { recursive: true });
+  for (const f of ['blinded.jsonl', 'rubric.md']) {
+    writeFileSync(join(g, f), 'an invented older text\n');
+    chmodSync(join(g, f), 0o644);
+  }
+  const b = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--seed', '1'], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(b.status, 0, b.stderr);
+  for (const f of ['blinded.jsonl', 'mapping.json', 'rubric.md']) assert.equal(statSync(join(g, f)).mode & 0o777, 0o600, f);
+  const { blinds } = JSON.parse(readFileSync(join(g, 'mapping.json'), 'utf8'));
+  writeFileSync(join(g, 'grades.jsonl'), Object.keys(blinds).map((blindId) => JSON.stringify(ans(blindId, 'q1', 'correct'))).join('\n') + '\n');
+  mkdirSync(join(dir, 'suites', 'R'), { recursive: true });
+  writeFileSync(join(dir, 'suites', 'R', 'key.jsonl'), JSON.stringify({ id: 'q1' }) + '\n');
+  const out = join(dir, 'aggregates', '2026-11-20.json');
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, '{}\n');
+  chmodSync(out, 0o644);
+  const a = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate'], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(a.status, 0, a.stderr);
+  assert.equal(statSync(out).mode & 0o777, 0o600);
 });

@@ -62,7 +62,7 @@
  * This file holds no task text, no key and no answer.
  */
 import { createHash, randomInt } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -76,6 +76,7 @@ import { GROK_MODELS } from '../units/grok/models.js';
 import mistralUnit from '../units/mistral/adapter.mjs';
 import { MISTRAL_MODELS } from '../units/mistral/models.js';
 import { checkInjection, readInjectionInputs } from './eval-inject.mjs';
+import { writePrivate } from './eval-run.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
@@ -684,7 +685,8 @@ const P_COUNTS = ['calls', 'green', 'red', 'doesNotApply', 'noDiff', 'failed', '
 /**
  * The P arms (spec, Part three: a test passes or it does not): per run its
  * calls, each answered call by its last check line's outcome — or `unchecked`
- * with none — the failed and empty calls, the mean lines changed over the
+ * with none; an unknown outcome, or `call-failed` on a call that answered, is
+ * refused, naming the call — the failed and empty calls, the mean lines changed over the
  * diffs that applied (green and red), and wall time and tokens of the answered
  * calls; `total` sums the counts over the runs, `byTask` gives each task's calls,
  * greens, mean lines changed and the gold's size.
@@ -702,8 +704,12 @@ export function aggregateP({ runLines, checkLines = [] }) {
         if (l.empty === true) r.empty += 1;
         if (l.ok !== true) { r.failed += 1; continue; }
         const c = checkOf(l);
-        if (!c) r.unchecked += 1;
-        else if (Object.hasOwn(P_OUTCOMES, c.outcome)) r[P_OUTCOMES[c.outcome]] += 1;
+        if (!c) { r.unchecked += 1; continue; }
+        // An answered call lands in exactly one count, or `total` stops summing to `calls`.
+        const at = `the P check line for ${arm} run ${l.run} ${l.taskIds[0]}: outcome ${JSON.stringify(c.outcome)}`;
+        if (c.outcome === 'call-failed') throw new Error(`${at}, and the call answered`);
+        if (typeof c.outcome !== 'string' || !Object.hasOwn(P_OUTCOMES, c.outcome)) throw new Error(`${at} is not one of ${Object.keys(P_OUTCOMES).join(', ')}`);
+        r[P_OUTCOMES[c.outcome]] += 1;
       }
       return { run, ...r, linesChanged: mean(applied(ls).map((c) => c.linesChanged)), ...costOf(answeredOf(ls)) };
     });
@@ -770,13 +776,16 @@ export function aggregateI({ runLines, checkLines = [] }) {
   });
 }
 
-const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').filter((l) => l.trim()).map((l, i) => {
-  try { return JSON.parse(l); } catch (e) { throw new Error(`${path}:${i + 1}: not JSON (${e.message})`); }
+/**
+ * `path`'s JSON lines, each with its line number in the file (blank lines
+ * counted, and skipped). A line that is not JSON is refused by that number
+ * alone: nothing of it — an answer's text, say — is quoted.
+ */
+const readNumbered = (path) => readFileSync(path, 'utf8').split('\n').flatMap((l, i) => {
+  if (!l.trim()) return [];
+  try { return [{ n: i + 1, value: JSON.parse(l) }]; } catch { throw new Error(`${path}:${i + 1}: not JSON`); }
 });
-const writePrivate = (path, text) => {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, text, { mode: 0o600 });
-};
+const readJsonl = (path) => readNumbered(path).map((x) => x.value);
 
 function cmdBlind({ dir, date, seed, out }) {
   const runsDir = join(dir, 'runs', date);
@@ -818,9 +827,12 @@ const bySuiteThenArm = (x, y) => x.suite.localeCompare(y.suite) || x.arm.localeC
  * hold that line's task: a batch call holding the task leaves whole, and its
  * grades leave with it. Returns what is left, and `excluded`: the calls that
  * left per suite and arm, sorted. Throws on an exclusion line that names no
- * call of the date.
+ * call of the date, naming it by `exclusionLineNumbers` (each line's number in
+ * its file; default: its place in `exclusions`).
  */
-export function applyExclusions({ mapping = null, grades = [], runLines = [], exclusions = [], date = mapping ? mapping.date : null }) {
+export function applyExclusions({
+  mapping = null, grades = [], runLines = [], exclusions = [], exclusionLineNumbers = exclusions.map((_, i) => i + 1), date = mapping ? mapping.date : null,
+}) {
   const named = exclusions.map(() => false);
   const counts = new Map();
   const leaves = (call) => {
@@ -846,7 +858,7 @@ export function applyExclusions({ mapping = null, grades = [], runLines = [], ex
   }
   const keptLines = runLines.filter((l) => !leaves(l));
   const unnamed = named.indexOf(false);
-  if (unnamed >= 0) throw new Error(`exclusions line ${unnamed + 1} names no call of ${date}`);
+  if (unnamed >= 0) throw new Error(`exclusions line ${exclusionLineNumbers[unnamed]} names no call of ${date}`);
   const excluded = [...counts].map(([k, calls]) => {
     const [suite, arm] = k.split('\u0000');
     return { suite, arm, calls };
@@ -881,8 +893,10 @@ function cmdAggregate({ dir, date, merge, out }) {
     grades = readJsonl(join(g, 'grades.jsonl'));
   }
   const exclusionsPath = join(dir, 'exclusions', `${date}.jsonl`);
+  const excludedLines = existsSync(exclusionsPath) ? readNumbered(exclusionsPath) : [];
   const kept = applyExclusions({
-    mapping, grades, runLines: [...pLines, ...injection.lines], exclusions: existsSync(exclusionsPath) ? readJsonl(exclusionsPath) : [], date,
+    mapping, grades, runLines: [...pLines, ...injection.lines],
+    exclusions: excludedLines.map((x) => x.value), exclusionLineNumbers: excludedLines.map((x) => x.n), date,
   });
   let agg = { date, arms: [], grades: 0, overturned: 0 };
   if (hasMapping) {
@@ -909,12 +923,16 @@ function cmdAggregate({ dir, date, merge, out }) {
     if (!existsSync(prevPath)) throw new Error(`no aggregate to merge at ${prevPath}`);
     const prev = JSON.parse(readFileSync(prevPath, 'utf8'));
     const ran = new Set(agg.arms.map((a) => `${a.suite}\u0000${a.arm}`));
-    const notRun = prev.arms.filter((a) => !ran.has(`${a.suite}\u0000${a.arm}`));
+    // An arm this date ran and lost whole to exclusions is this date's too: its earlier numbers never stand beside its `excluded` entry.
+    const own = new Set([...ran, ...agg.excluded.map((e) => `${e.suite}\u0000${e.arm}`)]);
+    const notRun = prev.arms.filter((a) => !own.has(`${a.suite}\u0000${a.arm}`));
     // No --merge across a change of R's question set (spec, Scripts): its arms answered other questions.
     const sameR = agg.sets.R !== null && !!prev.sets && prev.sets.R === agg.sets.R;
     const carried = notRun.filter((a) => a.suite !== 'R' || sameR).map((a) => ({ ...a, carriedFrom: merge }));
     const leftOut = notRun.length - carried.length;
-    if (leftOut) out(`R: ${leftOut} arm(s) of ${merge} not carried — its question set ${prev.sets && prev.sets.R ? 'differs from' : 'was not recorded beside'} this one's (no --merge across a change of question set)`);
+    const why = agg.sets.R === null ? 'this date has no R question set'
+      : `its question set ${prev.sets && prev.sets.R ? 'differs from' : 'was not recorded beside'} this one's`;
+    if (leftOut) out(`R: ${leftOut} arm(s) of ${merge} not carried — ${why} (no --merge across a change of question set)`);
     agg.arms = [...agg.arms, ...carried].sort(bySuiteThenArm);
     agg.date = `${date} (${ran.size} arm${ran.size === 1 ? '' : 's'}; ${carried.length} carried from ${merge})`;
     agg.carriedFrom = merge;
