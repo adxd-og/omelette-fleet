@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,8 @@ const BRIEF = 'Invented review brief: read the change and report what you find.'
 const DIFF = '--- a/lib/widget.js\n+++ b/lib/widget.js\n@@ -1 +1 @@\n-export const items = [];\n+export const items = [1];\n';
 const V01 = { id: 'V01', commit: 'abc1234', file: 'src/thing.js', prompt: BRIEF };
 const ARM = 'native:omelette-reviewer';
+/** The paragraph every brief opens with, its snapshot named (the whole-branch review's ruling RV4). */
+const opening = (snapshot) => `You are reviewing a snapshot of code. Work only inside the directory ${snapshot}: read no file outside it, do not use the web, do not read git history or any other checkout, and run nothing from the snapshot — no install, no build, no test, no script. Your tool calls are read after the run, and a run that leaves the snapshot is discarded.`;
 /** The hand-filed run line's fields (plan, Record shapes). */
 const HAND_KEYS = ['suite', 'taskIds', 'arm', 'unit', 'model', 'effort', 'run', 'cli', 'startedAt', 'wallMs', 'ok', 'answer', 'error', 'empty', 'usage', 'resultId', 'agyConversations', 'hand'];
 
@@ -115,7 +117,7 @@ test('brief writes the cwd brief to a private file and prints paths, never the t
   const brief = join(dir, 'hand', 'V-X01.brief.md');
   assert.equal(r.stdout, `snapshot ${snapshot}\nbrief ${brief}\n`);
   assert.equal(readFileSync(join(snapshot, 'lib', 'widget.js'), 'utf8'), 'export const items = [1];\n');
-  assert.equal(readFileSync(brief, 'utf8'), briefFor('V', { ...x01, diffText: DIFF }));
+  assert.equal(readFileSync(brief, 'utf8'), `${opening(snapshot)}\n\n${briefFor('V', { ...x01, diffText: DIFF })}`);
   assert.equal(statSync(brief).mode & 0o777, 0o600);
   assert.ok(!r.stdout.includes(BRIEF) && !r.stdout.includes('items = [1]'), 'no brief text on stdout');
 
@@ -131,7 +133,7 @@ test('brief writes the cwd brief to a private file and prints paths, never the t
   assert.equal(p.stdout, `snapshot ${join(fresh, 'omelette-evals', 'snapshots', 'P01')}\nbrief ${out}\n`);
   const text = readFileSync(out, 'utf8');
   assert.ok(text.endsWith(P_SUFFIX), text);
-  assert.equal(text, briefFor('P', P01));
+  assert.equal(text, `${opening(join(fresh, 'omelette-evals', 'snapshots', 'P01'))}\n\n${briefFor('P', P01)}`);
 });
 
 test('file --suite P meets the gold-proof gate brief meets: no proof, the gate\'s message and nothing filed; a proof, it files', () => {
@@ -201,4 +203,78 @@ test('usage errors exit 2 and file nothing; an unknown task exits 1', () => {
   assert.equal(week.status, 0, week.stderr);
   const [line] = readLines(join(dir, 'runs', '2026-11-20', 'V-native-a1-b2.jsonl'));
   assert.deepEqual([line.arm, line.wallMs], ['native:a1-b2', 604800000]);
+});
+
+// ─── the whole-branch review's rulings on eval-hand (RV4) ────────────────────
+
+test('every brief opens with the same paragraph naming its snapshot, so a control\'s brief is its task\'s but for the path', () => {
+  const x01 = { id: 'X01', kind: 'recall', show: 'file', tree: 'third-party/x01/before-fix', file: 'lib/widget.js', prompt: BRIEF };
+  const c01 = { ...x01, id: 'C01', kind: 'control', of: 'X01', tree: 'third-party/x01/after-fix' };
+  const dir = evalsDir({ V: [x01, c01] });
+  writeTree(dir, x01.tree, { 'lib/widget.js': 'export const items = [];\n' });
+  writeTree(dir, c01.tree, { 'lib/widget.js': 'export const items = [1];\n' });
+  const fresh = tmp('omelette-evals-hand-tmpdir-');
+  const text = {};
+  for (const id of ['X01', 'C01']) {
+    assert.equal(hand(['brief', '--suite', 'V', '--task', id, '--dir', dir], { TMPDIR: fresh }).status, 0);
+    text[id] = readFileSync(join(dir, 'hand', `V-${id}.brief.md`), 'utf8');
+  }
+  const snap = (id) => join(fresh, 'omelette-evals', 'snapshots', id);
+  assert.equal(text.X01, `${opening(snap('X01'))}\n\n${BRIEF}`);
+  assert.equal(text.C01.replace(snap('C01'), snap('X01')), text.X01);
+});
+
+test('file removes the copy brief made of the task\'s tree once the line is filed, answered or failed', () => {
+  const x01 = { id: 'X01', kind: 'recall', show: 'file', tree: 'third-party/x01/before-fix', file: 'lib/widget.js', prompt: BRIEF };
+  const dir = evalsDir({ V: [x01] });
+  writeTree(dir, x01.tree, { 'lib/widget.js': 'export const items = [];\n' });
+  const fresh = tmp('omelette-evals-hand-tmpdir-');
+  const copy = join(fresh, 'omelette-evals', 'snapshots', 'X01');
+  const file = (extra) => hand(['file', '--suite', 'V', '--arm', ARM, '--task', 'X01', '--model', 'm', '--wall-ms', '1', '--date', '2026-11-20', '--dir', dir, ...extra], { TMPDIR: fresh });
+  assert.equal(hand(['brief', '--suite', 'V', '--task', 'X01', '--dir', dir], { TMPDIR: fresh }).status, 0);
+  assert.equal(existsSync(join(copy, 'lib', 'widget.js')), true);
+  const filed = file(['--answer', answerFile(dir, 'a.md', 'An invented review.')]);
+  assert.equal(filed.status, 0, filed.stderr);
+  assert.equal(existsSync(copy), false, 'gone once the answer is filed');
+  assert.equal(hand(['brief', '--suite', 'V', '--task', 'X01', '--dir', dir], { TMPDIR: fresh }).status, 0);
+  assert.equal(file(['--failed', 'invented failure']).status, 0);
+  assert.equal(existsSync(copy), false, 'gone once the failure is filed');
+  // P: the same, for the tree its brief copied.
+  const p = pDir({ proven: true });
+  assert.equal(hand(['brief', '--suite', 'P', '--task', 'P01', '--dir', p], { TMPDIR: fresh }).status, 0);
+  assert.equal(existsSync(join(fresh, 'omelette-evals', 'snapshots', 'P01')), true);
+  const pFiled = hand(['file', '--suite', 'P', '--arm', 'native:session', '--task', 'P01', '--failed', 'invented', '--model', 'm', '--wall-ms', '1', '--date', '2026-11-20', '--dir', p], { TMPDIR: fresh });
+  assert.equal(pFiled.status, 0, pFiled.stderr);
+  assert.equal(existsSync(join(fresh, 'omelette-evals', 'snapshots', 'P01')), false);
+  // A copy that cannot be removed is said, and the line stays filed.
+  assert.equal(hand(['brief', '--suite', 'V', '--task', 'X01', '--dir', dir], { TMPDIR: fresh }).status, 0);
+  chmodSync(join(fresh, 'omelette-evals', 'snapshots'), 0o500);
+  try {
+    const stuck = file(['--failed', 'invented failure']);
+    assert.equal(stuck.status, 0, stuck.stderr);
+    assert.match(stuck.stdout, /^filed V native:omelette-reviewer X01 run 3 /);
+    assert.match(stuck.stderr, new RegExp(`^eval-hand: the copy ${copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} could not be removed`));
+  } finally { chmodSync(join(fresh, 'omelette-evals', 'snapshots'), 0o700); }
+  assert.equal(readLines(join(dir, 'runs', '2026-11-20', 'V-native-omelette-reviewer.jsonl')).length, 3);
+});
+
+test('an --answer that is no file is named by its flag, never echoed: its value may be the answer\'s text', () => {
+  const dir = evalsDir({ V: [V01] });
+  const r = fileV01(dir, ['--answer', 'An invented review pasted where its path belongs.', '--wall-ms', '1']);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /^eval-hand: --answer is not a file$/m);
+  assert.ok(!r.stderr.includes('An invented review'), r.stderr);
+});
+
+test('file --run N is refused when the arm already filed run N of the task: two lines of one key would make eval-patch check refuse the date', () => {
+  const dir = evalsDir({ V: [V01] });
+  const answer = answerFile(dir, 'a.md', 'An invented review.');
+  assert.equal(fileV01(dir, ['--answer', answer, '--wall-ms', '1']).status, 0);
+  const again = fileV01(dir, ['--answer', answer, '--wall-ms', '1', '--run', '1']);
+  assert.equal(again.status, 1);
+  assert.match(again.stderr, /run 1 of native:omelette-reviewer V01 is filed already/);
+  const file = join(dir, 'runs', '2026-11-20', 'V-native-omelette-reviewer.jsonl');
+  assert.equal(readLines(file).length, 1, 'nothing filed');
+  assert.equal(fileV01(dir, ['--answer', answer, '--wall-ms', '1', '--run', '2']).status, 0);
+  assert.deepEqual(readLines(file).map((l) => l.run), [1, 2]);
 });

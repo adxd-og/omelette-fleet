@@ -490,6 +490,9 @@ test('eval-hand file: a wall time too large to date the call is a usage error, n
   assert.deepEqual(everyFile(dir), before);
 });
 
+/** The paragraph every eval-hand brief opens with, its snapshot named (the whole-branch review's ruling RV4). */
+const opening = (snapshot) => `You are reviewing a snapshot of code. Work only inside the directory ${snapshot}: read no file outside it, do not use the web, do not read git history or any other checkout, and run nothing from the snapshot — no install, no build, no test, no script. Your tool calls are read after the run, and a run that leaves the snapshot is discarded.`;
+
 test('eval-hand brief: a commit task, a tree file task, a tree diff task; a task id that cannot name a file needs --out; the brief file is 0600 whatever was there', () => {
   const fresh = tmp('omelette-evals-tf-handtmp-');
   const commit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8', timeout: 5000 }).stdout.trim();
@@ -507,11 +510,11 @@ test('eval-hand brief: a commit task, a tree file task, a tree diff task; a task
   assert.equal(c.status, 0, c.stderr);
   const snap = join(fresh, 'omelette-evals', 'snapshots', commit);
   assert.equal(c.stdout, `snapshot ${snap}\nbrief ${join(dir, 'hand', 'V-V01.brief.md')}\n`);
-  assert.equal(readFileSync(join(dir, 'hand', 'V-V01.brief.md'), 'utf8'), BRIEF, 'a file task\'s brief is its prompt: the file is read from the snapshot');
+  assert.equal(readFileSync(join(dir, 'hand', 'V-V01.brief.md'), 'utf8'), `${opening(snap)}\n\n${BRIEF}`, 'a file task\'s brief is its prompt: the file is read from the snapshot');
   assert.ok(existsSync(join(snap, 'package.json')) && !existsSync(join(snap, '.git')));
   const t = brief('X01');
   assert.equal(t.status, 0, t.stderr);
-  assert.equal(readFileSync(join(dir, 'hand', 'V-X01.brief.md'), 'utf8'), 'Invented tree brief.');
+  assert.equal(readFileSync(join(dir, 'hand', 'V-X01.brief.md'), 'utf8'), `${opening(join(fresh, 'omelette-evals', 'snapshots', 'X01'))}\n\nInvented tree brief.`);
   assert.equal(readFileSync(join(fresh, 'omelette-evals', 'snapshots', 'X01', 'lib', 'widget.js'), 'utf8'), 'export const items = [];\n');
   const d = brief('X02');
   assert.equal(d.status, 0, d.stderr);
@@ -528,7 +531,7 @@ test('eval-hand brief: a commit task, a tree file task, a tree diff task; a task
   chmodSync(out, 0o644);
   const named = brief('V/odd', ['--out', out]);
   assert.equal(named.status, 0, named.stderr);
-  assert.equal(readFileSync(out, 'utf8'), 'Invented odd brief.');
+  assert.equal(readFileSync(out, 'utf8'), `${opening(snap)}\n\nInvented odd brief.`);
   assert.equal(statSync(out).mode & 0o777, 0o600);
   assert.equal(brief('V09').status, 1);
 });

@@ -13,9 +13,11 @@
  * BRIEF makes the task's snapshot as eval-run makes a cwd arm's — a fresh copy
  * of a tree, `git archive` of a commit, both outside every work tree — and
  * writes the brief a cwd arm is sent to `--out` or `<D>/hand/<suite>-<id>.brief.md`,
- * the operator's alone. A P task without a fresh gold proof is refused, as
- * eval-run refuses it. It prints the snapshot's path and the brief's: never the
- * brief's text.
+ * the operator's alone, opened by one paragraph that confines the sub-agent to
+ * the snapshot (it runs in the session's own directory, and nothing but its
+ * brief confines it).
+ * A P task without a fresh gold proof is refused, as eval-run refuses it. It
+ * prints the snapshot's path and the brief's: never the brief's text.
  *
  * FILE appends one run line, marked `hand: true`, to
  * `<D>/runs/<date>/<suite>-<arm>.jsonl` (`<date>` defaulting to today, local):
@@ -23,7 +25,10 @@
  * the failure. `usage` is `{total}`, the harness's sub-agent token total — not
  * input plus output, which the harness does not report apart. A P task
  * without a fresh gold proof is refused, as BRIEF refuses it, and nothing is
- * filed. It prints the suite, arm, task, run and file: never the answer.
+ * filed; so is a `--run` the arm already filed for the task. Once the line is
+ * filed, the copy BRIEF made of the task's tree is removed (a commit's
+ * snapshot may stay). It prints the suite, arm, task, run and file: never the
+ * answer.
  *
  * PRIVATE IN, PRIVATE OUT: D defaults to `<repo>/.omelette/evals` (ignored by
  * git). This file holds no task text, no key and no answer.
@@ -32,8 +37,10 @@ import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { removeStage } from './eval-patch.mjs';
 import {
-  appendRunLine, armSlug, assertProven, briefFor, DEFAULT_DIR, isEmptyCall, localDate, nextRunFor, prepareTasks, readTasks, selectTasks, writePrivate,
+  appendRunLine, armSlug, assertProven, briefFor, DEFAULT_DIR, isEmptyCall, localDate, nextRunFor, prepareTasks, readTasks, runsFor, selectTasks,
+  treeCopyPath, writePrivate,
 } from './eval-run.mjs';
 
 const USAGE = [
@@ -52,6 +59,18 @@ const MAX_WALL_MS = 7 * 24 * 60 * 60 * 1000;
 const FILE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** A native arm reads its task's code as its cwd, as every arm but Gemini's does. */
 const CWD_ARM = { unit: 'native' };
+
+/**
+ * What every brief opens with: a sub-agent runs in the session's own
+ * directory, and nothing but its brief confines it to the snapshot.
+ */
+const confineTo = (snapshot) => `You are reviewing a snapshot of code. Work only inside the directory ${snapshot}: read no file outside it, do not use the web, do not read git history or any other checkout, and run nothing from the snapshot — no install, no build, no test, no script. Your tool calls are read after the run, and a run that leaves the snapshot is discarded.`;
+
+/** The copy `brief` made of a task's tree under the OS temp dir, or null: a commit's snapshot may stay, and an id that names no copy had none. */
+function treeCopyOf(suite, task) {
+  if (suite !== 'P' && task.tree === undefined) return null;
+  try { return treeCopyPath(task.id); } catch { return null; }
+}
 
 const OPTIONS = {
   brief: { suite: { type: 'string' }, task: { type: 'string' }, dir: { type: 'string' }, out: { type: 'string' } },
@@ -81,7 +100,8 @@ function fileProblems(v) {
   if (v.answer !== undefined) {
     let st = null;
     try { st = statSync(v.answer); } catch { /* reported below */ }
-    if (!st || !st.isFile()) p.push(`--answer ${v.answer} is not a file`);
+    // The flag, never its value: an operator who pasted the answer's text here would see it echoed.
+    if (!st || !st.isFile()) p.push('--answer is not a file');
     else if (st.size > MAX_ANSWER_BYTES) p.push('--answer: the file is over 1 MiB');
   }
   return p;
@@ -100,12 +120,12 @@ function cmdBrief({ dir, suite, id, out }) {
   if (suite === 'P') assertProven({ dir, tasks: [task] });
   const [ready] = prepareTasks(suite, [task], { arm: CWD_ARM, dir });
   const path = out ? resolve(out) : join(dir, 'hand', `${suite}-${task.id}.brief.md`);
-  writePrivate(path, briefFor(suite, ready, { inline: false }));
+  writePrivate(path, `${confineTo(ready.snapshot)}\n\n${briefFor(suite, ready, { inline: false })}`);
   return [`snapshot ${ready.snapshot}`, `brief ${path}`];
 }
 
-/** `file`: one hand-filed run line appended; returns the line to print. */
-function cmdFile({ dir, suite, v, now }) {
+/** `file`: one hand-filed run line appended, then the task's tree copy removed; returns the line to print. */
+function cmdFile({ dir, suite, v, now, err }) {
   const task = taskOf(dir, suite, v.task);
   // Brief's gate: a diff filed before its task is proven would make `prove` refuse the task for ever.
   if (suite === 'P') assertProven({ dir, tasks: [task] });
@@ -117,6 +137,8 @@ function cmdFile({ dir, suite, v, now }) {
   const file = join(dir, 'runs', date, `${suite}-${armSlug(v.arm)}.jsonl`);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const run = v.run === undefined ? nextRunFor(file, [task.id]) : wholeFrom(v.run, 1);
+  // Two lines of one (arm, run, task) make eval-patch check refuse the whole date.
+  if (v.run !== undefined && runsFor(file, [task.id]).includes(run)) throw new Error(`run ${run} of ${v.arm} ${task.id} is filed already in ${file}`);
   const line = {
     suite,
     taskIds: [task.id],
@@ -138,6 +160,10 @@ function cmdFile({ dir, suite, v, now }) {
     hand: true,
   };
   appendRunLine(file, line);
+  // The run is over: its copy goes, as the runner's does when a call ends. The line stays filed whatever the removal does.
+  const copy = treeCopyOf(suite, task);
+  const left = copy ? removeStage(copy) : null;
+  if (left) err(`eval-hand: the copy ${copy} could not be removed — remove it by hand (${left})`);
   return `filed ${suite} ${v.arm} ${task.id} run ${run} → ${file}`;
 }
 
@@ -157,7 +183,7 @@ export function main(argv = process.argv.slice(2), { out = (l) => console.log(l)
   const dir = resolve(v.dir || DEFAULT_DIR);
   try {
     if (command === 'brief') for (const l of cmdBrief({ dir, suite: v.suite, id: v.task, out: v.out })) out(l);
-    else out(cmdFile({ dir, suite: v.suite, v, now }));
+    else out(cmdFile({ dir, suite: v.suite, v, now, err }));
   } catch (e) { err(`eval-hand: ${(e && e.message) || e}`); return 1; }
   return 0;
 }

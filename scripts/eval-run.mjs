@@ -328,7 +328,7 @@ const SNAPSHOT_IS_FOR_COMMITS = '--snapshot is for tasks at a commit of this rep
  * tree, named by the task id — never an id that reads as a commit id, since a
  * commit's snapshot sits in the same directory, named by its commit.
  */
-function treeCopyPath(id) {
+export function treeCopyPath(id) {
   if (!TREE_ID.test(String(id ?? ''))) throw new Error(`task id ${JSON.stringify(id)} cannot name a snapshot directory`);
   if (COMMIT_RE.test(id)) throw new Error(`task id ${JSON.stringify(id)} cannot name a snapshot directory: it reads as a commit id, and the commits' snapshots share that directory`);
   return join(tmpdir(), 'omelette-evals', 'snapshots', id);
@@ -656,13 +656,18 @@ export function orderTasks(tasks) {
   return [...tasks.filter((t) => !control(t)), ...tasks.filter(control)];
 }
 
-/** The first run number this task (or batch of tasks) has not used yet in the arm's file. */
-export function nextRunFor(file, taskIds) {
-  if (!existsSync(file)) return 1;
+/** The run numbers this task (or batch of tasks) already has in the arm's file. */
+export function runsFor(file, taskIds) {
+  if (!existsSync(file)) return [];
   const key = taskIds.join(',');
-  const runs = readJsonl(file)
+  return readJsonl(file)
     .filter((l) => Array.isArray(l.taskIds) && l.taskIds.join(',') === key)
     .map((l) => Number(l.run)).filter(Number.isInteger);
+}
+
+/** The first run number this task (or batch of tasks) has not used yet in the arm's file. */
+export function nextRunFor(file, taskIds) {
+  const runs = runsFor(file, taskIds);
   return runs.length ? Math.max(...runs) + 1 : 1;
 }
 
