@@ -49,7 +49,7 @@
  * fail-to-pass test fails (the test, not the harness) and the pass-to-pass
  * tests pass; with the gold patch both pass. One miss fails the proof and the
  * task is dropped. The proof names its inputs by a hash, so an edited task
- * line, gold, tests diff or build directory makes it stale.
+ * line, gold, tests diff, build directory or tree makes it stale.
  *
  * NOTHING OUTLIVES ITS BOUND. A step is killed at its task's `timeoutS`, every
  * other docker call at `CALL_BOUNDS_S`; the container of a killed step is
@@ -149,6 +149,8 @@ const LIVE_STAGES = new Set();
 const LIVE_CONTAINERS = new Map();
 
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
+/** Text this script did not write, fit for a terminal: without its control characters (C0, DEL, C1). */
+const plain = (text) => String(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
 
 const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').filter((l) => l.trim()).map((l, i) => {
   try { return JSON.parse(l); } catch (e) { throw new Error(`${path}:${i + 1}: not JSON (${e.message})`); }
@@ -235,16 +237,21 @@ export function pTaskProblems(task, { dir } = {}) {
   return problems;
 }
 
-/** Suite P's tasks, every line checked as written and against the private dir (see pTaskProblems); ids are unique. */
-export function readPTasks(dir) {
+/**
+ * Suite P's tasks, ids unique. Every line is checked as written; against the
+ * private dir (see pTaskProblems) every line too, or, with `only`, the tasks
+ * of those ids alone: a reserve task whose tree is not fetched yet must not
+ * stop the proof of another.
+ */
+export function readPTasks(dir, { only } = {}) {
   const path = join(dir, 'suites', 'P', 'tasks.jsonl');
   if (!existsSync(path)) throw new Error(`no suite at ${path}`);
   const tasks = readJsonl(path);
   if (!tasks.length) throw new Error(`${path} holds no task`);
   const seen = new Set();
   tasks.forEach((t, i) => {
-    const problems = pTaskProblems(t, { dir });
     const id = t && typeof t.id === 'string' && t.id ? t.id : `#${i + 1}`;
+    const problems = pTaskProblems(t, only === undefined || only.includes(id) ? { dir } : {});
     if (seen.has(id)) problems.push('a second task with this id: ids are unique per suite');
     if (problems.length) throw new Error(`${path}: task ${id}: ${problems.join('; ')}`);
     seen.add(id);
@@ -376,14 +383,14 @@ function refuseUnsafeChange(change) {
   }
 }
 
-/** Every file under a build directory as [relative path, sha256], sorted; a link by the text it holds, never followed. */
-function buildFiles(root) {
+/** Every file under a directory as [relative path, sha256 of its bytes], sorted; a link by the text it holds, never followed. */
+function hashedFiles(root) {
   const found = [];
   const walk = (d) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       const path = join(d, e.name);
       if (e.isDirectory()) walk(path);
-      else found.push([relative(root, path), sha256(e.isSymbolicLink() ? `link:${readlinkSync(path)}` : readFileSync(path))]);
+      else found.push([relative(root, path), sha256(e.isSymbolicLink() ? `link:${readlinkSync(path)}` : e.isFile() ? readFileSync(path) : 'neither a file nor a link')]);
     }
   };
   walk(root);
@@ -392,8 +399,8 @@ function buildFiles(root) {
 
 /**
  * What a proof was made of, as 16 hex: the task line's fields that decide a
- * step, the gold diff, the tests diff and the build directory. Not the tree's
- * content: an edited tree under the same path keeps its proof.
+ * step, the gold diff, the tests diff, the build directory and the tree, file
+ * by file: an edited tree under the same path is another task.
  */
 export function proofInputs({ dir, task }) {
   const paths = taskPaths({ dir, task });
@@ -402,20 +409,26 @@ export function proofInputs({ dir, task }) {
     task: { image, build, tree, gold, tests, failToPass, passToPass, timeoutS },
     gold: readFileSync(paths.gold, 'utf8'),
     tests: readFileSync(paths.tests, 'utf8'),
-    build: paths.build ? buildFiles(paths.build) : null,
+    build: paths.build ? hashedFiles(paths.build) : null,
+    tree: hashedFiles(paths.tree),
   })).slice(0, 16);
 }
 
 const proofPath = (dir, id) => join(dir, 'checks', 'proofs', `${id}.json`);
 
-/** `missing` (no proof file), `stale` (made of other inputs, or unreadable), `failed` (the proof did not hold) or `ok`. */
+/**
+ * `missing` (no proof file), `stale` (not this task's proof: another id,
+ * other inputs, no repetition, or unreadable), `failed` (it did not hold) or
+ * `ok` — `ok: true` and every repetition `ok`.
+ */
 export function proofStatus({ dir, task }) {
   const file = proofPath(dir, task.id);
   if (!existsSync(file)) return 'missing';
   let proof = null;
   try { proof = JSON.parse(readFileSync(file, 'utf8')); } catch { /* not a proof of anything: stale */ }
-  if (!proof || proof.inputs !== proofInputs({ dir, task })) return 'stale';
-  return proof.ok === true ? 'ok' : 'failed';
+  if (!proof || proof.task !== task.id || proof.inputs !== proofInputs({ dir, task })) return 'stale';
+  if (!Array.isArray(proof.reps) || !proof.reps.length) return 'stale';
+  return proof.ok === true && proof.reps.every((rep) => !!rep && rep.ok === true) ? 'ok' : 'failed';
 }
 
 /** One container step's argv: the whole profile. `--memory-swap` equal to `--memory`: alone, `--memory` allows as much swap again. */
@@ -634,8 +647,6 @@ function dockerfileProblem(text, image) {
   return null;
 }
 
-/** Text this script did not write, fit for a terminal: without its control characters (C0, DEL, C1). */
-const plain = (text) => String(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
 const lastLine = (text) => plain(String(text || '').trim().split('\n').pop());
 
 /**
@@ -670,15 +681,15 @@ export async function prepareImage({ dir, task, docker, env, out = () => {} }) {
   return { imageId: builtId, built: true };
 }
 
-/** True when a run line for the task is filed: an arm's answer, or one filed by hand, in any `runs/<date>/P-*.jsonl`. */
+/** True when a P run line for the task is filed — an arm's answer, or one filed by hand — in any `runs/<date>/*.jsonl`, whatever the file is called. */
 function hasRunLine(dir, id) {
   const runs = join(dir, 'runs');
   if (!existsSync(runs)) return false;
   for (const day of readdirSync(runs, { withFileTypes: true })) {
     if (!day.isDirectory()) continue;
     for (const file of readdirSync(join(runs, day.name))) {
-      if (!/^P-.*\.jsonl$/.test(file)) continue;
-      if (readJsonl(join(runs, day.name, file)).some((l) => l && Array.isArray(l.taskIds) && l.taskIds.includes(id))) return true;
+      if (!file.endsWith('.jsonl')) continue;
+      if (readJsonl(join(runs, day.name, file)).some((l) => l && l.suite === 'P' && Array.isArray(l.taskIds) && l.taskIds.includes(id))) return true;
     }
   }
   return false;
@@ -727,16 +738,21 @@ const exitWord = (step) => (!step ? '-' : step.timedOut ? 'timeout' : String(ste
 
 /**
  * Prove a task's gold patch `reps` times over and write the proof to
- * `<dir>/checks/proofs/<id>.json`; returns it (`ok` says whether it held).
- * Throws, before docker is called, for a task that is not sound or that
- * already has a model's run line.
+ * `<dir>/checks/proofs/<id>.json`, the operator's alone; returns it (`ok`
+ * says whether it held). Throws, before docker is called, for `reps` that is
+ * not a whole number of at least 1, and for a task that is not sound or that
+ * already has a model's run line. Says which daemon docker is pointed at when
+ * the environment points it at one.
  */
 export async function prove({ dir, task, docker, env, reps = 3, out = () => {} }) {
+  if (!Number.isInteger(reps) || reps < 1) throw new TypeError(`prove needs reps, a whole number of at least 1 (got ${JSON.stringify(reps)})`);
   const paths = taskPaths({ dir, task });
   if (hasRunLine(dir, task.id)) throw new Error(`${task.id}: a model's diff already exists — a build now would use the network after it`);
   const gold = readFileSync(paths.gold, 'utf8');
   stageTexts({ dir, task, change: gold }); // what its stages would be refused for, before docker is called
   const inputs = proofInputs({ dir, task });
+  const pointed = ['DOCKER_HOST', 'DOCKER_CONTEXT'].filter((name) => (env ?? process.env)[name]).map((name) => `${name}=${plain((env ?? process.env)[name])}`);
+  if (pointed.length) out(`${task.id}: docker is pointed at a daemon by ${pointed.join(', ')}`);
   const { imageId, built } = await prepareImage({ dir, task, docker, env, out });
   const results = [];
   for (let rep = 1; rep <= reps; rep++) {
@@ -756,6 +772,9 @@ export async function prove({ dir, task, docker, env, reps = 3, out = () => {} }
   const file = proofPath(dir, task.id);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   writeFileSync(file, `${JSON.stringify(proof, null, 2)}\n`, { mode: 0o600 });
+  // `mode` counts for what a call creates: a file or a directory that was there keeps its own.
+  chmodSync(file, 0o600);
+  for (const made of [dirname(file), dirname(dirname(file))]) chmodSync(made, 0o700);
   return proof;
 }
 
@@ -775,7 +794,7 @@ export async function main(argv = process.argv.slice(2), { out = (l) => console.
   const dir = resolve(values.dir || DEFAULT_DIR);
   const docker = env.OMELETTE_EVALS_DOCKER || 'docker';
   let tasks;
-  try { tasks = readPTasks(dir); } catch (e) { err(`eval-patch: ${(e && e.message) || e}`); return 1; }
+  try { tasks = readPTasks(dir, { only: values.task }); } catch (e) { err(`eval-patch: ${(e && e.message) || e}`); return 1; }
   let allOk = true;
   for (const id of new Set(values.task)) {
     try {

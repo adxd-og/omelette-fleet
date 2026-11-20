@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -310,6 +310,134 @@ test('a proof goes stale when its task changes', async () => {
   assert.equal(proofStatus({ dir, task }), 'failed');
   writeFileSync(join(dir, P01.gold), GOLD.replace('FAKE: fixes', 'FAKE: fixes, reworded'));
   assert.equal(proofStatus({ dir, task }), 'stale');
+});
+
+test('a proof is of its tree too: a file edited, added or renamed, or a link retargeted, makes it stale — and no link is followed', async () => {
+  const { dir, task, fake, env } = setup();
+  fake.addImage(IMAGE);
+  const tree = join(dir, P01.tree);
+  symlinkSync('widget.go', join(tree, 'widget', 'alias'));
+  await prove({ dir, task, docker: fake.bin, env, reps: 1, out: quiet });
+  const base = proofInputs({ dir, task });
+  assert.equal(proofStatus({ dir, task }), 'ok');
+  const edits = {
+    'a file\'s bytes': [() => writeFileSync(join(tree, 'widget', 'widget.go'), `${WIDGET}// edited\n`), () => writeFileSync(join(tree, 'widget', 'widget.go'), WIDGET)],
+    'a new file': [() => put(tree, 'widget/extra.go', WIDGET), () => rmSync(join(tree, 'widget', 'extra.go'))],
+    'a renamed file': [() => renameSync(join(tree, 'widget', 'widget_test.go'), join(tree, 'widget', 'moved_test.go')), () => renameSync(join(tree, 'widget', 'moved_test.go'), join(tree, 'widget', 'widget_test.go'))],
+    'a link\'s text': [
+      () => { rmSync(join(tree, 'widget', 'alias')); symlinkSync('widget_test.go', join(tree, 'widget', 'alias')); },
+      () => { rmSync(join(tree, 'widget', 'alias')); symlinkSync('widget.go', join(tree, 'widget', 'alias')); },
+    ],
+  };
+  for (const [name, [edit, undo]] of Object.entries(edits)) {
+    edit();
+    assert.notEqual(proofInputs({ dir, task }), base, name);
+    assert.equal(proofStatus({ dir, task }), 'stale', name);
+    undo();
+    assert.equal(proofInputs({ dir, task }), base, `${name}, undone`);
+  }
+  assert.equal(proofStatus({ dir, task }), 'ok');
+  // What a link reaches is not the tree — a container sees the link's text, never the file — and a link back into the tree is not walked.
+  put(dir, 'elsewhere/kept.txt', 'An invented line.\n');
+  symlinkSync(join(dir, 'elsewhere'), join(tree, 'out'));
+  symlinkSync('.', join(tree, 'widget', 'round'));
+  const linked = proofInputs({ dir, task });
+  assert.notEqual(linked, base, 'a new link is a new entry');
+  writeFileSync(join(dir, 'elsewhere', 'kept.txt'), 'Another invented line.\n');
+  assert.equal(proofInputs({ dir, task }), linked);
+});
+
+test('a proof is ok only as this task\'s own, with repetitions that each held', async () => {
+  const { dir, task, fake, env } = setup();
+  fake.addImage(IMAGE);
+  const proof = await prove({ dir, task, docker: fake.bin, env, reps: 2, out: quiet });
+  const file = join(dir, 'checks', 'proofs', 'P01.json');
+  assert.equal(proofStatus({ dir, task }), 'ok');
+  // The same inputs under another id: P01's proof file, copied, proves nothing of P02.
+  const p02 = { ...task, id: 'P02' };
+  assert.equal(proofInputs({ dir, task: p02 }), proof.inputs);
+  writeFileSync(join(dir, 'checks', 'proofs', 'P02.json'), JSON.stringify(proof));
+  assert.equal(proofStatus({ dir, task: p02 }), 'stale');
+  for (const [name, edited, status] of [
+    ['no repetition', { ...proof, reps: [] }, 'stale'],
+    ['repetitions that are no list', { ...proof, reps: { 0: { ok: true }, length: 1 } }, 'stale'],
+    ['no repetitions at all', { ...proof, reps: undefined }, 'stale'],
+    ['a repetition that did not hold under ok: true', { ...proof, reps: [proof.reps[0], { ...proof.reps[1], ok: false }] }, 'failed'],
+    ['a repetition that is nothing', { ...proof, reps: [proof.reps[0], null] }, 'failed'],
+    ['ok that is not true', { ...proof, ok: 'true' }, 'failed'],
+  ]) {
+    writeFileSync(file, JSON.stringify(edited));
+    assert.equal(proofStatus({ dir, task }), status, name);
+  }
+});
+
+test('prove: reps is a whole number of at least one, the proof is the operator\'s alone after every write, and the daemon is named when the environment picks it', async () => {
+  for (const reps of [0, -1, 1.5, '3', null, NaN]) {
+    const { dir, task, fake, env } = setup();
+    await assert.rejects(prove({ dir, task, docker: fake.bin, env, reps, out: quiet }), /^TypeError: prove needs reps, a whole number of at least 1/, String(reps));
+    assert.deepEqual(fake.log(), [], String(reps));
+    assert.equal(existsSync(join(dir, 'checks')), false);
+  }
+
+  // A proof written over one that anyone could read, in directories anyone could list.
+  const { dir, task, fake, env } = setup();
+  fake.addImage(IMAGE);
+  const file = join(dir, 'checks', 'proofs', 'P01.json');
+  put(dir, 'checks/proofs/P01.json', '{}');
+  for (const [path, mode] of [[file, 0o644], [dirname(file), 0o755], [join(dir, 'checks'), 0o755]]) chmodSync(path, mode);
+  const printed = [];
+  await prove({ dir, task, docker: fake.bin, env: { ...env, DOCKER_HOST: '' }, reps: 1, out: (l) => printed.push(l) });
+  assert.deepEqual([file, dirname(file), join(dir, 'checks')].map((path) => statSync(path).mode & 0o777), [0o600, 0o700, 0o700]);
+  assert.equal(proofAt(dir).ok, true);
+  assert.deepEqual(printed.filter((l) => /DOCKER_/.test(l)), [], 'no daemon is named when the environment names none: an empty value is none');
+
+  const elsewhere = setup();
+  elsewhere.fake.addImage(IMAGE);
+  const said = [];
+  await prove({
+    dir: elsewhere.dir, task: elsewhere.task, docker: elsewhere.fake.bin, reps: 1, out: (l) => said.push(l),
+    env: { ...elsewhere.env, DOCKER_HOST: 'tcp://invented.invalid:1\u001b[2J', DOCKER_CONTEXT: 'invented\n-context' },
+  });
+  assert.equal(said[0], 'P01: docker is pointed at a daemon by DOCKER_HOST=tcp://invented.invalid:1[2J, DOCKER_CONTEXT=invented-context');
+  assert.equal(said.filter((l) => /DOCKER_/.test(l)).length, 1);
+});
+
+test('a P run line stops the proof under any file name, and only a P line does', async () => {
+  const line = (suite, taskIds) => `${JSON.stringify({ suite, taskIds, arm: 'native:invented', run: 1, ok: true, answer: 'An invented answer.' })}\n`;
+  for (const name of ['hand-filed.jsonl', 'V-x.jsonl', '.jsonl']) {
+    const { dir, task, fake, env } = setup();
+    put(dir, `runs/2026-11-20/${name}`, `${line('V', ['V01'])}${line('P', ['P02', 'P01'])}`);
+    await assert.rejects(prove({ dir, task, docker: fake.bin, env, reps: 1, out: quiet }), /P01: a model's diff already exists/, name);
+    assert.deepEqual(fake.log(), [], name);
+  }
+  // Another suite's line that names the id, in a file named like a P one; and a file that is no .jsonl.
+  const free = setup();
+  free.fake.addImage(IMAGE);
+  put(free.dir, 'runs/2026-11-20/P-x.jsonl', `${line('V', ['P01'])}${line(undefined, ['P01'])}${line('P', ['P02'])}`);
+  put(free.dir, 'runs/2026-11-20/notes.txt', line('P', ['P01']));
+  assert.equal((await prove({ dir: free.dir, task: free.task, docker: free.fake.bin, env: free.env, reps: 1, out: quiet })).ok, true);
+});
+
+test('readPTasks checks every line\'s shape and, on disk, only the tasks asked for: a reserve task not fetched yet blocks no other', async () => {
+  const { dir, task, fake, env } = setup();
+  fake.addImage(IMAGE);
+  const reserve = { ...P01, id: 'P02', tree: 'third-party/p02/before-fix', gold: 'suites/P/P02/gold.diff', tests: 'suites/P/P02/tests.diff' };
+  const write = (...lines) => put(dir, 'suites/P/tasks.jsonl', lines.map((l) => `${JSON.stringify(l)}\n`).join(''));
+  write(task, reserve);
+  assert.throws(() => readPTasks(dir), /task P02: tree third-party\/p02\/before-fix is not a directory/);
+  assert.deepEqual(readPTasks(dir, { only: ['P01'] }), [task, reserve]);
+  assert.throws(() => readPTasks(dir, { only: ['P01', 'P02'] }), /task P02: tree .* is not a directory/);
+  assert.deepEqual(readPTasks(dir, { only: [] }), [task, reserve], 'none asked for, none checked on disk');
+  const printed = [];
+  assert.equal(await main(['prove', '--task', 'P01', '--dir', dir], { out: (l) => printed.push(l), err: (l) => printed.push(l), env }), 0, printed.join('\n'));
+  assert.equal(await main(['prove', '--task', 'P02', '--dir', dir], { out: quiet, err: (l) => printed.push(l), env }), 1);
+  assert.match(printed.join('\n'), /task P02: tree .* is not a directory/);
+
+  // A line that is not sound as written is refused whoever was asked for; so is a second line with an id.
+  write(task, { ...reserve, image: 'python:3.13' });
+  assert.throws(() => readPTasks(dir, { only: ['P01'] }), /task P02: image .* is not an official image pinned by digest/);
+  write(task, reserve, reserve);
+  assert.throws(() => readPTasks(dir, { only: ['P01'] }), /task P02: a second task with this id/);
 });
 
 test('testFiles and linesChanged read headers, not removed lines that look like them', () => {
