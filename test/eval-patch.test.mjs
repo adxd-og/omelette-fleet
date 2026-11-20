@@ -12,8 +12,9 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { main as handMain } from '../scripts/eval-hand.mjs';
 import {
-  CALL_BOUNDS_S, dockerRunArgs, linesChanged, main, makeStage, prepareImage, proofInputs, proofStatus, prove, pTaskProblems, readPTasks, RUN_SH, runStep, testFiles,
+  CALL_BOUNDS_S, check, dockerRunArgs, extractDiff, linesChanged, main, makeStage, prepareImage, proofInputs, proofStatus, prove, pTaskProblems, readPTasks, RUN_SH, runStep, testFiles,
 } from '../scripts/eval-patch.mjs';
 import { fakeDocker } from './fixtures/fake-docker.mjs';
 
@@ -955,6 +956,386 @@ test('a stage path a --mount would misread is refused', () => {
     rmSync(makeStage({ dir, task, change: null }), { recursive: true, force: true });
   } finally {
     if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was;
+  }
+});
+
+// —— T19: `extractDiff` and `check`. Every answer, diff and run line below is invented. ——
+
+const FILE_A = ['diff --git a/widget/widget.go b/widget/widget.go', '--- a/widget/widget.go', '+++ b/widget/widget.go', '@@ -1 +1 @@', '-old', '+new', ''].join('\n');
+const FILE_B = ['--- a/widget/other.go', '+++ b/widget/other.go', '@@ -3 +3 @@', '-before', '+after', ''].join('\n');
+const indented = (text, by) => text.split('\n').map((l) => (l ? `${' '.repeat(by)}${l}` : l)).join('\n');
+
+test('extractDiff takes every fenced diff, in order, and nothing else', () => {
+  const answer = [
+    'Invented prose about the fix.', '', '```python', '+++ a banner, and no hunk', 'print("invented")', '```', '',
+    '```diff', FILE_A.trimEnd(), '```', '', 'More invented prose.', '', '~~~', FILE_B.trimEnd(), '~~~', 'A last invented word.', '',
+  ].join('\n');
+  assert.equal(extractDiff(answer), `${FILE_A}${FILE_B}`);
+  assert.equal(extractDiff(answer.replaceAll('\n', '\r\n')), `${FILE_A}${FILE_B}`, 'CRLF in, LF out');
+  assert.equal(extractDiff(`Invented prose.\n${FILE_A}`), FILE_A, 'unfenced: from the diff --git line on');
+  assert.equal(extractDiff('Invented prose.\n--- a/x.go\n+++ b/x.go\nno hunk follows\n'), null, 'a +++ line and no hunk header');
+  assert.equal(extractDiff(`\`\`\`diff\n${FILE_A}\`\`\`\`\`\nInvented prose, with\n+++ nothing of a diff\n`), FILE_A, 'a longer fence closes');
+});
+
+test('extractDiff on the shapes an answer takes: what the rule gives for each', () => {
+  const diffOfDiff = [
+    '--- a/fixes/one.diff', '+++ b/fixes/one.diff', '@@ -1,3 +1,3 @@', ' --- a/x.go', '---- a/y.go', '-+++ b/y.go', '+--- a/z.go', '++++ b/z.go', ' @@ -1 +1 @@', '',
+  ].join('\n');
+  const overMarkdown = ['--- a/docs/notes.md', '+++ b/docs/notes.md', '@@ -1,3 +1,3 @@', ' ```', '-old', '+new', ' ```', ''].join('\n');
+  const withProse = `${FILE_A}\nThat is the whole invented fix:\n- it renames nothing\n`;
+  const cases = {
+    'a plain fence': [`\`\`\`\n${FILE_A}\`\`\`\n`, FILE_A],
+    'an info string with attributes': [`\`\`\`diff title="fix.patch" {1,3}\n${FILE_A}\`\`\`\n`, FILE_A],
+    'a tilde fence, longer, with an info string': [`~~~~diff\n${FILE_A}~~~~\n`, FILE_A],
+    'a closing fence with spaces after it': [`\`\`\`diff\n${FILE_A}\`\`\`  \nInvented prose.\n`, FILE_A],
+    'a shorter fence closes nothing': [`\`\`\`\`diff\n${FILE_A}\`\`\`\n\`\`\`\`\n`, `${FILE_A}\`\`\`\n`],
+    'a fence of the other character closes nothing': [`\`\`\`diff\n${FILE_A}~~~\n\`\`\`\n`, `${FILE_A}~~~\n`],
+    'an opening indented by up to three spaces': [`  \`\`\`diff\n${FILE_A}\`\`\`\n`, FILE_A],
+    'a fence never closed: the answer ends': [`Invented prose.\n\`\`\`diff\n${FILE_A}`, FILE_A],
+    'one fence, two files': [`\`\`\`diff\n${FILE_A}${FILE_B}\`\`\`\n`, `${FILE_A}${FILE_B}`],
+    'a diff of a diff, whole': [`\`\`\`diff\n${diffOfDiff}\`\`\`\n`, diffOfDiff],
+    'a diff over Markdown: a fence behind a context line\'s blank closes nothing': [`\`\`\`diff\n${overMarkdown}\`\`\`\n`, overMarkdown],
+    'a block that is no diff, then an unfenced diff': [`Run this:\n\`\`\`sh\ngit apply fix.diff\n\`\`\`\n${FILE_A}`, FILE_A],
+    'unfenced, a --- and +++ pair with no diff --git line': [`Invented prose.\n${FILE_B}`, FILE_B],
+    'a hunk header and no +++ line': ['```diff\n--- a/x.go\n@@ -1 +1 @@\n-a\n+b\n```\n', null],
+    'prose that only mentions a header': ['The bug is in --- a/x.go, see below.\n--- a/x.go is the old side,\nand @@ -1 +1 @@ would be its hunk.\n', null],
+    'no text at all': [null, null],
+    // The rule's answer where a reader would want another (the coder's report lists these as open questions):
+    'unfenced with prose after it: the prose is in the diff': [`Invented prose.\n${withProse}`, withProse],
+    'a fence indented with its body, as in a numbered list': [`1. Apply this:\n\n   \`\`\`diff\n${indented(FILE_A, 3)}   \`\`\`\n\n2. Run the tests.\n`, null],
+    'a fence in a block quote': [`\`\`\`diff\n${FILE_A}\`\`\`\n`.split('\n').map((l) => (l ? `> ${l}` : l)).join('\n'), null],
+    'a fence opened on a list item\'s own line': [`- \`\`\`diff\n${indented(FILE_A, 2)}  \`\`\`\n`, null],
+  };
+  for (const [name, [text, expected]] of Object.entries(cases)) assert.equal(extractDiff(text), expected, name);
+});
+
+test('a model\'s diff is counted leniently, whatever its hunk headers declare; the gold\'s stays strict', () => {
+  const wrongCounts = [
+    '--- a/x.go', '+++ b/x.go', '@@ -1,1 +1,1 @@', ' kept', '+one', '+two', '-three', '@@ -9 +9 @@', '-four', '+five', '+six',
+    '--- a/y.go', '+++ b/y.go', '@@ -1,99 +1,99 @@', '-seven', '',
+  ].join('\n');
+  // Strict: the first hunk is over after ` kept`, the second after `+five`, and the third holds y.go's one line.
+  assert.equal(linesChanged(wrongCounts), 3);
+  assert.equal(linesChanged(wrongCounts, { lenient: false }), 3);
+  assert.equal(linesChanged(wrongCounts, { lenient: true }), 7);
+  // A hunk that declares more than it holds swallows the next file's header when read strictly; leniently a header ends it.
+  const overDeclared = ['--- a/x.go', '+++ b/x.go', '@@ -1,9 +1,9 @@', '-a', '+b', '--- a/y.go', '+++ b/y.go', '@@ -1 +1 @@', '-c', '+d', ''].join('\n');
+  assert.equal(linesChanged(overDeclared), 6);
+  assert.equal(linesChanged(overDeclared, { lenient: true }), 4);
+  // Outside a hunk nothing counts; and prose after an unfenced diff is in its last hunk: a bullet reads as a removed line.
+  assert.equal(linesChanged('- a bullet\n+ another\n', { lenient: true }), 0);
+  assert.equal(linesChanged(`${FILE_A}\nThat is the whole invented fix:\n- it renames nothing\n`, { lenient: true }), 3);
+});
+
+const DATE = '2026-11-20';
+const ARM = 'gemini:Invented Model (High)';
+const GOLD_ONLY = 'INVENTED-GOLD-ONLY';
+/** A model's answer: prose around its diff in a fence. */
+const answerWith = (diff) => `An invented explanation of the fix.\n\n\`\`\`diff\n${diff}\`\`\`\n\nAn invented closing remark.\n`;
+const pRunLine = (over = {}) => ({
+  suite: 'P', taskIds: ['P01'], arm: ARM, unit: 'gemini', model: 'Invented Model (High)', effort: 'high', run: 1, cli: 'agy 0.0.0',
+  startedAt: '2026-11-20T09:00:00.000Z', wallMs: 1000, ok: true, answer: 'An invented answer.', error: null, empty: false,
+  usage: { input: 1, output: 1 }, resultId: null, agyConversations: [], ...over,
+});
+const fileRuns = (dir, lines, name = 'P-gemini-invented-model-high.jsonl') => put(dir, `runs/${DATE}/${name}`, lines.map((l) => `${JSON.stringify(l)}\n`).join(''));
+const checksFile = (dir) => join(dir, 'checks', DATE, 'P.jsonl');
+const checksAt = (dir) => readFileSync(checksFile(dir), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+const checkLineOf = (arm, run, outcome) => `  ${arm}  run ${run}  P01  ${outcome}`;
+
+/**
+ * P01 proven once over — its gold marked GOLD_ONLY, so that it is told from a model's diff — and then the run lines
+ * filed. `run(args)` is `check` through `main`, its printed lines in `printed`; `log0` and `stages0` count what the
+ * proof itself called and staged.
+ */
+async function proven(lines, opts = {}) {
+  const ctx = setup({ gold: goldWith(`FAKE: fixes ${GOLD_ONLY}`), ...opts });
+  ctx.fake.addImage(IMAGE);
+  await prove({ dir: ctx.dir, task: ctx.task, docker: ctx.fake.bin, env: ctx.env, reps: 1, out: quiet });
+  fileRuns(ctx.dir, lines);
+  const printed = [];
+  const run = (args = []) => main(['check', '--date', DATE, '--dir', ctx.dir, ...args], { out: (l) => printed.push(l), err: (l) => printed.push(l), env: ctx.env });
+  return { ...ctx, printed, run, log0: ctx.fake.log().length, stages0: ctx.fake.stages().length };
+}
+
+test('check records one line per run: green, red, does-not-apply, no-diff and a failed call', async () => {
+  const { dir, fake, run, printed, log0 } = await proven([
+    pRunLine({ run: 1, answer: answerWith(goldWith('FAKE: fixes')) }),
+    pRunLine({ run: 2, answer: answerWith(goldWith('an invented comment')) }),
+    pRunLine({ run: 3, answer: answerWith(goldWith('FAKE: does-not-apply')) }),
+    pRunLine({ run: 4, answer: 'Invented prose only: the model wrote no diff.' }),
+    pRunLine({ run: 5, ok: false, answer: null, error: 'An invented failure of the call.', empty: true }),
+  ]);
+  assert.equal(await run(), 0, printed.join('\n'));
+  const lines = checksAt(dir);
+  assert.deepEqual(lines.map((l) => [l.run, l.outcome]), [[1, 'green'], [2, 'red'], [3, 'does-not-apply'], [4, 'no-diff'], [5, 'call-failed']]);
+  const [green, red, unapplied, noDiff, failedCall] = lines;
+  assert.deepEqual(Object.keys(green), [
+    'suite', 'taskId', 'arm', 'run', 'hand', 'checkedAt', 'imageId', 'outcome', 'diffFound', 'method', 'applyLog', 'failToPass', 'passToPass',
+    'linesChanged', 'goldLines', 'paths', 'outsideGold', 'error',
+  ]);
+  assert.ok(!Number.isNaN(Date.parse(green.checkedAt)));
+  assert.equal(typeof green.failToPass.ms, 'number');
+  assert.deepEqual({ ...green, checkedAt: null, failToPass: { ...green.failToPass, ms: 0 }, passToPass: { ...green.passToPass, ms: 0 } }, {
+    suite: 'P', taskId: 'P01', arm: ARM, run: 1, hand: false, checkedAt: null, imageId: idOf(IMAGE), outcome: 'green', diffFound: true, method: 'git', applyLog: null,
+    failToPass: { exit: 0, ms: 0, timedOut: false }, passToPass: { exit: 0, ms: 0, timedOut: false },
+    linesChanged: 1, goldLines: 1, paths: ['widget/widget.go'], outsideGold: [], error: null,
+  });
+  assert.deepEqual([red.failToPass.exit, red.failToPass.timedOut, red.passToPass.exit, red.method], [1, false, 0, 'git']);
+  assert.deepEqual([unapplied.diffFound, unapplied.method, unapplied.failToPass, unapplied.passToPass, unapplied.linesChanged], [true, null, null, null, 1]);
+  assert.match(unapplied.applyLog, /patch failed/);
+  assert.deepEqual([noDiff.diffFound, noDiff.linesChanged, noDiff.paths, noDiff.failToPass], [false, null, null, null]);
+  assert.deepEqual([failedCall.diffFound, failedCall.linesChanged, failedCall.error], [false, null, null]);
+  assert.ok(lines.every((l) => l.imageId === idOf(IMAGE) && l.goldLines === 1), 'the image id and the gold\'s size are the proof\'s');
+  // Three steps for the green and the red, one for the diff that does not apply, none for the last two — and nothing but steps: no pull, no build, no inspect.
+  assert.deepEqual(calls(fake).slice(log0), runs(7));
+  assert.deepEqual(fake.runs().slice(-7).map((a) => [a[a.length - 3], a[a.length - 1]]), ['apply', 'f2p', 'p2p', 'apply', 'f2p', 'p2p', 'apply'].map((step) => [idOf(IMAGE), step]));
+});
+
+test('a model\'s stage carries the tree, its diff and the maintainers\' tests — never the gold', async () => {
+  const diffs = [goldWith('FAKE: fixes'), goldWith('an invented comment'), goldWith('FAKE: does-not-apply')];
+  const { dir, fake, run, printed, stages0 } = await proven([
+    ...diffs.map((diff, i) => pRunLine({ run: i + 1, answer: answerWith(diff) })),
+    pRunLine({ run: 4, answer: answerWith(`--- a/widget/widget.go\n+++ b/../outside.go\n@@ -1 +1 @@\n-a\n+b\n`) }),
+  ]);
+  const mine = tmp('omelette-evals-check-');
+  const was = process.env.TMPDIR;
+  process.env.TMPDIR = mine;
+  try {
+    assert.equal(await run(), 0, printed.join('\n'));
+    assert.deepEqual(checksAt(dir).map((l) => l.outcome), ['green', 'red', 'does-not-apply', 'does-not-apply']);
+    const proofStages = fake.stages().slice(0, stages0);
+    assert.ok(proofStages.some((s) => (s.contents['change.diff'] ?? '').includes(GOLD_ONLY)), 'the proof\'s own gold stages do hold it: the marker is one a stage would show');
+    const stages = fake.stages().slice(stages0);
+    assert.deepEqual(stages.map((s) => [s.step, s.contents['change.diff']]), [
+      ['apply', diffs[0]], ['f2p', diffs[0]], ['p2p', diffs[0]], ['apply', diffs[1]], ['f2p', diffs[1]], ['p2p', diffs[1]], ['apply', diffs[2]],
+    ]);
+    assert.ok(stageOf(fake.runs().at(-1)).startsWith(join(mine, 'omelette-evals-p-')), 'the stages of this check were made here');
+    for (const s of stages) {
+      assert.deepEqual(s.files, ['change.diff', 'f2p.cmd', 'p2p.cmd', 'run.sh', 'test-files', 'tests.diff', 'tree/widget/widget.go', 'tree/widget/widget_test.go']);
+      assert.equal(s.contents['test-files'], 'widget/widget_test.go\n');
+      assert.equal(s.contents['tests.diff'], TESTS);
+      assert.equal(s.contents['tree/widget/widget.go'], WIDGET);
+      assert.deepEqual(Object.entries(s.contents).filter(([, text]) => text.includes(GOLD_ONLY)).map(([path]) => path), []);
+    }
+    assert.deepEqual(readdirSync(mine), [], 'every stage is removed after its check');
+  } finally {
+    if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was;
+  }
+});
+
+test('a diff naming a path outside the tree is the diff\'s failure, filed on the host: no stage, no container', async () => {
+  const unsafe = '--- a/widget/widget.go\n+++ b/../outside.go\n@@ -1 +1 @@\n-a\n+b\n';
+  const mine = tmp('omelette-evals-check-');
+  const was = process.env.TMPDIR;
+  const { dir, fake, run, printed, log0 } = await proven([pRunLine({ answer: answerWith(unsafe) }), pRunLine({ run: 2, answer: `Invented prose.\n--- /invented/abs.go\n+++ /invented/abs.go\n@@ -1 +1 @@\n-a\n+b\n` })]);
+  process.env.TMPDIR = mine;
+  try {
+    assert.equal(await run(), 0, printed.join('\n'));
+    assert.deepEqual(readdirSync(mine), [], 'no stage was made');
+  } finally {
+    if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was;
+  }
+  const [climbing, absolute] = checksAt(dir);
+  assert.deepEqual([climbing.outcome, climbing.diffFound, climbing.method, climbing.failToPass, climbing.passToPass, climbing.linesChanged, climbing.error], ['does-not-apply', true, null, null, null, 2, null]);
+  assert.match(climbing.applyLog, /no container ran.*the change names a path that is absolute or holds a "\.\." segment: "b\/\.\.\/outside\.go"$/);
+  assert.deepEqual([absolute.outcome, absolute.paths], ['does-not-apply', ['/invented/abs.go']]);
+  assert.match(absolute.applyLog, /"\/invented\/abs\.go"$/);
+  assert.equal(fake.log().length, log0, 'docker was not called');
+  assert.deepEqual(printed.slice(0, 2), [checkLineOf(ARM, 1, 'does-not-apply'), checkLineOf(ARM, 2, 'does-not-apply')], 'the refused path is in the check file, not on the terminal');
+});
+
+test('every check line names the paths its diff touches and those the gold does not: such a green is printed green*', async () => {
+  const beside = (marker) => [
+    goldWith(marker).trimEnd(),
+    'diff --git a/widget/testdata/setup.go b/widget/testdata/setup.go', 'new file mode 100644', '--- /dev/null', '+++ b/widget/testdata/setup.go\t2026-11-20 00:00:00', '@@ -0,0 +1 @@', '+package testdata',
+    'diff --git a/widget/old.go b/widget/new.go', 'similarity index 100%', 'rename from widget/old.go', 'rename to widget/new.go',
+    'diff --git a/tools/run.sh b/tools/run.sh', 'old mode 100644', 'new mode 100755',
+    'diff --git "a/widget/na\\303\\257ve.go" "b/widget/na\\303\\257ve.go"', '--- "a/widget/na\\303\\257ve.go"', '+++ "b/widget/na\\303\\257ve.go"', '@@ -1 +1 @@', '-a', '+b', '',
+  ].join('\n');
+  const { dir, run, printed } = await proven([
+    pRunLine({ run: 1, answer: answerWith(goldWith('FAKE: fixes')) }),
+    pRunLine({ run: 2, answer: answerWith(beside('FAKE: fixes')) }),
+    pRunLine({ run: 3, answer: answerWith(beside('an invented comment')) }),
+  ]);
+  assert.equal(await run(), 0, printed.join('\n'));
+  const all = ['tools/run.sh', 'widget/naÃ¯ve.go', 'widget/new.go', 'widget/old.go', 'widget/testdata/setup.go', 'widget/widget.go'];
+  assert.deepEqual(checksAt(dir).map((l) => [l.outcome, l.paths, l.outsideGold]), [
+    ['green', ['widget/widget.go'], []],
+    ['green', all, all.filter((p) => p !== 'widget/widget.go')],
+    ['red', all, all.filter((p) => p !== 'widget/widget.go')],
+  ]);
+  // The mark is a green's alone, and no path is printed.
+  assert.deepEqual(printed.slice(0, 3), [checkLineOf(ARM, 1, 'green'), checkLineOf(ARM, 2, 'green*'), checkLineOf(ARM, 3, 'red')]);
+});
+
+test('check counts a model\'s lines leniently and leaves the gold\'s size the proof\'s', async () => {
+  const wrongCounts = goldWith('FAKE: fixes').replace('@@ -1,3 +1,4 @@', '@@ -1,1 +1,1 @@').replace(' func Last', '+// a second invented line\n func Last');
+  assert.deepEqual([linesChanged(wrongCounts), linesChanged(wrongCounts, { lenient: true })], [0, 2]);
+  const { dir, run, printed } = await proven([pRunLine({ answer: answerWith(wrongCounts) })]);
+  assert.equal(await run(), 0, printed.join('\n'));
+  assert.deepEqual(checksAt(dir).map((l) => [l.outcome, l.linesChanged, l.goldLines]), [['green', 2, 1]]);
+});
+
+test('a timed-out test step is the diff\'s failure; a daemon error is re-checked next time', async () => {
+  const hanging = pRunLine({ run: 1, answer: answerWith(goldWith('FAKE: fixes FAKE: hangs')) });
+  const fixing = pRunLine({ run: 2, answer: answerWith(goldWith('FAKE: fixes')) });
+  const { dir, fake, run, printed } = await proven([hanging], { task: { timeoutS: 1 } });
+  assert.equal(await run(), 0, printed.join('\n'));
+  const [timedOut] = checksAt(dir);
+  assert.deepEqual([timedOut.outcome, timedOut.failToPass.exit, timedOut.failToPass.timedOut, timedOut.passToPass.exit, timedOut.error], ['red', null, true, 0, null]);
+
+  // The daemon lost the image: Docker's own exit, 125, at the apply step.
+  fileRuns(dir, [hanging, fixing]);
+  writeFileSync(join(fake.state, 'images'), '');
+  assert.equal(await run(), 0, printed.join('\n'));
+  const lost = checksAt(dir)[1];
+  assert.deepEqual([lost.run, lost.outcome, lost.method, lost.failToPass, lost.passToPass, lost.linesChanged], [2, 'error', null, null, null, 1]);
+  assert.match(lost.error, /apply step exited 125/);
+
+  // The image is back: the key whose last line is `error` is checked again, and it alone.
+  fake.addImage(IMAGE);
+  const before = fake.runs().length;
+  assert.equal(await run(), 0, printed.join('\n'));
+  assert.equal(fake.runs().length, before + 3);
+  assert.deepEqual(checksAt(dir).map((l) => [l.run, l.outcome]), [[1, 'red'], [2, 'error'], [2, 'green']]);
+  assert.equal(await run(), 0);
+  assert.equal(fake.runs().length, before + 3, 'nothing is left to check');
+
+  // Docker's own exit at a test step, after an apply that went well: the harness's failure too, not a red.
+  const midway = await proven([fixing]);
+  const loses = dockerThat({ home: midway.env.HOME, fake: midway.fake, afterFirstRun: `fs.writeFileSync(${JSON.stringify(join(midway.fake.state, 'images'))}, '');` });
+  await check({ dir: midway.dir, date: DATE, docker: loses, env: midway.env, out: quiet });
+  const [gone] = checksAt(midway.dir);
+  assert.deepEqual([gone.outcome, gone.method, gone.failToPass.exit, gone.passToPass.exit], ['error', 'git', 125, 125]);
+  assert.match(gone.error, /f2p step exited 125/);
+});
+
+test('check refuses a task without a fresh proof before any container runs', async () => {
+  const { dir, task, fake, run, printed, env } = await proven([pRunLine({ answer: answerWith(goldWith('FAKE: fixes')) })]);
+  assert.equal(await run(), 0, printed.join('\n'));
+  const filed = readFileSync(checksFile(dir), 'utf8');
+  // The gold edited after its proof, and one more run to check.
+  writeFileSync(join(dir, P01.gold), goldWith(`FAKE: fixes ${GOLD_ONLY}, reworded`));
+  fileRuns(dir, [pRunLine({ answer: answerWith(goldWith('FAKE: fixes')) }), pRunLine({ run: 2, answer: answerWith(goldWith('FAKE: fixes')) })]);
+  const before = fake.log().length;
+  assert.equal(await run(), 1);
+  assert.match(printed.join('\n'), /eval-patch: P01 has no fresh gold proof \(stale\)/);
+  await assert.rejects(check({ dir, date: DATE, docker: fake.bin, env, out: quiet }), /P01 has no fresh gold proof \(stale\)/);
+  assert.equal(proofStatus({ dir, task }), 'stale');
+  assert.equal(fake.log().length, before, 'docker was not called');
+  assert.equal(readFileSync(checksFile(dir), 'utf8'), filed, 'the earlier check lines stay as they are');
+});
+
+test('a hand-supplied diff is checked like a model\'s', async () => {
+  const { dir, run, printed } = await proven([pRunLine({ answer: answerWith(goldWith('FAKE: fixes')) })]);
+  const bare = join(tmp('omelette-evals-hand-'), 'fix.diff');
+  writeFileSync(bare, goldWith('FAKE: fixes'));
+  const said = [];
+  const filed = handMain(
+    ['file', '--suite', 'P', '--arm', 'native:session', '--task', 'P01', '--answer', bare, '--model', 'hand', '--wall-ms', '0', '--date', DATE, '--dir', dir],
+    { out: (l) => said.push(l), err: (l) => said.push(l) },
+  );
+  assert.equal(filed, 0, said.join('\n'));
+  assert.equal(await run(), 0, printed.join('\n'));
+  assert.deepEqual(checksAt(dir).map((l) => [l.arm, l.run, l.hand, l.outcome, l.method]), [[ARM, 1, false, 'green', 'git'], ['native:session', 1, true, 'green', 'git']]);
+});
+
+test('check prints one line per check and nothing of a diff, an answer or an apply log; its file is appended to, the operator\'s alone', async () => {
+  const { dir, fake, run, printed } = await proven([
+    pRunLine({ run: 1, answer: answerWith(goldWith('FAKE: does-not-apply')) }),
+    pRunLine({ run: 2, answer: 'Invented prose only: SECRET-INVENTED-ANSWER.' }),
+  ]);
+  // An earlier check left an error for run 1, in a file and directories anyone could read.
+  const earlier = `${JSON.stringify({ suite: 'P', taskId: 'P01', arm: ARM, run: 1, outcome: 'error', error: 'an invented earlier failure' })}\n`;
+  put(dir, `checks/${DATE}/P.jsonl`, earlier);
+  for (const [path, mode] of [[checksFile(dir), 0o644], [dirname(checksFile(dir)), 0o755], [join(dir, 'checks'), 0o755]]) chmodSync(path, mode);
+  assert.equal(await run(), 0, printed.join('\n'));
+  assert.deepEqual(printed, [checkLineOf(ARM, 1, 'does-not-apply'), checkLineOf(ARM, 2, 'no-diff'), `2 checked, 0 already checked → ${checksFile(dir)}`]);
+  const text = readFileSync(checksFile(dir), 'utf8');
+  assert.ok(text.startsWith(earlier), 'the earlier line is still the first');
+  assert.deepEqual(checksAt(dir).map((l) => [l.run, l.outcome]), [[1, 'error'], [1, 'does-not-apply'], [2, 'no-diff']]);
+  assert.match(checksAt(dir)[1].applyLog, /patch failed/, 'the apply log is in the file');
+  assert.deepEqual([checksFile(dir), dirname(checksFile(dir)), join(dir, 'checks')].map((path) => statSync(path).mode & 0o777), [0o600, 0o700, 0o700]);
+
+  // The last line per call wins: neither is an error now, so a second check runs nothing and says so.
+  const before = fake.log().length;
+  printed.length = 0;
+  assert.equal(await run(), 0);
+  assert.deepEqual(printed, [`0 checked, 2 already checked → ${checksFile(dir)}`]);
+  assert.equal(fake.log().length, before);
+  assert.equal(readFileSync(checksFile(dir), 'utf8'), text);
+});
+
+test('check covers the arms and tasks asked for, and a name that selects no run line is refused before docker is called', async () => {
+  const other = 'gemini:Another Invented Model (High)';
+  const { dir, fake, run, printed, log0 } = await proven([pRunLine({ answer: answerWith(goldWith('FAKE: fixes')) })]);
+  fileRuns(dir, [pRunLine({ arm: other, answer: answerWith(goldWith('an invented comment')) }), { suite: 'V', taskIds: ['P01'], arm: other, run: 2, ok: true, answer: 'Not a P line.' }], 'P-gemini-another-invented-model-high.jsonl');
+  put(dir, `runs/${DATE}/notes-P.jsonl`, 'not a run file of suite P: its name does not open with P-\n');
+  for (const [args, message] of [
+    [['--arm', 'gemini:No Such Model'], /eval-patch: no P run line of 2026-11-20 for the arm gemini:No Such Model/],
+    [['--task', 'P09'], /eval-patch: no P run line of 2026-11-20 for the task P09/],
+    [['--date', '2026-11-21'], /eval-patch: no P run line at .*runs\/2026-11-21/],
+  ]) {
+    printed.length = 0;
+    assert.equal(await run(args), 1, args.join(' '));
+    assert.match(printed.join('\n'), message);
+  }
+  assert.equal(fake.log().length, log0);
+  assert.equal(existsSync(join(dir, 'checks', DATE)), false);
+  printed.length = 0;
+  assert.equal(await run(['--arm', other, '--task', 'P01']), 0, printed.join('\n'));
+  assert.deepEqual(printed.slice(0, -1), [checkLineOf(other, 1, 'red')]);
+  assert.equal(await run(), 0);
+  assert.deepEqual(checksAt(dir).map((l) => [l.arm, l.outcome]), [[other, 'red'], [ARM, 'green']]);
+
+  // The date is a usage error unless it is one; a line of the suite that names no call is refused by its place in the file.
+  for (const args of [['check', '--dir', dir], ['check', '--date', '20261120', '--dir', dir], ['check', '--date', DATE, '--reps', '1']]) {
+    const said = [];
+    assert.equal(await main(args, { out: quiet, err: (l) => said.push(l), env: {} }), 2, args.join(' '));
+    assert.match(said.join('\n'), /node scripts\/eval-patch\.mjs check --date YYYY-MM-DD \[--task ID …\] \[--arm ARM …\] \[--dir D\]/);
+  }
+  fileRuns(dir, [pRunLine(), { suite: 'P', taskIds: 'P01', arm: ARM, run: 2, ok: true, answer: 'SECRET-INVENTED-ANSWER' }]);
+  printed.length = 0;
+  assert.equal(await run(), 1);
+  assert.deepEqual(printed, [`eval-patch: ${join(dir, 'runs', DATE, 'P-gemini-invented-model-high.jsonl')}:2: not a P run line: it needs taskIds holding one id, an arm and a whole run number`]);
+});
+
+test('a line that is not JSON is refused by its own number in the file, and nothing of it is quoted', async () => {
+  const { dir, task } = pDir();
+  const tasksFile = join(dir, 'suites', 'P', 'tasks.jsonl');
+  writeFileSync(tasksFile, `${JSON.stringify(task)}\n\n   \n{"id": SECRET-INVENTED-TASK-TEXT\n`);
+  assert.throws(() => readPTasks(dir), (e) => e.message === `${tasksFile}:4: not JSON`);
+
+  const ctx = await proven([pRunLine({ answer: answerWith(goldWith('FAKE: fixes')) })]);
+  const runFile = join(ctx.dir, 'runs', DATE, 'P-gemini-invented-model-high.jsonl');
+  writeFileSync(runFile, `\n${JSON.stringify(pRunLine())}\n{"suite":"P","answer":"SECRET-INVENTED-ANSWER\n`);
+  assert.equal(await ctx.run(), 1);
+  assert.deepEqual(ctx.printed, [`eval-patch: ${runFile}:3: not JSON`]);
+  assert.equal(ctx.fake.log().length, ctx.log0);
+});
+
+test('a signal mid-check leaves nothing behind, and the stage it removes never held the gold', async () => {
+  const diff = goldWith('FAKE: fixes FAKE: hangs');
+  const { dir, fake, env } = await proven([pRunLine({ answer: answerWith(diff) })]);
+  const mine = tmp('omelette-evals-signal-');
+  const child = spawn(process.execPath, [SCRIPT, 'check', '--date', DATE, '--dir', dir], { env: { ...env, TMPDIR: mine }, stdio: 'ignore', timeout: 5000, killSignal: 'SIGKILL' });
+  const ended = new Promise((done) => { child.on('close', (code, sig) => done([code, sig])); });
+  let hung = [];
+  try {
+    hung = await until(() => fake.hanging(), (h) => h.length > 0, 4000);
+    assert.equal(hung.length, 1, 'the fail-to-pass step is in flight');
+    const [stage] = stagesIn(mine);
+    assert.equal(readFileSync(join(mine, stage, 'change.diff'), 'utf8'), diff);
+    assert.deepEqual(plainFiles(join(mine, stage)).filter(([, text]) => text.includes(GOLD_ONLY)).map(([path]) => path), []);
+    child.kill('SIGTERM');
+    assert.deepEqual(await ended, [143, null]);
+    assert.deepEqual(readdirSync(mine), [], 'no stage outlives the check');
+    assert.deepEqual(fake.log().pop(), ['rm', '-f', hung[0].name], 'the container of the step in flight is removed');
+    assert.equal(await until(() => alive(hung[0].pid), (is) => !is, 2000), false, 'the docker client is gone');
+    assert.equal(existsSync(checksFile(dir)), false, 'a check that did not end files no line');
+  } finally {
+    child.kill('SIGKILL');
+    for (const { pid } of hung) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone, as it should be */ } }
   }
 });
 

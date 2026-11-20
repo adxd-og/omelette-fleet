@@ -1,16 +1,31 @@
 #!/usr/bin/env node
 /**
  * omelette-fleet :: scripts/eval-patch.mjs
- * Suite P's container: a task's gold patch proven before any model runs (plan
- * docs/superpowers/plans/2026-11-19-evals-neon.md, T15).
+ * Suite P's container: a task's gold patch proven before any model runs, and
+ * a model's diff checked the same way (plan
+ * docs/superpowers/plans/2026-11-19-evals-neon.md, T15 and T19).
  *
  *   node scripts/eval-patch.mjs prove --task ID [--task ID …] [--dir D]
+ *   node scripts/eval-patch.mjs check --date YYYY-MM-DD [--task ID …] [--arm ARM …] [--dir D]
  *
  * PRIVATE IN, PRIVATE OUT. It reads `<D>/suites/P/tasks.jsonl`, the tree, the
  * gold diff and the tests diff each line names, and writes
  * `<D>/checks/proofs/<id>.json`, D defaulting to `<repo>/.omelette/evals`
  * (ignored by git). It prints task ids, exit codes and paths: never a prompt, a
  * diff or a test's output.
+ *
+ * CHECK reads the date's P run lines (`<D>/runs/<date>/P-*.jsonl`), takes the
+ * diff out of each answer (`extractDiff`), and runs it through the steps the
+ * gold went through, in the image its task's proof recorded: it never pulls
+ * and never builds, and a covered task without a fresh proof is refused before
+ * docker is called. One line per call is appended to
+ * `<D>/checks/<date>/P.jsonl`, the operator's alone, the last line of a call
+ * winning; a call whose last line is not `error` is not checked again. It
+ * prints the arm, the run, the task and the outcome: never a diff, an answer
+ * or an apply log. A model's stage holds its own diff and never the gold.
+ * `green*` is a green whose diff touches a path the maintainers' fix does not
+ * (`outsideGold` in its line): the tests it turned green may be ones it
+ * rearranged, and the session reads that diff itself.
  *
  * THIRD-PARTY CODE RUNS IN ONE PLACE: a container step (`dockerRunArgs`) — no
  * network, no pull, no capability, no new privilege, the host's uid, one
@@ -65,7 +80,8 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync,
+  appendFileSync, chmodSync, closeSync, cpSync, existsSync, fchmodSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync,
+  realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
@@ -76,7 +92,10 @@ import { inheritedEnv, killLiveGroups, runProcess } from '../core/spawn.mjs';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
 
-const USAGE = 'usage: node scripts/eval-patch.mjs prove --task ID [--task ID …] [--dir D]';
+const USAGE = [
+  'usage: node scripts/eval-patch.mjs prove --task ID [--task ID …] [--dir D]',
+  '       node scripts/eval-patch.mjs check --date YYYY-MM-DD [--task ID …] [--arm ARM …] [--dir D]',
+].join('\n');
 
 /** An official Docker Hub image (no `/` path) pinned by digest. */
 export const OFFICIAL_IMAGE = /^(?:docker\.io\/library\/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}$/;
@@ -152,9 +171,16 @@ const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 /** Text this script did not write, fit for a terminal: without its control characters (C0, DEL, C1). */
 const plain = (text) => String(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
 
-const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').filter((l) => l.trim()).map((l, i) => {
-  try { return JSON.parse(l); } catch (e) { throw new Error(`${path}:${i + 1}: not JSON (${e.message})`); }
+/**
+ * `path`'s JSON lines, each with its line number in the file (blank lines
+ * counted, and skipped). A line that is not JSON is refused by that number
+ * alone: nothing of it — a task's text, an answer's, a diff's — is quoted.
+ */
+const readNumbered = (path) => readFileSync(path, 'utf8').split('\n').flatMap((l, i) => {
+  if (!l.trim()) return [];
+  try { return [{ n: i + 1, value: JSON.parse(l) }]; } catch { throw new Error(`${path}:${i + 1}: not JSON`); }
 });
+const readJsonl = (path) => readNumbered(path).map((x) => x.value);
 
 /** True when `rel`, normalised, names something strictly below the relative directory `under`: never it, never beside it. */
 function strictlyUnder(rel, under) {
@@ -292,12 +318,20 @@ const PATH_LINE = /^(?:rename from|rename to|copy from|copy to|Index:) (.*)$/;
  * return is no part of a line.
  *   pairs: the text after `--- ` and after `+++ ` of every file header;
  *   gitLines: the text after `diff --git `; pathLines: the text of every PATH_LINE.
+ *
+ * `lenient`, for a model's diff, whose headers often declare counts its hunks
+ * do not have (`git apply --recount` applies it all the same): a hunk lasts
+ * from its header to the next hunk header or file header, whatever it
+ * declares, and every line in it that opens with `+` or `-` is a changed one.
+ * A `--- ` line directly followed by a `+++ ` line is then a file header
+ * wherever it stands, so this reading finds every header the strict one finds.
  */
-function scanDiff(diffText) {
+function scanDiff(diffText, { lenient = false } = {}) {
   const lines = String(diffText).split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
   const found = { pairs: [], gitLines: [], pathLines: [], changed: 0 };
   let oldLeft = 0;
   let newLeft = 0;
+  let inLenientHunk = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (oldLeft > 0 || newLeft > 0) {
@@ -312,15 +346,23 @@ function scanDiff(diffText) {
     const hunk = HUNK_HEADER.exec(line);
     const pathLine = PATH_LINE.exec(line);
     if (hunk) {
-      oldLeft = Number(hunk[1] ?? 1);
-      newLeft = Number(hunk[2] ?? 1);
+      if (lenient) {
+        inLenientHunk = true;
+      } else {
+        oldLeft = Number(hunk[1] ?? 1);
+        newLeft = Number(hunk[2] ?? 1);
+      }
     } else if (line.startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ ')) {
       found.pairs.push(line.slice(4), lines[i + 1].slice(4));
       i += 1;
+      inLenientHunk = false;
     } else if (line.startsWith('diff --git ')) {
       found.gitLines.push(line.slice('diff --git '.length));
+      inLenientHunk = false;
     } else if (pathLine) {
       found.pathLines.push(pathLine[1]);
+    } else if (inLenientHunk && (line[0] === '+' || line[0] === '-')) {
+      found.changed += 1;
     }
   }
   return found;
@@ -345,9 +387,14 @@ export function testFiles(diffText) {
   return [...paths].sort();
 }
 
-/** The lines a diff adds or removes: those starting `+` or `-` inside its hunks, each hunk as long as its header says. */
-export function linesChanged(diffText) {
-  return scanDiff(diffText).changed;
+/**
+ * The lines a diff adds or removes: those starting `+` or `-` inside its
+ * hunks, each hunk as long as its header says — the reading of the gold and of
+ * a tests diff. `lenient: true`, for a model's diff: each hunk lasts to the
+ * next hunk header or file header, whatever its header declares (`scanDiff`).
+ */
+export function linesChanged(diffText, { lenient = false } = {}) {
+  return scanDiff(diffText, { lenient }).changed;
 }
 
 const C_ESCAPES = { a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
@@ -381,6 +428,91 @@ function refuseUnsafeChange(change) {
   for (const text of gitLines) {
     for (const word of unescaped(text).split(/[\s"]+/)) check(text, word);
   }
+}
+
+/**
+ * The names of a `diff --git` line: one when both sides are the same path
+ * (`a/x b/x`, the form of every line that is no rename — a path with a blank
+ * in it is whole only there); else each quoted name and each word, without its
+ * `a/` or `b/`.
+ */
+function gitLineNames(text) {
+  const same = /^a\/(.+) b\/\1$/.exec(text);
+  if (same) return [same[1]];
+  return [...text.matchAll(/"((?:[^"\\]|\\.)*)"|(\S+)/g)].map(([, quoted, word]) => unprefixed(quoted === undefined ? word : unescaped(quoted)));
+}
+
+/**
+ * The paths a diff's headers name, sorted, every header form: both sides of a
+ * file header (`/dev/null` aside), a `diff --git` line's names — a mode
+ * change, a pure rename and a binary file have no other —, `rename`, `copy`
+ * and `Index:` lines. A record for a reader, not a gate: a name that cannot be
+ * read is kept as it is written.
+ */
+function touchedPaths(diffText, { lenient = false } = {}) {
+  const { pairs, gitLines, pathLines } = scanDiff(diffText, { lenient });
+  const paths = new Set();
+  for (const side of pairs) {
+    const text = side.split('\t')[0];
+    if (text !== '/dev/null') paths.add(unprefixed(namedPath(text) ?? text));
+  }
+  for (const text of gitLines) for (const name of gitLineNames(text)) paths.add(name);
+  for (const text of pathLines) paths.add(namedPath(text) ?? text);
+  return [...paths].sort();
+}
+
+/** A code fence's opening line: up to three spaces, then three or more backticks or tildes, then anything (the info string). */
+const FENCE_OPENING = /^ {0,3}(`{3,}|~{3,})/;
+/** A line of fence characters alone, spaces after it allowed: it closes a block opened by as many of the same character, or fewer. */
+const FENCE_ALONE = /^(`+|~+) *$/;
+/** True when the lines hold what a unified diff cannot lack: a `+++ ` line and a hunk header. */
+const holdsDiff = (lines) => lines.some((l) => l.startsWith('+++ ')) && lines.some((l) => HUNK_HEADER.test(l));
+
+/**
+ * The diff in a model's answer, or null when it holds none. CRLF is read as
+ * LF. Fenced blocks first: a block opens at a FENCE_OPENING line and closes at
+ * the next line of that fence character alone, at least as long (an answer
+ * that ends first ends the block); a block is a diff when its body holds a
+ * `+++ ` line and a hunk header, and when any block is one, the diff is every
+ * such block's body, in order. Else the text from the first line that opens a
+ * diff — `diff --git `, or a `--- ` line directly followed by a `+++ ` line —
+ * to the answer's end, when that holds a `+++ ` line and a hunk header. The
+ * diff ends with a line break.
+ *
+ * A body is taken as it is written: nothing is cut from a line, so a block
+ * indented with its fence (a list item's) or quoted (`> `) holds no line that
+ * opens with `+++ `, and is no diff.
+ */
+export function extractDiff(text) {
+  if (typeof text !== 'string') return null;
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const bodies = [];
+  let block = null;
+  for (const line of lines) {
+    if (block) {
+      const alone = FENCE_ALONE.exec(line);
+      if (alone && alone[1][0] === block.fence[0] && alone[1].length >= block.fence.length) {
+        bodies.push(block.body);
+        block = null;
+      } else {
+        block.body.push(line);
+      }
+      continue;
+    }
+    const opening = FENCE_OPENING.exec(line);
+    if (opening) block = { fence: opening[1], body: [] };
+  }
+  if (block) bodies.push(block.body);
+  const diffs = bodies.filter(holdsDiff);
+  let found = null;
+  if (diffs.length) {
+    found = diffs.map((body) => body.join('\n')).join('\n');
+  } else {
+    const from = lines.findIndex((l, i) => l.startsWith('diff --git ') || (l.startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ ')));
+    if (from !== -1 && holdsDiff(lines.slice(from))) found = lines.slice(from).join('\n');
+  }
+  if (found === null) return null;
+  return found.endsWith('\n') ? found : `${found}\n`;
 }
 
 /** Every file under a directory as [relative path, sha256 of its bytes], sorted; a link by the text it holds, never followed. */
@@ -697,11 +829,13 @@ function hasRunLine(dir, id) {
 
 /**
  * One state of a task (the snapshot, or the snapshot with `change`) through
- * its steps, in a stage of its own, removed after them. A stage that could not
- * be removed is an error naming its path: this state's own when its steps
- * ended well, added to the steps' error when they did not.
+ * its steps, in a stage of its own, removed after them → `{ state, applied }`:
+ * the state as a proof records it, and the apply step whole (a check reads
+ * its stderr and whether it timed out). A stage that could not be removed is
+ * an error naming its path: this state's own when its steps ended well, added
+ * to the steps' error when they did not.
  */
-async function runState({ dir, task, change, docker, imageId, env, out }) {
+async function runSteps({ dir, task, change, docker, imageId, env, out }) {
   const stage = makeStage({ dir, task, change });
   const step = async (name) => {
     const res = await runStep({ docker, imageId, stage, step: name, timeoutS: task.timeoutS ?? DEFAULT_TIMEOUT_S, env });
@@ -713,9 +847,10 @@ async function runState({ dir, task, change, docker, imageId, env, out }) {
     return { exit, ms, timedOut };
   };
   let state = null;
+  let applied = null;
   let failure = null;
   try {
-    const applied = await step('apply');
+    applied = await step('apply');
     const method = applied.exit === 0 ? /^applied-by (\S+)/m.exec(applied.stdout) : null;
     const apply = { exit: applied.exit, method: method ? plain(method[1]) : null };
     state = applied.exit !== 0 ? { apply, failToPass: null, passToPass: null } : { apply, failToPass: await test('f2p'), passToPass: await test('p2p') };
@@ -728,8 +863,11 @@ async function runState({ dir, task, change, docker, imageId, env, out }) {
     throw failure;
   }
   if (left) throw new Error(`${task.id}: ${left}`);
-  return state;
+  return { state, applied };
 }
+
+/** One state of a task through its steps (`runSteps`), as a proof records it. */
+const runState = async (options) => (await runSteps(options)).state;
 
 /** The fail-to-pass test failed: it ran to its end and the exit code is the test's own, not the harness's. */
 const failed = (step) => !!step && !step.timedOut && Number.isInteger(step.exit) && step.exit !== 0 && !HARNESS_EXITS.includes(step.exit);
@@ -778,21 +916,166 @@ export async function prove({ dir, task, docker, env, reps = 3, out = () => {} }
   return proof;
 }
 
+const DAY = /^\d{4}-\d\d-\d\d$/;
+const callKey = (arm, run, taskId) => `${arm}\u0000${run}\u0000${taskId}`;
+
+/**
+ * The date's P run lines, file by file in the order of the files' names
+ * (`runs/<date>/P-*.jsonl`, as the aggregate reads them). A line of suite P
+ * that names no call — one task, an arm, a run — is refused by its place in
+ * its file: nothing of it is quoted.
+ */
+function pRunLines({ dir, date }) {
+  const runsDir = join(dir, 'runs', date);
+  const files = existsSync(runsDir) ? readdirSync(runsDir).filter((f) => f.startsWith('P-') && f.endsWith('.jsonl')).sort() : [];
+  const lines = [];
+  for (const f of files) {
+    for (const { n, value: l } of readNumbered(join(runsDir, f))) {
+      if (!l || l.suite !== 'P') continue;
+      const names = Array.isArray(l.taskIds) && l.taskIds.length === 1 && typeof l.taskIds[0] === 'string' && typeof l.arm === 'string' && Number.isInteger(l.run);
+      if (!names) throw new Error(`${join(runsDir, f)}:${n}: not a P run line: it needs taskIds holding one id, an arm and a whole run number`);
+      lines.push(l);
+    }
+  }
+  return lines;
+}
+
+/**
+ * One check line, appended to `file`, which is the operator's alone (0600, its
+ * directory and `checks/` 0700) before the line lands: `mode` counts only for
+ * what a call creates, and a file or a directory that was there keeps its own.
+ */
+function appendPrivate(file, line) {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  for (const made of [dirname(file), dirname(dirname(file))]) chmodSync(made, 0o700);
+  const fd = openSync(file, 'a', 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    appendFileSync(fd, `${JSON.stringify(line)}\n`);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * One call's check line. No container for a call that failed (`call-failed`),
+ * an answer with no diff (`no-diff`), or a diff naming a path outside the tree
+ * — `does-not-apply`, refused on the host, its `applyLog` saying which path.
+ * Else the steps, in a stage that holds the model's diff and never the gold:
+ * `apply` 121 → `does-not-apply` with the last 2000 characters of its stderr;
+ * `apply` 0 → `green` when both test steps exit 0, else `red` (a test step
+ * that timed out is the diff's failure); any other end of `apply`, or Docker's
+ * own exit (125) from a test step → `error`, checked again next time.
+ * Whenever a diff was found: `linesChanged`, counted leniently; `paths`, what
+ * its headers name; `outsideGold`, those of them the gold's headers do not.
+ */
+async function checkCall({ dir, line, task, imageId, goldLines, goldPaths, docker, env, out }) {
+  const filed = (fields) => ({
+    suite: 'P', taskId: task.id, arm: line.arm, run: line.run, hand: line.hand === true, checkedAt: new Date().toISOString(), imageId,
+    outcome: null, diffFound: false, method: null, applyLog: null, failToPass: null, passToPass: null, linesChanged: null, goldLines,
+    paths: null, outsideGold: null, error: null, ...fields,
+  });
+  if (line.ok !== true) return filed({ outcome: 'call-failed' });
+  const diff = extractDiff(line.answer);
+  if (diff === null) return filed({ outcome: 'no-diff' });
+  const paths = touchedPaths(diff, { lenient: true });
+  const found = { diffFound: true, linesChanged: linesChanged(diff, { lenient: true }), paths, outsideGold: paths.filter((path) => !goldPaths.includes(path)) };
+  let ran;
+  try {
+    ran = await runSteps({ dir, task, change: diff, docker, imageId, env, out });
+  } catch (e) {
+    if (!e || e.code !== 'UNSAFE_PATH') throw e;
+    return filed({ ...found, outcome: 'does-not-apply', applyLog: `refused on the host, no container ran: ${e.message}` });
+  }
+  const { state: { apply, failToPass, passToPass }, applied } = ran;
+  if (applied.timedOut) return filed({ ...found, outcome: 'error', error: `the apply step did not end within ${task.timeoutS ?? DEFAULT_TIMEOUT_S} s` });
+  if (apply.exit === 121) return filed({ ...found, outcome: 'does-not-apply', applyLog: String(applied.stderr).slice(-2000) });
+  if (apply.exit !== 0) return filed({ ...found, outcome: 'error', error: `the apply step exited ${apply.exit}` });
+  const tests = { method: apply.method, failToPass, passToPass };
+  const dockers = [['f2p', failToPass], ['p2p', passToPass]].find(([, step]) => step.exit === 125);
+  if (dockers) return filed({ ...found, ...tests, outcome: 'error', error: `the ${dockers[0]} step exited 125` });
+  return filed({ ...found, ...tests, outcome: passed(failToPass) && passed(passToPass) ? 'green' : 'red' });
+}
+
+/**
+ * Check the date's P run lines — those of the tasks `only` names and the arms
+ * `arms` names, all of them when a list is empty — and append one check line
+ * per call to `<dir>/checks/<date>/P.jsonl` (`checkCall`); returns
+ * `{ file, checked, skipped }`. A call whose last check line is there and is
+ * not an `error` is skipped. Throws before docker is called: for a date with
+ * no P run line, a name that selects none, a run line of a task the suite does
+ * not have, and a covered task whose gold proof is not `ok`. It never pulls
+ * and never builds: every step runs the image id the task's proof recorded.
+ * Prints one line per check — arm, run, task, outcome; `green*` for a green
+ * whose diff touches a path the gold does not — and never a diff.
+ */
+export async function check({ dir, date, only = [], arms = [], docker, env, out = () => {} }) {
+  if (typeof date !== 'string' || !DAY.test(date)) throw new TypeError(`check needs date, YYYY-MM-DD (got ${JSON.stringify(date)})`);
+  const all = pRunLines({ dir, date });
+  if (!all.length) throw new Error(`no P run line at ${join(dir, 'runs', date)}`);
+  for (const id of only) if (!all.some((l) => l.taskIds[0] === id)) throw new Error(`no P run line of ${date} for the task ${plain(id)}`);
+  for (const arm of arms) if (!all.some((l) => l.arm === arm)) throw new Error(`no P run line of ${date} for the arm ${plain(arm)}`);
+  const lines = all.filter((l) => (!only.length || only.includes(l.taskIds[0])) && (!arms.length || arms.includes(l.arm)));
+  if (!lines.length) throw new Error(`no P run line of ${date} for those tasks and arms together`);
+
+  const ids = [...new Set(lines.map((l) => l.taskIds[0]))];
+  const tasks = readPTasks(dir, { only: ids });
+  const covered = new Map(ids.map((id) => {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) throw new Error(`${plain(id)}: suite P has no such task`);
+    return [id, { task }];
+  }));
+  const unproven = ids.map((id) => [id, proofStatus({ dir, task: covered.get(id).task })]).filter(([, status]) => status !== 'ok');
+  if (unproven.length) throw new Error(`${unproven.map(([id, status]) => `${id} has no fresh gold proof (${status})`).join('; ')}: nothing was checked`);
+  for (const entry of covered.values()) {
+    const { task } = entry;
+    const proof = JSON.parse(readFileSync(proofPath(dir, task.id), 'utf8'));
+    if (!IMAGE_ID.test(proof.imageId)) throw new Error(`${task.id}: its proof records no image id`);
+    entry.imageId = proof.imageId;
+    entry.goldLines = Number.isInteger(proof.goldLines) ? proof.goldLines : null;
+    // Read here for the paths its headers name, and for nothing else: no stage of a check is given it.
+    entry.goldPaths = touchedPaths(readFileSync(taskPaths({ dir, task }).gold, 'utf8'));
+  }
+
+  const file = join(dir, 'checks', date, 'P.jsonl');
+  const last = new Map((existsSync(file) ? readJsonl(file) : []).filter((c) => c && typeof c === 'object').map((c) => [callKey(c.arm, c.run, c.taskId), c]));
+  const checked = [];
+  let skipped = 0;
+  for (const line of lines) {
+    const earlier = last.get(callKey(line.arm, line.run, line.taskIds[0]));
+    if (earlier && earlier.outcome !== 'error') { skipped += 1; continue; }
+    const result = await checkCall({ dir, line, ...covered.get(line.taskIds[0]), docker, env, out });
+    appendPrivate(file, result);
+    checked.push(result);
+    out(`  ${plain(line.arm)}  run ${line.run}  ${result.taskId}  ${result.outcome}${result.outcome === 'green' && result.outsideGold.length ? '*' : ''}`);
+  }
+  out(`${checked.length} checked, ${skipped} already checked → ${file}`);
+  return { file, checked, skipped };
+}
+
+const OPTIONS = {
+  prove: { task: { type: 'string', multiple: true }, dir: { type: 'string' } },
+  check: { date: { type: 'string' }, task: { type: 'string', multiple: true }, arm: { type: 'string', multiple: true }, dir: { type: 'string' } },
+};
+
 export async function main(argv = process.argv.slice(2), { out = (l) => console.log(l), err = (l) => console.error(l), env = process.env } = {}) {
   const [command, ...rest] = argv;
-  if (command !== 'prove') { err(`eval-patch: ${command === undefined ? 'a command is needed' : `unknown command ${JSON.stringify(command)}`}\n${USAGE}`); return 2; }
+  if (!Object.hasOwn(OPTIONS, command ?? '')) { err(`eval-patch: ${command === undefined ? 'a command is needed' : `unknown command ${JSON.stringify(command)}`}\n${USAGE}`); return 2; }
   let values;
   try {
-    ({ values } = parseArgs({
-      args: rest,
-      options: { task: { type: 'string', multiple: true }, dir: { type: 'string' } },
-      strict: true, allowPositionals: false,
-    }));
+    ({ values } = parseArgs({ args: rest, options: OPTIONS[command], strict: true, allowPositionals: false }));
   } catch (e) { err(`eval-patch: ${e.message}\n${USAGE}`); return 2; }
-  if (!(values.task || []).length) { err(`eval-patch: at least one --task\n${USAGE}`); return 2; }
+  if (command === 'prove' && !(values.task || []).length) { err(`eval-patch: at least one --task\n${USAGE}`); return 2; }
+  if (command === 'check' && !DAY.test(values.date ?? '')) { err(`eval-patch: --date YYYY-MM-DD is required\n${USAGE}`); return 2; }
 
   const dir = resolve(values.dir || DEFAULT_DIR);
   const docker = env.OMELETTE_EVALS_DOCKER || 'docker';
+  if (command === 'check') {
+    try {
+      await check({ dir, date: values.date, only: values.task || [], arms: values.arm || [], docker, env, out });
+      return 0;
+    } catch (e) { err(`eval-patch: ${(e && e.message) || e}`); return 1; }
+  }
   let tasks;
   try { tasks = readPTasks(dir, { only: values.task }); } catch (e) { err(`eval-patch: ${(e && e.message) || e}`); return 1; }
   let allOk = true;
