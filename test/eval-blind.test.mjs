@@ -407,6 +407,13 @@ test('a level as its own word right after the name collapses, and an ordinary se
   }
 });
 
+test('XHigh alone on the line after a masked name goes with it; High there stays, as before', () => {
+  const terms = redactionTerms();
+  assert.equal(redact('Gemini 4 Neon\nXHigh\nThe retry never ends.', terms), '[model]\nThe retry never ends.');
+  assert.equal(redact('Neon\r\n  xhigh', terms), '[model]');
+  assert.equal(redact('Neon\nHigh\nThe retry never ends.', terms), '[model]\nHigh\nThe retry never ends.');
+});
+
 test('R: the net score is correct minus wrong — partly and no answer score 0 — per run and summed over the arm, with the traps counted', () => {
   const agg = aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS });
   const a = agg.arms.find((x) => x.suite === 'R' && x.arm === A);

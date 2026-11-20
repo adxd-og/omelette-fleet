@@ -98,9 +98,11 @@ export function redactionTerms(extra = []) {
 // - a level in brackets, or after a middle dot as a whole word that starts no
 //   compound (`· highlights`, `· high-level` stay), on the same line or the next;
 // - a level hyphenated as in a slug: `gemini-3.8-flash-high`;
-// - a level as its own word: `XHigh` (no English word) after a space, / or a
-//   comma; Low, Medium or High after / in any case, after a comma in any case
-//   or after a space capitalised (`High`, `HIGH`) — those two only where the
+// - `XHigh`, which is no English word: after a space, / or a comma whatever
+//   follows it but a longer word (`XHigh-thinking` goes, `XHighlights` stays),
+//   and alone on the next line;
+// - Low, Medium or High as its own word: after / in any case, after a comma
+//   in any case or after a space capitalised (`High`, `HIGH`) — those two only where the
 //   clause ends with it (`Neon, high.`), never before another word (`Neon High
 //   recall`, `Neon high-level`), since there an ordinary word reads the same.
 // The pattern is case-sensitive so that the capitalised form can be told
@@ -119,7 +121,8 @@ const COLLAPSE = new RegExp(`\\[model\\](?:${[
   `${JOIN}*(?:${anyCase('v')}?\\d+(?:[.\\u2010-\\u2015]\\d+)*|\\[model\\])`,
   `${JOIN}*(?:${LINE_BREAK}${JOIN}*)?(?:\\(${LEVEL_SLUG}\\)|·\\s*${LEVEL}${WORD_ENDS})`,
   `[-_\\u2010-\\u2015]${LEVEL_SLUG}(?!\\p{L})`,
-  `(?:${SPACE}+|${SPACE}*[/,]${SPACE}*)${anyCase('xhigh')}${WORD_ENDS}`,
+  `(?:${SPACE}+|${SPACE}*[/,]${SPACE}*)${anyCase('xhigh')}(?![\\p{L}\\p{N}])`,
+  `${SPACE}*${LINE_BREAK}${SPACE}*${anyCase('xhigh')}(?=${SPACE}*(?:$|${LINE_BREAK}))`,
   `${SPACE}*/${SPACE}*${WORD}${WORD_ENDS}`,
   `(?:${SPACE}*,${SPACE}*${WORD}|${SPACE}+(?:Low|LOW|Medium|MEDIUM|High|HIGH))${CLAUSE_ENDS}`,
 ].join('|')})+`, 'gu');
