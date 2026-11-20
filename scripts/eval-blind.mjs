@@ -27,10 +27,13 @@
  * leaves `[model]`, not `[model] 4 [model]`. Partial markers name the unit and
  * its timeout and become `[partial]`. Timings are not carried at all.
  *
- * AGGREGATE joins `grades.jsonl` with the mapping and the keys into
- * `<D>/aggregates/<date>.json`: numbers and arm names, per run and as means.
- * A run whose calls all failed has no score (its score fields are null), is
- * counted in the arm's `failedRuns`, and stays out of every score's mean.
+ * AGGREGATE joins `grades.jsonl` with the mapping, the keys and each V task's
+ * kind (`suites/V/tasks.jsonl`: keyed, recall-only or control) into
+ * `<D>/aggregates/<date>.json`: numbers and arm names, per run, as means and
+ * as totals. A run is a task's n-th answer, not a pass over the suite: the
+ * spec's rules read the totals. A run whose calls all failed has no score (its
+ * score fields are null), is counted in the arm's `failedRuns`, and stays out
+ * of every score's mean.
  * A grade the session overturned (`overturned: {from, to}`) counts as `to`.
  * `--merge D2` carries into the aggregate every arm of `aggregates/<D2>.json`
  * that this date did not run (a partial re-run keeps the other arms) — an R
@@ -188,7 +191,7 @@ export function rubric(date) {
 
 You grade the answers in \`blinded.jsonl\` against the keys (\`suites/R/key.jsonl\`, \`suites/V/key.jsonl\`). Each answer has a blind id; nothing says which model wrote it, and model names in it read \`[model]\`. Do not guess the author.
 
-Write \`grades.jsonl\` in this directory: one JSON object per line, one line per graded item. Grade every task of every answer, and every key item for every V answer.
+Write \`grades.jsonl\` in this directory: one JSON object per line, one line per graded item. Grade every task of every answer, and every key item of its task for every V answer.
 
 ## R: research
 
@@ -214,13 +217,20 @@ Per URL the answer cites for that task, one \`url\` line, graded:
 
 ## V: review
 
-Per key item, one \`key\` line: \`found\` (the answer names that defect: its location and its scenario) or \`not\`.
+An answer reviews one task. The key lists each task's defects; a task the key lists none for gets no \`key\` line.
 
-Per finding the key does not hold, one \`finding\` line naming its location in one line: \`plausible-new\` (it may be real; the session verifies it) or \`false\`.
+Per key item of the answer's task, one \`key\` line: \`found\` (the answer names that defect: its location and its scenario) or \`not\`. One credit per defect: a second comment on a defect already graded \`found\` earns nothing and gets no line.
+
+Per finding the key does not hold, one \`finding\` line naming its location in one line, graded:
+- \`plausible\`: true of the code the answer was shown, and not in the key;
+- \`fabricated\`: it cites a line, a symbol or a behaviour that is not in that code.
+
+Check each such finding's citation mechanically against the task's snapshot (the session names each task's snapshot directory): write it as a pointer line — path:line, a fragment of that line in backticks, the claim — and run \`node bin/omelette-fleet.mjs check <that file> --root <the snapshot>\`. A pointer that fails is \`fabricated\`.
 
 \`\`\`
 {"blindId":"b002","taskId":"<task id>","item":"key","keyId":"<key id>","grade":"found"}
-{"blindId":"b002","taskId":"<task id>","item":"finding","finding":"<location, one line>","grade":"plausible-new"}
+{"blindId":"b002","taskId":"<task id>","item":"finding","finding":"<location, one line>","grade":"plausible"}
+{"blindId":"b002","taskId":"<task id>","item":"finding","finding":"<location, one line>","grade":"fabricated"}
 \`\`\`
 
 ## On any line
@@ -231,20 +241,47 @@ Per finding the key does not hold, one \`finding\` line naming its location in o
 ## Added by the session, not the grader
 
 - \`"overturned": {"from": "<grade>", "to": "<grade>"}\` on a grade the session changed: it counts as \`to\`.
-- \`"verified": true\` on a \`plausible-new\` finding the session confirmed: it counts toward precision.
+- \`"verified": true\` on a \`plausible\` finding of a task of our own code that the session confirmed: it counts as \`confirmed\`. A finding on another project's code is never confirmed.
 `;
 }
 
 const GRADES = {
   R: { answer: ['correct', 'partly', 'wrong', 'no-answer'], url: ['supports', 'real-not-supporting', 'unreachable-or-invented'] },
-  V: { key: ['found', 'not'], finding: ['plausible-new', 'false'] },
+  V: { key: ['found', 'not'], finding: ['plausible', 'fabricated', 'plausible-new', 'false'] },
 };
 
 /** A grade line's final value: the session's, when it overturned the grader. */
 const finalGrade = (g) => (g.overturned ? g.overturned.to : g.grade);
 
-/** Check every grade line against the rubric and the mapping; throws naming the line. */
-function checkGrades(grades, mapping, keyIds) {
+/** A finding's final grade in this round's words: round one's `plausible-new` reads as `plausible`, its `false` as `fabricated`. */
+const findingGrade = (g) => {
+  const v = finalGrade(g);
+  return v === 'plausible-new' ? 'plausible' : v === 'false' ? 'fabricated' : v;
+};
+
+/**
+ * Which V key items are whose: `(taskId) => [key ids]`. Every key line names
+ * its `task`, or none does — round one's key, which belongs whole to the one
+ * task with a key (not a control) the runs cover; throws on a mix, and on a
+ * task-less key when the runs cover more than one such task.
+ */
+function keyOwner(keyV, mapping, kindOf) {
+  const named = keyV.filter((k) => k.task !== undefined).length;
+  if (named && named < keyV.length) throw new Error('the V key: every line names its task, or none does');
+  if (named) {
+    const by = new Map();
+    for (const k of keyV) by.set(k.task, [...(by.get(k.task) || []), k.id]);
+    return (taskId) => by.get(taskId) || [];
+  }
+  const covered = new Set([...Object.values(mapping.blinds), ...(mapping.failed || [])].filter((e) => e.suite === 'V').flatMap((e) => e.taskIds));
+  const owners = [...covered].filter((t) => kindOf(t) !== 'control');
+  if (keyV.length && owners.length > 1) throw new Error(`the V key names no task, and the runs cover ${owners.length} tasks with a key`);
+  const ids = keyV.map((k) => k.id);
+  return (taskId) => (taskId === owners[0] ? ids : []);
+}
+
+/** Check every grade line against the rubric, the mapping and the V tasks' kinds and keys; throws naming the line. */
+function checkGrades(grades, mapping, { keyIds, kindOf, keyItemsOf }) {
   const seen = new Set();
   grades.forEach((g, i) => {
     const at = `grades line ${i + 1}`;
@@ -259,7 +296,15 @@ function checkGrades(grades, mapping, keyIds) {
       const o = g.overturned;
       if (!o || !allowed.includes(o.from) || !allowed.includes(o.to)) throw new Error(`${at}: overturned needs a from and a to among ${allowed.join(', ')}`);
     }
-    if (g.item === 'key' && !keyIds.V.has(g.keyId)) throw new Error(`${at}: key item "${g.keyId}" is not in the V key`);
+    if (g.item === 'key') {
+      if (kindOf(g.taskId) === 'control') throw new Error(`${at}: task ${g.taskId} is a control: it has no key`);
+      if (!keyIds.V.has(g.keyId)) throw new Error(`${at}: key item "${g.keyId}" is not in the V key`);
+      if (!keyItemsOf(g.taskId).includes(g.keyId)) throw new Error(`${at}: key item "${g.keyId}" is not ${g.taskId}'s`);
+    }
+    if (g.verified !== undefined) {
+      if (g.item !== 'finding') throw new Error(`${at}: "verified" goes on a finding line only`);
+      if (kindOf(g.taskId) !== 'keyed') throw new Error(`${at}: task ${g.taskId} is not our own code: the session cannot confirm a finding on it`);
+    }
     const one = g.item === 'answer' ? `${g.blindId}/${g.taskId}` : g.item === 'key' ? `${g.blindId}/${g.keyId}` : null;
     if (one) {
       if (seen.has(`${g.item}:${one}`)) throw new Error(`${at}: a second ${g.item} grade for ${one}`);
@@ -329,28 +374,52 @@ function rRun({ calls, failed, grades, trapIds }) {
   return r;
 }
 
-/** V, one run: key items found, recall, findings, precision, false findings. A run with no answered call has no score. */
-function vRun({ calls, failed, grades, keyCount }) {
+/**
+ * V, one run. Keyed tasks give round one's recall and precision; recall-only tasks the bugs found and
+ * the findings counted; controls count every finding against the arm. A failed call's task is covered
+ * and finds nothing. A run with no answered call has no score.
+ */
+function vRun({ calls, failed, grades, kindOf, keyItemsOf }) {
   const empty = emptyCount(failed, () => 1);
   if (!calls.length) {
-    return { found: null, recall: null, findings: null, verifiedNew: null, unverifiedNew: null, falseFindings: null, precision: null, ungraded: 0, failed: failed.length, empty };
+    return { found: null, recall: null, findings: null, confirmed: null, plausible: null, fabricated: null, precision: null, recallOnly: null, control: null, ungraded: 0, failed: failed.length, empty };
   }
-  const found = new Set(grades.filter((g) => g.item === 'key' && finalGrade(g) === 'found').map((g) => g.keyId));
+  const answered = calls.map((c) => c.taskIds[0]);
+  const covered = [...new Set([...answered, ...failed.map((f) => f.taskIds[0])])];
+  const of = (kind) => covered.filter((t) => kindOf(t) === kind);
+  const tally = (ts) => {
+    const mine = new Set(ts);
+    const gs = grades.filter((g) => mine.has(g.taskId));
+    // One credit per keyed bug: a key item counts once however many lines name it.
+    const found = new Set(gs.filter((g) => g.item === 'key' && finalGrade(g) === 'found').map((g) => g.keyId)).size;
+    const extra = gs.filter((g) => g.item === 'finding');
+    return {
+      found,
+      findings: found + extra.length,
+      confirmed: extra.filter((g) => findingGrade(g) === 'plausible' && g.verified === true).length,
+      plausible: extra.filter((g) => findingGrade(g) === 'plausible' && g.verified !== true).length,
+      fabricated: extra.filter((g) => findingGrade(g) === 'fabricated').length,
+      keyItems: ts.reduce((n, t) => n + keyItemsOf(t).length, 0),
+    };
+  };
+  const kt = of('keyed');
+  const xt = of('recall');
+  const ct = of('control');
+  const k = kt.length ? tally(kt) : null;
+  const x = xt.length ? tally(xt) : null;
+  const c = ct.length ? tally(ct) : null;
   const keyLines = new Set(grades.filter((g) => g.item === 'key').map((g) => g.keyId));
-  const extra = grades.filter((g) => g.item === 'finding');
-  const verifiedNew = extra.filter((g) => finalGrade(g) === 'plausible-new' && g.verified === true).length;
-  const unverifiedNew = extra.filter((g) => finalGrade(g) === 'plausible-new' && g.verified !== true).length;
-  const falseFindings = extra.filter((g) => finalGrade(g) === 'false').length;
-  const findings = found.size + extra.length;
   return {
-    found: found.size,
-    recall: keyCount ? found.size / keyCount : null,
-    findings,
-    verifiedNew,
-    unverifiedNew,
-    falseFindings,
-    precision: findings ? (found.size + verifiedNew) / findings : null,
-    ungraded: Math.max(0, keyCount - keyLines.size),
+    found: k ? k.found : null,
+    recall: k && k.keyItems ? k.found / k.keyItems : null,
+    findings: k ? k.findings : null,
+    confirmed: k ? k.confirmed : null,
+    plausible: k ? k.plausible : null,
+    fabricated: k ? k.fabricated : null,
+    precision: k && k.findings ? (k.found + k.confirmed) / k.findings : null,
+    recallOnly: x && { tasks: xt.length, bugs: x.keyItems, found: x.found, findings: x.findings, plausible: x.plausible, fabricated: x.fabricated },
+    control: c && { tasks: ct.length, findings: c.findings, plausible: c.plausible, fabricated: c.fabricated },
+    ungraded: answered.filter((t) => kindOf(t) !== 'control').flatMap(keyItemsOf).filter((id) => !keyLines.has(id)).length,
     failed: failed.length,
     empty,
   };
@@ -370,15 +439,19 @@ const median = (xs) => {
 };
 
 /**
- * The aggregate: per suite and arm, every run's numbers and their means.
- * `keys` is `{R: [key lines], V: [key lines]}` — ids and the trap flag are all
- * it reads. Throws on a grade line the rubric does not allow.
+ * The aggregate: per suite and arm, every run's numbers, their means and
+ * their totals. `keys` is `{R: [key lines], V: [key lines]}` — ids, R's trap
+ * flag and V's `task` are all it reads; `tasks` is `{V: [task lines]}`, whose
+ * `kind` it reads (absent: every V task is keyed). Throws on a grade line the
+ * rubric does not allow, and on a V key whose owners cannot be told.
  */
-export function aggregate({ grades, mapping, keys }) {
+export function aggregate({ grades, mapping, keys, tasks = {} }) {
   const keyIds = { R: new Set((keys.R || []).map((k) => k.id)), V: new Set((keys.V || []).map((k) => k.id)) };
-  checkGrades(grades, mapping, keyIds);
+  const kinds = new Map((tasks.V || []).map((t) => [t.id, t.kind ?? 'keyed']));
+  const kindOf = (id) => kinds.get(id) ?? 'keyed';
+  const keyItemsOf = keyOwner(keys.V || [], mapping, kindOf);
+  checkGrades(grades, mapping, { keyIds, kindOf, keyItemsOf });
   const trapIds = new Set((keys.R || []).filter((k) => k.trap === true).map((k) => k.id));
-  const keyCount = keyIds.V.size;
 
   const arms = new Map();
   const armOf = (e) => {
@@ -399,19 +472,23 @@ export function aggregate({ grades, mapping, keys }) {
       const ids = new Set(calls.map((c) => c.blindId));
       const failed = a.failed.filter((f) => f.run === run);
       const runGrades = a.grades.filter((g) => ids.has(g.blindId));
-      const scores = a.suite === 'R' ? rRun({ calls, failed, grades: runGrades, trapIds }) : vRun({ calls, failed, grades: runGrades, keyCount });
+      const scores = a.suite === 'R' ? rRun({ calls, failed, grades: runGrades, trapIds }) : vRun({ calls, failed, grades: runGrades, kindOf, keyItemsOf });
       return { run, ...scores, ...costOf(calls) };
     });
     const m = (k) => mean(runs.map((r) => r[k]));
+    /** A recall-only or control count's mean over the runs that covered such a task. */
+    const mb = (block, k) => mean(runs.map((r) => (r[block] ? r[block][k] : null)));
     const means = a.suite === 'R'
       ? {
         correct: m('correct'), partly: m('partly'), wrong: m('wrong'), noAnswer: m('noAnswer'), inventedUrls: m('inventedUrls'),
         trapPassed: mean(runs.filter((r) => r.trap !== null).map((r) => (r.trap === 'passed' ? 1 : 0))),
       }
       : {
-        found: m('found'), recall: m('recall'), findings: m('findings'), verifiedNew: m('verifiedNew'),
-        unverifiedNew: m('unverifiedNew'), falseFindings: m('falseFindings'), precision: m('precision'),
+        found: m('found'), recall: m('recall'), findings: m('findings'), confirmed: m('confirmed'), plausible: m('plausible'), fabricated: m('fabricated'),
+        precision: m('precision'), recallOnlyFound: mb('recallOnly', 'found'), recallOnlyFindings: mb('recallOnly', 'findings'),
+        recallOnlyFabricated: mb('recallOnly', 'fabricated'), controlFindings: mb('control', 'findings'), controlFabricated: mb('control', 'fabricated'),
       };
+    const taskIds = [...new Set(all.flatMap((e) => e.taskIds))].sort();
     out.push({
       suite: a.suite,
       arm: a.arm,
@@ -420,7 +497,9 @@ export function aggregate({ grades, mapping, keys }) {
       effort: one(all.map((e) => e.effort)),
       cli: distinct(all.map((e) => e.cli)),
       batch: all.some((e) => (e.taskIds || []).length > 1),
-      ...(a.suite === 'R' ? { tasks: keyIds.R.size } : { keyItems: keyCount }),
+      ...(a.suite === 'R'
+        ? { tasks: keyIds.R.size }
+        : { keyItems: taskIds.filter((t) => kindOf(t) === 'keyed').reduce((n, t) => n + keyItemsOf(t).length, 0), taskIds }),
       n: runs.length,
       failedRuns: runs.filter((r) => !a.entries.some((e) => e.run === r.run)).length,
       runs,
@@ -487,7 +566,8 @@ function cmdAggregate({ dir, date, merge, out }) {
     if (suites.has(s) && !existsSync(p)) throw new Error(`no key at ${p}`);
     keys[s] = existsSync(p) ? readJsonl(p) : [];
   }
-  const agg = aggregate({ grades, mapping, keys });
+  const vTasks = join(dir, 'suites', 'V', 'tasks.jsonl');
+  const agg = aggregate({ grades, mapping, keys, tasks: { V: existsSync(vTasks) ? readJsonl(vTasks) : [] } });
   const rTasks = join(dir, 'suites', 'R', 'tasks.jsonl');
   agg.sets = { R: existsSync(rTasks) ? setFingerprint(readJsonl(rTasks)) : null };
   if (merge) {

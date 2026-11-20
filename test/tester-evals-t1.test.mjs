@@ -306,9 +306,9 @@ test('aggregate: a grade overturned to "not" and a finding overturned to "false"
   const run = a.arms[0].runs[0];
   assert.equal(run.found, 1);
   assert.equal(run.recall, 0.5);
-  assert.equal(run.verifiedNew, 1);
-  assert.equal(run.unverifiedNew, 1);
-  assert.equal(run.falseFindings, 1);
+  assert.equal(run.confirmed, 1);
+  assert.equal(run.plausible, 1);
+  assert.equal(run.fabricated, 1);
   assert.equal(run.findings, 4);                 // 1 key + 3 extra
   assert.equal(run.precision, 2 / 4);            // (1 key + 1 verified) / 4
   assert.equal(a.overturned, 2);

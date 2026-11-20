@@ -114,7 +114,7 @@ test('the CLI blinds a date: blinded.jsonl carries no arm, model, CLI or timing,
   for (const s of ['gemini', 'codex', 'gpt', 'agy 9.9.9', '9.9.9', 'Flash', 'Sol']) assert.ok(!text.toLowerCase().includes(s.toLowerCase()), `${s} reached a blinded V answer`);
 
   const rubric = readFileSync(join(g, 'rubric.md'), 'utf8');
-  for (const grade of ['correct', 'partly', 'wrong', 'no-answer', 'supports', 'real-not-supporting', 'unreachable-or-invented', 'found', 'not', 'plausible-new', 'false', 'grades.jsonl']) {
+  for (const grade of ['correct', 'partly', 'wrong', 'no-answer', 'supports', 'real-not-supporting', 'unreachable-or-invented', 'found', 'not', 'plausible', 'fabricated', 'confirmed', 'grades.jsonl']) {
     assert.ok(rubric.includes(`\`${grade}\``), `rubric names ${grade}`);
   }
 
@@ -187,11 +187,14 @@ test('the aggregate\'s numbers on a fixed grades fixture: R counts and the trap,
 
   const c = arm('V', C);
   assert.equal(c.keyItems, 4);
-  assert.deepEqual(c.runs.map(({ run, found, recall, findings, verifiedNew, unverifiedNew, falseFindings, precision }) => ({ run, found, recall, findings, verifiedNew, unverifiedNew, falseFindings, precision })), [
-    { run: 1, found: 2, recall: 0.5, findings: 4, verifiedNew: 1, unverifiedNew: 0, falseFindings: 1, precision: 0.75 },
-    { run: 2, found: 3, recall: 0.75, findings: 4, verifiedNew: 0, unverifiedNew: 1, falseFindings: 0, precision: 0.75 },
+  assert.deepEqual(c.runs.map(({ run, found, recall, findings, confirmed, plausible, fabricated, precision }) => ({ run, found, recall, findings, confirmed, plausible, fabricated, precision })), [
+    { run: 1, found: 2, recall: 0.5, findings: 4, confirmed: 1, plausible: 0, fabricated: 1, precision: 0.75 },
+    { run: 2, found: 3, recall: 0.75, findings: 4, confirmed: 0, plausible: 1, fabricated: 0, precision: 0.75 },
   ]);
-  assert.deepEqual(c.mean, { found: 2.5, recall: 0.625, findings: 4, verifiedNew: 0.5, unverifiedNew: 0.5, falseFindings: 0.5, precision: 0.75, failed: 0, wallMs: 6000, tokens: 30 });
+  assert.deepEqual(c.mean, {
+    found: 2.5, recall: 0.625, findings: 4, confirmed: 0.5, plausible: 0.5, fabricated: 0.5, precision: 0.75,
+    recallOnlyFound: null, recallOnlyFindings: null, recallOnlyFabricated: null, controlFindings: null, controlFabricated: null, failed: 0, wallMs: 6000, tokens: 30,
+  });
   assert.equal(c.effort, 'xhigh');
   assert.equal(agg.overturned, 2);
   assert.equal(agg.grades, GRADES.length);
@@ -282,7 +285,7 @@ test('a run whose calls all failed has no score: it is counted as failed and lef
   assert.deepEqual(arm.runs.map((r) => r.recall), [0.5, 0.25, null]);
   const failedRun = arm.runs[2];
   assert.equal(failedRun.failed, 1);
-  for (const k of ['found', 'recall', 'findings', 'verifiedNew', 'unverifiedNew', 'falseFindings', 'precision']) assert.equal(failedRun[k], null, k);
+  for (const k of ['found', 'recall', 'findings', 'confirmed', 'plausible', 'fabricated', 'precision']) assert.equal(failedRun[k], null, k);
   assert.equal(arm.mean.recall, 0.375);
   assert.equal(arm.failedRuns, 1);
 });
@@ -468,4 +471,58 @@ test('--merge leaves out the R arms of another question set, says so, and still 
   assert.deepEqual(agg.arms.map((a) => [a.suite, a.arm, a.carriedFrom || null]), [['R', N, null], ['V', C, '2026-10-16']]);
   assert.match(res.stdout, /R: 2 arm\(s\) of 2026-10-16 not carried/);
   assert.equal(agg.sets.R, setFingerprint(RT));
+});
+
+// ─── V by task kind: keyed, recall-only, control ─────────────────────────────
+
+const N = 'gemini:Gemini 4 Neon (High)';
+const TASKS_V = [{ id: 'V01', kind: 'keyed' }, { id: 'V02', kind: 'keyed' }, { id: 'X01', kind: 'recall' }, { id: 'C01', kind: 'control', of: 'X01' }];
+const KEY_V = [{ id: 'K1', task: 'V01' }, { id: 'K2', task: 'V01' }, { id: 'K3', task: 'V02' }, { id: 'K4', task: 'V02' }, { id: 'K5', task: 'V02' }, { id: 'XK1', task: 'X01' }];
+const keyOn = (blindId, taskId, keyId, grade) => ({ blindId, taskId, item: 'key', keyId, grade });
+const findingOn = (blindId, taskId, grade, extra = {}) => ({ blindId, taskId, item: 'finding', finding: 'invented location', grade, ...extra });
+const vMapping = (blinds, failed = []) => ({ date: 'd', seed: 1, failed, blinds: Object.fromEntries(Object.entries(blinds).map(([b, t]) => [b, blindOf('V', N, 1, [t], 1000, null)])) });
+
+test('V by kind: keyed recall and precision, recall-only bugs found, every finding on a control counted', () => {
+  const grades = [
+    keyOn('b1', 'V01', 'K1', 'found'), keyOn('b1', 'V01', 'K2', 'not'),
+    findingOn('b1', 'V01', 'plausible', { verified: true }), findingOn('b1', 'V01', 'fabricated'), findingOn('b1', 'V01', 'plausible'),
+    keyOn('b2', 'X01', 'XK1', 'found'), findingOn('b2', 'X01', 'plausible'), findingOn('b2', 'X01', 'fabricated'),
+    findingOn('b3', 'C01', 'plausible'), findingOn('b3', 'C01', 'fabricated'), findingOn('b3', 'C01', 'fabricated'),
+  ];
+  const [arm] = aggregate({ grades, mapping: vMapping({ b1: 'V01', b2: 'X01', b3: 'C01' }), keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V } }).arms;
+  const { found, recall, findings, confirmed, plausible, fabricated, precision, recallOnly, control, ungraded } = arm.runs[0];
+  assert.deepEqual({ found, recall, findings, confirmed, plausible, fabricated, precision, recallOnly, control, ungraded }, {
+    found: 1, recall: 0.5, findings: 4, confirmed: 1, plausible: 1, fabricated: 1, precision: 0.5,
+    recallOnly: { tasks: 1, bugs: 1, found: 1, findings: 3, plausible: 1, fabricated: 1 },
+    control: { tasks: 1, findings: 3, plausible: 1, fabricated: 2 },
+    ungraded: 0,
+  });
+  assert.equal(arm.keyItems, 2);
+  assert.deepEqual(arm.taskIds, ['C01', 'V01', 'X01']);
+  assert.equal(arm.mean.controlFindings, 3);
+  assert.equal(arm.mean.recallOnlyFound, 1);
+});
+
+test('a failed call on a keyed task counts its key items as not found', () => {
+  const failed = [{ ...blindOf('V', N, 1, ['V02'], 1000, null), error: 'agy produced no output: invented', empty: true }];
+  const grades = [keyOn('b1', 'V01', 'K1', 'found'), keyOn('b1', 'V01', 'K2', 'not')];
+  const [arm] = aggregate({ grades, mapping: vMapping({ b1: 'V01' }, failed), keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V } }).arms;
+  assert.deepEqual([arm.runs[0].recall, arm.runs[0].failed, arm.runs[0].empty], [0.2, 1, 1]);
+});
+
+test('the session cannot confirm a finding on foreign code, a control has no key, and a key item is its own task\'s', () => {
+  const mapping = vMapping({ b1: 'V01', b2: 'X01', b3: 'C01' });
+  const run = (line) => aggregate({ grades: [line], mapping, keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V } });
+  assert.throws(() => run(findingOn('b2', 'X01', 'plausible', { verified: true })), /grades line 1: .*not our own code/);
+  assert.throws(() => run(keyOn('b3', 'C01', 'XK1', 'not')), /grades line 1: .*control/);
+  assert.throws(() => run(keyOn('b2', 'X01', 'K1', 'found')), /grades line 1: .*not X01's/);
+});
+
+test('a V key names its task on every line or none: round one\'s task-less key belongs to the one keyed task', () => {
+  const taskless = { R: [], V: [{ id: 'k1' }, { id: 'k2' }] };
+  const grades = [keyOn('b1', 'V01', 'k1', 'found'), keyOn('b1', 'V01', 'k2', 'not')];
+  const [arm] = aggregate({ grades, mapping: vMapping({ b1: 'V01' }), keys: taskless, tasks: { V: TASKS_V } }).arms;
+  assert.equal(arm.keyItems, 2);
+  assert.throws(() => aggregate({ grades: [], mapping: vMapping({ b1: 'V01', b2: 'V02' }), keys: taskless, tasks: { V: TASKS_V } }), /names no task/);
+  assert.throws(() => aggregate({ grades: [], mapping: vMapping({ b1: 'V01' }), keys: { R: [], V: [{ id: 'k1', task: 'V01' }, { id: 'k2' }] }, tasks: { V: TASKS_V } }), /every line names its task/);
 });
