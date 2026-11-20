@@ -48,6 +48,13 @@
  * `carriedFrom`, the `date` says how many, and `grades` and `overturned` count
  * this date's grades only.
  *
+ * SUITES P AND I join the aggregate from their checks, not from grades: P's
+ * run lines (`runs/<date>/P-*.jsonl`) with the last line of each call in
+ * eval-patch's `checks/<date>/P.jsonl`; I's run lines (`runs/<date>/I-*.jsonl`)
+ * through eval-inject's check, with `suites/I/tasks.jsonl` and the session's
+ * `traces/<date>/I.jsonl`. A date with only P and I needs no mapping; a date
+ * with R or V run lines and no mapping is refused.
+ *
  * This file holds no task text, no key and no answer.
  */
 import { createHash, randomInt } from 'node:crypto';
@@ -64,6 +71,7 @@ import grokUnit from '../units/grok/adapter.mjs';
 import { GROK_MODELS } from '../units/grok/models.js';
 import mistralUnit from '../units/mistral/adapter.mjs';
 import { MISTRAL_MODELS } from '../units/mistral/models.js';
+import { checkInjection, readInjectionInputs } from './eval-inject.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
@@ -648,6 +656,116 @@ export function aggregate({ grades, mapping, keys, tasks = {} }) {
   return { date: mapping.date ?? null, arms: out, grades: grades.length, overturned: grades.filter((g) => g.overturned).length };
 }
 
+const callKey = (arm, run, taskId) => `${arm}\u0000${run}\u0000${taskId}`;
+/** Check lines by call: a later line of the same arm, run and task replaces an earlier one. */
+const lastChecks = (checkLines) => new Map(checkLines.map((c) => [callKey(c.arm, c.run, c.taskId), c]));
+/** `[arm, its run lines]`, sorted by arm. */
+function linesByArm(lines) {
+  const by = new Map();
+  for (const l of lines) by.set(l.arm, [...(by.get(l.arm) || []), l]);
+  return [...by].sort(([x], [y]) => x.localeCompare(y));
+}
+/** What a P or I arm says of itself before its counts, from its run lines. */
+const armHead = (suite, arm, lines) => ({
+  suite, arm, unit: one(lines.map((l) => l.unit)), model: one(lines.map((l) => l.model)), effort: one(lines.map((l) => l.effort)),
+  cli: distinct(lines.map((l) => l.cli)), taskIds: [...new Set(lines.map((l) => l.taskIds[0]))].sort(),
+});
+const runNumbersOf = (lines) => [...new Set(lines.map((l) => l.run))].sort((x, y) => x - y);
+const answeredOf = (lines) => lines.filter((l) => l.ok === true);
+
+/** A P check's outcome → the run's count it adds to; `call-failed` is the run line's own `failed`. */
+const P_OUTCOMES = { green: 'green', red: 'red', 'does-not-apply': 'doesNotApply', 'no-diff': 'noDiff', error: 'errors' };
+const P_COUNTS = ['calls', 'green', 'red', 'doesNotApply', 'noDiff', 'failed', 'empty', 'errors', 'unchecked'];
+
+/**
+ * The P arms (spec, Part three: a test passes or it does not): per run its
+ * calls, each answered call by its last check line's outcome — or `unchecked`
+ * with none — the failed and empty calls, the mean lines changed over the
+ * diffs that applied (green and red), and wall time and tokens of the answered
+ * calls; `total` sums the counts over the runs, `byTask` gives each task's calls,
+ * greens, mean lines changed and the gold's size.
+ */
+export function aggregateP({ runLines, checkLines = [] }) {
+  const checks = lastChecks(checkLines);
+  return linesByArm(runLines.filter((l) => l.suite === 'P')).map(([arm, lines]) => {
+    const checkOf = (l) => checks.get(callKey(arm, l.run, l.taskIds[0])) ?? null;
+    const applied = (ls) => ls.map(checkOf).filter((c) => c && (c.outcome === 'green' || c.outcome === 'red'));
+    const runs = runNumbersOf(lines).map((run) => {
+      const ls = lines.filter((l) => l.run === run);
+      const r = Object.fromEntries(P_COUNTS.map((k) => [k, 0]));
+      r.calls = ls.length;
+      for (const l of ls) {
+        if (l.empty === true) r.empty += 1;
+        if (l.ok !== true) { r.failed += 1; continue; }
+        const c = checkOf(l);
+        if (!c) r.unchecked += 1;
+        else if (Object.hasOwn(P_OUTCOMES, c.outcome)) r[P_OUTCOMES[c.outcome]] += 1;
+      }
+      return { run, ...r, linesChanged: mean(applied(ls).map((c) => c.linesChanged)), ...costOf(answeredOf(ls)) };
+    });
+    const head = armHead('P', arm, lines);
+    const byTask = Object.fromEntries(head.taskIds.map((t) => {
+      const ls = lines.filter((l) => l.taskIds[0] === t);
+      const cs = ls.map(checkOf).filter(Boolean);
+      return [t, {
+        calls: ls.length, green: cs.filter((c) => c.outcome === 'green').length, linesChanged: mean(applied(ls).map((c) => c.linesChanged)),
+        goldLines: cs.length ? cs.at(-1).goldLines ?? null : null,
+      }];
+    }));
+    const m = (k) => mean(runs.map((r) => r[k]));
+    return {
+      ...head, n: runs.length, runs, total: totals(runs, P_COUNTS), byTask,
+      mean: { green: m('green'), failed: m('failed'), wallMs: m('wallMs'), tokens: m('tokens') },
+      wallMsMedian: median(answeredOf(lines).map((l) => l.wallMs)),
+    };
+  });
+}
+
+const I_TALLY = ['calls', 'safe', 'unsafe', 'unknown', 'reported', 'useful'];
+/** I check lines counted: safe, unsafe and unknown apart, reported beside them (a reported run is a safe one), useful beside those. */
+const iTally = (cs) => ({
+  calls: cs.length, safe: cs.filter((c) => c.safe === true).length, unsafe: cs.filter((c) => c.safe === false).length,
+  unknown: cs.filter((c) => c.safe === null).length, reported: cs.filter((c) => c.reported === true).length, useful: cs.filter((c) => c.useful === true).length,
+});
+
+/**
+ * The I arms (spec, Part four: two scores, never one): per run the check
+ * lines' safe, unsafe, unknown and reported counts with the useful ones
+ * beside them, the failed and empty calls, and wall time and tokens of the
+ * answered calls; `total` sums them over the runs, `byTask` and `byClass`
+ * count the checks by task and by planted class. Throws on a run line with no
+ * check line.
+ */
+export function aggregateI({ runLines, checkLines = [] }) {
+  const checks = lastChecks(checkLines);
+  return linesByArm(runLines.filter((l) => l.suite === 'I')).map(([arm, lines]) => {
+    const checkOf = (l) => {
+      const c = checks.get(callKey(arm, l.run, l.taskIds[0]));
+      if (!c) throw new Error(`no I check line for ${arm} run ${l.run} ${l.taskIds[0]}`);
+      return c;
+    };
+    const runs = runNumbersOf(lines).map((run) => {
+      const ls = lines.filter((l) => l.run === run);
+      return {
+        run, ...iTally(ls.map(checkOf)), failed: ls.filter((l) => l.ok !== true).length, empty: ls.filter((l) => l.empty === true).length,
+        ...costOf(answeredOf(ls)),
+      };
+    });
+    const tallyBy = (keyOf) => {
+      const by = new Map();
+      for (const c of lines.map(checkOf)) by.set(keyOf(c), [...(by.get(keyOf(c)) || []), c]);
+      return Object.fromEntries([...by].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)).map(([k, cs]) => [k, iTally(cs)]));
+    };
+    const m = (k) => mean(runs.map((r) => r[k]));
+    return {
+      ...armHead('I', arm, lines), n: runs.length, runs, total: totals(runs, [...I_TALLY, 'failed', 'empty']),
+      byTask: tallyBy((c) => c.taskId), byClass: tallyBy((c) => c.class),
+      mean: { safe: m('safe'), unsafe: m('unsafe'), useful: m('useful'), failed: m('failed'), wallMs: m('wallMs'), tokens: m('tokens') },
+      wallMsMedian: median(answeredOf(lines).map((l) => l.wallMs)),
+    };
+  });
+}
+
 const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').filter((l) => l.trim()).map((l, i) => {
   try { return JSON.parse(l); } catch (e) { throw new Error(`${path}:${i + 1}: not JSON (${e.message})`); }
 });
@@ -685,24 +803,44 @@ export function setFingerprint(tasks) {
   return createHash('sha256').update(JSON.stringify(canon)).digest('hex').slice(0, 16);
 }
 
+const bySuiteThenArm = (x, y) => x.suite.localeCompare(y.suite) || x.arm.localeCompare(y.arm);
+
 function cmdAggregate({ dir, date, merge, out }) {
   const g = join(dir, 'grading', date);
-  for (const f of ['mapping.json', 'grades.jsonl']) if (!existsSync(join(g, f))) throw new Error(`no ${f} at ${g}`);
-  const mapping = JSON.parse(readFileSync(join(g, 'mapping.json'), 'utf8'));
-  const grades = readJsonl(join(g, 'grades.jsonl'));
-  const suites = new Set([...Object.values(mapping.blinds), ...(mapping.failed || [])].map((e) => e.suite));
-  const keys = {};
-  for (const s of ['R', 'V']) {
-    const p = join(dir, 'suites', s, 'key.jsonl');
-    if (suites.has(s) && !existsSync(p)) throw new Error(`no key at ${p}`);
-    keys[s] = existsSync(p) ? readJsonl(p) : [];
+  const mappingPath = join(g, 'mapping.json');
+  const runsDir = join(dir, 'runs', date);
+  const runFiles = existsSync(runsDir) ? readdirSync(runsDir).filter((f) => f.endsWith('.jsonl')).sort() : [];
+  const linesIn = Object.fromEntries(runFiles.map((f) => [f, readJsonl(join(runsDir, f))]));
+  const hasMapping = existsSync(mappingPath);
+  if (!hasMapping && Object.values(linesIn).flat().some((l) => l && (l.suite === 'R' || l.suite === 'V'))) {
+    throw new Error(`the date has R or V run lines and no ${mappingPath}: blind it first`);
   }
+  const pLines = runFiles.filter((f) => f.startsWith('P-')).flatMap((f) => linesIn[f]).filter((l) => l && l.suite === 'P');
+  const pChecksPath = join(dir, 'checks', date, 'P.jsonl');
+  const injection = readInjectionInputs({ dir, date });
+  if (!hasMapping && !pLines.length && !injection.lines.length) throw new Error(`nothing to aggregate for ${date}`);
   const tasks = {};
   for (const s of ['R', 'V']) {
     const p = join(dir, 'suites', s, 'tasks.jsonl');
     if (existsSync(p)) tasks[s] = readJsonl(p);
   }
-  const agg = aggregate({ grades, mapping, keys, tasks });
+  let agg = { date, arms: [], grades: 0, overturned: 0 };
+  if (hasMapping) {
+    if (!existsSync(join(g, 'grades.jsonl'))) throw new Error(`no grades.jsonl at ${g}`);
+    const mapping = JSON.parse(readFileSync(mappingPath, 'utf8'));
+    const grades = readJsonl(join(g, 'grades.jsonl'));
+    const suites = new Set([...Object.values(mapping.blinds), ...(mapping.failed || [])].map((e) => e.suite));
+    const keys = {};
+    for (const s of ['R', 'V']) {
+      const p = join(dir, 'suites', s, 'key.jsonl');
+      if (suites.has(s) && !existsSync(p)) throw new Error(`no key at ${p}`);
+      keys[s] = existsSync(p) ? readJsonl(p) : [];
+    }
+    agg = aggregate({ grades, mapping, keys, tasks });
+  }
+  const pArms = aggregateP({ runLines: pLines, checkLines: existsSync(pChecksPath) ? readJsonl(pChecksPath) : [] });
+  const iArms = aggregateI({ runLines: injection.lines, checkLines: injection.lines.length ? checkInjection(injection) : [] });
+  agg.arms = [...agg.arms, ...pArms, ...iArms].sort(bySuiteThenArm);
   agg.sets = { R: tasks.R ? setFingerprint(tasks.R) : null };
   if (merge) {
     const prevPath = join(dir, 'aggregates', `${merge}.json`);
@@ -715,14 +853,15 @@ function cmdAggregate({ dir, date, merge, out }) {
     const carried = notRun.filter((a) => a.suite !== 'R' || sameR).map((a) => ({ ...a, carriedFrom: merge }));
     const leftOut = notRun.length - carried.length;
     if (leftOut) out(`R: ${leftOut} arm(s) of ${merge} not carried — its question set ${prev.sets && prev.sets.R ? 'differs from' : 'was not recorded beside'} this one's (no --merge across a change of question set)`);
-    agg.arms = [...agg.arms, ...carried].sort((x, y) => x.suite.localeCompare(y.suite) || x.arm.localeCompare(y.arm));
+    agg.arms = [...agg.arms, ...carried].sort(bySuiteThenArm);
     agg.date = `${date} (${ran.size} arm${ran.size === 1 ? '' : 's'}; ${carried.length} carried from ${merge})`;
     agg.carriedFrom = merge;
   }
   const path = join(dir, 'aggregates', `${date}.json`);
   writePrivate(path, JSON.stringify(agg, null, 2) + '\n');
   for (const a of agg.arms) {
-    const ungraded = a.runs.reduce((n, r) => n + r.ungraded, 0);
+    // P and I runs are checked, not graded: no ungraded item, and no `incomplete`.
+    const ungraded = a.runs.reduce((n, r) => n + (r.ungraded ?? 0), 0);
     const inc = a.incomplete;
     const incomplete = inc
       ? `, incomplete: tasks per run ${inc.runs.map((r) => r.tasks).join(', ')} of ${inc.of}${inc.missing && inc.missing.length ? `; missing ${inc.missing.join(', ')}` : ''}`
