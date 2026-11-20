@@ -321,3 +321,54 @@ test('this round\'s names are masked as whole words — Anthropic, Claude, Opus,
   const out = redact('Anthropic built Claude Opus 5.5; Neon and Hydrogen are Carbon-based. Neonatal opuses stay.', redactionTerms());
   assert.equal(out, '[model] built [model]; [model] and [model] are [model]-based. Neonatal opuses stay.');
 });
+
+test('an empty answer is never put to the grader: it is a failed call marked empty, and its run counts it', () => {
+  const lines = [
+    runLine({ taskIds: ['q1'], answer: 'An invented answer.' }),
+    runLine({ taskIds: ['q2'], answer: '   ' }),
+    runLine({ taskIds: ['q3'], ok: false, answer: null, error: 'agy produced no output: invented', empty: true }),
+    runLine({ taskIds: ['q3'], run: 2, ok: false, answer: null, error: 'invented transport failure', empty: false }),
+  ];
+  const { blinded, mapping } = blind({ lines, seed: 3, terms: redactionTerms() });
+  assert.deepEqual(blinded.map((b) => b.taskIds), [['q1']]);
+  assert.deepEqual(mapping.failed.map((f) => [f.taskIds[0], f.run, f.empty]), [['q2', 1, true], ['q3', 1, true], ['q3', 2, false]]);
+  const keys = { R: [{ id: 'q1' }, { id: 'q2' }, { id: 'q3' }], V: [] };
+  const grades = [{ blindId: blinded[0].blindId, taskId: 'q1', item: 'answer', grade: 'correct' }];
+  const [arm] = aggregate({ grades, mapping: { date: 'd', ...mapping }, keys }).arms;
+  assert.deepEqual(arm.runs.map((r) => [r.run, r.failed, r.empty]), [[1, 2, 2], [2, 1, 0]]);
+  assert.deepEqual([arm.total.failed, arm.total.empty], [3, 2]);
+});
+
+test('blinding takes R and V lines only: P and I lines are checked, not graded', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-evals-blind-pi-'));
+  const runs = join(dir, 'runs', '2026-11-20');
+  mkdirSync(runs, { recursive: true });
+  writeFileSync(join(runs, 'R-a.jsonl'), JSON.stringify(runLine({})) + '\n');
+  writeFileSync(join(runs, 'P-a.jsonl'), JSON.stringify(runLine({ suite: 'P', taskIds: ['P01'] })) + '\n');
+  writeFileSync(join(runs, 'I-a.jsonl'), JSON.stringify(runLine({ suite: 'I', taskIds: ['I01'] })) + '\n');
+  const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--seed', '1'], { encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  const blinded = readFileSync(join(dir, 'grading', '2026-11-20', 'blinded.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(blinded.map((b) => b.suite), ['R']);
+  assert.match(res.stdout, /2 P\/I line\(s\) left to their checks/);
+  const only = mkdtempSync(join(tmpdir(), 'omelette-evals-blind-pi-'));
+  mkdirSync(join(only, 'runs', '2026-11-20'), { recursive: true });
+  writeFileSync(join(only, 'runs', '2026-11-20', 'P-a.jsonl'), JSON.stringify(runLine({ suite: 'P', taskIds: ['P01'] })) + '\n');
+  const none = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', only, '--seed', '1'], { encoding: 'utf8' });
+  assert.equal(none.status, 1);
+  assert.match(none.stderr, /no R or V run lines/);
+});
+
+test('a failed line from before `empty` was recorded is not recorded, never 0: its run and its arm say null', () => {
+  const lines = [
+    runLine({ taskIds: ['q1'], answer: 'An invented answer.' }),
+    runLine({ taskIds: ['q2'], ok: false, answer: null, error: 'invented failure' }),
+  ];
+  const { blinded, mapping } = blind({ lines, seed: 1, terms: redactionTerms() });
+  assert.deepEqual(mapping.failed.map((f) => f.empty), [null]);
+  const keys = { R: [{ id: 'q1' }, { id: 'q2' }], V: [] };
+  const grades = [{ blindId: blinded[0].blindId, taskId: 'q1', item: 'answer', grade: 'correct' }];
+  const [arm] = aggregate({ grades, mapping: { date: 'd', ...mapping }, keys }).arms;
+  assert.deepEqual([arm.runs[0].failed, arm.runs[0].empty], [1, null]);
+  assert.deepEqual([arm.total.failed, arm.total.empty], [1, null]);
+});

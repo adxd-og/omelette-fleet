@@ -7,15 +7,17 @@
  *   node scripts/eval-blind.mjs --date YYYY-MM-DD [--dir D] [--seed N]
  *   node scripts/eval-blind.mjs --date YYYY-MM-DD --aggregate [--dir D] [--merge YYYY-MM-DD]
  *
- * BLIND reads every run line of the date (`<D>/runs/<date>/*.jsonl`), redacts
- * each answer, shuffles with a seed it prints, and writes into
- * `<D>/grading/<date>/`:
+ * BLIND reads every R and V run line of the date (`<D>/runs/<date>/*.jsonl`;
+ * P and I lines are checked by their own scripts, never graded), redacts each
+ * answer, shuffles with a seed it prints, and writes into `<D>/grading/<date>/`:
  *   blinded.jsonl  {blindId, suite, taskIds, answer} — what the grader reads;
  *   mapping.json   blind id → arm, run and the call's facts — never the grader's;
  *   rubric.md      how to grade, and the `grades.jsonl` line format.
- * A failed call has no answer to grade: it goes to the mapping's `failed`, and
- * the aggregate counts it. A date is blinded once — a second mapping would
- * orphan the grades written against the first.
+ * A failed call, or one that ended empty, has no answer to grade: it goes to
+ * the mapping's `failed`, marked `empty`, and the aggregate counts it. A line
+ * from before `empty` was recorded is `empty: null` — not recorded, never
+ * false — and so is every count it is part of. A date is blinded once — a
+ * second mapping would orphan the grades written against the first.
  *
  * REDACTION replaces with `[model]` every catalog id and label
  * (`units/*\/models.js`), the family and vendor words below, every unit tool name, and the
@@ -107,6 +109,18 @@ function rng(seed) {
   };
 }
 
+/**
+ * A line with no answer to grade: true when eval-run filed it `empty`, or its
+ * answer is blank (a line from before `empty` existed included); false when the
+ * line says so or holds an answer; null for a failed line from before `empty`
+ * was recorded — unknown, never false.
+ */
+const emptyOf = (l) => {
+  if (l.empty === true || (l.ok === true && !String(l.answer ?? '').trim())) return true;
+  return l.empty === false || l.ok === true ? false : null;
+};
+const gradable = (l) => l.ok === true && emptyOf(l) !== true;
+
 /** The call's facts the aggregate needs, kept in the mapping and never shown to the grader. */
 const facts = (l) => ({
   suite: l.suite, arm: l.arm, run: l.run, taskIds: l.taskIds, unit: l.unit, model: l.model, effort: l.effort,
@@ -114,11 +128,12 @@ const facts = (l) => ({
 });
 
 /**
- * Blind run lines: `{blinded, mapping}`. The ok lines are shuffled with `seed`
- * and numbered in their new order; the failed ones go to `mapping.failed`.
+ * Blind run lines: `{blinded, mapping}`. The answered lines are shuffled with
+ * `seed` and numbered in their new order; a failed or empty one goes to
+ * `mapping.failed`, marked `empty` (null when its line did not record it).
  */
 export function blind({ lines, seed, terms }) {
-  const ok = lines.filter((l) => l.ok);
+  const ok = lines.filter(gradable);
   const order = ok.map((_, i) => i);
   const next = rng(seed);
   for (let i = order.length - 1; i > 0; i--) {
@@ -134,7 +149,7 @@ export function blind({ lines, seed, terms }) {
     // R is kept whole: its questions are about models, so masking their names would make the answers ungradable.
     blinds[blindId] = facts(l);
   });
-  const failed = lines.filter((l) => !l.ok).map((l) => ({ ...facts(l), error: l.error ?? null }));
+  const failed = lines.filter((l) => !gradable(l)).map((l) => ({ ...facts(l), error: l.error ?? null, empty: emptyOf(l) }));
   return { blinded, mapping: { seed, blinds, failed } };
 }
 
@@ -239,10 +254,19 @@ function costOf(calls) {
   };
 }
 
-/** R, one run: the four answer grades, invented URLs, the trap, failed calls. A run with no answered call has no score. */
+/**
+ * The empty calls among `failed`, each weighted by `weight`; null ("not
+ * recorded") when one of them comes from a line that did not record `empty`.
+ */
+const emptyCount = (failed, weight) => (failed.some((f) => typeof f.empty !== 'boolean')
+  ? null
+  : failed.filter((f) => f.empty === true).reduce((n, f) => n + weight(f), 0));
+
+/** R, one run: the four answer grades, invented URLs, the trap, failed and empty calls. A run with no answered call has no score. */
 function rRun({ calls, failed, grades, trapIds }) {
   const failedCount = failed.reduce((n, f) => n + f.taskIds.length, 0);
-  if (!calls.length) return { correct: null, partly: null, wrong: null, noAnswer: null, urls: null, inventedUrls: null, ungraded: 0, trap: null, failed: failedCount };
+  const empty = emptyCount(failed, (f) => f.taskIds.length);
+  if (!calls.length) return { correct: null, partly: null, wrong: null, noAnswer: null, urls: null, inventedUrls: null, ungraded: 0, trap: null, failed: failedCount, empty };
   const r = { correct: 0, partly: 0, wrong: 0, noAnswer: 0, urls: 0, inventedUrls: 0, ungraded: 0 };
   const field = { correct: 'correct', partly: 'partly', wrong: 'wrong', 'no-answer': 'noAnswer' };
   const answerOf = new Map();
@@ -256,13 +280,15 @@ function rRun({ calls, failed, grades, trapIds }) {
   const traps = covered.filter((t) => trapIds.has(t));
   r.trap = traps.length ? (traps.every((t) => answerOf.get(t) === 'correct') ? 'passed' : 'failed') : null;
   r.failed = failedCount;
+  r.empty = empty;
   return r;
 }
 
 /** V, one run: key items found, recall, findings, precision, false findings. A run with no answered call has no score. */
 function vRun({ calls, failed, grades, keyCount }) {
+  const empty = emptyCount(failed, () => 1);
   if (!calls.length) {
-    return { found: null, recall: null, findings: null, verifiedNew: null, unverifiedNew: null, falseFindings: null, precision: null, ungraded: 0, failed: failed.length };
+    return { found: null, recall: null, findings: null, verifiedNew: null, unverifiedNew: null, falseFindings: null, precision: null, ungraded: 0, failed: failed.length, empty };
   }
   const found = new Set(grades.filter((g) => g.item === 'key' && finalGrade(g) === 'found').map((g) => g.keyId));
   const keyLines = new Set(grades.filter((g) => g.item === 'key').map((g) => g.keyId));
@@ -281,8 +307,15 @@ function vRun({ calls, failed, grades, keyCount }) {
     precision: findings ? (found.size + verifiedNew) / findings : null,
     ungraded: Math.max(0, keyCount - keyLines.size),
     failed: failed.length,
+    empty,
   };
 }
+
+const sum = (xs) => xs.reduce((n, x) => n + (typeof x === 'number' && Number.isFinite(x) ? x : 0), 0);
+/** Each named field summed over the runs, a null as 0. */
+const totals = (runs, keys) => Object.fromEntries(keys.map((k) => [k, sum(runs.map((r) => r[k]))]));
+/** The empty calls over the runs: null ("not recorded") when a run could not count its own. */
+const emptyTotal = (runs) => (runs.some((r) => r.empty === null || r.empty === undefined) ? null : sum(runs.map((r) => r.empty)));
 
 /**
  * The aggregate: per suite and arm, every run's numbers and their means.
@@ -340,6 +373,7 @@ export function aggregate({ grades, mapping, keys }) {
       failedRuns: runs.filter((r) => !a.entries.some((e) => e.run === r.run)).length,
       runs,
       mean: { ...means, failed: m('failed'), wallMs: m('wallMs'), tokens: m('tokens') },
+      total: { ...totals(runs, ['failed']), empty: emptyTotal(runs) },
       overturned: a.grades.filter((g) => g.overturned).length,
     });
   }
@@ -361,7 +395,9 @@ function cmdBlind({ dir, date, seed, out }) {
   if (!files.length) throw new Error(`no run lines at ${runsDir}`);
   const g = join(dir, 'grading', date);
   if (existsSync(join(g, 'mapping.json'))) throw new Error(`${join(g, 'mapping.json')} exists: this date is blinded, and a new mapping would orphan its grades`);
-  const lines = files.flatMap((f) => readJsonl(join(runsDir, f)));
+  const all = files.flatMap((f) => readJsonl(join(runsDir, f)));
+  const lines = all.filter((l) => l.suite === 'R' || l.suite === 'V');
+  if (!lines.length) throw new Error(`no R or V run lines at ${runsDir} — P and I are checked, not graded`);
   const extra = [
     ...lines.map((l) => l.cli).filter((c) => typeof c === 'string' && !c.startsWith('unknown')),
     ...lines.map((l) => l.model).filter((m) => typeof m === 'string' && !m.startsWith('(')),
@@ -371,6 +407,7 @@ function cmdBlind({ dir, date, seed, out }) {
   writePrivate(join(g, 'mapping.json'), JSON.stringify({ date, ...mapping }, null, 2) + '\n');
   writePrivate(join(g, 'rubric.md'), rubric(date));
   out(`seed ${seed}`);
+  if (all.length > lines.length) out(`${all.length - lines.length} P/I line(s) left to their checks`);
   out(`${blinded.length} answer(s) blinded, ${mapping.failed.length} failed call(s) kept for the aggregate → ${g}`);
   out('give the grader blinded.jsonl, rubric.md and the keys — never mapping.json');
 }
