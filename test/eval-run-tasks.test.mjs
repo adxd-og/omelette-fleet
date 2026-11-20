@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { proofInputs } from '../scripts/eval-patch.mjs';
@@ -430,4 +430,77 @@ test('the P dry run names each task\'s proof, marks one without a fresh proof, a
   assert.match(text, /P01 gold proof missing — would be REFUSED: run node scripts\/eval-patch\.mjs prove --task P01 first/);
   assert.match(text, /P02 gold proof ok$/m);
   for (const t of tasks) assert.ok(!text.includes(t.prompt), 'no prompt is printed');
+});
+
+// The runner's hardenings (T16b): every unit is a fake, every value invented.
+/** A fake `codex` whose answer is what of `names` its own environment holds. */
+function envCodex(dir, names) {
+  const p = join(dir, 'env-codex');
+  writeFileSync(p, [
+    `#!${process.execPath}`,
+    'if (process.argv[2] === "--version") { console.log("fake-codex 1.2.3"); process.exit(0); }',
+    `const seen = Object.fromEntries(${JSON.stringify(names)}.map((k) => [k, process.env[k] ?? null]));`,
+    'process.stdin.on("data", () => {}).on("end", () => {',
+    '  process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(seen) } }) + "\\n");',
+    '  process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }) + "\\n");',
+    '});',
+  ].join('\n'));
+  chmodSync(p, 0o755);
+  return p;
+}
+
+test('an eval call runs under the stock env allowlist: an OMELETTE_ENV_PASSTHROUGH the shell exports widens nothing', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const dir = evalsDir({ R: [{ id: 'q1', prompt: 'Invented question: what colour is the imaginary widget?' }] });
+  const env = baseEnv(home, {
+    CODEX_BIN: envCodex(home, ['GIT_DIR', 'INVENTED_TOKEN']), OMELETTE_ENV_PASSTHROUGH: 'GIT_*,INVENTED_*',
+    GIT_DIR: join(home, 'invented-git-dir'), INVENTED_TOKEN: 'invented-secret',
+  });
+  const { lines } = await runArm({ suite: 'R', arm: parseArm('codex:gpt-6.1-sol'), dir, env, out: quiet });
+  assert.equal(lines[0].ok, true, lines[0].error);
+  assert.deepEqual(JSON.parse(lines[0].answer), { GIT_DIR: null, INVENTED_TOKEN: null }, 'the vendor CLI saw neither');
+  assert.equal(env.OMELETTE_ENV_PASSTHROUGH, 'GIT_*,INVENTED_*', 'the caller\'s env is left as it was');
+});
+
+test('a task whose id is another task\'s commit, in any case, is refused: the two would share one snapshot directory', () => {
+  for (const id of ['abc1234', 'ABC1234']) {
+    const dir = evalsDir({
+      V: [
+        { id: 'V01', commit: 'abc1234', file: 'src/thing.js', prompt: BRIEF },
+        { id, kind: 'recall', tree: 'third-party/x01/before-fix', file: 'lib/widget.js', prompt: BRIEF },
+      ],
+    });
+    assert.throws(() => readTasks(dir, 'V'), new RegExp(`task ${id}: its id is V01's commit`), id);
+  }
+});
+
+test('a control character in a task\'s id, file, tree, diff or commit is refused by task id, in every suite', () => {
+  const escaped = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const refused = [
+    ['V', { id: 'V09', commit: 'abc1234', file: 'src/thing.js\n```\nInvented line outside the fence.', prompt: BRIEF }, 'V09', 'file'],
+    ['V', { id: 'V09', commit: 'abc1234\u0085', file: 'src/thing.js', prompt: BRIEF }, 'V09', 'commit'],
+    ['V', { id: 'X09', kind: 'recall', tree: 'third-party/x09/at\u007fintro', file: 'lib/widget.js', prompt: BRIEF }, 'X09', 'tree'],
+    ['V', { id: 'X09', kind: 'recall', show: 'diff', tree: 'third-party/x09/at-intro', diff: 'suites/V/X09\u001b[2J.diff', prompt: BRIEF }, 'X09', 'diff'],
+    ['V', { id: 'V\t09', commit: 'abc1234', file: 'src/thing.js', prompt: BRIEF }, '"V\\t09"', 'id'],
+    ['R', { id: 'q\u00001', prompt: 'Invented question.' }, '"q\\u00001"', 'id'],
+    ['P', pLine('P09', { tree: 'third-party/p09/before\u009ffix' }), 'P09', 'tree'],
+  ];
+  for (const [suite, line, named, field] of refused) {
+    assert.throws(() => readTasks(evalsDir({ [suite]: [line] }), suite), new RegExp(`task ${escaped(named)}: ${field} holds a control character`), JSON.stringify(line));
+  }
+});
+
+test('the run file is the operator\'s alone after every append, not only when it is made', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const dir = evalsDir({ R: [{ id: 'q1', prompt: 'Invented question: when did the made-up release ship?' }] });
+  const file = join(dir, 'runs', '2026-11-20', 'R-codex-gpt-6.1-sol.jsonl');
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, '');
+  chmodSync(file, 0o644);
+  await runArm({
+    suite: 'R', arm: parseArm('codex:gpt-6.1-sol'), dir, now: () => new Date(2026, 10, 20, 12), out: quiet,
+    serverPath: echoServer(home, 'codex_research'), env: baseEnv(home, { CODEX_BIN: fakeCodex(home) }),
+  });
+  assert.equal(readLines(file).length, 1, 'the line went into the file that was there');
+  assert.equal(statSync(file).mode & 0o777, 0o600);
 });

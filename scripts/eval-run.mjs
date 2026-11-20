@@ -54,7 +54,7 @@
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import {
-  appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync,
+  appendFileSync, closeSync, cpSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -62,7 +62,7 @@ import { parseArgs } from 'node:util';
 import { callUnitServer } from '../core/client.mjs';
 import { fleetHome, unitConfig } from '../core/config.mjs';
 import { createResultStore } from '../core/results.mjs';
-import { runProcess } from '../core/spawn.mjs';
+import { ENV_PASSTHROUGH_VAR, runProcess } from '../core/spawn.mjs';
 import { locateBin, resolveBin } from '../core/unit.mjs';
 import codexUnit from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
@@ -525,9 +525,19 @@ function taskProblems(suite, task, all, dir, { onDisk = true } = {}) {
   }
 }
 
+/** A control character (C0, DEL, C1): in a name written into a brief, a path or a message, it can end a line or a fence. */
+const CONTROL_CHAR = /[\u0000-\u001f\u007f-\u009f]/;
+/** The fields of a task line that name something, in every suite. */
+const NAMING_FIELDS = ['id', 'file', 'tree', 'diff', 'commit'];
+/** A task id fit for a message: as it is, or quoted with its escapes when it holds a control character. */
+const shownId = (id) => (CONTROL_CHAR.test(String(id)) ? JSON.stringify(id) : id);
+
 /**
  * The suite's tasks, every line checked (see taskProblems); ids are unique per
- * suite. `only` (the ids the arm runs; none: every task) limits a P line's
+ * suite. A line whose id, file, tree, diff or commit holds a control
+ * character is refused, as is a task whose id is another task's commit, case
+ * aside (`treeCopyPath` and a commit's snapshot share one directory).
+ * `only` (the ids the arm runs; none: every task) limits a P line's
  * checks on disk to those tasks, as eval-patch's own reading does: a task
  * whose tree is not fetched yet must not stop another.
  */
@@ -539,9 +549,16 @@ export function readTasks(dir, suite, { only } = {}) {
   const seen = new Set();
   tasks.forEach((t, i) => {
     const id = t && typeof t.id === 'string' && t.id ? t.id : `#${i + 1}`;
-    const problems = taskProblems(suite, t, tasks, dir, { onDisk: !only || !only.length || only.includes(id) });
+    const controls = t && typeof t === 'object' ? NAMING_FIELDS.filter((f) => typeof t[f] === 'string' && CONTROL_CHAR.test(t[f])) : [];
+    // Nothing else is read of such a line: a later message would echo the character.
+    const problems = controls.length
+      ? controls.map((f) => `${f} holds a control character (U+0000–U+001F, U+007F–U+009F)`)
+      : taskProblems(suite, t, tasks, dir, { onDisk: !only || !only.length || only.includes(id) });
+    const shared = !controls.length && t && typeof t.id === 'string'
+      ? tasks.find((o) => o !== t && o && typeof o.commit === 'string' && o.commit.toLowerCase() === t.id.toLowerCase()) : undefined;
+    if (shared) problems.push(`its id is ${shownId(shared.id)}'s commit, case aside: a tree's copy and a commit's snapshot share one directory, named by the id and by the commit`);
     if (seen.has(id)) problems.push('a second task with this id: ids are unique per suite');
-    if (problems.length) throw new Error(`${path}: task ${id}: ${problems.join('; ')}`);
+    if (problems.length) throw new Error(`${path}: task ${shownId(id)}: ${problems.join('; ')}`);
     seen.add(id);
   });
   return tasks;
@@ -643,11 +660,33 @@ const EXHAUSTED = /quota exhausted|RESOURCE_EXHAUSTED/i;
 /** The write gates an eval never opens: a unit under test runs read-only, whatever the caller's shell exports. */
 export const WRITE_GATES = ['OMELETTE_ALLOW_WRITE', 'ORION_ALLOW_GEMINI_MUTATE', 'OMELETTE_ALLOW_REPRO'];
 
-/** `env` without the write gates: a copy, the caller's object untouched. */
+/**
+ * What widens the environment a unit hands its vendor CLI beyond the stock
+ * allowlist (core/spawn.mjs): an eval call runs under that allowlist, so no
+ * `GIT_*` or token pattern the shell admits reaches a model's CLI.
+ */
+export const ENV_WIDENERS = [ENV_PASSTHROUGH_VAR];
+
+/** `env` without the write gates and the allowlist's wideners: a copy, the caller's object untouched. */
 export function evalEnv(env) {
   const out = { ...env };
-  for (const k of WRITE_GATES) delete out[k];
+  for (const k of [...WRITE_GATES, ...ENV_WIDENERS]) delete out[k];
   return out;
+}
+
+/**
+ * One run line, appended to `file`, which is the operator's alone (0600) before
+ * the line lands: `mode` counts only when a call creates the file, and a run
+ * file made by hand or by an older runner keeps its own.
+ */
+function appendRunLine(file, line) {
+  const fd = openSync(file, 'a', 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    appendFileSync(fd, JSON.stringify(line) + '\n');
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** What the operator runs to give a P task the proof it lacks. */
@@ -726,7 +765,7 @@ export async function runArm({
         resultId: rec ? rec.resultId : null,
         agyConversations: convDir ? touchedConversations(before, conversationState(convDir)) : null,
       };
-      appendFileSync(file, JSON.stringify(line) + '\n', { mode: 0o600 });
+      appendRunLine(file, line);
       lines.push(line);
       out(`  run ${run}  ${call.taskIds.join(',')}  ${ok ? 'ok' : 'FAILED'}  ${(line.wallMs / 1000).toFixed(1)}s`);
       if (!ok && EXHAUSTED.test(String(error ?? ''))) {
