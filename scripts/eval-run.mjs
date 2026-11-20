@@ -91,7 +91,8 @@ export function parseArm(spec) {
     let id = model;
     if (effort) {
       if (GEMINI_LEVEL.test(model)) throw new Error(`${where}: the effort is already in the model id`);
-      const level = GEMINI_LEVEL_WORD[effort.toLowerCase()];
+      const word = effort.toLowerCase();
+      const level = Object.hasOwn(GEMINI_LEVEL_WORD, word) ? GEMINI_LEVEL_WORD[word] : undefined;
       if (!level) throw new Error(`${where}: unknown effort "${effort}" — a Gemini level is one of ${Object.keys(GEMINI_LEVEL_WORD).join(', ')}`);
       id = `${model} (${level})`;
     }
