@@ -374,8 +374,8 @@ function treeIn({ dir, rel, under, who }) {
 /**
  * A fresh copy of `<dir>/<rel>` (a third-party tree) for task `id`, under the
  * OS temp dir; any earlier copy is removed first. `rel` must sit strictly under
- * `<dir>/<under>` (required: `third-party` for V and P, `suites/I/docs` for I), as written and as the kernel
- * resolves it, whatever the caller checked. Links are copied as they are and
+ * `<dir>/<under>` (required: `third-party` for V and P, `suites/I/docs` for I),
+ * as written and as the kernel resolves it, whatever the caller checked. Links are copied as they are and
  * refused when one points out of the tree; then no git history may be
  * reachable from the copy. Returns its path.
  */
@@ -485,7 +485,7 @@ export async function cliVersion(unit, env = process.env) {
 }
 
 /** A local calendar date, `YYYY-MM-DD`: the day the operator ran the arm. */
-const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+export const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').filter((l) => l.trim()).map((l, i) => {
   try { return JSON.parse(l); } catch (e) { throw new Error(`${path}:${i + 1}: not JSON (${e.message})`); }
@@ -640,8 +640,9 @@ export function selectTasks(tasks, ids) {
  * from the private dir, nothing copied; every arm gets a shown diff's text
  * (`diffText`). P and I: a fresh copy of the task's tree or document directory
  * (`snapshot`). `extract: false` (the dry run) reads what is there and makes nothing.
+ * Every arm but Gemini's is a cwd arm: eval-hand passes a native arm as one.
  */
-function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract = true }) {
+export function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract = true }) {
   if (snapshot && (suite === 'P' || suite === 'I')) throw new Error(SNAPSHOT_IS_FOR_COMMITS);
   switch (suite) {
     case 'V': {
@@ -727,7 +728,7 @@ export function evalEnv(env) {
  * the line lands: `mode` counts only when a call creates the file, and a run
  * file made by hand or by an older runner keeps its own.
  */
-function appendRunLine(file, line) {
+export function appendRunLine(file, line) {
   const fd = openSync(file, 'a', 0o600);
   try {
     fchmodSync(fd, 0o600);
@@ -739,6 +740,17 @@ function appendRunLine(file, line) {
 
 /** What the operator runs to give a P task the proof it lacks. */
 const proveFirst = (id) => `run node scripts/eval-patch.mjs prove --task ${id} first`;
+
+/**
+ * Throws, naming the first, when a P task's gold proof is not `ok`: no model's
+ * diff exists before its task is proven, and no brief asking for one is made.
+ */
+export function assertProven({ dir, tasks }) {
+  for (const t of tasks) {
+    const status = proofStatus({ dir, task: t });
+    if (status !== 'ok') throw new Error(`${t.id} has no fresh gold proof (${status}): ${proveFirst(t.id)}`);
+  }
+}
 
 /**
  * Run one arm of one suite `runs` times; every call appends its line as soon
@@ -756,12 +768,7 @@ export async function runArm({
   env = evalEnv(env);
   const unit = UNITS[arm.unit];
   const selected = selectTasks(readTasks(dir, suite, { only }), only);
-  if (suite === 'P') {
-    for (const t of selected) {
-      const status = proofStatus({ dir, task: t });
-      if (status !== 'ok') throw new Error(`${t.id} has no fresh gold proof (${status}): ${proveFirst(t.id)}`);
-    }
-  }
+  if (suite === 'P') assertProven({ dir, tasks: selected });
   const tasks = prepareTasks(suite, selected, { arm, dir, repo, snapshot });
   const calls = planCalls({ suite, arm, tasks, batch });
   const file = join(dir, 'runs', localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);

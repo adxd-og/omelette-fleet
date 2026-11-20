@@ -340,12 +340,23 @@ const mean = (xs) => {
 const distinct = (xs) => [...new Set(xs.filter((x) => x !== null && x !== undefined && x !== ''))];
 const one = (xs) => distinct(xs).join(' / ') || null;
 
+/**
+ * A call's tokens: input plus output when both are numbers, else the `total`
+ * a hand-filed native call carries (the harness's sub-agent total); null when neither.
+ */
+const tokensOf = (c) => {
+  const u = c.usage;
+  if (!u) return null;
+  if (Number.isFinite(u.input) && Number.isFinite(u.output)) return u.input + u.output;
+  return Number.isFinite(u.total) ? u.total : null;
+};
+
 /** Wall time and tokens of one run's answered calls. */
 function costOf(calls) {
-  const reported = calls.filter((c) => c.usage && Number.isFinite(c.usage.input) && Number.isFinite(c.usage.output));
+  const reported = calls.map(tokensOf).filter((t) => t !== null);
   return {
     wallMs: mean(calls.map((c) => c.wallMs)),
-    tokens: mean(reported.map((c) => c.usage.input + c.usage.output)),
+    tokens: mean(reported),
     tokensReported: `${reported.length} of ${calls.length}`,
   };
 }
