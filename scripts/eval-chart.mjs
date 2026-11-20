@@ -279,7 +279,7 @@ function vRecallPrecision(agg) {
   return barChart({
     id: 'v-recall-precision',
     title: 'V: review against a known-defect key',
-    subtitle: `Recall (key defects found, of ${keyItems}) and precision (real findings over all findings): the bar is over every review the arm made, a dot a run that reviewed every task`,
+    subtitle: `Recall (key defects found, of ${keyItems}) and precision (real findings over all findings) on the keyed tasks: the bar is over every keyed review the arm made, a dot a run that reviewed every task; the recall-only and control tasks are tables, not charts`,
     date: agg.date,
     arms,
     series: [
@@ -299,15 +299,27 @@ const score = (a, src = a.mean) => {
   return v === null || v === undefined ? null : v * 100;
 };
 
+/** The families the effort chart has a series colour for. */
+const MAX_FAMILIES = 3;
+
 function effort(agg) {
   const id = 'effort';
   const title = 'Effort: Gemini scores at each level';
-  const arms = agg.arms.filter((a) => GRADED.has(a.suite) && a.unit === 'gemini' && !NOT_GEMINI.has(a.model) && LEVEL_RE.test(a.model || ''));
-  if (!arms.length) return emptyChart(id, title, agg.date);
-  const families = [...new Set(arms.map((a) => LEVEL_RE.exec(a.model)[1]))].sort((x, y) => x.localeCompare(y)).slice(0, 3);
+  const gemini = agg.arms.filter((a) => GRADED.has(a.suite) && a.unit === 'gemini' && !NOT_GEMINI.has(a.model) && LEVEL_RE.test(a.model || ''));
+  if (!gemini.length) return emptyChart(id, title, agg.date);
+  const familyOf = (a) => LEVEL_RE.exec(a.model)[1];
+  const byName = (x, y) => x.localeCompare(y);
+  // A family this date ran is never dropped by the cap; families only carried from another date fill the room left.
+  const ran = [...new Set(gemini.filter((a) => !a.carriedFrom).map(familyOf))];
+  const carriedOnly = [...new Set(gemini.map(familyOf))].filter((f) => !ran.includes(f)).sort(byName);
+  const room = Math.max(0, MAX_FAMILIES - ran.length);
+  const families = [...ran, ...carriedOnly.slice(0, room)].sort(byName);
+  const leftOut = carriedOnly.slice(room);
+  const arms = gemini.filter((a) => families.includes(familyOf(a)));
   const cls = (f) => families.indexOf(f) + 1;
-  const batchFamilies = new Set(arms.filter((a) => a.suite === 'R' && a.batch).map((a) => LEVEL_RE.exec(a.model)[1]));
-  const head = header({ title, subtitle: 'R: share of questions answered correctly · V: recall. The large point is the mean, the small ones the runs', lines: caption(agg.date, arms) });
+  const batchFamilies = new Set(arms.filter((a) => a.suite === 'R' && a.batch).map(familyOf));
+  const lines = [...caption(agg.date, arms), ...(leftOut.length ? [`left out for want of room: ${leftOut.join(', ')} (carried; the chart draws three families)`] : [])];
+  const head = header({ title, subtitle: 'R: share of questions answered correctly · V: recall. The large point is the mean, the small ones the runs', lines });
   const body = [...head.out, ...legend(head.bottom + 22, families.map((f) => ({ shape: 'circle', cls: `c${cls(f)}`, label: `${f}${batchFamilies.has(f) ? ' *' : ''}` })))];
   const top = head.bottom + 58;
   const h = 220;
@@ -357,7 +369,7 @@ function effort(agg) {
   const notes = batchFamilies.size ? [`${BATCH_NOTE} in R, one call per level`] : [];
   const footY = top + h + 46;
   notes.forEach((n, i) => body.push(`<text class="t2" x="16" y="${footY + i * 16}" font-size="12">${esc(n)}</text>`));
-  return frame({ id, height: footY + notes.length * 16 + 8, title, desc: `${title}. ${caption(agg.date, arms).join('. ')}. ${descParts.join('. ')}.`, body });
+  return frame({ id, height: footY + notes.length * 16 + 8, title, desc: `${title}. ${lines.join('. ')}. ${descParts.join('. ')}.`, body });
 }
 
 /** A log axis over the values: whole decades, ticks at 1 and 3 of each. */

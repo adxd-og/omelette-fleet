@@ -355,3 +355,31 @@ test('the effort chart draws Gemini models only, not Claude through agy', () => 
   const svg = renderCharts({ ...AGG, arms: [AGG.arms[0], claude] })['effort.svg'];
   assert.ok(!svg.includes('Claude'), 'no Claude family on the effort chart');
 });
+
+// ─── the whole-branch review's rulings on the charts (RV3) ───────────────────
+
+test('effort: a family this date ran is never dropped by the cap; carried families fill the room left, and the caption names the one left out', () => {
+  const ran = (family, level, correct) => rArm(`gemini:${family} (${level})`, { effort: level.toLowerCase(), runs: [{ correct, inventedUrls: 0 }], wallMs: 1000, tokens: 10 });
+  const carried = (family, level, correct) => ({ ...ran(family, level, correct), carriedFrom: '2026-10-16' });
+  // By name the two carried families come first: a cap by name alone would drop this date's Neon.
+  const agg = {
+    date: '2026-11-20', grades: 0, overturned: 0,
+    arms: [ran('Gemini 4 Neon', 'High', 8), ran('Gemini 4 Hydrogen', 'High', 7), carried('Gemini 3.8 Flash', 'High', 6), carried('Gemini 4 Argon', 'High', 9)],
+  };
+  const svg = renderCharts(agg)['effort.svg'];
+  assert.deepEqual([...new Set(elements(svg, 'mean').map((p) => p.attrs['data-family']))].sort(), ['Gemini 3.8 Flash', 'Gemini 4 Hydrogen', 'Gemini 4 Neon']);
+  const t = texts(svg);
+  assert.ok(t.includes('left out for want of room: Gemini 4 Argon (carried; the chart draws three families)'), t.join('\n'));
+  assert.ok(t.some((s) => /^carried from 2026-10-16/.test(s) && s.includes('Gemini 3.8 Flash') && !s.includes('Argon')), 'the caption\'s carried line names the drawn arms only');
+  // Nothing left out: no such line.
+  assert.ok(!texts(renderCharts({ ...agg, arms: agg.arms.slice(0, 3) })['effort.svg']).some((s) => s.startsWith('left out')));
+});
+
+test('the V chart says its bars are the keyed tasks\' recall and precision, and that the recall-only and control results are tables, not charts', () => {
+  const svg = charts['v-recall-precision.svg'];
+  const subtitle = texts(svg)[1];
+  assert.match(subtitle, /on the keyed tasks/);
+  assert.match(subtitle, /the recall-only and control tasks are tables, not charts/);
+  assert.doesNotMatch(subtitle, /every review the arm made/);
+  assert.match(/<desc id="[^"]+">([^<]+)<\/desc>/.exec(svg)[1], /recall-only and control tasks are tables, not charts/);
+});
