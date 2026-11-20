@@ -324,6 +324,11 @@ function prepareV(tasks, { arm, dir, repo, snapshot, extract = true }) {
   });
 }
 
+/** The unit's own words for a run that ended with nothing (units/gemini/adapter.mjs interpretAgy). */
+const NO_OUTPUT = /produced no output|ended with no answer/i;
+/** A call that ended with no answer text: a blank answer, or a failure the unit reports as no output. */
+export const isEmptyCall = ({ ok, answer, error }) => (ok ? !String(answer ?? '').trim() : NO_OUTPUT.test(String(error ?? '')));
+
 /**
  * Run one arm of one suite `runs` times; every call appends its line as soon
  * as it ends. Returns `{file, lines}`. `serverPath` replaces the unit's server
@@ -360,6 +365,8 @@ export async function runArm({
       const rec = res ? findCallRecord({ home, unit: arm.unit, pid: res.pid, tool: call.tool, sinceMs: t0 }) : null;
       if (res && !rec) unmatched += 1;
       const ok = !!res && !res.isError;
+      const answer = ok ? res.text : null;
+      const error = ok ? null : (res ? res.text : failure);
       const line = {
         suite,
         taskIds: call.taskIds,
@@ -372,8 +379,9 @@ export async function runArm({
         startedAt: new Date(t0).toISOString(),
         wallMs: res ? res.durationMs : Date.now() - t0,
         ok,
-        answer: ok ? res.text : null,
-        error: ok ? null : (res ? res.text : failure),
+        answer,
+        error,
+        empty: isEmptyCall({ ok, answer, error }),
         usage: rec ? rec.usage : null,
         resultId: rec ? rec.resultId : null,
       };

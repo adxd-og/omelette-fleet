@@ -105,6 +105,21 @@ function failingServer(dir, counter) {
   return p;
 }
 
+let answering = 0;
+/** A fake MCP server for `tool` whose every call answers `text`, as an error when `isError`. */
+function answeringServer(dir, { tool = 'codex_research', text, isError = false }) {
+  const p = join(dir, `answering-${++answering}.mjs`);
+  writeFileSync(p, [
+    'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
+    'let buf = ""; process.stdin.setEncoding("utf8");',
+    'process.stdin.on("data", (c) => { buf += c; let nl; while ((nl = buf.indexOf("\\n")) >= 0) { const l = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!l) continue; const m = JSON.parse(l);',
+    '  if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "f", version: "0" } } });',
+    `  else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: ${JSON.stringify(tool)}, description: "d", inputSchema: { type: "object" } }] } });`,
+    `  else if (m.id === 3) send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: ${JSON.stringify(text)} }], isError: ${isError ? 'true' : 'false'} } }); } });`,
+  ].join('\n'));
+  return p;
+}
+
 const baseEnv = (home, extra = {}) => ({
   PATH: process.env.PATH, HOME: home, OMELETTE_HOME: home, OMELETTE_UPDATE_CHECK: '0', ...extra,
 });
@@ -256,7 +271,7 @@ test('R through the real codex server: one line per call with every field, usage
   const lines = readLines(file);
   assert.equal(lines.length, 2);
   for (const [i, l] of lines.entries()) {
-    assert.deepEqual(Object.keys(l).sort(), ['answer', 'arm', 'cli', 'effort', 'error', 'model', 'ok', 'resultId', 'run', 'startedAt', 'suite', 'taskIds', 'unit', 'usage', 'wallMs'].sort());
+    assert.deepEqual(Object.keys(l).sort(), ['answer', 'arm', 'cli', 'effort', 'empty', 'error', 'model', 'ok', 'resultId', 'run', 'startedAt', 'suite', 'taskIds', 'unit', 'usage', 'wallMs'].sort());
     assert.equal(l.suite, 'R');
     assert.deepEqual(l.taskIds, [R_TASKS[i].id]);
     assert.equal(l.arm, 'codex:gpt-6.1-sol');
@@ -378,4 +393,21 @@ test('an XHigh arm is spelled as the catalog spells it, and a level already in t
   assert.equal(parseArm('gemini:Gemini 4 Neon (XHigh)').model, 'Gemini 4 Neon (XHigh)');
   assert.throws(() => parseArm('gemini:Gemini 4 Neon (XHigh):high'), /already in the model id/);
   assert.throws(() => parseArm('gemini:Gemini 4 Neon:max'), /unknown effort "max"/);
+});
+
+test('a call that ended with nothing is filed empty: a blank answer, or the unit\'s "produced no output"; any other failure is not', async () => {
+  const home = tmp('omelette-evals-home-');
+  const dir = evalsDir({ R: R_TASKS.slice(0, 1) });
+  const env = baseEnv(home, { CODEX_BIN: fakeCodex(home) });
+  const one = async (opts) => (await runArm({ suite: 'R', arm: parseArm('codex:gpt-6.1-sol'), dir, env, serverPath: answeringServer(home, opts), out: quiet })).lines[0];
+  const blank = await one({ text: '  \n' });
+  assert.deepEqual([blank.ok, blank.empty], [true, true]);
+  const none = await one({ text: 'agy produced no output: a tool required the "command" permission that headless mode cannot prompt for', isError: true });
+  assert.deepEqual([none.ok, none.empty], [false, true]);
+  const unanswered = await one({ text: 'agy run ended with no answer (status=TIMEOUT)', isError: true });
+  assert.deepEqual([unanswered.ok, unanswered.empty], [false, true]);
+  const other = await one({ text: 'invented failure', isError: true });
+  assert.deepEqual([other.ok, other.empty], [false, false]);
+  const fine = await one({ text: 'An invented answer.' });
+  assert.deepEqual([fine.ok, fine.empty], [true, false]);
 });
