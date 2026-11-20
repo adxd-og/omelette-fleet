@@ -120,6 +120,34 @@ function answeringServer(dir, { tool = 'codex_research', text, isError = false }
   return p;
 }
 
+/** A fake `agy` that answers `--version` only: no test spawns the real CLI. */
+function fakeAgy(dir) {
+  const p = join(dir, 'fake-agy');
+  writeFileSync(p, [`#!${process.execPath}`, 'console.log("agy 9.9.9");'].join('\n'));
+  chmodSync(p, 0o755);
+  return p;
+}
+
+/** A fake gemini_research server that writes to one agy conversation's WAL file, as agy does, on each call. */
+function conversingServer(dir, db) {
+  const p = join(dir, 'conversing-server.mjs');
+  writeFileSync(p, [
+    'import { appendFileSync, mkdirSync } from "node:fs";',
+    'import { join } from "node:path";',
+    'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
+    'let buf = ""; process.stdin.setEncoding("utf8");',
+    'process.stdin.on("data", (c) => { buf += c; let nl; while ((nl = buf.indexOf("\\n")) >= 0) { const l = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!l) continue; const m = JSON.parse(l);',
+    '  if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "f", version: "0" } } });',
+    '  else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "gemini_research", description: "d", inputSchema: { type: "object" } }] } });',
+    '  else if (m.id === 3) {',
+    '    const d = join(process.env.HOME, ".gemini", "antigravity-cli", "conversations");',
+    '    mkdirSync(d, { recursive: true });',
+    `    appendFileSync(join(d, ${JSON.stringify(`${db}-wal`)}), "x");`,
+    '    send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: "An invented answer." }] } }); } } });',
+  ].join('\n'));
+  return p;
+}
+
 const baseEnv = (home, extra = {}) => ({
   PATH: process.env.PATH, HOME: home, OMELETTE_HOME: home, OMELETTE_UPDATE_CHECK: '0', ...extra,
 });
@@ -271,7 +299,7 @@ test('R through the real codex server: one line per call with every field, usage
   const lines = readLines(file);
   assert.equal(lines.length, 2);
   for (const [i, l] of lines.entries()) {
-    assert.deepEqual(Object.keys(l).sort(), ['answer', 'arm', 'cli', 'effort', 'empty', 'error', 'model', 'ok', 'resultId', 'run', 'startedAt', 'suite', 'taskIds', 'unit', 'usage', 'wallMs'].sort());
+    assert.deepEqual(Object.keys(l).sort(), ['agyConversations', 'answer', 'arm', 'cli', 'effort', 'empty', 'error', 'model', 'ok', 'resultId', 'run', 'startedAt', 'suite', 'taskIds', 'unit', 'usage', 'wallMs'].sort());
     assert.equal(l.suite, 'R');
     assert.deepEqual(l.taskIds, [R_TASKS[i].id]);
     assert.equal(l.arm, 'codex:gpt-6.1-sol');
@@ -410,4 +438,19 @@ test('a call that ended with nothing is filed empty: a blank answer, or the unit
   assert.deepEqual([other.ok, other.empty], [false, false]);
   const fine = await one({ text: 'An invented answer.' });
   assert.deepEqual([fine.ok, fine.empty], [true, false]);
+});
+
+test('a Gemini call records the agy conversations it wrote to, a WAL file read as its database; another unit records none', async () => {
+  const home = tmp('omelette-evals-home-');
+  const conv = join(home, '.gemini', 'antigravity-cli', 'conversations');
+  mkdirSync(conv, { recursive: true });
+  writeFileSync(join(conv, '00000000-0000-4000-8000-000000000001.db'), 'untouched');
+  const dir = evalsDir({ R: R_TASKS.slice(0, 1) });
+  const g = await runArm({
+    suite: 'R', arm: parseArm('gemini:Gemini 4 Hydrogen:high'), dir, out: quiet,
+    serverPath: conversingServer(home, '00000000-0000-4000-8000-000000000002.db'), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }),
+  });
+  assert.deepEqual(g.lines[0].agyConversations, ['00000000-0000-4000-8000-000000000002.db']);
+  const c = await runArm({ suite: 'R', arm: parseArm('codex:gpt-6.1-sol'), dir, env: baseEnv(home, { CODEX_BIN: fakeCodex(home) }), out: quiet });
+  assert.equal(c.lines[0].agyConversations, null);
 });

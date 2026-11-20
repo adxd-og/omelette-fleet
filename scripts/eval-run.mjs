@@ -40,7 +40,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -324,6 +324,29 @@ function prepareV(tasks, { arm, dir, repo, snapshot, extract = true }) {
   });
 }
 
+/** agy's local conversation store: one SQLite file per conversation, named by its id (seen 2026-11-19). */
+const agyConversationsDir = (env) => join(env.HOME, '.gemini', 'antigravity-cli', 'conversations');
+
+/** `{name: mtimeMs}` of the store's files, a `-wal`, `-shm` or `-journal` file read as its database; `{}` when there is no store. */
+function conversationState(dir) {
+  const out = {};
+  let names;
+  try { names = readdirSync(dir); } catch { return out; }
+  for (const n of names) {
+    let st;
+    try { st = statSync(join(dir, n)); } catch { continue; }
+    if (!st.isFile()) continue;
+    const db = n.replace(/-(?:wal|shm|journal)$/, '');
+    out[db] = Math.max(out[db] ?? 0, st.mtimeMs);
+  }
+  return out;
+}
+
+/** The conversations a call created or wrote to: new in `after`, or written later than in `before`. Sorted. */
+export function touchedConversations(before, after) {
+  return Object.keys(after).filter((n) => !(n in before) || after[n] > before[n]).sort();
+}
+
 /** The unit's own words for a run that ended with nothing (units/gemini/adapter.mjs interpretAgy). */
 const NO_OUTPUT = /produced no output|ended with no answer/i;
 /** A call that ended with no answer text: a blank answer, or a failure the unit reports as no output. */
@@ -351,11 +374,14 @@ export async function runArm({
   const timeoutS = cfg.values.timeoutS * 2 + 60;
   const server = serverPath || join(ROOT, 'servers', `${arm.unit}.mjs`);
   const home = fleetHome(env);
+  // The runner cannot read a run's tool calls (the unit returns the answer only): it names the conversation the session opens.
+  const convDir = arm.unit === 'gemini' && env.HOME ? agyConversationsDir(env) : null;
   out(`${suite} ${arm.arm} · ${cli} · ${calls.length} call(s) × ${runs} run(s) → ${file}`);
   const lines = [];
   let unmatched = 0;
   for (let run = first; run < first + runs; run++) {
     for (const call of calls) {
+      const before = convDir ? conversationState(convDir) : null;
       const t0 = Date.now();
       let res = null;
       let failure = null;
@@ -384,6 +410,7 @@ export async function runArm({
         empty: isEmptyCall({ ok, answer, error }),
         usage: rec ? rec.usage : null,
         resultId: rec ? rec.resultId : null,
+        agyConversations: convDir ? touchedConversations(before, conversationState(convDir)) : null,
       };
       appendFileSync(file, JSON.stringify(line) + '\n', { mode: 0o600 });
       lines.push(line);
