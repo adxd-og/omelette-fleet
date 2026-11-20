@@ -51,7 +51,7 @@ import { tmpdir } from 'node:os';
 import {
   appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { callUnitServer } from '../core/client.mjs';
@@ -311,6 +311,26 @@ function linkOutOf(root) {
 }
 
 /**
+ * `<dir>/<rel>`, a third-party tree, refused unless it is a directory strictly
+ * under `<dir>/<under>` (required) as written and as the kernel resolves it: a
+ * link in the path to the tree, not in it, could still lead out of the place.
+ */
+function treeIn({ dir, rel, under, who }) {
+  if (!isRelativeInside(under) || normalize(under).replace(/\/+$/, '') === '.') {
+    throw new Error(`${who} needs "under": the directory of ${dir} its tree must sit strictly under`);
+  }
+  const place = resolve(dir, under);
+  if (!isStrictlyUnder(rel, under)) throw new Error(`tree ${JSON.stringify(rel)} is not a relative path inside ${place}`);
+  const src = resolve(dir, rel);
+  let st = null;
+  try { st = lstatSync(src); } catch { /* reported below */ }
+  if (!st || !st.isDirectory()) throw new Error(`tree ${rel} is not a directory under ${dir}`);
+  const fromPlace = relative(realpathSync.native(place), realpathSync.native(src));
+  if (fromPlace === '' || fromPlace.startsWith('..') || isAbsolute(fromPlace)) throw new Error(`tree ${rel} leads out of ${place} through a link`);
+  return src;
+}
+
+/**
  * A fresh copy of `<dir>/<rel>` (a third-party tree) for task `id`, under the
  * OS temp dir; any earlier copy is removed first. `rel` must sit strictly under
  * `<dir>/<under>` (required: `third-party` for V), as written and as the kernel
@@ -320,19 +340,7 @@ function linkOutOf(root) {
  */
 export function materializeTree({ dir, rel, id, under }) {
   const path = treeCopyPath(id);
-  if (!isRelativeInside(under) || normalize(under).replace(/\/+$/, '') === '.') {
-    throw new Error(`materializeTree needs "under": the directory of ${dir} its tree must sit strictly under`);
-  }
-  const place = resolve(dir, under);
-  if (!isStrictlyUnder(rel, under)) throw new Error(`tree ${JSON.stringify(rel)} is not a relative path inside ${place}`);
-  const src = resolve(dir, rel);
-  let st = null;
-  try { st = lstatSync(src); } catch { /* reported below */ }
-  if (!st || !st.isDirectory()) throw new Error(`tree ${rel} is not a directory under ${dir}`);
-  // A link in the path to the tree (not in the tree) could still lead out of the place: check it as the kernel resolves it.
-  const realPlace = realpathSync.native(place);
-  const fromPlace = relative(realPlace, realpathSync.native(src));
-  if (fromPlace === '' || fromPlace.startsWith('..') || isAbsolute(fromPlace)) throw new Error(`tree ${rel} leads out of ${place} through a link`);
+  const src = treeIn({ dir, rel, under, who: 'materializeTree' });
   rmSync(path, { recursive: true, force: true });
   const staging = `${path}.tmp-${process.pid}`;
   rmSync(staging, { recursive: true, force: true });
@@ -366,14 +374,19 @@ export function snapshotFor({ task, dir, repo = ROOT, snapshot, extract = true }
   return path;
 }
 
-/** `file`'s text under `root`; refused when it, or a link on its way, is outside `root`. */
+/**
+ * `file`'s text under `root`, found as the kernel finds it: `file` is appended
+ * to the root's native real path unnormalised, so a `..` after a link goes
+ * where the kernel takes it. Refused when it, or a link on its way, leads out
+ * of `root` or nowhere.
+ */
 function readInside(root, file, id) {
   let real;
   let realRoot;
   try {
-    realRoot = realpathSync(root);
-    real = realpathSync(resolve(root, file));
-  } catch { throw new Error(`task ${id}: no file ${file} under ${root}`); }
+    realRoot = realpathSync.native(root);
+    real = realpathSync.native(`${realRoot}${sep}${file}`);
+  } catch { throw new Error(`task ${id}: no file ${file} under ${root}, or a link on its way leads nowhere`); }
   if (!within(realRoot, real)) throw new Error(`task ${id}: file ${file} is outside ${root}`);
   return readFileSync(real, 'utf8');
 }
@@ -550,7 +563,7 @@ function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract = true }
           return { ...t, snapshot: path, snapshotPresent: existsSync(path), fileText: null, diffText };
         }
         if (t.show === 'diff') return { ...t, snapshot: null, snapshotPresent: false, fileText: null, diffText };
-        if (t.tree !== undefined) return { ...t, snapshot: null, snapshotPresent: false, fileText: readInside(resolve(dir, t.tree), t.file, t.id), diffText };
+        if (t.tree !== undefined) return { ...t, snapshot: null, snapshotPresent: false, fileText: readInside(treeIn({ dir, rel: t.tree, under: V_TREES, who: 'a Gemini arm' }), t.file, t.id), diffText };
         // Outside every work tree by default: under the private dir, git would walk up to the live .git and its later fixes.
         const path = snapshot ? resolve(snapshot) : join(tmpdir(), 'omelette-evals', 'snapshots', t.commit);
         const present = existsSync(path);

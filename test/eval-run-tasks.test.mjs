@@ -210,6 +210,42 @@ test('V runs controls last, and a third-party file or diff comes from the privat
   for (const s of Object.values(sent)) assert.equal(s.cwd, undefined);
 });
 
+test('a Gemini arm reads a tree\'s file as the kernel finds it: a link chain out of the tree, or a tree reached through a link, is refused before any call', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const gemini = (dir) => runArm({
+    suite: 'V', arm: parseArm('gemini:Gemini 4 Hydrogen:high'), dir, out: quiet,
+    serverPath: echoServer(home, 'gemini_research'), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }),
+  });
+  const tree = (tasks) => {
+    const dir = evalsDir({ V: tasks });
+    writeTree(dir, 'third-party/x01/before-fix', {
+      'lib/widget.js': 'export const items = []; // invented, inside the tree\n',
+      'outside.txt': 'invented decoy: where the text of the link points\n',
+    });
+    writeFileSync(join(dir, 'third-party', 'x01', 'outside.txt'), 'invented: where the kernel lands, outside the tree\n');
+    const root = join(dir, 'third-party', 'x01', 'before-fix');
+    mkdirSync(join(root, 'a', 'b'), { recursive: true });
+    symlinkSync('..', join(root, 'a', 'b', 's'));
+    symlinkSync('a/b/s/../..', join(root, 'reach'));
+    symlinkSync('lib/widget.js', join(root, 'alias.js'));
+    symlinkSync('../suites', join(dir, 'third-party', 'x02'));
+    return dir;
+  };
+  const x = (id, file, at = 'third-party/x01/before-fix') => ({ id, kind: 'recall', tree: at, file, prompt: BRIEF });
+  // `reach` reads as the tree's root and is its parent to the kernel: the decoy is what a lexical reading finds.
+  const chain = tree([x('X01', 'reach/outside.txt')]);
+  await withTmpdir(() => assert.rejects(gemini(chain), /task X01: file reach\/outside\.txt is outside/));
+  assert.equal(existsSync(join(chain, 'runs')), false, 'no call was made');
+  // `third-party/x02` is a link to the private dir's suites: the tree's place, not a link in it.
+  const through = tree([x('X02', 'tasks.jsonl', 'third-party/x02/V')]);
+  await withTmpdir(() => assert.rejects(gemini(through), /through a link/));
+  assert.equal(existsSync(join(through, 'runs')), false, 'no call was made');
+  // A plain file, and a link that stays inside, still read.
+  const fine = tree([x('X01', 'lib/widget.js'), x('X03', 'alias.js')]);
+  const { lines } = await withTmpdir(() => gemini(fine));
+  for (const l of lines) assert.ok(JSON.parse(l.answer).prompt.includes('invented, inside the tree'), l.taskIds[0]);
+});
+
 test('a cwd arm reviews a fresh copy of a third-party tree outside every work tree', async () => {
   const home = tmp('omelette-evals-tasks-home-');
   const dir = evalsDir({ V: [{ id: 'X01', kind: 'recall', tree: 'third-party/x01/before-fix', file: 'lib/widget.js', prompt: BRIEF }] });
