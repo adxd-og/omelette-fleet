@@ -5,7 +5,7 @@
  * unit path (plan docs/superpowers/plans/2026-10-16-evals-mvp.md, Task 1).
  *
  *   node scripts/eval-run.mjs --suite R|V --arm <unit>:<model>[:<effort>] [--arm …]
- *        [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]
+ *        [--runs N] [--task ID …] [--batch] [--dir D] [--snapshot PATH] [--dry-run]
  *
  * PRIVATE IN, PRIVATE OUT. It reads `<D>/suites/<suite>/tasks.jsonl` and writes
  * `<D>/runs/<YYYY-MM-DD>/<suite>-<arm>.jsonl`, D defaulting to
@@ -381,8 +381,10 @@ export function evalEnv(env) {
 
 /**
  * Run one arm of one suite `runs` times; every call appends its line as soon
- * as it ends. Returns `{file, lines}`. `serverPath` replaces the unit's server
- * (tests); `now` dates the run directory.
+ * as it ends. `only` names the task ids to run (all when empty); each task
+ * numbers its own runs. Returns `{file, lines, stopped}` — `stopped` is set when
+ * a call failed on an exhausted quota and the arm made no call after it.
+ * `serverPath` replaces the unit's server (tests); `now` dates the run directory.
  */
 export async function runArm({
   suite, arm, runs = 1, batch = false, dir = DEFAULT_DIR, repo = ROOT, snapshot, only, env = process.env,
