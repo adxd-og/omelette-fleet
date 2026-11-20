@@ -44,18 +44,27 @@
  * task is dropped. The proof names its inputs by a hash, so an edited task
  * line, gold, tests diff or build directory makes it stale.
  *
+ * NOTHING OUTLIVES ITS BOUND. A step is killed at its task's `timeoutS`, every
+ * other docker call at `CALL_BOUNDS_S`; the container of a killed step is
+ * removed (`docker rm -f`: killing the client does not stop it, and one created
+ * and not yet started survives a `docker kill`), and one that could not be is
+ * named with the command that removes it. A stage is removed whatever modes
+ * its copy of the tree carries. On SIGINT, SIGTERM or SIGHUP the CLI
+ * (`installCleanup`) kills its docker clients, removes the containers of the
+ * steps in flight and every stage, and exits 130, 143 or 129.
+ *
  * This script imports no other script: scripts/eval-run.mjs imports it.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync,
+  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { inheritedEnv, runProcess } from '../core/spawn.mjs';
+import { inheritedEnv, killLiveGroups, runProcess } from '../core/spawn.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
@@ -115,6 +124,17 @@ const P_FILES = 'suites/P';
 /** What `docker image inspect --format {{.Id}}` prints, and the only thing a step is started with. */
 const IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
 const DEFAULT_TIMEOUT_S = 600;
+
+/** The seconds each docker call that is not a step may take; a step's bound is its task's `timeoutS`. Past it the client is killed. (An object, so that a test can shorten one.) */
+export const CALL_BOUNDS_S = { 'image inspect': 60, pull: 1800, build: 3600, rm: 30 };
+
+/**
+ * What this process must not leave behind when it is told to stop
+ * (`installCleanup`): the stages it made and has not removed, and the
+ * containers of its steps in flight, each with the docker that started it.
+ */
+const LIVE_STAGES = new Set();
+const LIVE_CONTAINERS = new Map();
 
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 
@@ -326,13 +346,14 @@ export function dockerRunArgs({ imageId, stage, name, step, uid, gid }) {
  * as links), `change.diff` (`change`: the gold or a model's diff, written as
  * the text it is; `null` for the snapshot state, and then no such file),
  * `tests.diff`, `test-files`, `f2p.cmd`, `p2p.cmd` and `run.sh`. The caller
- * removes it. Returns its path.
+ * removes it, with `removeStage`. Returns its path.
  */
 export function makeStage({ dir, task, change }) {
   const paths = taskPaths({ dir, task });
   const tests = readFileSync(paths.tests, 'utf8');
   const restored = testFiles(tests);
   const stage = mkdtempSync(join(tmpdir(), 'omelette-evals-p-'));
+  LIVE_STAGES.add(stage);
   try {
     // `--mount` takes comma-separated key=value pairs: such a path would be read as more of them.
     if (/[,=]/.test(stage)) throw new Error(`the stage's path ${stage} holds "," or "=", which --mount would misread: set TMPDIR to a path without them`);
@@ -344,23 +365,73 @@ export function makeStage({ dir, task, change }) {
     writeFileSync(join(stage, 'p2p.cmd'), `${task.passToPass}\n`);
     writeFileSync(join(stage, 'run.sh'), RUN_SH, { mode: 0o755 });
   } catch (e) {
-    rmSync(stage, { recursive: true, force: true });
+    const left = removeStage(stage);
+    if (left && e instanceof Error) e.message = `${e.message}; ${left}`;
     throw e;
   }
   return stage;
 }
 
-/** `docker <args>` as the operator's own tool: an argv, the operator's environment, no shell. */
-const dockerCall = ({ docker, args, env, hardKillMs = 0 }) => runProcess({
+/**
+ * Remove a stage, whatever modes its copy of the tree carries: a directory its
+ * owner may not write in copies fine and then keeps its files, so every
+ * directory is made the owner's first (no link followed). Returns null, or
+ * what is left as a message naming the path — returned, not thrown, so that it
+ * never stands in for the error of the step before it.
+ */
+export function removeStage(stage) {
+  const open = (d) => {
+    try {
+      chmodSync(d, 0o700);
+      for (const e of readdirSync(d, { withFileTypes: true })) if (e.isDirectory()) open(join(d, e.name));
+    } catch { /* what could not be opened, rmSync reports below */ }
+  };
+  try {
+    if (lstatSync(stage, { throwIfNoEntry: false })?.isDirectory()) open(stage);
+    rmSync(stage, { recursive: true, force: true });
+  } catch (e) {
+    return `the stage ${stage} could not be removed (${(e && e.code) || e})`;
+  }
+  LIVE_STAGES.delete(stage);
+  return null;
+}
+
+/** `docker <args>` as the operator's own tool: an argv, the operator's environment, no shell, killed after `hardKillMs`. */
+const dockerCall = ({ docker, args, env, hardKillMs }) => runProcess({
   bin: docker, args, env, inheritEnv: true, hardKillMs, outputCap: 1000000,
   notFoundHelp: `${docker} not found: suite P needs Docker on this machine`,
 });
 
+/** A docker call that is not a step (`call`: a key of `CALL_BOUNDS_S`), for the task `id`: past its bound it is killed and this throws, naming it. */
+async function boundedCall({ call, id, docker, args, env }) {
+  const boundS = CALL_BOUNDS_S[call];
+  const res = await dockerCall({ docker, args, env, hardKillMs: boundS * 1000 });
+  if (res.killed) throw new Error(`${id}: docker ${call} did not end within ${boundS} s`);
+  return res;
+}
+
+/**
+ * `docker rm -f <name>`, bounded (`CALL_BOUNDS_S.rm`) → true when docker says
+ * the container is gone, false when the removal failed or did not end in time:
+ * then the name stays listed, and a signal tries once more.
+ */
+function removeContainer({ docker, env, name }) {
+  const res = spawnSync(docker, ['rm', '-f', name], {
+    env: inheritedEnv(env ?? process.env), stdio: 'ignore', timeout: CALL_BOUNDS_S.rm * 1000, killSignal: 'SIGKILL',
+  });
+  if (res.status !== 0) return false;
+  LIVE_CONTAINERS.delete(name);
+  return true;
+}
+
+const leftContainerLine = (docker, name) => `the container ${name} could not be removed — remove it with: ${docker} rm -f ${name}`;
+
 /**
  * One step (`apply`, `f2p` or `p2p`) of a stage in a container of its own →
  * `{ exit, ms, timedOut, stdout, stderr }`. Past `timeoutS` the docker client
- * is killed and the container with it (`docker kill`: killing the client does
- * not stop it), and the step is `exit: null, timedOut: true`.
+ * is killed and the container removed (`docker rm -f`: killing the client does
+ * not stop it), and the step is `exit: null, timedOut: true` — with
+ * `leftContainer: <name>` when the removal failed or did not end in time.
  */
 export async function runStep({ docker, imageId, stage, step, timeoutS, env }) {
   // No bound, no container: a missing `timeoutS` would otherwise start a step nothing ever kills.
@@ -368,22 +439,59 @@ export async function runStep({ docker, imageId, stage, step, timeoutS, env }) {
   const name = `omelette-evals-${process.pid}-${randomBytes(4).toString('hex')}`;
   const args = dockerRunArgs({ imageId, stage, name, step, uid: process.getuid(), gid: process.getgid() });
   const t0 = Date.now();
-  const res = await dockerCall({ docker, args, env, hardKillMs: timeoutS * 1000 });
+  LIVE_CONTAINERS.set(name, { docker, env });
+  let res;
+  try {
+    res = await dockerCall({ docker, args, env, hardKillMs: timeoutS * 1000 });
+  } catch (e) {
+    LIVE_CONTAINERS.delete(name); // docker did not start: there is no container
+    throw e;
+  }
   const ms = Date.now() - t0;
   if (res.killed) {
-    spawnSync(docker, ['kill', name], { env: inheritedEnv(env), stdio: 'ignore', timeout: 30000 });
-    return { exit: null, ms, timedOut: true, stdout: res.stdout, stderr: res.stderr };
+    const timedOut = { exit: null, ms, timedOut: true, stdout: res.stdout, stderr: res.stderr };
+    return removeContainer({ docker, env, name }) ? timedOut : { ...timedOut, leftContainer: name };
   }
+  LIVE_CONTAINERS.delete(name); // `--rm`: it went with its step
   return { exit: res.code, ms, timedOut: false, stdout: res.stdout, stderr: res.stderr };
 }
 
+const SIGNAL_EXITS = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
+let cleanupInstalled = false;
+
+/**
+ * For a CLI that runs steps: told to stop (SIGINT, SIGTERM, SIGHUP), it kills
+ * its docker clients (each a process group of its own, so the signal did not
+ * reach them), removes the container of every step in flight and every stage
+ * — a stage can hold the gold — and exits 130, 143 or 129. What could not be
+ * removed is named on `err`. Installed once per process.
+ */
+export function installCleanup({ err = (l) => console.error(l) } = {}) {
+  if (cleanupInstalled) return;
+  cleanupInstalled = true;
+  const say = (line) => { try { err(`eval-patch: ${line}`); } catch { /* the terminal is gone */ } };
+  for (const [signal, code] of Object.entries(SIGNAL_EXITS)) {
+    process.on(signal, () => {
+      killLiveGroups();
+      for (const [name, { docker, env }] of [...LIVE_CONTAINERS]) {
+        if (!removeContainer({ docker, env, name })) say(leftContainerLine(docker, name));
+      }
+      for (const stage of [...LIVE_STAGES]) {
+        const left = removeStage(stage);
+        if (left) say(left);
+      }
+      process.exit(code);
+    });
+  }
+}
+
 /** The id of an image the daemon holds, or null when it holds none by that name. */
-async function imageIdOf({ docker, env, ref }) {
-  const res = await dockerCall({ docker, args: ['image', 'inspect', '--format', '{{.Id}}', ref], env });
+async function imageIdOf({ id, docker, env, ref }) {
+  const res = await boundedCall({ call: 'image inspect', id, docker, args: ['image', 'inspect', '--format', '{{.Id}}', ref], env });
   if (res.code !== 0) return null;
-  const id = res.stdout.trim();
-  if (!IMAGE_ID.test(id)) throw new Error(`docker image inspect printed no image id for ${ref}`);
-  return id;
+  const imageId = res.stdout.trim();
+  if (!IMAGE_ID.test(imageId)) throw new Error(`docker image inspect printed no image id for ${ref}`);
+  return imageId;
 }
 
 const FROM_LINE = /^\s*FROM\s+(?:--\S+\s+)*(\S+)/gim;
@@ -403,20 +511,21 @@ export async function prepareImage({ dir, task, docker, env, out = () => {} }) {
       if (ref !== task.image) throw new Error(`${task.id}: the Dockerfile builds FROM ${ref}, not the task's image`);
     }
   }
-  let imageId = await imageIdOf({ docker, env, ref: task.image });
+  const { id } = task;
+  let imageId = await imageIdOf({ id, docker, env, ref: task.image });
   if (!imageId) {
     out(`${task.id}: pulling ${task.image}`);
-    const pull = await dockerCall({ docker, args: ['pull', task.image], env });
+    const pull = await boundedCall({ call: 'pull', id, docker, args: ['pull', task.image], env });
     if (pull.code !== 0) throw new Error(`${task.id}: docker pull failed (exit ${pull.code}): ${lastLine(pull.stderr)}`);
-    imageId = await imageIdOf({ docker, env, ref: task.image });
+    imageId = await imageIdOf({ id, docker, env, ref: task.image });
     if (!imageId) throw new Error(`${task.id}: docker pull ended well and the daemon still holds no ${task.image}`);
   }
   if (!paths.build) return { imageId, built: false };
   const tag = `omelette-evals-${task.id.toLowerCase()}:${proofInputs({ dir, task })}`;
   out(`${task.id}: building ${tag}`);
-  const build = await dockerCall({ docker, args: ['build', '--pull=false', '-t', tag, paths.build], env });
+  const build = await boundedCall({ call: 'build', id, docker, args: ['build', '--pull=false', '-t', tag, paths.build], env });
   if (build.code !== 0) throw new Error(`${task.id}: docker build failed (exit ${build.code}): ${lastLine(build.stderr)}`);
-  const builtId = await imageIdOf({ docker, env, ref: tag });
+  const builtId = await imageIdOf({ id, docker, env, ref: tag });
   if (!builtId) throw new Error(`${task.id}: docker build ended well and the daemon holds no ${tag}`);
   return { imageId: builtId, built: true };
 }
@@ -435,23 +544,40 @@ function hasRunLine(dir, id) {
   return false;
 }
 
-/** One state of a task (the snapshot, or the snapshot with `change`) through its steps, in a stage of its own. */
-async function runState({ dir, task, change, docker, imageId, env }) {
+/**
+ * One state of a task (the snapshot, or the snapshot with `change`) through
+ * its steps, in a stage of its own, removed after them. A stage that could not
+ * be removed is an error naming its path: this state's own when its steps
+ * ended well, added to the steps' error when they did not.
+ */
+async function runState({ dir, task, change, docker, imageId, env, out }) {
   const stage = makeStage({ dir, task, change });
+  const step = async (name) => {
+    const res = await runStep({ docker, imageId, stage, step: name, timeoutS: task.timeoutS ?? DEFAULT_TIMEOUT_S, env });
+    if (res.leftContainer) out(`${task.id}: ${leftContainerLine(docker, res.leftContainer)}`);
+    return res;
+  };
+  const test = async (name) => {
+    const { exit, ms, timedOut } = await step(name);
+    return { exit, ms, timedOut };
+  };
+  let state = null;
+  let failure = null;
   try {
-    const step = (name) => runStep({ docker, imageId, stage, step: name, timeoutS: task.timeoutS ?? DEFAULT_TIMEOUT_S, env });
-    const test = async (name) => {
-      const { exit, ms, timedOut } = await step(name);
-      return { exit, ms, timedOut };
-    };
     const applied = await step('apply');
     const method = applied.exit === 0 ? /^applied-by (\S+)/m.exec(applied.stdout) : null;
     const apply = { exit: applied.exit, method: method ? method[1] : null };
-    if (applied.exit !== 0) return { apply, failToPass: null, passToPass: null };
-    return { apply, failToPass: await test('f2p'), passToPass: await test('p2p') };
-  } finally {
-    rmSync(stage, { recursive: true, force: true });
+    state = applied.exit !== 0 ? { apply, failToPass: null, passToPass: null } : { apply, failToPass: await test('f2p'), passToPass: await test('p2p') };
+  } catch (e) {
+    failure = e instanceof Error ? e : new Error(String(e));
   }
+  const left = removeStage(stage);
+  if (failure) {
+    if (left) failure.message = `${failure.message}; ${left}`;
+    throw failure;
+  }
+  if (left) throw new Error(`${task.id}: ${left}`);
+  return state;
 }
 
 /** The fail-to-pass test failed: it ran to its end and the exit code is the test's own, not the harness's. */
@@ -473,8 +599,8 @@ export async function prove({ dir, task, docker, env, reps = 3, out = () => {} }
   const { imageId, built } = await prepareImage({ dir, task, docker, env, out });
   const results = [];
   for (let rep = 1; rep <= reps; rep++) {
-    const snapshot = await runState({ dir, task, change: null, docker, imageId, env });
-    const withGold = await runState({ dir, task, change: gold, docker, imageId, env });
+    const snapshot = await runState({ dir, task, change: null, docker, imageId, env, out });
+    const withGold = await runState({ dir, task, change: gold, docker, imageId, env, out });
     const ok = snapshot.apply.exit === 0 && failed(snapshot.failToPass) && passed(snapshot.passToPass)
       && withGold.apply.exit === 0 && passed(withGold.failToPass) && passed(withGold.passToPass);
     results.push({ rep, snapshot, gold: withGold, ok });
@@ -526,5 +652,6 @@ export async function main(argv = process.argv.slice(2), { out = (l) => console.
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+  installCleanup();
   process.exitCode = await main();
 }

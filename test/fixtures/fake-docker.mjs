@@ -6,8 +6,12 @@
 //   FAKE: fixes              the fail-to-pass step passes (without it, it fails: exit 1);
 //   FAKE: breaks-neighbours  the pass-to-pass step fails;
 //   FAKE: hangs              the fail-to-pass step never ends: the caller's timeout must kill it.
+//   snapshotExit(step, code|'hang'|'kill')  a step with no change.diff (the snapshot state) exits `code`, never ends, or dies of a signal.
+// A `run` that never ends writes its pid to `<state>/hanging-<name>`; `rm -f <name>` ends it and exits 0
+// (1 after `noRm()`: the daemon refused). `hangOn('image'|'pull'|'build'|'rm')` makes that call never end
+// (its pid in `<state>/hanging-<call>`).
 // `<state>/flip-f2p-at` holding N turns the Nth fail-to-pass step's result over: a flaky test.
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SOURCE = (state) => `
@@ -23,6 +27,8 @@ const idOf = (ref) => 'sha256:' + crypto.createHash('sha256').update(ref).digest
 const find = (ref) => images().find((r) => r === ref || idOf(r) === ref);
 function main() {
   const [cmd] = argv;
+  const hang = (file) => { if (file) fs.writeFileSync(at(file), String(process.pid)); setTimeout(() => {}, 60000); return null; };
+  if (fs.existsSync(at('hang-' + cmd))) return hang('hanging-' + cmd);
   if (cmd === 'image' && argv[1] === 'inspect') {
     const r = find(argv[argv.length - 1]);
     if (!r) { process.stderr.write('Error: No such image\\n'); return 1; }
@@ -36,10 +42,21 @@ function main() {
   }
   if (cmd === 'build') { fs.appendFileSync(at('images'), argv[argv.indexOf('-t') + 1] + '\\n'); return 0; }
   if (cmd === 'kill') return 0;
+  if (cmd === 'rm') {
+    const file = at('hanging-' + argv[argv.length - 1]);
+    if (fs.existsSync(file)) {
+      const pid = Number(fs.readFileSync(file, 'utf8'));
+      // Never 0: that would be this process's own group.
+      if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone already */ } }
+      fs.unlinkSync(file);
+    }
+    return fs.existsSync(at('no-rm')) ? 1 : 0;
+  }
   if (cmd !== 'run') return 1;
   const mount = argv[argv.indexOf('--mount') + 1] || '';
   const stage = (/source=([^,]+)/.exec(mount) || [])[1];
   const step = argv[argv.length - 1];
+  const hanging = 'hanging-' + argv[argv.indexOf('--name') + 1];
   if (!find(argv[argv.length - 3])) { process.stderr.write('Unable to find image\\n'); return 125; }
   const files = [];
   const walk = (d, rel) => {
@@ -53,7 +70,13 @@ function main() {
   const contents = Object.fromEntries(files.map((f) => [f, fs.readFileSync(path.join(stage, f), 'utf8')]));
   fs.appendFileSync(at('stages.jsonl'), JSON.stringify({ step, files, contents }) + '\\n');
   const change = contents['change.diff'] ?? null;
-  if (step === 'f2p' && change && change.includes('FAKE: hangs')) { setTimeout(() => {}, 60000); return null; }
+  if (step === 'f2p' && change && change.includes('FAKE: hangs')) return hang(hanging);
+  if (!change && fs.existsSync(at('snapshot-' + step))) {
+    const word = fs.readFileSync(at('snapshot-' + step), 'utf8');
+    if (word === 'hang') return hang(hanging);
+    if (word === 'kill') { process.kill(process.pid, 'SIGKILL'); return null; }
+    return Number(word);
+  }
   if (step === 'apply') {
     if (change && change.includes('FAKE: does-not-apply')) { process.stderr.write('error: patch failed: invented.go:3\\n'); return 121; }
     process.stdout.write('applied-by ' + (!change ? 'none' : change.includes('FAKE: needs-fuzz') ? 'patch' : 'git') + '\\n');
@@ -89,6 +112,12 @@ export function fakeDocker(dir) {
     stages: () => jsonl('stages.jsonl'),
     addImage: (ref) => appendFileSync(join(state, 'images'), `${ref}\n`),
     flipF2pAt: (n) => writeFileSync(join(state, 'flip-f2p-at'), String(n)),
+    snapshotExit: (step, word) => writeFileSync(join(state, `snapshot-${step}`), String(word)),
     noPull: () => writeFileSync(join(state, 'no-pull'), ''),
+    noRm: () => writeFileSync(join(state, 'no-rm'), ''),
+    hangOn: (cmd) => writeFileSync(join(state, `hang-${cmd}`), ''),
+    /** The runs that never end, as { name, pid }: one whose pid is not written yet is not listed. */
+    hanging: () => readdirSync(state).filter((f) => f.startsWith('hanging-'))
+      .map((f) => ({ name: f.slice('hanging-'.length), pid: Number(readFileSync(join(state, f), 'utf8')) })).filter((h) => h.pid > 0),
   };
 }

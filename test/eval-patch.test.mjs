@@ -4,7 +4,7 @@
 // A tripwire named plain `docker` stands first on every PATH handed out here; the last test reads it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync,
@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  dockerRunArgs, linesChanged, main, makeStage, prepareImage, proofInputs, proofStatus, prove, pTaskProblems, readPTasks, RUN_SH, runStep, testFiles,
+  CALL_BOUNDS_S, dockerRunArgs, linesChanged, main, makeStage, prepareImage, proofInputs, proofStatus, prove, pTaskProblems, readPTasks, RUN_SH, runStep, testFiles,
 } from '../scripts/eval-patch.mjs';
 import { fakeDocker } from './fixtures/fake-docker.mjs';
 
@@ -97,6 +97,36 @@ const after = (argv, flag) => argv[argv.indexOf(flag) + 1];
 const stageOf = (argv) => /^type=bind,source=([^,]+),/.exec(after(argv, '--mount'))[1];
 const proofAt = (dir, id = 'P01') => JSON.parse(readFileSync(join(dir, 'checks', 'proofs', `${id}.json`), 'utf8'));
 const runs = (n) => Array(n).fill('run');
+const stagesIn = (tmpDir) => readdirSync(tmpDir).filter((n) => n.startsWith('omelette-evals-p-'));
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+/** `read()` every 25 ms until `done` says so or `ms` have passed: the last value read. */
+async function until(read, done, ms) {
+  const end = Date.now() + ms;
+  let value = read();
+  while (!done(value) && Date.now() < end) {
+    await new Promise((r) => { setTimeout(r, 25); });
+    value = read();
+  }
+  return value;
+}
+
+/** A docker that hands every call to the fake and, after its first `run`, does `afterFirstRun` (JavaScript; `fs` is there). */
+function dockerThat({ home, fake, afterFirstRun }) {
+  const bin = join(home, 'docker-that');
+  const seen = join(home, 'docker-that-ran');
+  writeFileSync(bin, `#!${process.execPath}
+const fs = require('fs');
+const r = require('child_process').spawnSync(${JSON.stringify(fake.bin)}, process.argv.slice(2), { stdio: 'inherit', timeout: 4000 });
+if (process.argv[2] === 'run' && !fs.existsSync(${JSON.stringify(seen)})) {
+  fs.writeFileSync(${JSON.stringify(seen)}, '');
+  ${afterFirstRun}
+}
+process.exit(r.status);
+`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
 
 /** Every plain file under `root`, as [relative path, text]; a link is not followed. */
 function plainFiles(root) {
@@ -314,15 +344,146 @@ test('a step past its timeout is killed, removed and recorded as timed out', asy
     const step = await runStep({ docker: fake.bin, imageId: idOf(IMAGE), stage, step: 'f2p', timeoutS: 1, env });
     assert.deepEqual([step.timedOut, step.exit], [true, null]);
     assert.ok(step.ms >= 900, `the step ran to its bound, not past a kill at once: ${step.ms} ms`);
-    const [run, kill] = fake.log();
+    const [run, removal] = fake.log();
     assert.ok(run.includes('--rm'));
     assert.match(after(run, '--name'), /^omelette-evals-\d+-[0-9a-f]{8}$/);
-    assert.deepEqual(kill, ['kill', after(run, '--name')]);
+    // `rm -f`, not `kill`: a container created and not yet started survives a kill.
+    assert.deepEqual(removal, ['rm', '-f', after(run, '--name')]);
+    assert.equal('leftContainer' in step, false, 'removed: nothing is left to name');
     // A step with no bound is not started at all (`apply`: were it started, the fake would answer at once, not hang).
     await assert.rejects(runStep({ docker: fake.bin, imageId: idOf(IMAGE), stage, step: 'apply', env }), /runStep needs timeoutS/);
     assert.equal(fake.log().length, 2);
   } finally {
     rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+test('a container that could not be removed is named, with the command that removes it', async () => {
+  const { dir, task, fake, env } = setup({ task: { timeoutS: 1 }, gold: goldWith('FAKE: fixes FAKE: hangs') });
+  fake.addImage(IMAGE);
+  fake.noRm();
+  const printed = [];
+  const proof = await prove({ dir, task, docker: fake.bin, env, reps: 1, out: (l) => printed.push(l) });
+  const removals = fake.log().filter((a) => a[0] === 'rm');
+  assert.equal(removals.length, 1);
+  const name = removals[0][2];
+  assert.deepEqual(printed.filter((l) => l.includes(name)), [`P01: the container ${name} could not be removed — remove it with: ${fake.bin} rm -f ${name}`]);
+  assert.deepEqual([proof.ok, proof.reps[0].gold.failToPass], [false, { exit: null, ms: proof.reps[0].gold.failToPass.ms, timedOut: true }], 'the proof holds the step as before');
+
+  // A removal past its own bound is a failed one.
+  const slow = setup();
+  slow.fake.addImage(IMAGE);
+  slow.fake.hangOn('rm');
+  const stage = makeStage({ dir: slow.dir, task: slow.task, change: goldWith('FAKE: hangs') });
+  const bound = CALL_BOUNDS_S.rm;
+  CALL_BOUNDS_S.rm = 0.3;
+  try {
+    const step = await runStep({ docker: slow.fake.bin, imageId: idOf(IMAGE), stage, step: 'f2p', timeoutS: 1, env: slow.env });
+    assert.deepEqual([step.timedOut, step.exit, step.leftContainer], [true, null, after(slow.fake.runs()[0], '--name')]);
+  } finally {
+    CALL_BOUNDS_S.rm = bound;
+    rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+test('no docker call runs without a bound, and a call past it is killed and named', async () => {
+  assert.deepEqual(CALL_BOUNDS_S, { 'image inspect': 60, pull: 1800, build: 3600, rm: 30 });
+  const bounds = { ...CALL_BOUNDS_S };
+  try {
+    for (const [call, word] of [['image inspect', 'image'], ['pull', 'pull'], ['build', 'build']]) {
+      const { dir, task, fake, env } = setup({ task: { build: 'suites/P/P01/build' } });
+      put(dir, 'suites/P/P01/build/Dockerfile', `FROM ${IMAGE}\n`);
+      fake.hangOn(word);
+      if (call === 'build') fake.addImage(IMAGE);
+      CALL_BOUNDS_S[call] = 0.3;
+      const t0 = Date.now();
+      await assert.rejects(prepareImage({ dir, task, docker: fake.bin, env, out: quiet }), new RegExp(`^Error: P01: docker ${call} did not end within 0\\.3 s$`), call);
+      assert.ok(Date.now() - t0 < 20000, `${call}: killed at the bound set here, far from its own`);
+      assert.ok(!calls(fake).includes('run'));
+      Object.assign(CALL_BOUNDS_S, bounds);
+    }
+  } finally {
+    Object.assign(CALL_BOUNDS_S, bounds);
+  }
+});
+
+test('a signal mid-step leaves nothing behind: the docker client killed, the container removed, the stage gone', async () => {
+  for (const [signal, exit] of [['SIGTERM', 143], ['SIGINT', 130], ['SIGHUP', 129]]) {
+    const { dir, fake, env } = setup({ gold: goldWith('FAKE: fixes FAKE: hangs') });
+    fake.addImage(IMAGE);
+    const mine = tmp('omelette-evals-signal-');
+    const child = spawn(process.execPath, [SCRIPT, 'prove', '--task', 'P01', '--dir', dir], { env: { ...env, TMPDIR: mine }, stdio: 'ignore', timeout: 5000, killSignal: 'SIGKILL' });
+    const ended = new Promise((done) => { child.on('close', (code, sig) => done([code, sig])); });
+    let hung = [];
+    try {
+      // The gold state's fail-to-pass step is in its container, and its stage holds the gold.
+      hung = await until(() => fake.hanging(), (h) => h.length > 0, 4000);
+      assert.equal(hung.length, 1, `${signal}: a step is in flight`);
+      assert.equal(stagesIn(mine).length, 1);
+      child.kill(signal);
+      assert.deepEqual(await ended, [exit, null], signal);
+      assert.deepEqual(readdirSync(mine), [], `${signal}: no stage outlives the run`);
+      assert.deepEqual(fake.log().pop(), ['rm', '-f', hung[0].name], `${signal}: the container of the step in flight is removed`);
+      assert.equal(await until(() => alive(hung[0].pid), (is) => !is, 2000), false, `${signal}: the docker client is gone`);
+      assert.equal(existsSync(join(dir, 'checks')), false);
+    } finally {
+      child.kill('SIGKILL');
+      for (const { pid } of hung) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone, as it should be */ } }
+    }
+  }
+
+  // No step in flight, so no container to remove: the docker client of a pull is a process group of its own, and is killed.
+  const { dir, fake, env } = setup();
+  fake.hangOn('pull');
+  const child = spawn(process.execPath, [SCRIPT, 'prove', '--task', 'P01', '--dir', dir], { env, stdio: 'ignore', timeout: 5000, killSignal: 'SIGKILL' });
+  const ended = new Promise((done) => { child.on('close', (code, sig) => done([code, sig])); });
+  let hung = [];
+  try {
+    hung = await until(() => fake.hanging(), (h) => h.length > 0, 4000);
+    assert.deepEqual(hung.map((h) => h.name), ['pull']);
+    child.kill('SIGTERM');
+    assert.deepEqual(await ended, [143, null]);
+    assert.equal(await until(() => alive(hung[0].pid), (is) => !is, 2000), false, 'the pull is gone');
+    assert.deepEqual(calls(fake), ['image inspect', 'pull']);
+  } finally {
+    child.kill('SIGKILL');
+    for (const { pid } of hung) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone, as it should be */ } }
+  }
+});
+
+test('a stage that cannot be removed is reported by its path: beside the step\'s own error, never instead of it', { skip: process.getuid() === 0 ? 'root removes it whatever the modes' : false }, async () => {
+  const contexts = [setup(), setup()];
+  const mine = tmp('omelette-evals-kept-');
+  const was = process.env.TMPDIR;
+  process.env.TMPDIR = mine;
+  try {
+    // The OS temp dir loses its write bit while the first step runs: the stage in it can no longer be unlinked.
+    const [whole, vanishing] = contexts.map((ctx, i) => {
+      ctx.fake.addImage(IMAGE);
+      const closes = `fs.chmodSync(${JSON.stringify(mine)}, 0o555);`;
+      return { ...ctx, docker: dockerThat({ home: ctx.env.HOME, fake: ctx.fake, afterFirstRun: i === 0 ? closes : `${closes} fs.unlinkSync(__filename);` }) };
+    });
+    await assert.rejects(prove({ dir: whole.dir, task: whole.task, docker: whole.docker, env: whole.env, reps: 1, out: quiet }), (e) => {
+      const [stage] = stagesIn(mine);
+      assert.equal(e.message.startsWith(`P01: the stage ${join(mine, stage)} could not be removed (E`), true, e.message);
+      return true;
+    });
+    assert.equal(whole.fake.runs().length, 3, 'the state\'s steps ran; the proof stops at the stage it could not remove');
+    assert.equal(existsSync(join(whole.dir, 'checks')), false);
+    chmodSync(mine, 0o700);
+    for (const stage of stagesIn(mine)) rmSync(join(mine, stage), { recursive: true, force: true });
+
+    await assert.rejects(prove({ dir: vanishing.dir, task: vanishing.task, docker: vanishing.docker, env: vanishing.env, reps: 1, out: quiet }), (e) => {
+      const [stage] = stagesIn(mine);
+      assert.match(e.message, /not found: suite P needs Docker/, 'the step\'s own error');
+      assert.match(e.message, /; the stage \S+ could not be removed \(E[A-Z]+\)$/, 'and the stage, after it');
+      assert.ok(e.message.includes(join(mine, stage)), e.message);
+      return true;
+    });
+  } finally {
+    if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was;
+    chmodSync(mine, 0o700);
+    for (const stage of stagesIn(mine)) rmSync(join(mine, stage), { recursive: true, force: true });
   }
 });
 
