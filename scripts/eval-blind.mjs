@@ -31,7 +31,10 @@
  * kind (`suites/V/tasks.jsonl`: keyed, recall-only or control) into
  * `<D>/aggregates/<date>.json`: numbers and arm names, per run, as means and
  * as totals. A run is a task's n-th answer, not a pass over the suite: the
- * spec's rules read the totals. A run whose calls all failed has no score (its
+ * spec's rules read the totals (V's summed over every call, a failed one
+ * counting its key items; V's per task in `byTask`), and an arm whose runs do
+ * not each hold all its tasks, or that never ran a task of the suite's file,
+ * says so in `incomplete`. A run whose calls all failed has no score (its
  * score fields are null), is counted in the arm's `failedRuns`, and stays out
  * of every score's mean.
  * A grade the session overturned (`overturned: {from, to}`) counts as `to`.
@@ -375,41 +378,53 @@ function rRun({ calls, failed, grades, trapIds }) {
 }
 
 /**
+ * One run's counts over the tasks `ts` it covered, from that run's grades. One
+ * credit per keyed bug: a key item counts once however many lines name it. A
+ * failed call's task finds nothing and still has its key items.
+ */
+function tally(ts, grades, keyItemsOf) {
+  const mine = new Set(ts);
+  const gs = grades.filter((g) => mine.has(g.taskId));
+  const found = new Set(gs.filter((g) => g.item === 'key' && finalGrade(g) === 'found').map((g) => g.keyId)).size;
+  const extra = gs.filter((g) => g.item === 'finding');
+  return {
+    found,
+    findings: found + extra.length,
+    confirmed: extra.filter((g) => findingGrade(g) === 'plausible' && g.verified === true).length,
+    plausible: extra.filter((g) => findingGrade(g) === 'plausible' && g.verified !== true).length,
+    fabricated: extra.filter((g) => findingGrade(g) === 'fabricated').length,
+    keyItems: ts.reduce((n, t) => n + keyItemsOf(t).length, 0),
+  };
+}
+
+/** The task ids one run's lines (answered and failed) cover, once each, by kind. */
+function coveredBy(lines, kindOf) {
+  const covered = [...new Set(lines.map((l) => l.taskIds[0]))];
+  return (kind) => covered.filter((t) => kindOf(t) === kind);
+}
+
+/**
  * V, one run. Keyed tasks give round one's recall and precision; recall-only tasks the bugs found and
  * the findings counted; controls count every finding against the arm. A failed call's task is covered
- * and finds nothing. A run with no answered call has no score.
+ * and finds nothing. A run with no answered call has no score, and still its calls and key items.
  */
 function vRun({ calls, failed, grades, kindOf, keyItemsOf }) {
   const empty = emptyCount(failed, () => 1);
+  const of = coveredBy([...calls, ...failed], kindOf);
+  const kt = of('keyed');
+  const count = { calls: calls.length + failed.length, keyItems: kt.reduce((n, t) => n + keyItemsOf(t).length, 0) };
   if (!calls.length) {
-    return { found: null, recall: null, findings: null, confirmed: null, plausible: null, fabricated: null, precision: null, recallOnly: null, control: null, ungraded: 0, failed: failed.length, empty };
+    return { ...count, found: null, recall: null, findings: null, confirmed: null, plausible: null, fabricated: null, precision: null, recallOnly: null, control: null, ungraded: 0, failed: failed.length, empty };
   }
   const answered = calls.map((c) => c.taskIds[0]);
-  const covered = [...new Set([...answered, ...failed.map((f) => f.taskIds[0])])];
-  const of = (kind) => covered.filter((t) => kindOf(t) === kind);
-  const tally = (ts) => {
-    const mine = new Set(ts);
-    const gs = grades.filter((g) => mine.has(g.taskId));
-    // One credit per keyed bug: a key item counts once however many lines name it.
-    const found = new Set(gs.filter((g) => g.item === 'key' && finalGrade(g) === 'found').map((g) => g.keyId)).size;
-    const extra = gs.filter((g) => g.item === 'finding');
-    return {
-      found,
-      findings: found + extra.length,
-      confirmed: extra.filter((g) => findingGrade(g) === 'plausible' && g.verified === true).length,
-      plausible: extra.filter((g) => findingGrade(g) === 'plausible' && g.verified !== true).length,
-      fabricated: extra.filter((g) => findingGrade(g) === 'fabricated').length,
-      keyItems: ts.reduce((n, t) => n + keyItemsOf(t).length, 0),
-    };
-  };
-  const kt = of('keyed');
   const xt = of('recall');
   const ct = of('control');
-  const k = kt.length ? tally(kt) : null;
-  const x = xt.length ? tally(xt) : null;
-  const c = ct.length ? tally(ct) : null;
+  const k = kt.length ? tally(kt, grades, keyItemsOf) : null;
+  const x = xt.length ? tally(xt, grades, keyItemsOf) : null;
+  const c = ct.length ? tally(ct, grades, keyItemsOf) : null;
   const keyLines = new Set(grades.filter((g) => g.item === 'key').map((g) => g.keyId));
   return {
+    ...count,
     found: k ? k.found : null,
     recall: k && k.keyItems ? k.found / k.keyItems : null,
     findings: k ? k.findings : null,
@@ -425,9 +440,93 @@ function vRun({ calls, failed, grades, kindOf, keyItemsOf }) {
   };
 }
 
+/**
+ * V, the arm's total: every count summed over its calls, run by run — a failed
+ * call adds its task's key items (keyed) or its bug (recall-only) and finds
+ * nothing, a run whose calls all failed included — and recall and precision by
+ * the run's own formulas over the sums (null on a zero denominator).
+ */
+function vTotal(perRun, kindOf, keyItemsOf) {
+  const t = { calls: 0, keyItems: 0, found: 0, findings: 0, confirmed: 0, plausible: 0, fabricated: 0 };
+  const recallOnly = { calls: 0, bugs: 0, found: 0, findings: 0, plausible: 0, fabricated: 0 };
+  const control = { calls: 0, findings: 0, plausible: 0, fabricated: 0 };
+  let failedCalls = 0;
+  for (const { calls, failed, grades } of perRun) {
+    const lines = [...calls, ...failed];
+    const of = coveredBy(lines, kindOf);
+    const callsOf = (kind) => lines.filter((l) => kindOf(l.taskIds[0]) === kind).length;
+    const k = tally(of('keyed'), grades, keyItemsOf);
+    const x = tally(of('recall'), grades, keyItemsOf);
+    const c = tally(of('control'), grades, keyItemsOf);
+    t.calls += lines.length;
+    for (const f of ['keyItems', 'found', 'findings', 'confirmed', 'plausible', 'fabricated']) t[f] += k[f];
+    recallOnly.calls += callsOf('recall');
+    recallOnly.bugs += x.keyItems;
+    for (const f of ['found', 'findings', 'plausible', 'fabricated']) recallOnly[f] += x[f];
+    control.calls += callsOf('control');
+    for (const f of ['findings', 'plausible', 'fabricated']) control[f] += c[f];
+    failedCalls += failed.length;
+  }
+  return {
+    ...t,
+    recall: t.keyItems ? t.found / t.keyItems : null,
+    precision: t.findings ? (t.found + t.confirmed) / t.findings : null,
+    recallOnly,
+    control,
+    failed: failedCalls,
+  };
+}
+
+/**
+ * V, per task: its calls, its key items (keyed) or its bug (recall-only) summed
+ * over them, what they found, failed and empty calls, and `foundInRuns` — how
+ * many of its answered calls found at least one of its key items.
+ */
+function vByTask(perRun, kindOf, keyItemsOf) {
+  const by = new Map();
+  for (const { calls, failed, grades } of perRun) {
+    for (const t of new Set([...calls, ...failed].map((l) => l.taskIds[0]))) {
+      const kind = kindOf(t);
+      if (!by.has(t)) by.set(t, { kind, calls: 0, ...(kind === 'keyed' ? { keyItems: 0 } : kind === 'recall' ? { bugs: 0 } : {}), found: 0, findings: 0, fabricated: 0, failed: 0, failedLines: [], foundInRuns: 0 });
+      const e = by.get(t);
+      const answered = calls.filter((c) => c.taskIds[0] === t);
+      const failedHere = failed.filter((f) => f.taskIds[0] === t);
+      const s = tally([t], grades, keyItemsOf);
+      e.calls += answered.length + failedHere.length;
+      if (kind === 'keyed') e.keyItems += s.keyItems;
+      else if (kind === 'recall') e.bugs += s.keyItems;
+      for (const f of ['found', 'findings', 'fabricated']) e[f] += s[f];
+      e.failed += failedHere.length;
+      e.failedLines.push(...failedHere);
+      e.foundInRuns += answered.filter((c) => grades.some((g) => g.blindId === c.blindId && g.taskId === t && g.item === 'key' && finalGrade(g) === 'found')).length;
+    }
+  }
+  return Object.fromEntries([...by].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)).map(([t, { failedLines, foundInRuns, ...e }]) => [t, { ...e, empty: emptyCount(failedLines, () => 1), foundInRuns }]));
+}
+
+/**
+ * `null` when every run holds every task id of the arm and the arm misses no
+ * task of its suite's task file; otherwise each run's task count, the arm's
+ * task count (`of`), and the file's task ids no run holds (`missing`; null
+ * when there is no task file).
+ */
+function incompleteOf(all, runNumbers, fileTasks) {
+  const ids = new Set(all.flatMap((e) => e.taskIds));
+  const runs = runNumbers.map((run) => ({ run, tasks: new Set(all.filter((e) => e.run === run).flatMap((e) => e.taskIds)).size }));
+  const missing = Array.isArray(fileTasks) ? fileTasks.map((t) => t && t.id).filter((id) => typeof id === 'string' && !ids.has(id)) : null;
+  if (runs.every((r) => r.tasks === ids.size) && !(missing && missing.length)) return null;
+  return { runs, of: ids.size, missing };
+}
+
 const sum = (xs) => xs.reduce((n, x) => n + (typeof x === 'number' && Number.isFinite(x) ? x : 0), 0);
 /** Each named field summed over the runs, a null as 0. */
 const totals = (runs, keys) => Object.fromEntries(keys.map((k) => [k, sum(runs.map((r) => r[k]))]));
+/** R, the arm's total: summed over its runs; with no gradable answer at all, the net score and the four grade counts are null, not 0. */
+function rTotal(runs, graded) {
+  const t = totals(runs, ['net', 'correct', 'partly', 'wrong', 'noAnswer', 'traps', 'trapsPassed', 'failed']);
+  if (!graded) for (const k of ['net', 'correct', 'partly', 'wrong', 'noAnswer']) t[k] = null;
+  return t;
+}
 /** The empty calls over the runs: null ("not recorded") when a run could not count its own. */
 const emptyTotal = (runs) => (runs.some((r) => r.empty === null || r.empty === undefined) ? null : sum(runs.map((r) => r.empty)));
 /** The middle value, the mean of the two middle ones for an even count; null when there is none. */
@@ -441,9 +540,10 @@ const median = (xs) => {
 /**
  * The aggregate: per suite and arm, every run's numbers, their means and
  * their totals. `keys` is `{R: [key lines], V: [key lines]}` — ids, R's trap
- * flag and V's `task` are all it reads; `tasks` is `{V: [task lines]}`, whose
- * `kind` it reads (absent: every V task is keyed). Throws on a grade line the
- * rubric does not allow, and on a V key whose owners cannot be told.
+ * flag and V's `task` are all it reads; `tasks` is `{R, V: [task lines]}`: V's
+ * `kind` (absent: every V task is keyed), and each suite's ids for the tasks an
+ * arm never ran (absent: not known). Throws on a grade line the rubric does
+ * not allow, and on a V key whose owners cannot be told.
  */
 export function aggregate({ grades, mapping, keys, tasks = {} }) {
   const keyIds = { R: new Set((keys.R || []).map((k) => k.id)), V: new Set((keys.V || []).map((k) => k.id)) };
@@ -467,11 +567,12 @@ export function aggregate({ grades, mapping, keys, tasks = {} }) {
   for (const a of arms.values()) {
     const all = [...a.entries, ...a.failed];
     const runNumbers = [...new Set(all.map((e) => e.run))].sort((x, y) => x - y);
-    const runs = runNumbers.map((run) => {
+    const perRun = runNumbers.map((run) => {
       const calls = a.entries.filter((e) => e.run === run);
       const ids = new Set(calls.map((c) => c.blindId));
-      const failed = a.failed.filter((f) => f.run === run);
-      const runGrades = a.grades.filter((g) => ids.has(g.blindId));
+      return { run, calls, failed: a.failed.filter((f) => f.run === run), grades: a.grades.filter((g) => ids.has(g.blindId)) };
+    });
+    const runs = perRun.map(({ run, calls, failed, grades: runGrades }) => {
       const scores = a.suite === 'R' ? rRun({ calls, failed, grades: runGrades, trapIds }) : vRun({ calls, failed, grades: runGrades, kindOf, keyItemsOf });
       return { run, ...scores, ...costOf(calls) };
     });
@@ -506,9 +607,11 @@ export function aggregate({ grades, mapping, keys, tasks = {} }) {
       mean: { ...means, failed: m('failed'), wallMs: m('wallMs'), tokens: m('tokens') },
       // Every rule of the spec reads these: summed over calls, whatever number of calls each run holds.
       total: {
-        ...(a.suite === 'R' ? totals(runs, ['net', 'correct', 'partly', 'wrong', 'noAnswer', 'traps', 'trapsPassed', 'failed']) : totals(runs, ['failed'])),
+        ...(a.suite === 'R' ? rTotal(runs, a.entries.length > 0) : vTotal(perRun, kindOf, keyItemsOf)),
         empty: emptyTotal(runs),
       },
+      ...(a.suite === 'V' ? { byTask: vByTask(perRun, kindOf, keyItemsOf) } : {}),
+      incomplete: incompleteOf(all, runNumbers, tasks[a.suite]),
       wallMsMedian: median(a.entries.map((e) => e.wallMs)),
       overturned: a.grades.filter((g) => g.overturned).length,
     });
@@ -566,10 +669,13 @@ function cmdAggregate({ dir, date, merge, out }) {
     if (suites.has(s) && !existsSync(p)) throw new Error(`no key at ${p}`);
     keys[s] = existsSync(p) ? readJsonl(p) : [];
   }
-  const vTasks = join(dir, 'suites', 'V', 'tasks.jsonl');
-  const agg = aggregate({ grades, mapping, keys, tasks: { V: existsSync(vTasks) ? readJsonl(vTasks) : [] } });
-  const rTasks = join(dir, 'suites', 'R', 'tasks.jsonl');
-  agg.sets = { R: existsSync(rTasks) ? setFingerprint(readJsonl(rTasks)) : null };
+  const tasks = {};
+  for (const s of ['R', 'V']) {
+    const p = join(dir, 'suites', s, 'tasks.jsonl');
+    if (existsSync(p)) tasks[s] = readJsonl(p);
+  }
+  const agg = aggregate({ grades, mapping, keys, tasks });
+  agg.sets = { R: tasks.R ? setFingerprint(tasks.R) : null };
   if (merge) {
     const prevPath = join(dir, 'aggregates', `${merge}.json`);
     if (!existsSync(prevPath)) throw new Error(`no aggregate to merge at ${prevPath}`);
@@ -589,7 +695,11 @@ function cmdAggregate({ dir, date, merge, out }) {
   writePrivate(path, JSON.stringify(agg, null, 2) + '\n');
   for (const a of agg.arms) {
     const ungraded = a.runs.reduce((n, r) => n + r.ungraded, 0);
-    out(`${a.suite} ${a.arm}: ${a.n} run(s)${ungraded ? `, ${ungraded} item(s) ungraded` : ''}${a.carriedFrom ? `, carried from ${a.carriedFrom}` : ''}`);
+    const inc = a.incomplete;
+    const incomplete = inc
+      ? `, incomplete: tasks per run ${inc.runs.map((r) => r.tasks).join(', ')} of ${inc.of}${inc.missing && inc.missing.length ? `; missing ${inc.missing.join(', ')}` : ''}`
+      : '';
+    out(`${a.suite} ${a.arm}: ${a.n} run(s)${ungraded ? `, ${ungraded} item(s) ungraded` : ''}${a.carriedFrom ? `, carried from ${a.carriedFrom}` : ''}${incomplete}`);
   }
   out(`${agg.grades} grade(s), ${agg.overturned} overturned → ${path}`);
 }

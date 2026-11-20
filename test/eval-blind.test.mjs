@@ -518,6 +518,85 @@ test('the session cannot confirm a finding on foreign code, a control has no key
   assert.throws(() => run(keyOn('b2', 'X01', 'K1', 'found')), /grades line 1: .*not X01's/);
 });
 
+test('V\'s total sums the arm\'s calls: a failed call adds its key items or its bug to the denominators, a wholly failed run included, and recall and precision come from the sums', () => {
+  const at = (run, t) => blindOf('V', N, run, [t], 1000, null);
+  const failedOn = (run, t, empty) => ({ ...at(run, t), error: 'invented failure', empty });
+  const mapping = {
+    date: 'd', seed: 1,
+    blinds: { b1: at(1, 'V01'), b2: at(1, 'X01'), b3: at(1, 'C01'), b4: at(2, 'V01') },
+    failed: [failedOn(2, 'V02', false), failedOn(2, 'X01', true), failedOn(3, 'V01', false)],
+  };
+  const grades = [
+    keyOn('b1', 'V01', 'K1', 'found'), keyOn('b1', 'V01', 'K2', 'not'), findingOn('b1', 'V01', 'plausible', { verified: true }), findingOn('b1', 'V01', 'fabricated'),
+    keyOn('b2', 'X01', 'XK1', 'found'), findingOn('b2', 'X01', 'plausible'),
+    findingOn('b3', 'C01', 'fabricated'), findingOn('b3', 'C01', 'plausible'),
+    keyOn('b4', 'V01', 'K1', 'found'), keyOn('b4', 'V01', 'K2', 'found'),
+  ];
+  const [arm] = aggregate({ grades, mapping, keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V } }).arms;
+  assert.deepEqual(arm.runs.map((r) => [r.run, r.calls, r.keyItems]), [[1, 3, 2], [2, 3, 5], [3, 1, 2]]);
+  assert.deepEqual(arm.total, {
+    calls: 7, keyItems: 9, found: 3, findings: 5, confirmed: 1, plausible: 0, fabricated: 1, recall: 3 / 9, precision: 0.8,
+    recallOnly: { calls: 2, bugs: 2, found: 1, findings: 2, plausible: 1, fabricated: 0 },
+    control: { calls: 1, findings: 2, plausible: 1, fabricated: 1 },
+    failed: 3, empty: 1,
+  });
+  // A zero denominator is null, never NaN.
+  const [only] = aggregate({ grades: [], mapping: { date: 'd', seed: 1, failed: [], blinds: { b1: at(1, 'C01') } }, keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V } }).arms;
+  assert.deepEqual([only.total.recall, only.total.precision], [null, null]);
+});
+
+test('V by task: each task\'s calls, its key items or its bug, what was found, and in how many answered calls', () => {
+  const at = (run, t) => blindOf('V', N, run, [t], 1000, null);
+  const mapping = {
+    date: 'd', seed: 1,
+    blinds: { b1: at(1, 'V01'), b2: at(1, 'X01'), b3: at(1, 'C01'), b4: at(2, 'V01') },
+    failed: [{ ...at(2, 'V02'), error: 'invented failure', empty: false }, { ...at(2, 'X01'), error: 'invented failure', empty: true }],
+  };
+  const grades = [
+    keyOn('b1', 'V01', 'K1', 'found'), keyOn('b1', 'V01', 'K2', 'not'), findingOn('b1', 'V01', 'fabricated'),
+    keyOn('b2', 'X01', 'XK1', 'found'), findingOn('b2', 'X01', 'plausible'),
+    findingOn('b3', 'C01', 'fabricated'),
+    keyOn('b4', 'V01', 'K1', 'not'), keyOn('b4', 'V01', 'K2', 'not'),
+  ];
+  const [arm] = aggregate({ grades, mapping, keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V } }).arms;
+  assert.deepEqual(arm.byTask, {
+    C01: { kind: 'control', calls: 1, found: 0, findings: 1, fabricated: 1, failed: 0, empty: 0, foundInRuns: 0 },
+    V01: { kind: 'keyed', calls: 2, keyItems: 4, found: 1, findings: 2, fabricated: 1, failed: 0, empty: 0, foundInRuns: 1 },
+    V02: { kind: 'keyed', calls: 1, keyItems: 3, found: 0, findings: 0, fabricated: 0, failed: 1, empty: 0, foundInRuns: 0 },
+    X01: { kind: 'recall', calls: 2, bugs: 2, found: 1, findings: 2, fabricated: 0, failed: 1, empty: 1, foundInRuns: 1 },
+  });
+});
+
+test('an R arm with no gradable answer has no net score and no grade counts, while its traps, failed and empty calls are counted', () => {
+  const mapping = { date: 'd', seed: 1, blinds: {}, failed: [{ suite: 'R', arm: A, run: 1, taskIds: ['q1', 'q3'], unit: 'gemini', model: 'm', effort: 'high', cli: 'fake 1.0', empty: true }] };
+  const [arm] = aggregate({ grades: [], mapping, keys: KEYS }).arms;
+  const { net, correct, partly, wrong, noAnswer, traps, failed, empty } = arm.total;
+  assert.deepEqual({ net, correct, partly, wrong, noAnswer, traps, failed, empty }, { net: null, correct: null, partly: null, wrong: null, noAnswer: null, traps: 1, failed: 2, empty: 2 });
+});
+
+test('an arm says it is incomplete: a run short of the arm\'s tasks, or a task of the suite\'s file it never ran; --aggregate prints it', () => {
+  const RT = ['q1', 'q2', 'q3', 'q4'].map((id) => ({ id, prompt: `Invented question ${id}.` }));
+  const short = { date: 'd', seed: 1, failed: [], blinds: { b1: blindOf('R', A, 1, ['q1'], 1, null), b2: blindOf('R', A, 1, ['q2'], 1, null), b3: blindOf('R', A, 1, ['q3'], 1, null), b4: blindOf('R', A, 2, ['q1'], 1, null) } };
+  const [a] = aggregate({ grades: [], mapping: short, keys: KEYS, tasks: { R: RT } }).arms;
+  assert.deepEqual(a.incomplete, { runs: [{ run: 1, tasks: 3 }, { run: 2, tasks: 1 }], of: 3, missing: ['q4'] });
+  const whole = { ...short, blinds: { b1: short.blinds.b1, b2: short.blinds.b2, b3: short.blinds.b3 } };
+  assert.equal(aggregate({ grades: [], mapping: whole, keys: KEYS }).arms[0].incomplete, null, 'every task in every run, and no task file to miss one of');
+  assert.deepEqual(aggregate({ grades: [], mapping: whole, keys: KEYS, tasks: { R: RT } }).arms[0].incomplete, { runs: [{ run: 1, tasks: 3 }], of: 3, missing: ['q4'] });
+  assert.deepEqual(aggregate({ grades: [], mapping: short, keys: KEYS }).arms[0].incomplete.missing, null);
+
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-evals-incomplete-'));
+  const g = join(dir, 'grading', '2026-11-20');
+  mkdirSync(g, { recursive: true });
+  writeFileSync(join(g, 'mapping.json'), JSON.stringify({ ...short, date: '2026-11-20' }));
+  writeFileSync(join(g, 'grades.jsonl'), '');
+  mkdirSync(join(dir, 'suites', 'R'), { recursive: true });
+  writeFileSync(join(dir, 'suites', 'R', 'key.jsonl'), KEYS.R.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  writeFileSync(join(dir, 'suites', 'R', 'tasks.jsonl'), RT.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate'], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /R gemini:Gemini 3\.8 Flash \(High\): 2 run\(s\).*, incomplete: tasks per run 3, 1 of 3; missing q4$/m);
+});
+
 test('a V key names its task on every line or none: round one\'s task-less key belongs to the one keyed task', () => {
   const taskless = { R: [], V: [{ id: 'k1' }, { id: 'k2' }] };
   const grades = [keyOn('b1', 'V01', 'k1', 'found'), keyOn('b1', 'V01', 'k2', 'not')];
