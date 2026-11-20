@@ -32,7 +32,9 @@
  *
  * THE V SNAPSHOT is `git archive` of the task's commit, extracted with no
  * `.git`, or for a task of another project (`tree`) a fresh copy of its
- * directory under the private dir, refused when a link in it points out of it.
+ * directory, which sits strictly under the private dir's `third-party/` (a
+ * shown diff is a `.diff` file), refused when a link in it points out of it as
+ * the kernel follows it.
  * A review runs with it as `cwd`, so it is refused when git can still reach a
  * repository from it: inside the live checkout's tree git walks up to its
  * `.git`, and the later fixes would be one `git log` away. A V task is keyed,
@@ -255,11 +257,23 @@ export function isRelativeInside(rel) {
   return typeof rel === 'string' && rel !== '' && !isAbsolute(rel) && !normalize(rel).startsWith('..');
 }
 
+/** True when `rel`, normalised, names something strictly below the relative directory `under`: never `under` itself, never beside it. */
+function isStrictlyUnder(rel, under) {
+  if (!isRelativeInside(rel) || !isRelativeInside(under)) return false;
+  const base = normalize(under).replace(/\/+$/, '');
+  if (base === '.') return false;
+  const r = normalize(rel);
+  return r.startsWith(`${base}/`) && r.slice(base.length + 1).replace(/\/+$/, '') !== '';
+}
+
 /** `path` is `root` or under it (both as given: resolve or realpath them alike). */
 const within = (root, path) => {
   const rel = relative(root, path);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 };
+
+/** Where every V tree sits in the private dir: an allowlist, so the keys and the other suites are never a tree. */
+const V_TREES = 'third-party';
 
 const TREE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -269,19 +283,23 @@ function treeCopyPath(id) {
   return join(tmpdir(), 'omelette-evals', 'snapshots', id);
 }
 
-/** The first link under `root` that is absolute or resolves outside it, relative to `root`; null when none does. */
+/**
+ * The first link under `root` that is absolute, leads nowhere, or lands outside
+ * it, relative to `root`; null when none does. Where a link lands is where the
+ * kernel takes it (`realpathSync.native`): `s/..` after a link `s` is the parent
+ * of `s`'s target, which a lexical check, or Node's own realpath, reads as `.`.
+ */
 function linkOutOf(root) {
-  const realRoot = realpathSync(root);
+  const realRoot = realpathSync.native(root);
   const walk = (d) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       const p = join(d, e.name);
       if (e.isSymbolicLink()) {
         const target = readlinkSync(p);
         if (isAbsolute(target) || !within(root, resolve(d, target))) return relative(root, p);
-        // A link that reaches out through another link: where it really goes, when it goes anywhere.
         let real = null;
-        try { real = realpathSync(p); } catch { /* dangling: its target, read above, is all there is */ }
-        if (real && !within(realRoot, real)) return relative(root, p);
+        try { real = realpathSync.native(p); } catch { /* dangling, or a loop: refused below */ }
+        if (!real || !within(realRoot, real)) return relative(root, p);
       } else if (e.isDirectory()) {
         const hit = walk(p);
         if (hit) return hit;
@@ -294,17 +312,27 @@ function linkOutOf(root) {
 
 /**
  * A fresh copy of `<dir>/<rel>` (a third-party tree) for task `id`, under the
- * OS temp dir; any earlier copy is removed first. Links are copied as they are
- * and refused when one points out of the tree; then no git history may be
+ * OS temp dir; any earlier copy is removed first. `rel` must sit strictly under
+ * `<dir>/<under>` (required: `third-party` for V), as written and as the kernel
+ * resolves it, whatever the caller checked. Links are copied as they are and
+ * refused when one points out of the tree; then no git history may be
  * reachable from the copy. Returns its path.
  */
-export function materializeTree({ dir, rel, id }) {
+export function materializeTree({ dir, rel, id, under }) {
   const path = treeCopyPath(id);
-  if (!isRelativeInside(rel)) throw new Error(`tree ${JSON.stringify(rel)} is not a relative path inside ${dir}`);
+  if (!isRelativeInside(under) || normalize(under).replace(/\/+$/, '') === '.') {
+    throw new Error(`materializeTree needs "under": the directory of ${dir} its tree must sit strictly under`);
+  }
+  const place = resolve(dir, under);
+  if (!isStrictlyUnder(rel, under)) throw new Error(`tree ${JSON.stringify(rel)} is not a relative path inside ${place}`);
   const src = resolve(dir, rel);
   let st = null;
   try { st = lstatSync(src); } catch { /* reported below */ }
   if (!st || !st.isDirectory()) throw new Error(`tree ${rel} is not a directory under ${dir}`);
+  // A link in the path to the tree (not in the tree) could still lead out of the place: check it as the kernel resolves it.
+  const realPlace = realpathSync.native(place);
+  const fromPlace = relative(realPlace, realpathSync.native(src));
+  if (fromPlace === '' || fromPlace.startsWith('..') || isAbsolute(fromPlace)) throw new Error(`tree ${rel} leads out of ${place} through a link`);
   rmSync(path, { recursive: true, force: true });
   const staging = `${path}.tmp-${process.pid}`;
   rmSync(staging, { recursive: true, force: true });
@@ -330,7 +358,7 @@ export function materializeTree({ dir, rel, id }) {
 export function snapshotFor({ task, dir, repo = ROOT, snapshot, extract = true }) {
   if (task.tree !== undefined) {
     if (snapshot) throw new Error('--snapshot is for tasks at a commit of this repository');
-    return extract ? materializeTree({ dir, rel: task.tree, id: task.id }) : treeCopyPath(task.id);
+    return extract ? materializeTree({ dir, rel: task.tree, id: task.id, under: V_TREES }) : treeCopyPath(task.id);
   }
   const path = snapshot ? resolve(snapshot) : join(tmpdir(), 'omelette-evals', 'snapshots', task.commit);
   if (extract) return ensureSnapshot({ repo, commit: task.commit, path });
@@ -433,12 +461,13 @@ function taskProblems(suite, task, all, dir) {
       if (!V_SHOWS.includes(show)) own.push(`show ${JSON.stringify(task.show)} is not one of ${V_SHOWS.join(', ')}`);
       const hasCommit = task.commit !== undefined;
       if (hasCommit === (task.tree !== undefined)) {
-        own.push(hasCommit ? 'names a commit and a tree: exactly one says where its code is' : 'needs a commit of this repository or a tree under the private dir');
-      } else if (hasCommit && !COMMIT_RE.test(String(task.commit))) own.push(`commit ${JSON.stringify(task.commit)} is not a commit id`);
-      else if (!hasCommit && !isRelativeInside(task.tree)) own.push(`tree ${JSON.stringify(task.tree)} is not a relative path inside the private dir`);
+        own.push(hasCommit ? 'names a commit and a tree: exactly one says where its code is' : `needs a commit of this repository or a tree under the private dir's ${V_TREES}/`);
+      } else if (hasCommit && (typeof task.commit !== 'string' || !COMMIT_RE.test(task.commit))) own.push(`commit ${JSON.stringify(task.commit)} is not a commit id`);
+      else if (!hasCommit && !isStrictlyUnder(task.tree, V_TREES)) own.push(`tree ${JSON.stringify(task.tree)} is not a directory strictly under the private dir's ${V_TREES}/`);
       if (show === 'file' && !isRelativeInside(task.file)) own.push('shows a file, and needs "file": a relative path inside its code');
       if (show === 'diff') {
         if (!isRelativeInside(task.diff)) own.push('shows a diff, and needs "diff": a relative path inside the private dir');
+        else if (!task.diff.endsWith('.diff')) own.push(`diff ${JSON.stringify(task.diff)} is not a .diff file`);
         else if (!isFile(resolve(dir, task.diff))) own.push(`diff ${task.diff} is not a file under ${dir}`);
       }
       if (kind === 'control') {
@@ -447,6 +476,9 @@ function taskProblems(suite, task, all, dir) {
         else if (!of) own.push(`"of" names ${task.of}, and the suite has no such task`);
         else if ((of.kind ?? 'keyed') !== 'recall') own.push(`"of" names ${task.of}, a ${of.kind ?? 'keyed'} task: a control is the control of a recall task`);
         else if (task.prompt !== of.prompt) own.push(`its prompt is not word for word ${task.of}'s: a control's brief is its task's`);
+        // The wrapper sentence is part of the brief: it says what is shown, and names a shown file.
+        else if (show !== (of.show ?? 'file')) own.push(`it shows a ${show}, and ${task.of} shows a ${of.show ?? 'file'}: a control's brief is its task's, the wrapper sentence included`);
+        else if (show === 'file' && task.file !== of.file) own.push(`it shows ${task.file}, and ${task.of} shows ${of.file}: a control's brief names its task's file`);
       }
       return own;
     }

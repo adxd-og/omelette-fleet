@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { parseArm, readTasks, runArm } from '../scripts/eval-run.mjs';
+import { materializeTree, parseArm, readTasks, runArm } from '../scripts/eval-run.mjs';
 
 const tmp = (p) => mkdtempSync(join(tmpdir(), p));
 
@@ -119,6 +119,7 @@ test('a V task line is refused when its kind, its source or what it shows is wro
     { id: 'V09', kind: 'recall', show: 'diff', tree: 'third-party/x', prompt: BRIEF },
     { id: 'V09', kind: 'recall', tree: '../outside', file: 'a.js', prompt: BRIEF },
     { id: 'V09', kind: 'recall', tree: '/abs', file: 'a.js', prompt: BRIEF },
+    { id: 'V09', commit: 1234, file: 'a.js', prompt: BRIEF },
   ];
   for (const line of refused) {
     assert.throws(() => readTasks(evalsDir({ V: [line] }), 'V'), /task V09: /, JSON.stringify(line));
@@ -130,11 +131,41 @@ test('a V task line is refused when its kind, its source or what it shows is wro
     { id: 'V01', commit: 'abc1234', file: 'src/thing.js', prompt: BRIEF },
     { id: 'V02', kind: 'keyed', show: 'file', commit: 'def5678', file: 'hooks/thing.mjs', prompt: BRIEF },
     { id: 'X01', kind: 'recall', show: 'diff', tree: 'third-party/x01/at-intro', diff: 'suites/V/X01.diff', prompt: BRIEF },
-    { id: 'C01', kind: 'control', of: 'X01', show: 'file', tree: 'third-party/x01/after-fix', file: 'lib/widget.js', prompt: BRIEF },
+    { id: 'C01', kind: 'control', of: 'X01', show: 'diff', tree: 'third-party/x01/after-fix', diff: 'suites/V/C01.diff', prompt: BRIEF },
   ];
   const dir = evalsDir({ V: accepted });
   writeFileSync(join(dir, 'suites', 'V', 'X01.diff'), DIFF);
+  writeFileSync(join(dir, 'suites', 'V', 'C01.diff'), DIFF);
   assert.deepEqual(readTasks(dir, 'V').map((t) => t.id), ['V01', 'V02', 'X01', 'C01']);
+});
+
+test('a place is allowlisted: a tree strictly under third-party/, a shown diff a .diff file', () => {
+  for (const tree of ['.', 'suites', 'a/..', 'third-party', 'third-party/', 'third-party/x/..', 'third-party/../suites']) {
+    const dir = evalsDir({ V: [{ id: 'X01', kind: 'recall', tree, file: 'V/tasks.jsonl', prompt: BRIEF }] });
+    assert.throws(() => readTasks(dir, 'V'), /task X01: .*third-party/, JSON.stringify(tree));
+  }
+  const dir = evalsDir({ V: [{ id: 'X01', kind: 'recall', show: 'diff', tree: 'third-party/x01/at-intro', diff: 'suites/V/key.jsonl', prompt: BRIEF }] });
+  writeFileSync(join(dir, 'suites', 'V', 'key.jsonl'), '{"id":"XK1","task":"X01"}\n');
+  assert.throws(() => readTasks(dir, 'V'), /task X01: .*\.diff/);
+});
+
+test('materializeTree copies only a directory strictly under the place it is given, as the kernel finds it', async () => {
+  await withTmpdir(async (fresh) => {
+    const dir = tmp('omelette-evals-tasks-place-');
+    writeTree(dir, 'third-party/x01/before-fix', { 'lib/widget.js': 'export const items = [];\n' });
+    writeTree(dir, 'suites/V', { 'key.jsonl': '{"id":"XK1"}\n' });
+    assert.throws(() => materializeTree({ dir, rel: 'third-party/x01/before-fix', id: 'X01' }), /needs "under"/);
+    for (const rel of ['suites', 'third-party', 'third-party/x01/..']) {
+      assert.throws(() => materializeTree({ dir, rel, id: 'X01', under: 'third-party' }), /relative path inside/, rel);
+    }
+    // A link in the path to the tree, not in the tree: the place is checked as the kernel resolves it.
+    symlinkSync('../suites', join(dir, 'third-party', 'x02'));
+    assert.throws(() => materializeTree({ dir, rel: 'third-party/x02/V', id: 'X02', under: 'third-party' }), /through a link/);
+    assert.equal(existsSync(join(fresh, 'omelette-evals', 'snapshots', 'X02')), false);
+    // A link that leads nowhere is refused as a link out of the tree.
+    symlinkSync('lib/gone.js', join(dir, 'third-party', 'x01', 'before-fix', 'dangling'));
+    assert.throws(() => materializeTree({ dir, rel: 'third-party/x01/before-fix', id: 'X01', under: 'third-party' }), /a link in third-party\/x01\/before-fix points out of it: dangling/);
+  });
 });
 
 test('a control\'s brief is word for word its task\'s', () => {
@@ -144,6 +175,11 @@ test('a control\'s brief is word for word its task\'s', () => {
   const keyed = { id: 'V01', commit: 'abc1234', file: 'src/thing.js', prompt: BRIEF };
   assert.throws(() => readTasks(evalsDir({ V: [keyed, control({ of: 'V01' })] }), 'V'), /task C01: /);
   assert.throws(() => readTasks(evalsDir({ V: [x01, control({ of: 'X09' })] }), 'V'), /task C01: /);
+  // The wrapper sentence is part of the brief: it says what is shown, and names a shown file.
+  const shown = evalsDir({ V: [x01, control({ show: 'diff', file: undefined, diff: 'suites/V/C01.diff' })] });
+  writeFileSync(join(shown, 'suites', 'V', 'C01.diff'), DIFF);
+  assert.throws(() => readTasks(shown, 'V'), /task C01: .*shows/);
+  assert.throws(() => readTasks(evalsDir({ V: [x01, control({ file: 'lib/other.js' })] }), 'V'), /task C01: .*lib\/other\.js/);
 });
 
 test('V runs controls last, and a third-party file or diff comes from the private dir', async () => {
