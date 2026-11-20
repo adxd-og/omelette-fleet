@@ -14,7 +14,7 @@ import { aggregate, blind, redact, redactionTerms } from '../scripts/eval-blind.
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRIPT = join(ROOT, 'scripts', 'eval-blind.mjs');
-const WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra', 'Mistral', 'Vibe', 'Large 4', 'GLM'];
+const WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra', 'Mistral', 'Vibe', 'Large 4', 'GLM', 'Hydrogen', 'Neon', 'Carbon', 'Claude', 'Opus'];
 const TOOLS = ['gemini_research', 'gemini_deep_research', 'grok_research', 'grok_code_review', 'codex_research', 'codex_code_review', 'mistral_security_review', 'mistral_security_repro'];
 
 /** A name is gone when no letter-bounded occurrence of it is left, in any case. */
@@ -315,4 +315,9 @@ test('a name and its version collapse across a Unicode space or a dash, never a 
 
 test('a name left next to an XHigh level in the middle-dot form collapses with it', () => {
   assert.equal(redact('Gemini · XHigh said so.', redactionTerms()), '[model] said so.');
+});
+
+test('this round\'s names are masked as whole words — Anthropic, Claude, Opus, Neon, Hydrogen, Carbon — and longer words keep them', () => {
+  const out = redact('Anthropic built Claude Opus 5.5; Neon and Hydrogen are Carbon-based. Neonatal opuses stay.', redactionTerms());
+  assert.equal(out, '[model] built [model]; [model] and [model] are [model]-based. Neonatal opuses stay.');
 });

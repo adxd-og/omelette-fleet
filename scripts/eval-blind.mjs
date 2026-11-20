@@ -57,9 +57,9 @@ const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
 const USAGE = 'usage: node scripts/eval-blind.mjs --date YYYY-MM-DD [--dir D] [--seed N] | --date YYYY-MM-DD --aggregate [--dir D] [--merge YYYY-MM-DD]';
 
 /** The family words the plan names, beside the catalogs' own ids and labels. */
-export const FAMILY_WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra', 'Mistral', 'Vibe', 'Large 4', 'GLM'];
+export const FAMILY_WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra', 'Mistral', 'Vibe', 'Large 4', 'GLM', 'Hydrogen', 'Neon', 'Carbon', 'Claude', 'Opus'];
 /** The vendors and the vendor tools an answer may name itself by. */
-export const VENDOR_WORDS = ['OpenAI', 'ChatGPT', 'Google', 'DeepMind', 'xAI', 'Antigravity', 'agy'];
+export const VENDOR_WORDS = ['OpenAI', 'ChatGPT', 'Google', 'DeepMind', 'xAI', 'Antigravity', 'agy', 'Anthropic'];
 export const MASK = '[model]';
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
