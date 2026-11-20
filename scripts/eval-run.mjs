@@ -65,7 +65,7 @@ export const TOOL_FOR = {
   V: { gemini: 'gemini_research', grok: 'grok_code_review', codex: 'codex_code_review', mistral: 'mistral_security_review' },
 };
 
-const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V --arm <unit>:<model>[:<effort>] [--arm …] [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]';
+const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V --arm <unit>:<model>[:<effort>] [--arm …] [--task ID …] [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]';
 const GEMINI_LEVEL = /\((Low|Medium|High|XHigh)\)$/;
 /** The catalog's spelling of each level word an arm may name: `xhigh` is `XHigh`, not `Xhigh`. */
 const GEMINI_LEVEL_WORD = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh' };
@@ -291,11 +291,24 @@ export function readTasks(dir, suite) {
   return tasks;
 }
 
-/** The first run number this arm's file has not used yet. */
-function nextRun(file) {
+/** The first run number this task (or batch of tasks) has not used yet in the arm's file. */
+export function nextRunFor(file, taskIds) {
   if (!existsSync(file)) return 1;
-  const runs = readJsonl(file).map((l) => Number(l.run)).filter(Number.isInteger);
+  const key = taskIds.join(',');
+  const runs = readJsonl(file)
+    .filter((l) => Array.isArray(l.taskIds) && l.taskIds.join(',') === key)
+    .map((l) => Number(l.run)).filter(Number.isInteger);
   return runs.length ? Math.max(...runs) + 1 : 1;
+}
+
+/** The tasks `ids` names, in the suite's order; every id must be in the suite. No ids: every task. */
+export function selectTasks(tasks, ids) {
+  if (!ids || !ids.length) return tasks;
+  const known = new Set(tasks.map((t) => t.id));
+  const missing = ids.filter((id) => !known.has(id));
+  if (missing.length) throw new Error(`no task ${missing.join(', ')} in the suite`);
+  const want = new Set(ids);
+  return tasks.filter((t) => want.has(t.id));
 }
 
 /**
@@ -358,16 +371,16 @@ export const isEmptyCall = ({ ok, answer, error }) => (ok ? !String(answer ?? ''
  * (tests); `now` dates the run directory.
  */
 export async function runArm({
-  suite, arm, runs = 1, batch = false, dir = DEFAULT_DIR, repo = ROOT, snapshot, env = process.env,
+  suite, arm, runs = 1, batch = false, dir = DEFAULT_DIR, repo = ROOT, snapshot, only, env = process.env,
   now = () => new Date(), serverPath, out = (l) => console.log(l),
 }) {
   const unit = UNITS[arm.unit];
-  let tasks = readTasks(dir, suite);
+  let tasks = selectTasks(readTasks(dir, suite), only);
   if (suite === 'V') tasks = prepareV(tasks, { arm, dir, repo, snapshot });
   const calls = planCalls({ suite, arm, tasks, batch });
   const file = join(dir, 'runs', localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const first = nextRun(file);
+  const firstOf = calls.map((c) => nextRunFor(file, c.taskIds));
   const cli = await cliVersion(unit, env);
   const cfg = unitConfig({ unit: unit.name, envMap: unit.envMap, builtin: unit.builtin, extraSchema: unit.extraSchema, supportedModes: unit.supportedModes, env });
   // The unit's own hard kill governs, and its bounded retry may run the CLI twice.
@@ -379,8 +392,9 @@ export async function runArm({
   out(`${suite} ${arm.arm} · ${cli} · ${calls.length} call(s) × ${runs} run(s) → ${file}`);
   const lines = [];
   let unmatched = 0;
-  for (let run = first; run < first + runs; run++) {
-    for (const call of calls) {
+  for (let pass = 0; pass < runs; pass++) {
+    for (const [i, call] of calls.entries()) {
+      const run = firstOf[i] + pass;
       const before = convDir ? conversationState(convDir) : null;
       const t0 = Date.now();
       let res = null;
@@ -422,24 +436,24 @@ export async function runArm({
 }
 
 /** The dry run: the calls each arm would make, by task id and prompt length. Writes and spawns nothing. */
-function printPlan({ suite, arm, runs, batch, dir, repo, snapshot, now, out }) {
-  let tasks = readTasks(dir, suite);
+function printPlan({ suite, arm, runs, batch, dir, repo, snapshot, only, now, out }) {
+  let tasks = selectTasks(readTasks(dir, suite), only);
   if (suite === 'V') tasks = prepareV(tasks, { arm, dir, repo, snapshot, extract: false });
   const pending = suite === 'V' && arm.unit === 'gemini' && tasks.some((t) => t.fileText === null);
   const calls = planCalls({ suite, arm, tasks: tasks.map((t) => (t.fileText === null ? { ...t, fileText: '' } : t)), batch });
   const file = join(dir, 'runs', localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
-  const first = nextRun(file);
-  out(`${suite} ${arm.arm} → ${file} (runs ${first}–${first + runs - 1}; the CLI version is read when it runs)`);
+  const firstOf = calls.map((c) => nextRunFor(file, c.taskIds));
+  out(`${suite} ${arm.arm} → ${file} (the CLI version is read when it runs)`);
   for (const t of suite === 'V' ? tasks : []) {
     const reached = !t.snapshotPresent && arm.unit !== 'gemini' ? reachableGitDir(nearestExisting(t.snapshot)) : null;
     out(`  snapshot ${t.snapshot} ${t.snapshotPresent ? '(present)' : `(absent: would be extracted from ${t.commit})`}` +
       (reached ? ` — would be REFUSED: git reaches ${reached} from there; pass --snapshot outside every git work tree` : ''));
   }
-  for (let run = first; run < first + runs; run++) {
-    for (const c of calls) {
+  for (let pass = 0; pass < runs; pass++) {
+    for (const [i, c] of calls.entries()) {
       const { prompt, ...rest } = c.args;
       const opts = Object.entries(rest).map(([k, v]) => `${k}=${v}`).join('  ');
-      out(`  run ${run}  ${c.taskIds.join(',')}  ${c.tool}  ${opts}  prompt ${prompt.length} chars${pending ? ' + the file\'s text' : ''}`);
+      out(`  run ${firstOf[i] + pass}  ${c.taskIds.join(',')}  ${c.tool}  ${opts}  prompt ${prompt.length} chars${pending ? ' + the file\'s text' : ''}`);
     }
   }
 }
@@ -450,7 +464,7 @@ export async function main(argv = process.argv.slice(2), { out = (l) => console.
     ({ values } = parseArgs({
       args: argv,
       options: {
-        suite: { type: 'string' }, arm: { type: 'string', multiple: true }, runs: { type: 'string' },
+        suite: { type: 'string' }, arm: { type: 'string', multiple: true }, task: { type: 'string', multiple: true }, runs: { type: 'string' },
         batch: { type: 'boolean' }, dir: { type: 'string' }, snapshot: { type: 'string' }, 'dry-run': { type: 'boolean' },
       },
       strict: true, allowPositionals: false,
@@ -470,7 +484,7 @@ export async function main(argv = process.argv.slice(2), { out = (l) => console.
   if (errors.length) { for (const e of errors) err(`eval-run: ${e}`); err(USAGE); return 2; }
 
   const dir = resolve(values.dir || DEFAULT_DIR);
-  const opts = { suite, runs, batch: !!values.batch, dir, repo: ROOT, snapshot: values.snapshot, now: () => new Date(), out };
+  const opts = { suite, runs, batch: !!values.batch, dir, repo: ROOT, snapshot: values.snapshot, only: values.task, now: () => new Date(), out };
   try {
     for (const arm of arms) {
       if (values['dry-run']) printPlan({ ...opts, arm });

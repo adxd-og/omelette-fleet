@@ -454,3 +454,25 @@ test('a Gemini call records the agy conversations it wrote to, a WAL file read a
   const c = await runArm({ suite: 'R', arm: parseArm('codex:gpt-6.1-sol'), dir, env: baseEnv(home, { CODEX_BIN: fakeCodex(home) }), out: quiet });
   assert.equal(c.lines[0].agyConversations, null);
 });
+
+test('--task runs the named tasks only, and each task numbers its own runs', async () => {
+  const home = tmp('omelette-evals-home-');
+  const dir = evalsDir({ R: R_TASKS });
+  const env = baseEnv(home, { CODEX_BIN: fakeCodex(home) });
+  const arm = parseArm('codex:gpt-6.1-sol');
+  const a = await runArm({ suite: 'R', arm, dir, env, only: ['q2'], out: quiet });
+  assert.deepEqual(a.lines.map((l) => [l.taskIds[0], l.run]), [['q2', 1]]);
+  const b = await runArm({ suite: 'R', arm, dir, env, runs: 2, out: quiet });
+  assert.deepEqual(b.lines.map((l) => [l.taskIds[0], l.run]), [['q1', 1], ['q2', 2], ['q1', 2], ['q2', 3]]);
+  await assert.rejects(runArm({ suite: 'R', arm, dir, env, only: ['q9'], out: quiet }), /no task q9/);
+});
+
+test('--task reaches the plan: a dry run with --task q2 plans q2 alone', () => {
+  const home = tmp('omelette-evals-home-');
+  const dir = evalsDir({ R: R_TASKS });
+  const r = spawnSync(process.execPath, [SCRIPT, '--suite', 'R', '--arm', 'codex:gpt-6.1-sol', '--task', 'q2', '--dir', dir, '--dry-run'], { encoding: 'utf8', cwd: home, env: baseEnv(home) });
+  assert.equal(r.status, 0, r.stderr);
+  const calls = r.stdout.split('\n').filter((l) => /codex_research/.test(l));
+  assert.equal(calls.length, 1, r.stdout);
+  assert.match(calls[0], /run 1 {2}q2 /);
+});
