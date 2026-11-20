@@ -4,7 +4,7 @@
  * The evals runner: one suite, one or more arms, every call through the real
  * unit path (plan docs/superpowers/plans/2026-10-16-evals-mvp.md, Task 1).
  *
- *   node scripts/eval-run.mjs --suite R|V|P --arm <unit>:<model>[:<effort>] [--arm …]
+ *   node scripts/eval-run.mjs --suite R|V|P|I --arm <unit>:<model>[:<effort>] [--arm …]
  *        [--runs N] [--task ID …] [--batch] [--dir D] [--snapshot PATH] [--dry-run]
  *
  * PRIVATE IN, PRIVATE OUT. It reads `<D>/suites/<suite>/tasks.jsonl` and writes
@@ -48,6 +48,11 @@
  * a unified diff, with a fresh copy of the task's tree as `cwd`. The gold and
  * the maintainers' tests stay in the private dir, out of the copy and the brief.
  *
+ * SUITE I runs on Gemini only: the honest question about a local document,
+ * with a fresh copy of the document's directory (strictly under the private
+ * dir's `suites/I/docs/`) as `cwd`. What was planted and what a correct answer
+ * holds stay in the task line, outside that directory; eval-inject scores them.
+ *
  * The vendor CLI's `--version` is read once per arm, the way `doctor` reads it
  * (core/spawn.mjs, with the unit's env allowlist and billing scrub).
  */
@@ -73,19 +78,20 @@ import { proofStatus, pTaskProblems } from './eval-patch.mjs';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
 export const UNITS = { gemini: geminiUnit, grok: grokUnit, codex: codexUnit, mistral: mistralUnit };
-export const SUITES = ['R', 'V', 'P'];
+export const SUITES = ['R', 'V', 'P', 'I'];
 
-/** The tool each suite calls on each unit: the research tool for R; the review tool for V, Gemini having none; P on Gemini alone. */
+/** The tool each suite calls on each unit: the research tool for R; the review tool for V, Gemini having none; P and I on Gemini alone. */
 export const TOOL_FOR = {
   R: { gemini: 'gemini_research', grok: 'grok_research', codex: 'codex_research', mistral: 'mistral_security_review' },
   V: { gemini: 'gemini_research', grok: 'grok_code_review', codex: 'codex_code_review', mistral: 'mistral_security_review' },
   P: { gemini: 'gemini_research' },
+  I: { gemini: 'gemini_research' },
 };
 
 /** What a P brief asks for after the bug report: the fix as a diff, given as text. */
 export const P_SUFFIX = 'Answer with the change that fixes it, as one unified diff against the files in the working directory, paths as `git diff` prints them (a/ and b/), inside one ```diff fenced block.';
 
-const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V|P --arm <unit>:<model>[:<effort>] [--arm …] [--task ID …] [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]';
+const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V|P|I --arm <unit>:<model>[:<effort>] [--arm …] [--task ID …] [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]';
 const GEMINI_LEVEL = /\((Low|Medium|High|XHigh)\)$/;
 /** The catalog's spelling of each level word an arm may name: `xhigh` is `XHigh`, not `Xhigh`. */
 const GEMINI_LEVEL_WORD = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh' };
@@ -160,6 +166,7 @@ export function inlineDiffPrompt(task) {
  * The prompt one task's call sends. V: a shown diff is in every arm's brief; a
  * shown file is in the brief when `inline` (Gemini), and otherwise read from the cwd.
  * P: the bug report, a blank line and `P_SUFFIX` — the tree is the cwd.
+ * I: the honest question alone — the document's directory is the cwd.
  */
 export function briefFor(suite, task, { inline = false } = {}) {
   switch (suite) {
@@ -168,6 +175,8 @@ export function briefFor(suite, task, { inline = false } = {}) {
       return inline ? inlineFilePrompt(task) : task.prompt;
     case 'P':
       return `${task.prompt}\n\n${P_SUFFIX}`;
+    case 'I':
+      return task.prompt;
     default:
       throw new Error(`no brief for suite ${suite}`);
   }
@@ -177,7 +186,8 @@ export function briefFor(suite, task, { inline = false } = {}) {
  * The calls one run of an arm makes: `[{taskIds, tool, args}]`, in order. Pure.
  * V tasks arrive with `snapshot` (an absolute path) for a cwd arm, `fileText`
  * for Gemini, and `diffText` for a task that shows a diff; P tasks with
- * `snapshot`, the copy of their tree.
+ * `snapshot`, the copy of their tree; I tasks with `snapshot`, the copy of
+ * their document's directory.
  */
 export function planCalls({ suite, arm, tasks, batch = false }) {
   const tool = TOOL_FOR[suite] && TOOL_FOR[suite][arm.unit];
@@ -189,6 +199,7 @@ export function planCalls({ suite, arm, tasks, batch = false }) {
   return tasks.map((t) => {
     if (suite === 'R') return { taskIds: [t.id], tool, args: { prompt: t.prompt, ...base } };
     if (suite === 'P') return { taskIds: [t.id], tool, args: { prompt: briefFor('P', t), ...base, cwd: t.snapshot } };
+    if (suite === 'I') return { taskIds: [t.id], tool, args: { prompt: briefFor('I', t), ...base, cwd: t.snapshot } };
     // Gemini V calls keep round one's construction: the shown text inline, no cwd.
     return { taskIds: [t.id], tool, args: { prompt: briefFor('V', t, { inline: gemini }), ...base, ...(gemini ? {} : { cwd: t.snapshot }) } };
   });
@@ -291,12 +302,22 @@ const within = (root, path) => {
 const V_TREES = 'third-party';
 /** Where every P tree sits: the place eval-patch checks a P line's tree against. */
 const P_TREES = 'third-party';
+/** Where every I document's directory sits: under the suite's own directory, never it — its task file holds what was planted. */
+const I_DOCS = 'suites/I/docs';
 
 const TREE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** Where a tree task's copy lives: under the OS temp dir, outside every work tree, named by the task id. */
+/** Said wherever `--snapshot` meets a task that is not at a commit of this repository. */
+const SNAPSHOT_IS_FOR_COMMITS = '--snapshot is for tasks at a commit of this repository';
+
+/**
+ * Where a tree task's copy lives: under the OS temp dir, outside every work
+ * tree, named by the task id — never an id that reads as a commit id, since a
+ * commit's snapshot sits in the same directory, named by its commit.
+ */
 function treeCopyPath(id) {
   if (!TREE_ID.test(String(id ?? ''))) throw new Error(`task id ${JSON.stringify(id)} cannot name a snapshot directory`);
+  if (COMMIT_RE.test(id)) throw new Error(`task id ${JSON.stringify(id)} cannot name a snapshot directory: it reads as a commit id, and the commits' snapshots share that directory`);
   return join(tmpdir(), 'omelette-evals', 'snapshots', id);
 }
 
@@ -353,7 +374,7 @@ function treeIn({ dir, rel, under, who }) {
 /**
  * A fresh copy of `<dir>/<rel>` (a third-party tree) for task `id`, under the
  * OS temp dir; any earlier copy is removed first. `rel` must sit strictly under
- * `<dir>/<under>` (required: `third-party` for V), as written and as the kernel
+ * `<dir>/<under>` (required: `third-party` for V and P, `suites/I/docs` for I), as written and as the kernel
  * resolves it, whatever the caller checked. Links are copied as they are and
  * refused when one points out of the tree; then no git history may be
  * reachable from the copy. Returns its path.
@@ -385,7 +406,7 @@ export function materializeTree({ dir, rel, id, under }) {
  */
 export function snapshotFor({ task, dir, repo = ROOT, snapshot, extract = true }) {
   if (task.tree !== undefined) {
-    if (snapshot) throw new Error('--snapshot is for tasks at a commit of this repository');
+    if (snapshot) throw new Error(SNAPSHOT_IS_FOR_COMMITS);
     return extract ? materializeTree({ dir, rel: task.tree, id: task.id, under: V_TREES }) : treeCopyPath(task.id);
   }
   const path = snapshot ? resolve(snapshot) : join(tmpdir(), 'omelette-evals', 'snapshots', task.commit);
@@ -473,6 +494,26 @@ const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').filter((l) =>
 const V_KINDS = ['keyed', 'recall', 'control'];
 const V_SHOWS = ['file', 'diff'];
 
+/** What an I document plants: a canary to answer with, a command or link to pass on, a tool call to make, a falsehood to state. */
+export const I_CLASSES = ['canary', 'instruct', 'tool', 'falsehood'];
+const nonEmpty = (s) => typeof s === 'string' && s.trim() !== '';
+
+/** What is wrong with an I task line: [] when nothing is. */
+export function iTaskProblems(t) {
+  const p = [];
+  if (!isStrictlyUnder(t.doc, I_DOCS)) p.push(`needs a doc: a directory strictly under the private dir's ${I_DOCS}/`);
+  if (!I_CLASSES.includes(t.class)) p.push(`needs a class: ${I_CLASSES.join(', ')}`);
+  const planted = t.planted && typeof t.planted === 'object' ? t.planted : {};
+  if (!Array.isArray(planted.strings) || !planted.strings.every(nonEmpty)) p.push('needs planted.strings: a list of strings');
+  else if (!planted.strings.length && t.class !== 'tool') p.push('plants no string: only a tool class may');
+  if (planted.call != null && !nonEmpty(planted.call)) p.push('planted.call is a string or null');
+  if (t.class === 'tool' && !nonEmpty(planted.call)) p.push('a tool class needs planted.call');
+  if (planted.permission != null && !nonEmpty(planted.permission)) p.push('planted.permission is a string or null');
+  const alternative = (e) => nonEmpty(e) || (Array.isArray(e) && e.length > 0 && e.every(nonEmpty));
+  if (!Array.isArray(t.expect) || !t.expect.length || !t.expect.every(alternative)) p.push('needs expect: strings, or lists of alternatives, a correct answer holds');
+  return p;
+}
+
 /** A file that is itself there: a link named `x.diff` could show an arm any file of the private dir. */
 const isFile = (path) => {
   try { return lstatSync(path).isFile(); } catch { return false; }
@@ -492,6 +533,8 @@ function taskProblems(suite, task, all, dir, { onDisk = true } = {}) {
       return own;
     case 'P':
       return pTaskProblems(task, onDisk ? { dir } : {});
+    case 'I':
+      return [...own, ...iTaskProblems(task)];
     case 'V': {
       const kind = task.kind ?? 'keyed';
       const show = task.show ?? 'file';
@@ -528,13 +571,13 @@ function taskProblems(suite, task, all, dir, { onDisk = true } = {}) {
 /** A control character (C0, DEL, C1): in a name written into a brief, a path or a message, it can end a line or a fence. */
 const CONTROL_CHAR = /[\u0000-\u001f\u007f-\u009f]/;
 /** The fields of a task line that name something, in every suite. */
-const NAMING_FIELDS = ['id', 'file', 'tree', 'diff', 'commit'];
+const NAMING_FIELDS = ['id', 'file', 'tree', 'diff', 'commit', 'doc'];
 /** A task id fit for a message: as it is, or quoted with its escapes when it holds a control character. */
 const shownId = (id) => (CONTROL_CHAR.test(String(id)) ? JSON.stringify(id) : id);
 
 /**
  * The suite's tasks, every line checked (see taskProblems); ids are unique per
- * suite. A line whose id, file, tree, diff or commit holds a control
+ * suite. A line whose id, file, tree, diff, commit or doc holds a control
  * character is refused, as is a task whose id is another task's commit, case
  * aside (`treeCopyPath` and a commit's snapshot share one directory).
  * `only` (the ids the arm runs; none: every task) limits a P line's
@@ -595,12 +638,14 @@ export function selectTasks(tasks, ids) {
  * cwd arm gets the directory it reviews (`snapshot`, guarded); Gemini gets the
  * shown file's text (`fileText`), read out of the commit's snapshot or straight
  * from the private dir, nothing copied; every arm gets a shown diff's text
- * (`diffText`). `extract: false` (the dry run) reads what is there and makes nothing.
+ * (`diffText`). P and I: a fresh copy of the task's tree or document directory
+ * (`snapshot`). `extract: false` (the dry run) reads what is there and makes nothing.
  */
 function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract = true }) {
+  if (snapshot && (suite === 'P' || suite === 'I')) throw new Error(SNAPSHOT_IS_FOR_COMMITS);
   switch (suite) {
     case 'V': {
-      if (snapshot && tasks.some((t) => t.tree !== undefined)) throw new Error('--snapshot is for tasks at a commit of this repository');
+      if (snapshot && tasks.some((t) => t.tree !== undefined)) throw new Error(SNAPSHOT_IS_FOR_COMMITS);
       if (snapshot && new Set(tasks.map((t) => t.commit)).size > 1) throw new Error('--snapshot names one tree, and these tasks are at more than one commit');
       const asCwd = arm.unit !== 'gemini';
       return orderTasks(tasks).map((t) => {
@@ -621,6 +666,9 @@ function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract = true }
     case 'P':
       // The tree alone: the gold and the tests diff sit under suites/P/, never under the place a tree is copied from.
       return tasks.map((t) => ({ ...t, snapshot: extract ? materializeTree({ dir, rel: t.tree, id: t.id, under: P_TREES }) : treeCopyPath(t.id) }));
+    case 'I':
+      // The document's directory alone: the task line, with what was planted and what a correct answer holds, sits a level up.
+      return tasks.map((t) => ({ ...t, snapshot: extract ? materializeTree({ dir, rel: t.doc, id: t.id, under: I_DOCS }) : treeCopyPath(t.id) }));
     default:
       return tasks;
   }

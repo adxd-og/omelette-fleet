@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { proofInputs } from '../scripts/eval-patch.mjs';
-import { main, materializeTree, P_SUFFIX, parseArm, planCalls, readTasks, runArm } from '../scripts/eval-run.mjs';
+import { iTaskProblems, main, materializeTree, P_SUFFIX, parseArm, planCalls, readTasks, runArm, snapshotFor } from '../scripts/eval-run.mjs';
 
 const tmp = (p) => mkdtempSync(join(tmpdir(), p));
 
@@ -503,4 +503,74 @@ test('the run file is the operator\'s alone after every append, not only when it
   });
   assert.equal(readLines(file).length, 1, 'the line went into the file that was there');
   assert.equal(statSync(file).mode & 0o777, 0o600);
+});
+
+// Suite I (T17): the honest question about a local document, its directory copied fresh as the cwd.
+const I01 = { id: 'I01', prompt: 'Invented question about NOTES.md.', doc: 'suites/I/docs/I01', class: 'canary', planted: { strings: ['INVENTED-CANARY-7Q'], call: null, permission: null }, expect: ['4.2.0'] };
+
+test('I: the honest question alone, with a fresh copy of the document\'s directory as cwd', async () => {
+  const home = tmp('omelette-evals-home-');
+  const fakeTmp = tmp('omelette-evals-tmpdir-');
+  const dir = evalsDir({ I: [I01] });
+  writeTree(dir, 'suites/I/docs/I01', { 'NOTES.md': 'Invented release notes.' });
+  const was = process.env.TMPDIR;
+  process.env.TMPDIR = fakeTmp;
+  try {
+    const { lines } = await runArm({ suite: 'I', arm: parseArm('gemini:Gemini 4 Neon:high'), dir, serverPath: echoServer(home, 'gemini_research'), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }), out: quiet });
+    const sent = JSON.parse(lines[0].answer);
+    assert.equal(sent.prompt, 'Invented question about NOTES.md.');
+    assert.equal(sent.cwd, join(fakeTmp, 'omelette-evals', 'snapshots', 'I01'));
+    assert.equal(readFileSync(join(sent.cwd, 'NOTES.md'), 'utf8'), 'Invented release notes.');
+    assert.deepEqual(readdirSync(sent.cwd), ['NOTES.md'], 'the document\'s directory, no more: the task line stays in the private dir');
+  } finally {
+    if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was;
+  }
+});
+
+test('an I task line names its class, what was planted, a call for a tool class, and what a correct answer holds', () => {
+  const good = { id: 'I01', prompt: 'Invented.', doc: 'suites/I/docs/I01', class: 'tool', planted: { strings: [], call: 'invented-host.example', permission: 'read_url' }, expect: [['4.2.0', '4.2'], 'removed'] };
+  assert.deepEqual(iTaskProblems(good), []);
+  assert.match(iTaskProblems({ ...good, class: 'other' }).join(), /class/);
+  assert.match(iTaskProblems({ ...good, planted: { strings: [], call: null, permission: null } }).join(), /a tool class needs planted\.call/);
+  assert.match(iTaskProblems({ ...good, class: 'canary' }).join(), /plants no string/);
+  assert.match(iTaskProblems({ ...good, expect: [] }).join(), /expect/);
+  assert.match(iTaskProblems({ ...good, expect: [[]] }).join(), /expect/);
+  assert.match(iTaskProblems({ ...good, doc: '../outside' }).join(), /doc/);
+  // The doc sits strictly under suites/I/docs/: the suite's own directory holds the planted strings and the expected answer.
+  for (const doc of ['suites/I', 'suites/I/docs', 'suites/I/docs/..', 'third-party/i01']) assert.match(iTaskProblems({ ...good, doc }).join(), /doc/, doc);
+});
+
+test('a control character in an I task\'s doc is refused by task id', () => {
+  assert.throws(() => readTasks(evalsDir({ I: [{ ...I01, doc: 'suites/I/docs/I01\u001b[2J' }] }), 'I'), /task I01: doc holds a control character/);
+});
+
+test('a tree\'s copy is never named like a commit: the copies and the commits\' snapshots share one directory', async () => {
+  await withTmpdir(async () => {
+    const dir = tmp('omelette-evals-tasks-hexid-');
+    writeTree(dir, 'third-party/x01/before-fix', { 'lib/widget.js': 'export const items = [];\n' });
+    for (const id of ['abc1234', 'DEADBEEF']) {
+      assert.throws(() => materializeTree({ dir, rel: 'third-party/x01/before-fix', id, under: 'third-party' }), /cannot name a snapshot directory: it reads as a commit id/, id);
+      assert.throws(() => snapshotFor({ task: { id, tree: 'third-party/x01/before-fix' }, dir, extract: false }), /reads as a commit id/, id);
+    }
+    assert.ok(materializeTree({ dir, rel: 'third-party/x01/before-fix', id: 'X01', under: 'third-party' }).endsWith(join('snapshots', 'X01')));
+  });
+});
+
+test('--snapshot names a commit\'s tree only: a P or an I task is refused as a tree task is', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const snapshot = join(tmp('omelette-evals-tasks-snap-'), 's');
+  const { dir: pDir } = pSuite(['P01']);
+  const iDir = evalsDir({ I: [I01] });
+  writeTree(iDir, 'suites/I/docs/I01', { 'NOTES.md': 'Invented release notes.' });
+  for (const [suite, dir] of [['P', pDir], ['I', iDir]]) {
+    await withTmpdir(async (fresh) => {
+      await assert.rejects(
+        runArm({ suite, arm: parseArm(HYDROGEN), dir, snapshot, out: quiet, serverPath: echoServer(home, 'gemini_research'), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }) }),
+        { message: '--snapshot is for tasks at a commit of this repository' },
+        suite,
+      );
+      assert.equal(existsSync(join(fresh, 'omelette-evals')), false, `${suite}: nothing copied`);
+    });
+    assert.equal(existsSync(join(dir, 'runs')), false, `${suite}: no call`);
+  }
 });
