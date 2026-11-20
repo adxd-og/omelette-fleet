@@ -55,6 +55,10 @@
  * `traces/<date>/I.jsonl`. A date with only P and I needs no mapping; a date
  * with R or V run lines and no mapping is refused.
  *
+ * EXCLUDED CALLS, filed by the session in `exclusions/<date>.jsonl` after
+ * reading a run's trace, leave every count of their arm before anything is
+ * counted; the aggregate's `excluded` says how many calls per arm.
+ *
  * This file holds no task text, no key and no answer.
  */
 import { createHash, randomInt } from 'node:crypto';
@@ -805,6 +809,51 @@ export function setFingerprint(tasks) {
 
 const bySuiteThenArm = (x, y) => x.suite.localeCompare(y.suite) || x.arm.localeCompare(y.arm);
 
+/**
+ * The calls the session excluded (`exclusions/<date>.jsonl`; spec,
+ * Contamination: a run that looked the fix up measures nothing), taken out
+ * before anything is counted, so that they leave every count of their arm. A
+ * call — a blind or a failed entry of the mapping (R, V), a P or I run line —
+ * leaves when its suite, arm and run are an exclusion line's and its task ids
+ * hold that line's task: a batch call holding the task leaves whole, and its
+ * grades leave with it. Returns what is left, and `excluded`: the calls that
+ * left per suite and arm, sorted. Throws on an exclusion line that names no
+ * call of the date.
+ */
+export function applyExclusions({ mapping = null, grades = [], runLines = [], exclusions = [], date = mapping ? mapping.date : null }) {
+  const named = exclusions.map(() => false);
+  const counts = new Map();
+  const leaves = (call) => {
+    let hit = false;
+    exclusions.forEach((x, i) => {
+      if (x && typeof x === 'object' && x.suite === call.suite && x.arm === call.arm && x.run === call.run && Array.isArray(call.taskIds) && call.taskIds.includes(x.taskId)) {
+        named[i] = true;
+        hit = true;
+      }
+    });
+    if (hit) counts.set(`${call.suite}\u0000${call.arm}`, (counts.get(`${call.suite}\u0000${call.arm}`) || 0) + 1);
+    return hit;
+  };
+  const gone = new Set();
+  let left = mapping;
+  if (mapping) {
+    const blinds = {};
+    for (const [blindId, e] of Object.entries(mapping.blinds)) {
+      if (leaves(e)) gone.add(blindId);
+      else blinds[blindId] = e;
+    }
+    left = { ...mapping, blinds, failed: (mapping.failed || []).filter((f) => !leaves(f)) };
+  }
+  const keptLines = runLines.filter((l) => !leaves(l));
+  const unnamed = named.indexOf(false);
+  if (unnamed >= 0) throw new Error(`exclusions line ${unnamed + 1} names no call of ${date}`);
+  const excluded = [...counts].map(([k, calls]) => {
+    const [suite, arm] = k.split('\u0000');
+    return { suite, arm, calls };
+  }).sort(bySuiteThenArm);
+  return { mapping: left, grades: grades.filter((g) => !gone.has(g.blindId)), runLines: keptLines, excluded };
+}
+
 function cmdAggregate({ dir, date, merge, out }) {
   const g = join(dir, 'grading', date);
   const mappingPath = join(g, 'mapping.json');
@@ -824,24 +873,35 @@ function cmdAggregate({ dir, date, merge, out }) {
     const p = join(dir, 'suites', s, 'tasks.jsonl');
     if (existsSync(p)) tasks[s] = readJsonl(p);
   }
-  let agg = { date, arms: [], grades: 0, overturned: 0 };
+  let mapping = null;
+  let grades = [];
   if (hasMapping) {
     if (!existsSync(join(g, 'grades.jsonl'))) throw new Error(`no grades.jsonl at ${g}`);
-    const mapping = JSON.parse(readFileSync(mappingPath, 'utf8'));
-    const grades = readJsonl(join(g, 'grades.jsonl'));
-    const suites = new Set([...Object.values(mapping.blinds), ...(mapping.failed || [])].map((e) => e.suite));
+    mapping = JSON.parse(readFileSync(mappingPath, 'utf8'));
+    grades = readJsonl(join(g, 'grades.jsonl'));
+  }
+  const exclusionsPath = join(dir, 'exclusions', `${date}.jsonl`);
+  const kept = applyExclusions({
+    mapping, grades, runLines: [...pLines, ...injection.lines], exclusions: existsSync(exclusionsPath) ? readJsonl(exclusionsPath) : [], date,
+  });
+  let agg = { date, arms: [], grades: 0, overturned: 0 };
+  if (hasMapping) {
+    const suites = new Set([...Object.values(kept.mapping.blinds), ...(kept.mapping.failed || [])].map((e) => e.suite));
     const keys = {};
     for (const s of ['R', 'V']) {
       const p = join(dir, 'suites', s, 'key.jsonl');
       if (suites.has(s) && !existsSync(p)) throw new Error(`no key at ${p}`);
       keys[s] = existsSync(p) ? readJsonl(p) : [];
     }
-    agg = aggregate({ grades, mapping, keys, tasks });
+    agg = aggregate({ grades: kept.grades, mapping: kept.mapping, keys, tasks });
   }
-  const pArms = aggregateP({ runLines: pLines, checkLines: existsSync(pChecksPath) ? readJsonl(pChecksPath) : [] });
-  const iArms = aggregateI({ runLines: injection.lines, checkLines: injection.lines.length ? checkInjection(injection) : [] });
+  const pArms = aggregateP({ runLines: kept.runLines, checkLines: existsSync(pChecksPath) ? readJsonl(pChecksPath) : [] });
+  const iLines = kept.runLines.filter((l) => l.suite === 'I');
+  const iArms = aggregateI({ runLines: iLines, checkLines: iLines.length ? checkInjection({ ...injection, lines: iLines }) : [] });
   agg.arms = [...agg.arms, ...pArms, ...iArms].sort(bySuiteThenArm);
   agg.sets = { R: tasks.R ? setFingerprint(tasks.R) : null };
+  // The count of excluded calls per arm is itself reported (spec, Contamination).
+  agg.excluded = kept.excluded;
   if (merge) {
     const prevPath = join(dir, 'aggregates', `${merge}.json`);
     if (!existsSync(prevPath)) throw new Error(`no aggregate to merge at ${prevPath}`);
@@ -868,6 +928,7 @@ function cmdAggregate({ dir, date, merge, out }) {
       : '';
     out(`${a.suite} ${a.arm}: ${a.n} run(s)${ungraded ? `, ${ungraded} item(s) ungraded` : ''}${a.carriedFrom ? `, carried from ${a.carriedFrom}` : ''}${incomplete}`);
   }
+  for (const e of agg.excluded) out(`${e.suite} ${e.arm}: ${e.calls} call(s) excluded`);
   out(`${agg.grades} grade(s), ${agg.overturned} overturned → ${path}`);
 }
 

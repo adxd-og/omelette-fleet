@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { CODEX_MODELS } from '../units/codex/models.js';
 import { GEMINI_MODELS } from '../units/gemini/models.js';
 import { GROK_MODELS } from '../units/grok/models.js';
-import { aggregate, blind, redact, redactionTerms, setFingerprint } from '../scripts/eval-blind.mjs';
+import { aggregate, applyExclusions, blind, redact, redactionTerms, setFingerprint } from '../scripts/eval-blind.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRIPT = join(ROOT, 'scripts', 'eval-blind.mjs');
@@ -247,7 +247,7 @@ test('--aggregate writes aggregates/<date>.json from grades.jsonl, the mapping a
   assert.equal(res.status, 0, res.stderr);
   const out = join(dir, 'aggregates', '2026-10-16.json');
   assert.ok(existsSync(out));
-  assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), { ...aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS }), sets: { R: null } });
+  assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), { ...aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS }), sets: { R: null }, excluded: [] });
 });
 
 test('--aggregate --merge D2 carries D2\'s arms this date did not run, marked carriedFrom, and names the count in date', () => {
@@ -624,4 +624,80 @@ test('a V key names its task on every line or none: round one\'s task-less key b
   assert.equal(arm.keyItems, 2);
   assert.throws(() => aggregate({ grades: [], mapping: vMapping({ b1: 'V01', b2: 'V02' }), keys: taskless, tasks: { V: TASKS_V } }), /names no task/);
   assert.throws(() => aggregate({ grades: [], mapping: vMapping({ b1: 'V01' }), keys: { R: [], V: [{ id: 'k1', task: 'V01' }, { id: 'k2' }] }, tasks: { V: TASKS_V } }), /every line names its task/);
+});
+
+// ─── T22: an excluded run is counted, not scored ─────────────────────────────
+
+/** A dated V grading of N's run 1 on V01 and V02 (the kinds fixture), the key and the task file; returns the dir and a CLI aggregate. */
+function excludedFixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-evals-excluded-'));
+  const g = join(dir, 'grading', '2026-11-20');
+  mkdirSync(g, { recursive: true });
+  writeFileSync(join(g, 'mapping.json'), JSON.stringify({ ...vMapping({ b1: 'V01', b2: 'V02' }), date: '2026-11-20' }));
+  const grades = [
+    keyOn('b1', 'V01', 'K1', 'found'), keyOn('b1', 'V01', 'K2', 'not'),
+    keyOn('b2', 'V02', 'K3', 'found'), keyOn('b2', 'V02', 'K4', 'not'), keyOn('b2', 'V02', 'K5', 'not'), findingOn('b2', 'V02', 'fabricated'),
+  ];
+  writeFileSync(join(g, 'grades.jsonl'), grades.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  mkdirSync(join(dir, 'suites', 'V'), { recursive: true });
+  writeFileSync(join(dir, 'suites', 'V', 'key.jsonl'), KEY_V.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  writeFileSync(join(dir, 'suites', 'V', 'tasks.jsonl'), TASKS_V.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const run = () => {
+    const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate'], { encoding: 'utf8', timeout: 5000 });
+    return { res, agg: res.status === 0 ? JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8')) : null };
+  };
+  const exclude = (lines) => {
+    mkdirSync(join(dir, 'exclusions'), { recursive: true });
+    writeFileSync(join(dir, 'exclusions', '2026-11-20.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  };
+  return { run, exclude };
+}
+
+test('an excluded V call leaves recall\'s denominator and is counted for its arm', () => {
+  const { run, exclude } = excludedFixture();
+  const before = run();
+  assert.equal(before.res.status, 0, before.res.stderr);
+  assert.equal(before.agg.arms[0].runs[0].recall, 2 / 5);
+  assert.deepEqual(before.agg.excluded, []);
+  exclude([{ suite: 'V', arm: N, run: 1, taskId: 'V02', reason: 'invented: searched the tracker' }]);
+  const { res, agg } = run();
+  assert.equal(res.status, 0, res.stderr);
+  const [arm] = agg.arms;
+  assert.equal(arm.runs[0].recall, 1 / 2, 'over V01\'s two items only');
+  assert.deepEqual(agg.excluded, [{ suite: 'V', arm: N, calls: 1 }]);
+  // Every count of the arm, not only the run row: the total, the tasks, the grades, and the tasks the arm now has no call of.
+  assert.deepEqual([arm.total.calls, arm.total.keyItems, arm.total.fabricated, Object.keys(arm.byTask), arm.taskIds, agg.grades], [1, 2, 0, ['V01'], ['V01'], 2]);
+  assert.deepEqual(arm.incomplete.missing, ['V02', 'X01', 'C01']);
+  assert.match(res.stdout, /V gemini:Gemini 4 Neon \(High\): 1 call\(s\) excluded/);
+});
+
+test('an exclusion naming no call is refused', () => {
+  const { run, exclude } = excludedFixture();
+  exclude([{ suite: 'V', arm: N, run: 9, taskId: 'V02', reason: 'invented' }]);
+  const { res } = run();
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /exclusions line 1 names no call/);
+});
+
+test('an exclusion takes a batch call out whole with its grades, and a P or I run line out of the lines', () => {
+  const mapping = {
+    date: 'd', seed: 1,
+    blinds: { b1: blindOf('R', A, 1, ['q1', 'q2', 'q3'], 1000, null), b2: blindOf('R', A, 2, ['q1'], 1000, null) },
+    failed: [{ ...blindOf('R', B, 1, ['q2'], 1000, null), error: 'invented', empty: false }],
+  };
+  const grades = [ans('b1', 'q1', 'correct'), ans('b1', 'q2', 'wrong'), ans('b2', 'q1', 'correct')];
+  const runLines = [
+    { suite: 'P', arm: N, run: 1, taskIds: ['P01'] }, { suite: 'P', arm: N, run: 2, taskIds: ['P01'] }, { suite: 'I', arm: N, run: 1, taskIds: ['I01'] },
+  ];
+  const exclusions = [
+    { suite: 'R', arm: A, run: 1, taskId: 'q2' }, { suite: 'R', arm: A, run: 1, taskId: 'q3' }, { suite: 'R', arm: B, run: 1, taskId: 'q2' },
+    { suite: 'P', arm: N, run: 2, taskId: 'P01' }, { suite: 'I', arm: N, run: 1, taskId: 'I01' },
+  ];
+  const left = applyExclusions({ mapping, grades, runLines, exclusions });
+  assert.deepEqual(Object.keys(left.mapping.blinds), ['b2']);
+  assert.deepEqual(left.mapping.failed, []);
+  assert.deepEqual(left.grades, [ans('b2', 'q1', 'correct')]);
+  assert.deepEqual(left.runLines, [runLines[0]]);
+  assert.deepEqual(left.excluded, [{ suite: 'I', arm: N, calls: 1 }, { suite: 'P', arm: N, calls: 1 }, { suite: 'R', arm: A, calls: 1 }, { suite: 'R', arm: B, calls: 1 }]);
+  assert.throws(() => applyExclusions({ mapping, grades, runLines, exclusions: [{ suite: 'P', arm: N, run: 3, taskId: 'P01' }], date: '2026-11-20' }), /exclusions line 1 names no call of 2026-11-20/);
 });
