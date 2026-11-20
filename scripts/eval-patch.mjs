@@ -507,7 +507,9 @@ const DIFF_LINE = /^(?:[ +\\-]|@@|diff --git|index |new file|deleted file|old mo
  */
 function dedented({ indent, body }) {
   const leading = (l) => { let k = 0; while (l[k] === ' ') k += 1; return k; };
-  const common = Math.min(indent, ...body.filter((l) => l.trim() !== '').map(leading));
+  // A loop, not a spread: an answer may hold a block of a quarter of a million lines.
+  let common = indent;
+  for (const l of body) if (common > 0 && l.trim() !== '') common = Math.min(common, leading(l));
   return body.map((l) => l.slice(Math.min(common, leading(l))));
 }
 
