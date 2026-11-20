@@ -401,3 +401,38 @@ test('a level as its own word right after the name collapses, and an ordinary se
     assert.equal(redact(kept, terms), kept.replace('Neon', '[model]'), kept);
   }
 });
+
+test('R: the net score is correct minus wrong — partly and no answer score 0 — per run and summed over the arm, with the traps counted', () => {
+  const agg = aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS });
+  const a = agg.arms.find((x) => x.suite === 'R' && x.arm === A);
+  assert.deepEqual(a.runs.map(({ run, net, traps, trapsPassed }) => ({ run, net, traps, trapsPassed })), [
+    { run: 1, net: 2, traps: 1, trapsPassed: 1 },
+    { run: 2, net: -1, traps: 1, trapsPassed: 0 },
+  ]);
+  // The fixture's failed call is a line from before `empty` was recorded: not recorded, never 0.
+  assert.deepEqual(a.total, { net: 1, correct: 2, partly: 1, wrong: 1, noAnswer: 1, traps: 2, trapsPassed: 1, failed: 1, empty: null });
+  const b = agg.arms.find((x) => x.suite === 'R' && x.arm === B);
+  assert.deepEqual([b.total.net, b.total.traps, b.total.trapsPassed], [1, 1, 0]);
+});
+
+test('the median wall time is over the arm\'s answered calls, not the mean of its run means', () => {
+  const mapping = {
+    date: 'd', seed: 1, failed: [],
+    blinds: { b1: blindOf('R', A, 1, ['q1'], 1000, null), b2: blindOf('R', A, 1, ['q2'], 1000, null), b3: blindOf('R', A, 2, ['q1'], 10000, null) },
+  };
+  const [arm] = aggregate({ grades: [], mapping, keys: KEYS }).arms;
+  assert.equal(arm.wallMsMedian, 1000);
+  assert.equal(arm.mean.wallMs, 5500);
+  const c = aggregate({ grades: GRADES, mapping: MAPPING, keys: KEYS }).arms.find((x) => x.suite === 'V');
+  assert.equal(c.wallMsMedian, 6000, 'an even count: the mean of the two middle calls');
+});
+
+test('a run that is one failed call (a task\'s second answer) still counts its trap as asked in the arm\'s total', () => {
+  const mapping = {
+    date: 'd', seed: 1,
+    blinds: { b1: blindOf('R', A, 1, ['q3'], 1000, null) },
+    failed: [{ suite: 'R', arm: A, run: 2, taskIds: ['q3'], unit: 'gemini', model: 'Gemini 3.8 Flash (High)', effort: 'high', cli: 'fake 1.0', empty: false }],
+  };
+  const [arm] = aggregate({ grades: [ans('b1', 'q3', 'correct')], mapping, keys: KEYS }).arms;
+  assert.deepEqual([arm.total.traps, arm.total.trapsPassed, arm.total.net, arm.total.failed, arm.total.empty], [2, 1, 1, 1, 0]);
+});

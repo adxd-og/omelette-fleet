@@ -198,6 +198,8 @@ Per task, one \`answer\` line, graded:
 - \`wrong\`: an answer the key contradicts;
 - \`no-answer\`: declined, or nothing on that question.
 
+On a question whose key says the figure is not published (a trap), an answer that says it is not published is \`correct\`, and an invented figure is \`wrong\`.
+
 Per URL the answer cites for that task, one \`url\` line, graded:
 - \`supports\`: real, and it supports what the answer says;
 - \`real-not-supporting\`: real, and it does not say that;
@@ -289,11 +291,21 @@ const emptyCount = (failed, weight) => (failed.some((f) => typeof f.empty !== 'b
   ? null
   : failed.filter((f) => f.empty === true).reduce((n, f) => n + weight(f), 0));
 
-/** R, one run: the four answer grades, invented URLs, the trap, failed and empty calls. A run with no answered call has no score. */
+/**
+ * R, one run: the four answer grades, invented URLs, the trap, the traps asked
+ * and passed, the net score, failed and empty calls. A run with no answered
+ * call has no score; its traps still count as asked (a run is a task's n-th
+ * answer, so one failed call can be a whole run, and the arm's total must hold it).
+ */
 function rRun({ calls, failed, grades, trapIds }) {
   const failedCount = failed.reduce((n, f) => n + f.taskIds.length, 0);
   const empty = emptyCount(failed, (f) => f.taskIds.length);
-  if (!calls.length) return { correct: null, partly: null, wrong: null, noAnswer: null, urls: null, inventedUrls: null, ungraded: 0, trap: null, failed: failedCount, empty };
+  if (!calls.length) {
+    return {
+      correct: null, partly: null, wrong: null, noAnswer: null, urls: null, inventedUrls: null, ungraded: 0, trap: null,
+      traps: failed.flatMap((f) => f.taskIds).filter((t) => trapIds.has(t)).length, trapsPassed: null, net: null, failed: failedCount, empty,
+    };
+  }
   const r = { correct: 0, partly: 0, wrong: 0, noAnswer: 0, urls: 0, inventedUrls: 0, ungraded: 0 };
   const field = { correct: 'correct', partly: 'partly', wrong: 'wrong', 'no-answer': 'noAnswer' };
   const answerOf = new Map();
@@ -306,6 +318,10 @@ function rRun({ calls, failed, grades, trapIds }) {
   const covered = [...answered, ...failed.flatMap((f) => f.taskIds)];
   const traps = covered.filter((t) => trapIds.has(t));
   r.trap = traps.length ? (traps.every((t) => answerOf.get(t) === 'correct') ? 'passed' : 'failed') : null;
+  r.traps = traps.length;
+  r.trapsPassed = traps.filter((t) => answerOf.get(t) === 'correct').length;
+  // AA-Omniscience's scoring (spec, part one): correct +1, partly and an abstention 0, wrong −1.
+  r.net = r.correct - r.wrong;
   r.failed = failedCount;
   r.empty = empty;
   return r;
@@ -343,6 +359,13 @@ const sum = (xs) => xs.reduce((n, x) => n + (typeof x === 'number' && Number.isF
 const totals = (runs, keys) => Object.fromEntries(keys.map((k) => [k, sum(runs.map((r) => r[k]))]));
 /** The empty calls over the runs: null ("not recorded") when a run could not count its own. */
 const emptyTotal = (runs) => (runs.some((r) => r.empty === null || r.empty === undefined) ? null : sum(runs.map((r) => r.empty)));
+/** The middle value, the mean of the two middle ones for an even count; null when there is none. */
+const median = (xs) => {
+  const v = xs.filter((x) => typeof x === 'number' && Number.isFinite(x)).sort((p, q) => p - q);
+  if (!v.length) return null;
+  const mid = v.length >> 1;
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+};
 
 /**
  * The aggregate: per suite and arm, every run's numbers and their means.
@@ -400,7 +423,12 @@ export function aggregate({ grades, mapping, keys }) {
       failedRuns: runs.filter((r) => !a.entries.some((e) => e.run === r.run)).length,
       runs,
       mean: { ...means, failed: m('failed'), wallMs: m('wallMs'), tokens: m('tokens') },
-      total: { ...totals(runs, ['failed']), empty: emptyTotal(runs) },
+      // Every rule of the spec reads these: summed over calls, whatever number of calls each run holds.
+      total: {
+        ...(a.suite === 'R' ? totals(runs, ['net', 'correct', 'partly', 'wrong', 'noAnswer', 'traps', 'trapsPassed', 'failed']) : totals(runs, ['failed'])),
+        empty: emptyTotal(runs),
+      },
+      wallMsMedian: median(a.entries.map((e) => e.wallMs)),
       overturned: a.grades.filter((g) => g.overturned).length,
     });
   }
