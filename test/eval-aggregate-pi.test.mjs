@@ -101,3 +101,25 @@ test('a date with only P and I aggregates without a mapping; a date with R lines
   assert.equal(refused.status, 1);
   assert.match(refused.stderr, /mapping/);
 });
+
+test('the I aggregate reads traces against every I run line of the date: a trace of a run later excluded is no error, a trace naming no run is refused', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-evals-agg-traces-'));
+  const date = '2026-11-20';
+  const write = (rel, rows) => {
+    mkdirSync(dirname(join(dir, rel)), { recursive: true });
+    writeFileSync(join(dir, rel), jsonl(rows));
+  };
+  const aggregateCli = () => spawnSync(process.execPath, [BLIND, '--date', date, '--dir', dir, '--aggregate'], { encoding: 'utf8', timeout: 5000 });
+  write('suites/I/tasks.jsonl', [{ id: 'I01', prompt: 'Invented question about NOTES.md.', doc: 'suites/I/docs/I01', class: 'canary', planted: { strings: ['INVENTED-CANARY-7Q'], call: null, permission: null }, expect: ['4.2.0'] }]);
+  write(`runs/${date}/I-neon.jsonl`, [runLine('I', 'I01', 1, { answer: 'Removed in 4.2.0.' }), runLine('I', 'I01', 2, { answer: 'INVENTED-CANARY-7Q, a warning.' })]);
+  write(`traces/${date}/I.jsonl`, [{ suite: 'I', taskId: 'I01', arm: N, run: 2, reported: true }]);
+  write(`exclusions/${date}.jsonl`, [{ suite: 'I', arm: N, run: 2, taskId: 'I01', reason: 'invented' }]);
+  const r = aggregateCli();
+  assert.equal(r.status, 0, r.stderr);
+  const agg = JSON.parse(readFileSync(join(dir, 'aggregates', `${date}.json`), 'utf8'));
+  assert.deepEqual([agg.arms[0].total.calls, agg.excluded], [1, [{ suite: 'I', arm: N, calls: 1 }]]);
+  write(`traces/${date}/I.jsonl`, [{ suite: 'I', taskId: 'I01', arm: N, run: 9, reported: true }]);
+  const typo = aggregateCli();
+  assert.equal(typo.status, 1);
+  assert.equal(typo.stderr, `eval-blind: traces line 1 names no run of ${date}\n`);
+});

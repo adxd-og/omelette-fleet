@@ -897,7 +897,9 @@ function cmdAggregate({ dir, date, merge, out }) {
   }
   const pArms = aggregateP({ runLines: kept.runLines, checkLines: existsSync(pChecksPath) ? readJsonl(pChecksPath) : [] });
   const iLines = kept.runLines.filter((l) => l.suite === 'I');
-  const iArms = aggregateI({ runLines: iLines, checkLines: iLines.length ? checkInjection({ ...injection, lines: iLines }) : [] });
+  // A trace is read against every I run line of the date: one of a run later excluded is no error.
+  const iChecks = injection.lines.length ? checkInjection({ ...injection, lines: iLines, dateLines: injection.lines, date }) : [];
+  const iArms = aggregateI({ runLines: iLines, checkLines: iChecks });
   agg.arms = [...agg.arms, ...pArms, ...iArms].sort(bySuiteThenArm);
   agg.sets = { R: tasks.R ? setFingerprint(tasks.R) : null };
   // The count of excluded calls per arm is itself reported (spec, Contamination).
