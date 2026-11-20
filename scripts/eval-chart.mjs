@@ -62,15 +62,23 @@ const fmtPct = (v) => (v === null || v === undefined ? 'n/a' : `${Math.round(v)}
 const textW = (s, size = 12) => String(s).length * size * 0.56;
 
 const CATALOG = new Map([...GEMINI_MODELS, ...GROK_MODELS, ...CODEX_MODELS, ...MISTRAL_MODELS].map((m) => [m.id, m.label]));
+/** Catalog ids of a family other than Gemini's (Claude, GPT-OSS through agy): never one of Gemini's effort curves. */
+const NOT_GEMINI = new Set(GEMINI_MODELS.filter((m) => m.family !== 'gemini').map((m) => m.id));
+/** The suites a grader scores and the charts draw; P and I are tables in MEASUREMENTS. */
+const GRADED = new Set(['R', 'V']);
 
-/** An arm as a reader names it: the catalog's label (or the id, its level after a middle dot), then the effort Codex or Grok used. */
+/**
+ * An arm as a reader names it: the catalog's label (or the id, its level after a middle dot), then the effort Codex or Grok used;
+ * a hand-filed native arm by its role and its model.
+ */
 export function armLabel(a) {
+  if (a.unit === 'native') return `${String(a.arm).replace(/^native:/, '')} (${a.model})${a.effort ? ` · ${a.effort}` : ''}`;
   const level = LEVEL_RE.exec(a.model || '');
   const base = CATALOG.get(a.model) || (level ? `${level[1]} · ${level[2]}` : a.model || a.arm);
   return a.unit !== 'gemini' && a.effort ? `${base} · ${a.effort}` : base;
 }
 
-const UNIT_ORDER = ['gemini', 'grok', 'codex', 'mistral'];
+const UNIT_ORDER = ['gemini', 'grok', 'codex', 'mistral', 'native'];
 const CATALOG_ORDER = [...GEMINI_MODELS, ...GROK_MODELS, ...CODEX_MODELS, ...MISTRAL_MODELS].map((m) => m.id);
 
 /** The order arms are drawn and keyed in: the fleet's unit order, then model family, level, catalog order. */
@@ -94,7 +102,7 @@ function sortArms(arms) {
 const failedRun = (r) => r.failed > 0 && (r.correct === null || r.recall === null);
 const FAILED_TITLE = 'failed run';
 
-/** Date, CLI versions and N for the arms one chart draws, and the failed runs when there are any. */
+/** Date, CLI versions and N for the arms one chart draws, the failed runs when there are any, and the arms carried from another date. */
 function caption(date, arms) {
   const ns = arms.map((a) => a.n);
   const lo = Math.min(...ns);
@@ -102,7 +110,10 @@ function caption(date, arms) {
   const n = lo === hi ? `N = ${lo} run${lo === 1 ? '' : 's'} per arm` : `N = ${lo}–${hi} runs per arm`;
   const clis = [...new Set(arms.flatMap((a) => a.cli || []))].sort();
   const failed = arms.reduce((k, a) => k + (a.failedRuns || 0), 0);
-  return [`${date} · ${n}${hi <= 2 ? ' · runs shown, no intervals' : ''}`, `CLI versions: ${clis.join(', ') || 'not recorded'}`, ...(failed ? [`failed runs: ${failed}`] : [])];
+  const carried = new Map();
+  for (const a of arms) if (a.carriedFrom) carried.set(a.carriedFrom, [...(carried.get(a.carriedFrom) || []), armLabel(a)]);
+  const carriedLines = [...carried].map(([d, labels]) => `carried from ${d}, with that round's tasks and CLIs: ${labels.join(', ')}`);
+  return [`${date} · ${n}${hi <= 2 ? ' · runs shown, no intervals' : ''}`, `CLI versions: ${clis.join(', ') || 'not recorded'}`, ...(failed ? [`failed runs: ${failed}`] : []), ...carriedLines];
 }
 
 /** The frame every chart shares: the svg element, its title and desc, the style. */
@@ -259,7 +270,7 @@ const score = (a, src = a.mean) => {
 function effort(agg) {
   const id = 'effort';
   const title = 'Effort: Gemini scores at each level';
-  const arms = agg.arms.filter((a) => a.unit === 'gemini' && LEVEL_RE.test(a.model || ''));
+  const arms = agg.arms.filter((a) => GRADED.has(a.suite) && a.unit === 'gemini' && !NOT_GEMINI.has(a.model) && LEVEL_RE.test(a.model || ''));
   if (!arms.length) return emptyChart(id, title, agg.date);
   const families = [...new Set(arms.map((a) => LEVEL_RE.exec(a.model)[1]))].sort((x, y) => x.localeCompare(y)).slice(0, 3);
   const cls = (f) => families.indexOf(f) + 1;

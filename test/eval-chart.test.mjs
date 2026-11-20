@@ -264,3 +264,29 @@ test('effort: an XHigh arm is a fourth column, right of High, labelled as the ca
   near(num(p.attrs['data-value']), 90, 'its share correct');
   assert.ok(texts(out['r-accuracy.svg']).some((s) => s.includes('Gemini 4 Neon · XHigh')));
 });
+
+test('a P or an I arm in the aggregate is drawn on no chart', () => {
+  const pi = (suite) => ({ suite, arm: 'gemini:Gemini 4 Neon (High)', unit: 'gemini', model: 'Gemini 4 Neon (High)', effort: 'high', cli: ['agy 9.1.0'], n: 1, runs: [{ run: 1, calls: 3, failed: 0, wallMs: 1000, tokens: 10 }], total: { calls: 3 }, mean: { failed: 0, wallMs: 1000, tokens: 10 } });
+  const agg = { ...AGG, arms: [AGG.arms[0], pi('P'), pi('I')] };
+  for (const [name, svg] of Object.entries(renderCharts(agg))) assert.ok(!svg.includes('Neon'), `${name} draws no P or I arm`);
+});
+
+test('the native reviewer is labelled by its role and its model', () => {
+  const arm = vArm('native:omelette-reviewer', { effort: 'xhigh', cli: 'claude-code 9.0.0', runs: [{ recall: 0.5, precision: 0.8 }], wallMs: 300000, tokens: 50000 });
+  arm.model = 'claude-opus-5-5';
+  const t = texts(renderCharts({ ...AGG, arms: [arm] })['v-recall-precision.svg']);
+  assert.ok(t.some((s) => s.includes('omelette-reviewer (claude-opus-5-5) · xhigh')), t.join('\n'));
+});
+
+test('carried arms are named in the caption with the date they came from', () => {
+  const carried = { ...AGG.arms[4], carriedFrom: '2026-10-16' };
+  const t = texts(renderCharts({ ...AGG, arms: [carried, AGG.arms[5]] })['v-recall-precision.svg']).join('\n');
+  assert.match(t, /carried from 2026-10-16, with that round's tasks and CLIs: GPT-6\.1 Sol · xhigh/);
+  assert.doesNotMatch(texts(charts['v-recall-precision.svg']).join('\n'), /carried from/);
+});
+
+test('the effort chart draws Gemini models only, not Claude through agy', () => {
+  const claude = rArm('gemini:Claude Opus 5.5 (High)', { effort: 'high', runs: [{ correct: 9, inventedUrls: 0 }], wallMs: 1000, tokens: 10 });
+  const svg = renderCharts({ ...AGG, arms: [AGG.arms[0], claude] })['effort.svg'];
+  assert.ok(!svg.includes('Claude'), 'no Claude family on the effort chart');
+});
