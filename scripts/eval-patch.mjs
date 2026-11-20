@@ -500,9 +500,17 @@ const DIFF_LINE = /^(?:[ +\\-]|@@|diff --git|index |new file|deleted file|old mo
  * fence character, at least as long and indented no deeper than the opening
  * line (an answer that ends first ends the block). A fence opened at column 0
  * is thus closed at column 0 alone — ` ``` `, a context line of a diff over
- * Markdown, is its body. A fence opened n spaces in (a list item's) takes up
- * to n leading spaces off every body line: spaces only, never more.
+ * Markdown, is its body. A fence opened n spaces in (a list item's) takes its
+ * body's common indent off every body line, n at most: spaces only. A body
+ * written at column 0 under such a fence therefore keeps the blank that opens
+ * its context lines.
  */
+function dedented({ indent, body }) {
+  const leading = (l) => { let k = 0; while (l[k] === ' ') k += 1; return k; };
+  const common = Math.min(indent, ...body.filter((l) => l.trim() !== '').map(leading));
+  return body.map((l) => l.slice(Math.min(common, leading(l))));
+}
+
 function fencedBodies(lines) {
   const bodies = [];
   let block = null;
@@ -514,15 +522,13 @@ function fencedBodies(lines) {
     }
     const alone = FENCE_ALONE.exec(line);
     if (alone && alone[1].length <= block.indent && alone[2][0] === block.fence[0] && alone[2].length >= block.fence.length) {
-      bodies.push(block.body);
+      bodies.push(dedented(block));
       block = null;
       continue;
     }
-    let taken = 0;
-    while (taken < block.indent && line[taken] === ' ') taken += 1;
-    block.body.push(line.slice(taken));
+    block.body.push(line);
   }
-  if (block) bodies.push(block.body);
+  if (block) bodies.push(dedented(block));
   return bodies;
 }
 

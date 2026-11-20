@@ -1029,9 +1029,11 @@ test('extractDiff, the rulings after the build: what an indented fence takes off
 
   // (9) A body line loses spaces only, as many as it has and never more than the opening fence stands in.
   assert.equal(extractDiff(`   \`\`\`diff\n${FILE_A.split('\n').map((l) => (l ? `\t${l}` : l)).join('\n')}   \`\`\`\n`), null, 'a tab is not taken off');
-  assert.equal(extractDiff(lined('   ```diff', ` ${head[0]}`, `  ${head[1]}`, `   ${head[2]}`, '    package widget', '   -old', '+new', '   ```')), lined(...head, ' package widget', '-old', '+new'), 'one, two, three and none');
-  // The rule's answer where a reader would want another: under an indented fence a body written at column 0 loses the blank of its context lines.
-  assert.equal(extractDiff(`  \`\`\`diff\n${withContext}\`\`\`\n`), lined(...head, 'package widget', '', '-old', '+new'));
+  // The body's COMMON indent goes, n at most: a body written three in under a fence three in loses three, and a deeper line keeps the rest.
+  assert.equal(extractDiff(lined('   ```diff', ...head.map((l) => `   ${l}`), '    package widget', '   -old', '   +new', '   ```')), lined(...head, ' package widget', '-old', '+new'), 'three off every line');
+  assert.equal(extractDiff(lined(' ```diff', ...head.map((l) => `   ${l}`), '    package widget', '   -old', '   +new', ' ```')), null, 'a body deeper than its fence loses the fence\'s one space only, and is then no diff');
+  // A body written at column 0 under an indented fence keeps the blank that opens its context lines: its common indent is none.
+  assert.equal(extractDiff(`  \`\`\`diff\n${withContext}\`\`\`\n`), withContext);
 
   // (10) After backticks, not one more backtick; after tildes, anything.
   assert.equal(extractDiff(`\`\`\`sh \`invented\`\n~~~diff\n${FILE_A}~~~\n`), FILE_A, 'a single backtick in the info string: the line opens nothing');
