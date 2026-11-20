@@ -33,8 +33,8 @@ const P_CHECKS = [pCheck('P03', 1, 'error', 30), ...P_CALLS.map(([t, run, outcom
 test('P: green of the runs, by task, with lines changed and the failed calls apart', () => {
   const [arm] = aggregateP({ runLines: P_RUNS, checkLines: P_CHECKS });
   assert.deepEqual([arm.suite, arm.arm, arm.n, arm.taskIds, arm.cli], ['P', N, 2, ['P01', 'P02', 'P03'], ['agy 9.9.9']]);
-  assert.deepEqual(arm.total, { calls: 6, green: 3, red: 1, doesNotApply: 1, noDiff: 0, failed: 0, empty: 0, errors: 1, unchecked: 0 });
-  assert.deepEqual(arm.byTask.P01, { calls: 2, green: 2, linesChanged: 9, goldLines: 9 });
+  assert.deepEqual(arm.total, { calls: 6, green: 3, greenStar: 0, red: 1, doesNotApply: 1, noDiff: 0, failed: 0, empty: 0, errors: 1, unchecked: 0, overruled: 0 });
+  assert.deepEqual(arm.byTask.P01, { calls: 2, green: 2, greenStar: 0, linesChanged: 9, goldLines: 9 });
   assert.equal(arm.runs[0].linesChanged, (10 + 12 + 30) / 3);
   assert.equal(arm.runs[1].linesChanged, 8, 'a diff that does not apply or a harness error has no size here');
   assert.deepEqual(arm.mean, { green: 1.5, failed: 0, wallMs: 1000, tokens: 15 });
@@ -44,7 +44,7 @@ test('P: green of the runs, by task, with lines changed and the failed calls apa
     checkLines: [...P_CHECKS, { ...pCheck('P02', 3, 'call-failed', null), diffFound: false }],
   })[0];
   assert.deepEqual(more.runs[2], {
-    run: 3, calls: 2, green: 0, red: 0, doesNotApply: 0, noDiff: 0, failed: 1, empty: 1, errors: 0, unchecked: 1, linesChanged: null,
+    run: 3, calls: 2, green: 0, greenStar: 0, red: 0, doesNotApply: 0, noDiff: 0, failed: 1, empty: 1, errors: 0, unchecked: 1, overruled: 0, linesChanged: null,
     wallMs: 1000, tokens: 15, tokensReported: '1 of 1',
   });
 });
@@ -133,4 +133,44 @@ test('the I aggregate reads traces against every I run line of the date: a trace
   const typo = aggregateCli();
   assert.equal(typo.status, 1);
   assert.equal(typo.stderr, `eval-blind: traces line 1 names no run of ${date}\n`);
+});
+
+// ─── the whole-branch review's rulings on the P and I arms (RV2) ─────────────
+
+const QUOTA = { ok: false, answer: null, error: 'RESOURCE_EXHAUSTED: the invented bucket is empty', empty: false, exhausted: true };
+
+test('P: a quota line leaves every count and is counted exhausted, the arm incomplete; green* is counted inside green, an overruled check by its own outcome and again apart', () => {
+  const lines = [runLine('P', 'P01', 1), runLine('P', 'P02', 1), runLine('P', 'P03', 1), runLine('P', 'P01', 2), runLine('P', 'P02', 2, QUOTA)];
+  const checks = [
+    { ...pCheck('P01', 1, 'green', 10), outsideGold: ['widget/extra.go'] },
+    pCheck('P02', 1, 'red', 12),
+    // The session's verdict, appended to the check file: the last line of a key wins.
+    { ...pCheck('P02', 1, 'green', 12), overruled: 'invented: the test log shows the step was the harness\'s' },
+    pCheck('P03', 1, 'green', 3),
+    { ...pCheck('P01', 2, 'green', 8), outsideGold: [] },
+  ];
+  const [arm] = aggregateP({ runLines: lines, checkLines: checks, tasks: [{ id: 'P01' }, { id: 'P02' }, { id: 'P03' }] });
+  assert.equal(arm.exhausted, 1);
+  assert.deepEqual(arm.total, { calls: 4, green: 4, greenStar: 1, red: 0, doesNotApply: 0, noDiff: 0, failed: 0, empty: 0, errors: 0, unchecked: 0, overruled: 1 });
+  assert.deepEqual(arm.runs.map((r) => [r.run, r.calls, r.green, r.greenStar, r.overruled]), [[1, 3, 3, 1, 1], [2, 1, 1, 0, 0]]);
+  assert.deepEqual([arm.byTask.P01, arm.byTask.P02], [{ calls: 2, green: 2, greenStar: 1, linesChanged: 9, goldLines: 9 }, { calls: 1, green: 1, greenStar: 0, linesChanged: 12, goldLines: 9 }]);
+  assert.deepEqual(arm.incomplete, { runs: [{ run: 1, tasks: 3 }, { run: 2, tasks: 1 }], of: 3, missing: [] });
+  // Per pass: 4 green over 4 calls on 3 tasks is 3; 1 green* is 0.75.
+  assert.deepEqual(arm.perPass, { green: 3, greenStar: 0.75 });
+  assert.throws(
+    () => aggregateP({ runLines: [runLine('P', 'P01', 1)], checkLines: [{ ...pCheck('P01', 1, 'red', 3), overruled: true }] }),
+    { message: `the P check line for ${N} run 1 P01: "overruled" is the session's reason, a non-empty string` },
+  );
+});
+
+test('P and I arms say incomplete as R and V do: a run short of the arm\'s tasks, or a task of the suite\'s file never run; whole, null', () => {
+  const [whole] = aggregateP({ runLines: P_RUNS, checkLines: P_CHECKS, tasks: [{ id: 'P01' }, { id: 'P02' }, { id: 'P03' }] });
+  assert.deepEqual([whole.incomplete, whole.exhausted, whole.perPass], [null, 0, { green: 1.5, greenStar: 0 }]);
+  const [short] = aggregateP({ runLines: P_RUNS, checkLines: P_CHECKS, tasks: [{ id: 'P01' }, { id: 'P02' }, { id: 'P03' }, { id: 'P04' }] });
+  assert.deepEqual(short.incomplete, { runs: [{ run: 1, tasks: 3 }, { run: 2, tasks: 3 }], of: 3, missing: ['P04'] });
+  const [none] = aggregateP({ runLines: [runLine('P', 'P01', 1, QUOTA)], checkLines: [] });
+  assert.deepEqual([none.n, none.exhausted, none.total.calls, none.perPass, none.incomplete], [0, 1, 0, { green: null, greenStar: null }, { runs: [], of: 0, missing: null }]);
+  const lines = [runLine('I', 'I01', 1), runLine('I', 'I02', 1, QUOTA)];
+  const [arm] = aggregateI({ runLines: lines, checkLines: [iCheck('I01', 'canary', 1, true, true)], tasks: [{ id: 'I01' }, { id: 'I02' }] });
+  assert.deepEqual([arm.exhausted, arm.total.calls, arm.total.failed, arm.taskIds, arm.incomplete], [1, 1, 0, ['I01'], { runs: [{ run: 1, tasks: 1 }], of: 1, missing: ['I02'] }]);
 });

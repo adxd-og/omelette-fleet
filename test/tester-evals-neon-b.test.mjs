@@ -232,7 +232,7 @@ function mergeFixture({ rTasks, prevSets }) {
   }));
   return dir;
 }
-const merge = (dir) => spawnSync(process.execPath, [BLIND, '--date', '2026-11-20', '--dir', dir, '--aggregate', '--merge', '2026-10-16'], { encoding: 'utf8', timeout: 5000 });
+const merge = (dir) => spawnSync(process.execPath, [BLIND, '--date', '2026-11-20', '--dir', dir, '--aggregate', '--merge', '2026-10-16', '--carry', 'codex:old'], { encoding: 'utf8', timeout: 5000 });
 const armsOf = (dir) => JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8')).arms.map((a) => [a.suite, a.arm, a.carriedFrom || null]);
 
 test('--merge leaves out R arms when both aggregates record an R set and the sets differ, or when this round has no question file', () => {

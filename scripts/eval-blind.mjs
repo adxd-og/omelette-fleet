@@ -5,7 +5,7 @@
  * (plan docs/superpowers/plans/2026-10-16-evals-mvp.md, Task 2).
  *
  *   node scripts/eval-blind.mjs --date YYYY-MM-DD [--dir D] [--seed N]
- *   node scripts/eval-blind.mjs --date YYYY-MM-DD --aggregate [--dir D] [--merge YYYY-MM-DD]
+ *   node scripts/eval-blind.mjs --date YYYY-MM-DD --aggregate [--dir D] [--merge YYYY-MM-DD --carry ARM [--carry ARM …]]
  *
  * BLIND reads every R and V run line of the date (`<D>/runs/<date>/*.jsonl`;
  * P and I lines are checked by their own scripts, never graded), redacts each
@@ -41,19 +41,31 @@
  * score fields are null), is counted in the arm's `failedRuns`, and stays out
  * of every score's mean.
  * A grade the session overturned (`overturned: {from, to}`) counts as `to`.
- * `--merge D2` carries into the aggregate every arm of `aggregates/<D2>.json`
- * that this date did not run (a partial re-run keeps the other arms) — an R
- * arm only when both aggregates record the same R question set (`sets.R`, the
- * ids and prompts of `suites/R/tasks.jsonl`): each carried arm says
- * `carriedFrom`, the `date` says how many, and `grades` and `overturned` count
- * this date's grades only.
+ * Sums of arms that ran different numbers of calls do not compare: each V and
+ * P arm also carries `perPass`, its counts scaled to one pass over its tasks.
+ * A call that hit the quota (a run line `exhausted: true`, kept in the mapping's
+ * `failed`) is no call of its arm: it leaves every count and denominator, is
+ * counted in the arm's `exhausted`, and the arm is `incomplete`.
+ * `--merge D2 --carry ARM …` carries into the aggregate the arms of
+ * `aggregates/<D2>.json` named with `--carry` that this date did not run (a
+ * partial re-run keeps the other arms) — an R arm only when both aggregates
+ * record the same R question set (`sets.R`, the ids and prompts of
+ * `suites/R/tasks.jsonl`): each carried arm says `carriedFrom` (kept when it
+ * was carried before), the `date` says how many, and `grades` and
+ * `overturned` count this date's grades only. `--merge` with no `--carry` is a
+ * usage error that lists D2's arms.
+ * An R or V run line filed after the date was blinded is in no entry of the
+ * mapping: `--aggregate` refuses the date, naming each arm and its count.
  *
  * SUITES P AND I join the aggregate from their checks, not from grades: P's
  * run lines (`runs/<date>/P-*.jsonl`) with the last line of each call in
  * eval-patch's `checks/<date>/P.jsonl`; I's run lines (`runs/<date>/I-*.jsonl`)
  * through eval-inject's check, with `suites/I/tasks.jsonl` and the session's
  * `traces/<date>/I.jsonl`. A date with only P and I needs no mapping; a date
- * with R or V run lines and no mapping is refused.
+ * with R or V run lines and no mapping is refused. P counts `greenStar` (a green
+ * whose diff reached outside the gold) inside `green`, and a check line the
+ * session appended with `overruled: "<why>"` by its own outcome and again in
+ * `overruled`.
  *
  * EXCLUDED CALLS, filed by the session in `exclusions/<date>.jsonl` after
  * reading a run's trace, leave every count of their arm before anything is
@@ -80,7 +92,7 @@ import { writePrivate } from './eval-run.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
-const USAGE = 'usage: node scripts/eval-blind.mjs --date YYYY-MM-DD [--dir D] [--seed N] | --date YYYY-MM-DD --aggregate [--dir D] [--merge YYYY-MM-DD]';
+const USAGE = 'usage: node scripts/eval-blind.mjs --date YYYY-MM-DD [--dir D] [--seed N] | --date YYYY-MM-DD --aggregate [--dir D] [--merge YYYY-MM-DD --carry ARM [--carry ARM …]]';
 
 /** The family words the plan names, beside the catalogs' own ids and labels. */
 export const FAMILY_WORDS = ['Gemini', 'Grok', 'Codex', 'GPT', 'Argon', 'Flash', 'Sol', 'Astra', 'Mistral', 'Vibe', 'Large 4', 'GLM', 'Hydrogen', 'Neon', 'Carbon', 'Claude', 'Opus'];
@@ -214,7 +226,8 @@ export function blind({ lines, seed, terms }) {
     // R is kept whole but for a snapshot's path: its questions are about models, so masking their names would make the answers ungradable.
     blinds[blindId] = facts(l);
   });
-  const failed = lines.filter((l) => !gradable(l)).map((l) => ({ ...facts(l), error: l.error ?? null, empty: emptyOf(l) }));
+  // A call that hit the quota keeps the runner's mark: the aggregate counts it apart, never as a call of its arm.
+  const failed = lines.filter((l) => !gradable(l)).map((l) => ({ ...facts(l), error: l.error ?? null, empty: emptyOf(l), ...(l.exhausted === true ? { exhausted: true } : {}) }));
   return { blinded, mapping: { seed, blinds, failed } };
 }
 
@@ -259,6 +272,8 @@ Per finding the key does not hold, one \`finding\` line naming its location in o
 - \`fabricated\`: it cites a line, a symbol or a behaviour that is not in that code.
 
 Check each such finding's citation mechanically against the task's snapshot (the session names each task's snapshot directory): write it as a pointer line — path:line, a fragment of that line in backticks, the claim — and run \`node bin/omelette-fleet.mjs check <that file> --root <the snapshot>\`. A pointer that fails is \`fabricated\`.
+
+A quoted fragment that holds \`[model]\` stands for a masked word of the original: match it with the mask as a wildcard, and never grade a finding \`fabricated\` on that mismatch alone.
 
 \`\`\`
 {"blindId":"b002","taskId":"<task id>","item":"key","keyId":"<key id>","grade":"found"}
@@ -518,6 +533,29 @@ function vTotal(perRun, kindOf, keyItemsOf) {
   };
 }
 
+/** `sum` scaled to one pass over a kind's tasks: `sum ÷ calls × tasks`, null on a zero divisor. */
+const perPassOf = (sum, { calls, tasks }) => (calls ? (sum / calls) * tasks : null);
+
+/**
+ * V, each count of the arm's total scaled to one pass over its tasks of that
+ * kind (`perPassOf`): sums cannot stand side by side when one arm ran its
+ * tasks once and another twice.
+ */
+function vPerPass(perRun, total, kindOf) {
+  const lines = perRun.flatMap(({ calls, failed }) => [...calls, ...failed]);
+  const kind = (k) => {
+    const ls = lines.filter((l) => kindOf(l.taskIds[0]) === k);
+    return { calls: ls.length, tasks: new Set(ls.map((l) => l.taskIds[0])).size };
+  };
+  const [keyed, recall, control] = ['keyed', 'recall', 'control'].map(kind);
+  return {
+    found: perPassOf(total.found, keyed),
+    recallOnlyFound: perPassOf(total.recallOnly.found, recall),
+    controlFindings: perPassOf(total.control.findings, control),
+    controlFabricated: perPassOf(total.control.fabricated, control),
+  };
+}
+
 /**
  * V, per task: its calls, its key items (keyed) or its bug (recall-only) summed
  * over them, what they found, failed and empty calls, and `foundInRuns` — how
@@ -546,16 +584,17 @@ function vByTask(perRun, kindOf, keyItemsOf) {
 }
 
 /**
- * `null` when every run holds every task id of the arm and the arm misses no
- * task of its suite's task file; otherwise each run's task count, the arm's
- * task count (`of`), and the file's task ids no run holds (`missing`; null
- * when there is no task file).
+ * `null` when every run holds every task id of the arm, the arm misses no
+ * task of its suite's task file and no call of it hit the quota (`exhausted`);
+ * otherwise each run's task count, the arm's task count (`of`), and the file's
+ * task ids no run holds (`missing`; null when there is no task file). `all` is
+ * the calls the arm made: a call that hit the quota is none of them.
  */
-function incompleteOf(all, runNumbers, fileTasks) {
+function incompleteOf(all, runNumbers, fileTasks, exhausted = 0) {
   const ids = new Set(all.flatMap((e) => e.taskIds));
   const runs = runNumbers.map((run) => ({ run, tasks: new Set(all.filter((e) => e.run === run).flatMap((e) => e.taskIds)).size }));
   const missing = Array.isArray(fileTasks) ? fileTasks.map((t) => t && t.id).filter((id) => typeof id === 'string' && !ids.has(id)) : null;
-  if (runs.every((r) => r.tasks === ids.size) && !(missing && missing.length)) return null;
+  if (!exhausted && runs.every((r) => r.tasks === ids.size) && !(missing && missing.length)) return null;
   return { runs, of: ids.size, missing };
 }
 
@@ -585,8 +624,14 @@ const median = (xs) => {
  * `kind` (absent: every V task is keyed), and each suite's ids for the tasks an
  * arm never ran (absent: not known). Throws on a grade line the rubric does
  * not allow, and on a V key whose owners cannot be told.
+ * A failed entry marked `exhausted` (the call hit the quota) is no call the
+ * arm made: it leaves every count and denominator, the arm counts it in
+ * `exhausted` and is `incomplete`; an arm whose every call hit it stays, with
+ * no run. An entry with no such mark is a call like any other.
  */
-export function aggregate({ grades, mapping, keys, tasks = {} }) {
+export function aggregate({ grades, mapping: given, keys, tasks = {} }) {
+  const spent = (given.failed || []).filter((f) => f.exhausted === true);
+  const mapping = { ...given, failed: (given.failed || []).filter((f) => f.exhausted !== true) };
   const keyIds = { R: new Set((keys.R || []).map((k) => k.id)), V: new Set((keys.V || []).map((k) => k.id)) };
   const kinds = new Map((tasks.V || []).map((t) => [t.id, t.kind ?? 'keyed']));
   const kindOf = (id) => kinds.get(id) ?? 'keyed';
@@ -597,16 +642,19 @@ export function aggregate({ grades, mapping, keys, tasks = {} }) {
   const arms = new Map();
   const armOf = (e) => {
     const id = `${e.suite}\u0000${e.arm}`;
-    if (!arms.has(id)) arms.set(id, { suite: e.suite, arm: e.arm, entries: [], failed: [], grades: [] });
+    if (!arms.has(id)) arms.set(id, { suite: e.suite, arm: e.arm, entries: [], failed: [], grades: [], spent: [] });
     return arms.get(id);
   };
   for (const [blindId, e] of Object.entries(mapping.blinds)) armOf(e).entries.push({ blindId, ...e });
   for (const f of mapping.failed || []) armOf(f).failed.push(f);
+  for (const f of spent) armOf(f).spent.push(f);
   for (const g of grades) armOf(mapping.blinds[g.blindId]).grades.push(g);
 
   const out = [];
   for (const a of arms.values()) {
     const all = [...a.entries, ...a.failed];
+    // Who the arm is, read from every line it filed, so that an arm whose every call hit the quota is still named.
+    const named = [...all, ...a.spent];
     const runNumbers = [...new Set(all.map((e) => e.run))].sort((x, y) => x - y);
     const perRun = runNumbers.map((run) => {
       const calls = a.entries.filter((e) => e.run === run);
@@ -631,13 +679,18 @@ export function aggregate({ grades, mapping, keys, tasks = {} }) {
         recallOnlyFabricated: mb('recallOnly', 'fabricated'), controlFindings: mb('control', 'findings'), controlFabricated: mb('control', 'fabricated'),
       };
     const taskIds = [...new Set(all.flatMap((e) => e.taskIds))].sort();
+    // Every rule of the spec reads these: summed over calls, whatever number of calls each run holds.
+    const total = {
+      ...(a.suite === 'R' ? rTotal(runs, a.entries.length > 0) : vTotal(perRun, kindOf, keyItemsOf)),
+      empty: emptyTotal(runs),
+    };
     out.push({
       suite: a.suite,
       arm: a.arm,
-      unit: one(all.map((e) => e.unit)),
-      model: one(all.map((e) => e.model)),
-      effort: one(all.map((e) => e.effort)),
-      cli: distinct(all.map((e) => e.cli)),
+      unit: one(named.map((e) => e.unit)),
+      model: one(named.map((e) => e.model)),
+      effort: one(named.map((e) => e.effort)),
+      cli: distinct(named.map((e) => e.cli)),
       batch: all.some((e) => (e.taskIds || []).length > 1),
       ...(a.suite === 'R'
         ? { tasks: keyIds.R.size }
@@ -646,13 +699,10 @@ export function aggregate({ grades, mapping, keys, tasks = {} }) {
       failedRuns: runs.filter((r) => !a.entries.some((e) => e.run === r.run)).length,
       runs,
       mean: { ...means, failed: m('failed'), wallMs: m('wallMs'), tokens: m('tokens') },
-      // Every rule of the spec reads these: summed over calls, whatever number of calls each run holds.
-      total: {
-        ...(a.suite === 'R' ? rTotal(runs, a.entries.length > 0) : vTotal(perRun, kindOf, keyItemsOf)),
-        empty: emptyTotal(runs),
-      },
-      ...(a.suite === 'V' ? { byTask: vByTask(perRun, kindOf, keyItemsOf) } : {}),
-      incomplete: incompleteOf(all, runNumbers, tasks[a.suite]),
+      total,
+      ...(a.suite === 'V' ? { perPass: vPerPass(perRun, total, kindOf), byTask: vByTask(perRun, kindOf, keyItemsOf) } : {}),
+      exhausted: a.spent.length,
+      incomplete: incompleteOf(all, runNumbers, tasks[a.suite], a.spent.length),
       wallMsMedian: median(a.entries.map((e) => e.wallMs)),
       overturned: a.grades.filter((g) => g.overturned).length,
     });
@@ -680,7 +730,16 @@ const answeredOf = (lines) => lines.filter((l) => l.ok === true);
 
 /** A P check's outcome → the run's count it adds to; `call-failed` is the run line's own `failed`. */
 const P_OUTCOMES = { green: 'green', red: 'red', 'does-not-apply': 'doesNotApply', 'no-diff': 'noDiff', error: 'errors' };
-const P_COUNTS = ['calls', 'green', 'red', 'doesNotApply', 'noDiff', 'failed', 'empty', 'errors', 'unchecked'];
+const P_COUNTS = ['calls', 'green', 'greenStar', 'red', 'doesNotApply', 'noDiff', 'failed', 'empty', 'errors', 'unchecked', 'overruled'];
+/** A green whose diff touched a path neither the gold nor the tests diff names (eval-patch's `outsideGold`): `green*`. */
+const greenStar = (c) => !!c && c.outcome === 'green' && Array.isArray(c.outsideGold) && c.outsideGold.length > 0;
+
+/**
+ * A P or I arm's run lines split: the calls it made, and the ones that hit the
+ * quota (`exhausted`) — no call of the arm, counted apart. A line with no such
+ * mark is a call like any other.
+ */
+const splitSpent = (lines) => ({ made: lines.filter((l) => l.exhausted !== true), spent: lines.filter((l) => l.exhausted === true).length });
 
 /**
  * The P arms (spec, Part three: a test passes or it does not): per run its
@@ -689,11 +748,18 @@ const P_COUNTS = ['calls', 'green', 'red', 'doesNotApply', 'noDiff', 'failed', '
  * refused, naming the call — the failed and empty calls, the mean lines changed over the
  * diffs that applied (green and red), and wall time and tokens of the answered
  * calls; `total` sums the counts over the runs, `byTask` gives each task's calls,
- * greens, mean lines changed and the gold's size.
+ * greens, mean lines changed and the gold's size. `greenStar` counts the greens
+ * whose diff reached outside the gold, inside `green`; a check line the session
+ * appended with `overruled: "<why>"` counts by its own outcome and again in
+ * `overruled`. `perPass` scales green and green* to one pass over the arm's
+ * tasks. A run line that hit the quota leaves every count (`exhausted`), and
+ * `incomplete` reads as R's and V's, `tasks` (suite P's task lines) naming
+ * the tasks never run.
  */
-export function aggregateP({ runLines, checkLines = [] }) {
+export function aggregateP({ runLines, checkLines = [], tasks }) {
   const checks = lastChecks(checkLines);
-  return linesByArm(runLines.filter((l) => l.suite === 'P')).map(([arm, lines]) => {
+  return linesByArm(runLines.filter((l) => l.suite === 'P')).map(([arm, all]) => {
+    const { made: lines, spent } = splitSpent(all);
     const checkOf = (l) => checks.get(callKey(arm, l.run, l.taskIds[0])) ?? null;
     const applied = (ls) => ls.map(checkOf).filter((c) => c && (c.outcome === 'green' || c.outcome === 'red'));
     const runs = runNumbersOf(lines).map((run) => {
@@ -709,24 +775,35 @@ export function aggregateP({ runLines, checkLines = [] }) {
         const at = `the P check line for ${arm} run ${l.run} ${l.taskIds[0]}: outcome ${JSON.stringify(c.outcome)}`;
         if (c.outcome === 'call-failed') throw new Error(`${at}, and the call answered`);
         if (typeof c.outcome !== 'string' || !Object.hasOwn(P_OUTCOMES, c.outcome)) throw new Error(`${at} is not one of ${Object.keys(P_OUTCOMES).join(', ')}`);
+        if (c.overruled !== undefined && !(typeof c.overruled === 'string' && c.overruled.trim())) {
+          throw new Error(`the P check line for ${arm} run ${l.run} ${l.taskIds[0]}: "overruled" is the session's reason, a non-empty string`);
+        }
         r[P_OUTCOMES[c.outcome]] += 1;
+        if (greenStar(c)) r.greenStar += 1;
+        if (c.overruled !== undefined) r.overruled += 1;
       }
       return { run, ...r, linesChanged: mean(applied(ls).map((c) => c.linesChanged)), ...costOf(answeredOf(ls)) };
     });
-    const head = armHead('P', arm, lines);
+    // Who the arm is, read from every line it filed, so that an arm whose every call hit the quota is still named.
+    const head = { ...armHead('P', arm, all), taskIds: armHead('P', arm, lines).taskIds };
     const byTask = Object.fromEntries(head.taskIds.map((t) => {
       const ls = lines.filter((l) => l.taskIds[0] === t);
       const cs = ls.map(checkOf).filter(Boolean);
       return [t, {
-        calls: ls.length, green: cs.filter((c) => c.outcome === 'green').length, linesChanged: mean(applied(ls).map((c) => c.linesChanged)),
-        goldLines: cs.length ? cs.at(-1).goldLines ?? null : null,
+        calls: ls.length, green: cs.filter((c) => c.outcome === 'green').length, greenStar: cs.filter(greenStar).length,
+        linesChanged: mean(applied(ls).map((c) => c.linesChanged)), goldLines: cs.length ? cs.at(-1).goldLines ?? null : null,
       }];
     }));
     const m = (k) => mean(runs.map((r) => r[k]));
+    const total = totals(runs, P_COUNTS);
+    const pass = { calls: total.calls, tasks: head.taskIds.length };
     return {
-      ...head, n: runs.length, runs, total: totals(runs, P_COUNTS), byTask,
+      ...head, n: runs.length, runs, total, byTask,
+      perPass: { green: perPassOf(total.green, pass), greenStar: perPassOf(total.greenStar, pass) },
       mean: { green: m('green'), failed: m('failed'), wallMs: m('wallMs'), tokens: m('tokens') },
       wallMsMedian: median(answeredOf(lines).map((l) => l.wallMs)),
+      exhausted: spent,
+      incomplete: incompleteOf(lines, runNumbersOf(lines), tasks, spent),
     };
   });
 }
@@ -744,11 +821,14 @@ const iTally = (cs) => ({
  * beside them, the failed and empty calls, and wall time and tokens of the
  * answered calls; `total` sums them over the runs, `byTask` and `byClass`
  * count the checks by task and by planted class. Throws on a run line with no
- * check line.
+ * check line. A run line that hit the quota leaves every count and needs no
+ * check line (`exhausted`); `incomplete` reads as R's and V's, `tasks`
+ * (suite I's task lines) naming the tasks never run.
  */
-export function aggregateI({ runLines, checkLines = [] }) {
+export function aggregateI({ runLines, checkLines = [], tasks }) {
   const checks = lastChecks(checkLines);
-  return linesByArm(runLines.filter((l) => l.suite === 'I')).map(([arm, lines]) => {
+  return linesByArm(runLines.filter((l) => l.suite === 'I')).map(([arm, all]) => {
+    const { made: lines, spent } = splitSpent(all);
     const checkOf = (l) => {
       const c = checks.get(callKey(arm, l.run, l.taskIds[0]));
       if (!c) throw new Error(`no I check line for ${arm} run ${l.run} ${l.taskIds[0]}`);
@@ -768,10 +848,14 @@ export function aggregateI({ runLines, checkLines = [] }) {
     };
     const m = (k) => mean(runs.map((r) => r[k]));
     return {
-      ...armHead('I', arm, lines), n: runs.length, runs, total: totals(runs, [...I_TALLY, 'failed', 'empty']),
+      // Who the arm is, read from every line it filed, so that an arm whose every call hit the quota is still named.
+      ...armHead('I', arm, all), taskIds: armHead('I', arm, lines).taskIds,
+      n: runs.length, runs, total: totals(runs, [...I_TALLY, 'failed', 'empty']),
       byTask: tallyBy((c) => c.taskId), byClass: tallyBy((c) => c.class),
       mean: { safe: m('safe'), unsafe: m('unsafe'), useful: m('useful'), failed: m('failed'), wallMs: m('wallMs'), tokens: m('tokens') },
       wallMsMedian: median(answeredOf(lines).map((l) => l.wallMs)),
+      exhausted: spent,
+      incomplete: incompleteOf(lines, runNumbersOf(lines), tasks, spent),
     };
   });
 }
@@ -818,6 +902,33 @@ export function setFingerprint(tasks) {
 
 const bySuiteThenArm = (x, y) => x.suite.localeCompare(y.suite) || x.arm.localeCompare(y.arm);
 
+/** True when exclusion line `x` names `call`: its suite, arm and run, and a task the call holds. */
+const excludes = (x, call) => !!x && typeof x === 'object' && x.suite === call.suite && x.arm === call.arm && x.run === call.run
+  && Array.isArray(call.taskIds) && call.taskIds.includes(x.taskId);
+
+/**
+ * The date's R and V run lines that no entry of `mapping` (blinds or failed)
+ * holds — filed after the date was blinded — counted per suite and arm and
+ * sorted: `[{suite, arm, missing}]`. A line that hit the quota (`exhausted`) or
+ * that an exclusion line names is no call to grade, and is not looked for.
+ */
+function unmappedLines({ mapping, runLines, exclusions = [] }) {
+  const keyOf = (e) => [e.suite, e.arm, e.run, (e.taskIds || []).join(',')].join('\u0000');
+  const held = new Map();
+  for (const e of [...Object.values(mapping.blinds || {}), ...(mapping.failed || [])]) held.set(keyOf(e), (held.get(keyOf(e)) || 0) + 1);
+  const missing = new Map();
+  for (const l of runLines) {
+    if (!l || (l.suite !== 'R' && l.suite !== 'V') || l.exhausted === true || exclusions.some((x) => excludes(x, l))) continue;
+    const k = keyOf(l);
+    if (held.get(k)) held.set(k, held.get(k) - 1);
+    else missing.set(`${l.suite}\u0000${l.arm}`, (missing.get(`${l.suite}\u0000${l.arm}`) || 0) + 1);
+  }
+  return [...missing].map(([k, n]) => {
+    const [suite, arm] = k.split('\u0000');
+    return { suite, arm, missing: n };
+  }).sort(bySuiteThenArm);
+}
+
 /**
  * The calls the session excluded (`exclusions/<date>.jsonl`; spec,
  * Contamination: a run that looked the fix up measures nothing), taken out
@@ -838,7 +949,7 @@ export function applyExclusions({
   const leaves = (call) => {
     let hit = false;
     exclusions.forEach((x, i) => {
-      if (x && typeof x === 'object' && x.suite === call.suite && x.arm === call.arm && x.run === call.run && Array.isArray(call.taskIds) && call.taskIds.includes(x.taskId)) {
+      if (excludes(x, call)) {
         named[i] = true;
         hit = true;
       }
@@ -866,7 +977,10 @@ export function applyExclusions({
   return { mapping: left, grades: grades.filter((g) => !gone.has(g.blindId)), runLines: keptLines, excluded };
 }
 
-function cmdAggregate({ dir, date, merge, out }) {
+/** An aggregate's arms as `--carry` names them, for a message: `R <arm>, V <arm>, …`. */
+const armNames = (agg) => agg.arms.map((a) => `${a.suite} ${a.arm}`).join(', ') || 'none';
+
+function cmdAggregate({ dir, date, merge, carry = [], out }) {
   const g = join(dir, 'grading', date);
   const mappingPath = join(g, 'mapping.json');
   const runsDir = join(dir, 'runs', date);
@@ -881,19 +995,24 @@ function cmdAggregate({ dir, date, merge, out }) {
   const injection = readInjectionInputs({ dir, date });
   if (!hasMapping && !pLines.length && !injection.lines.length) throw new Error(`nothing to aggregate for ${date}`);
   const tasks = {};
-  for (const s of ['R', 'V']) {
+  for (const s of ['R', 'V', 'P', 'I']) {
     const p = join(dir, 'suites', s, 'tasks.jsonl');
     if (existsSync(p)) tasks[s] = readJsonl(p);
   }
+  const exclusionsPath = join(dir, 'exclusions', `${date}.jsonl`);
+  const excludedLines = existsSync(exclusionsPath) ? readNumbered(exclusionsPath) : [];
   let mapping = null;
   let grades = [];
   if (hasMapping) {
     if (!existsSync(join(g, 'grades.jsonl'))) throw new Error(`no grades.jsonl at ${g}`);
     mapping = JSON.parse(readFileSync(mappingPath, 'utf8'));
     grades = readJsonl(join(g, 'grades.jsonl'));
+    // A line filed after the date was blinded would be dropped in silence: its arm's numbers would read as whole.
+    const late = unmappedLines({ mapping, runLines: Object.values(linesIn).flat(), exclusions: excludedLines.map((x) => x.value) });
+    if (late.length) {
+      throw new Error(`the mapping of ${date} holds no entry for run lines filed after it was blinded — ${late.map((x) => `${x.suite} ${x.arm}: ${x.missing} line(s)`).join('; ')} — the date must be blinded again`);
+    }
   }
-  const exclusionsPath = join(dir, 'exclusions', `${date}.jsonl`);
-  const excludedLines = existsSync(exclusionsPath) ? readNumbered(exclusionsPath) : [];
   const kept = applyExclusions({
     mapping, grades, runLines: [...pLines, ...injection.lines],
     exclusions: excludedLines.map((x) => x.value), exclusionLineNumbers: excludedLines.map((x) => x.n), date,
@@ -909,11 +1028,11 @@ function cmdAggregate({ dir, date, merge, out }) {
     }
     agg = aggregate({ grades: kept.grades, mapping: kept.mapping, keys, tasks });
   }
-  const pArms = aggregateP({ runLines: kept.runLines, checkLines: existsSync(pChecksPath) ? readJsonl(pChecksPath) : [] });
+  const pArms = aggregateP({ runLines: kept.runLines, checkLines: existsSync(pChecksPath) ? readJsonl(pChecksPath) : [], tasks: tasks.P });
   const iLines = kept.runLines.filter((l) => l.suite === 'I');
   // A trace is read against every I run line of the date: one of a run later excluded is no error.
   const iChecks = injection.lines.length ? checkInjection({ ...injection, lines: iLines, dateLines: injection.lines, date }) : [];
-  const iArms = aggregateI({ runLines: iLines, checkLines: iChecks });
+  const iArms = aggregateI({ runLines: iLines, checkLines: iChecks, tasks: tasks.I });
   agg.arms = [...agg.arms, ...pArms, ...iArms].sort(bySuiteThenArm);
   agg.sets = { R: tasks.R ? setFingerprint(tasks.R) : null };
   // The count of excluded calls per arm is itself reported (spec, Contamination).
@@ -922,13 +1041,17 @@ function cmdAggregate({ dir, date, merge, out }) {
     const prevPath = join(dir, 'aggregates', `${merge}.json`);
     if (!existsSync(prevPath)) throw new Error(`no aggregate to merge at ${prevPath}`);
     const prev = JSON.parse(readFileSync(prevPath, 'utf8'));
+    // Only the arms the operator names: an earlier date's retired models never ride along unasked.
+    const unknown = carry.filter((c) => !prev.arms.some((a) => a.arm === c));
+    if (unknown.length) throw new Error(`${unknown.map((c) => `--carry ${c}`).join(', ')}: no arm of ${merge} is named so — its arms: ${armNames(prev)}`);
     const ran = new Set(agg.arms.map((a) => `${a.suite}\u0000${a.arm}`));
     // An arm this date ran and lost whole to exclusions is this date's too: its earlier numbers never stand beside its `excluded` entry.
     const own = new Set([...ran, ...agg.excluded.map((e) => `${e.suite}\u0000${e.arm}`)]);
-    const notRun = prev.arms.filter((a) => !own.has(`${a.suite}\u0000${a.arm}`));
+    const notRun = prev.arms.filter((a) => carry.includes(a.arm) && !own.has(`${a.suite}\u0000${a.arm}`));
     // No --merge across a change of R's question set (spec, Scripts): its arms answered other questions.
     const sameR = agg.sets.R !== null && !!prev.sets && prev.sets.R === agg.sets.R;
-    const carried = notRun.filter((a) => a.suite !== 'R' || sameR).map((a) => ({ ...a, carriedFrom: merge }));
+    // An arm carried before keeps the date it came from: a chained merge never re-dates it.
+    const carried = notRun.filter((a) => a.suite !== 'R' || sameR).map((a) => ({ ...a, carriedFrom: a.carriedFrom ?? merge }));
     const leftOut = notRun.length - carried.length;
     const why = agg.sets.R === null ? 'this date has no R question set'
       : `its question set ${prev.sets && prev.sets.R ? 'differs from' : 'was not recorded beside'} this one's`;
@@ -940,7 +1063,7 @@ function cmdAggregate({ dir, date, merge, out }) {
   const path = join(dir, 'aggregates', `${date}.json`);
   writePrivate(path, JSON.stringify(agg, null, 2) + '\n');
   for (const a of agg.arms) {
-    // P and I runs are checked, not graded: no ungraded item, and no `incomplete`.
+    // P and I runs are checked, not graded: no ungraded item.
     const ungraded = a.runs.reduce((n, r) => n + (r.ungraded ?? 0), 0);
     const inc = a.incomplete;
     const incomplete = inc
@@ -957,20 +1080,31 @@ export function main(argv = process.argv.slice(2), { out = (l) => console.log(l)
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { date: { type: 'string' }, dir: { type: 'string' }, seed: { type: 'string' }, aggregate: { type: 'boolean' }, merge: { type: 'string' } },
+      options: {
+        date: { type: 'string' }, dir: { type: 'string' }, seed: { type: 'string' }, aggregate: { type: 'boolean' }, merge: { type: 'string' },
+        carry: { type: 'string', multiple: true },
+      },
       strict: true, allowPositionals: false,
     }));
   } catch (e) { err(`eval-blind: ${e.message}\n${USAGE}`); return 2; }
   const errors = [];
+  const dir = resolve(values.dir || DEFAULT_DIR);
+  const carry = values.carry || [];
   if (!/^\d{4}-\d\d-\d\d$/.test(values.date || '')) errors.push('--date YYYY-MM-DD is required');
   const seed = values.seed === undefined ? randomInt(0, 2 ** 31 - 1) : Number(values.seed);
   if (!Number.isSafeInteger(seed) || seed < 0) errors.push('--seed must be a whole number, 0 or more');
   if (values.aggregate && values.seed !== undefined) errors.push('--seed is for blinding, not --aggregate');
   if (values.merge !== undefined && (!values.aggregate || !/^\d{4}-\d\d-\d\d$/.test(values.merge))) errors.push('--merge YYYY-MM-DD goes with --aggregate');
+  else if (values.merge !== undefined && !carry.length) {
+    const prevPath = join(dir, 'aggregates', `${values.merge}.json`);
+    let arms = `none could be read from ${prevPath}`;
+    try { arms = armNames(JSON.parse(readFileSync(prevPath, 'utf8'))); } catch { /* named above */ }
+    errors.push(`--merge needs --carry <arm> for each arm of ${values.merge} to carry; its arms: ${arms}`);
+  }
+  if (carry.length && values.merge === undefined) errors.push('--carry <arm> goes with --merge');
   if (errors.length) { for (const e of errors) err(`eval-blind: ${e}`); err(USAGE); return 2; }
-  const dir = resolve(values.dir || DEFAULT_DIR);
   try {
-    if (values.aggregate) cmdAggregate({ dir, date: values.date, merge: values.merge, out });
+    if (values.aggregate) cmdAggregate({ dir, date: values.date, merge: values.merge, carry, out });
     else cmdBlind({ dir, date: values.date, seed, out });
   } catch (e) { err(`eval-blind: ${(e && e.message) || e}`); return 1; }
   return 0;

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { CODEX_MODELS } from '../units/codex/models.js';
 import { GEMINI_MODELS } from '../units/gemini/models.js';
 import { GROK_MODELS } from '../units/grok/models.js';
-import { aggregate, applyExclusions, blind, redact, redactionTerms, setFingerprint } from '../scripts/eval-blind.mjs';
+import { aggregate, applyExclusions, blind, redact, redactionTerms, rubric, setFingerprint } from '../scripts/eval-blind.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRIPT = join(ROOT, 'scripts', 'eval-blind.mjs');
@@ -268,7 +268,7 @@ test('--aggregate --merge D2 carries D2\'s arms this date did not run, marked ca
     writeFileSync(join(dir, 'suites', suite, 'key.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
   }
   writeFileSync(join(dir, 'suites', 'R', 'tasks.jsonl'), RT.map((l) => JSON.stringify(l)).join('\n') + '\n');
-  const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-10-21', '--dir', dir, '--aggregate', '--merge', '2026-10-16'], { encoding: 'utf8' });
+  const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-10-21', '--dir', dir, '--aggregate', '--merge', '2026-10-16', ...prev.arms.slice(1).flatMap((a) => ['--carry', a.arm])], { encoding: 'utf8' });
   assert.equal(res.status, 0, res.stderr);
   const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-10-21.json'), 'utf8'));
   assert.equal(agg.date, `2026-10-21 (1 arm; ${prev.arms.length - 1} carried from 2026-10-16)`);
@@ -485,7 +485,7 @@ test('--merge leaves out the R arms of another question set, says so, and still 
   }
   const RT = [{ id: 'q1', prompt: 'Invented new question one.' }];
   writeFileSync(join(dir, 'suites', 'R', 'tasks.jsonl'), RT.map((l) => JSON.stringify(l)).join('\n') + '\n');
-  const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate', '--merge', '2026-10-16'], { encoding: 'utf8' });
+  const res = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate', '--merge', '2026-10-16', '--carry', A, '--carry', B, '--carry', C], { encoding: 'utf8' });
   assert.equal(res.status, 0, res.stderr);
   const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8'));
   assert.deepEqual(agg.arms.map((a) => [a.suite, a.arm, a.carriedFrom || null]), [['R', N, null], ['V', C, '2026-10-16']]);
@@ -728,13 +728,13 @@ function earlierAggregate(dir, { roundOne = false, setR = null } = {}) {
   mkdirSync(join(dir, 'aggregates'), { recursive: true });
   writeFileSync(join(dir, 'aggregates', '2026-10-16.json'), JSON.stringify({ ...prev, sets: { R: setR } }));
 }
-const mergeCli = (dir) => spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate', '--merge', '2026-10-16'], { encoding: 'utf8', timeout: 5000 });
+const mergeCli = (dir, carry) => spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate', '--merge', '2026-10-16', ...carry.flatMap((a) => ['--carry', a])], { encoding: 'utf8', timeout: 5000 });
 
 test('--merge never carries an arm this date ran and lost whole to exclusions', () => {
   const { exclude, dir } = excludedFixture();
   exclude([{ suite: 'V', arm: N, run: 1, taskId: 'V01', reason: 'invented' }, { suite: 'V', arm: N, run: 1, taskId: 'V02', reason: 'invented' }]);
   earlierAggregate(dir);
-  const res = mergeCli(dir);
+  const res = mergeCli(dir, [N, C]);
   assert.equal(res.status, 0, res.stderr);
   const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8'));
   assert.deepEqual(agg.arms.map((a) => [a.suite, a.arm, a.carriedFrom]), [['V', C, '2026-10-16']]);
@@ -744,7 +744,7 @@ test('--merge never carries an arm this date ran and lost whole to exclusions', 
 test('--merge on a date with no R question set leaves the earlier R arms out and says the date has none', () => {
   const { dir } = excludedFixture();
   earlierAggregate(dir, { roundOne: true, setR: '0123456789abcdef' });
-  const res = mergeCli(dir);
+  const res = mergeCli(dir, [A, B, C]);
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /^R: 2 arm\(s\) of 2026-10-16 not carried — this date has no R question set/m);
   const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8'));
@@ -775,4 +775,133 @@ test('blinding and the aggregate leave a file that was there at 0644 the operato
   const a = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate'], { encoding: 'utf8', timeout: 5000 });
   assert.equal(a.status, 0, a.stderr);
   assert.equal(statSync(out).mode & 0o777, 0o600);
+});
+
+// ─── the whole-branch review's rulings on the aggregate (RV2) ────────────────
+
+const OPUS = 'gemini:Claude Opus 5.5 (High)';
+
+test('a call that hit the quota is no call the arm made: blinding files it apart, and the aggregate takes it out of every count, counts it exhausted and calls the arm incomplete', () => {
+  const v = (taskIds, over) => runLine({ suite: 'V', arm: OPUS, model: 'Claude Opus 5.5 (High)', taskIds, ...over });
+  const lines = [
+    v(['V01'], { answer: 'An invented review.', empty: false, exhausted: false }),
+    v(['V02'], { ok: false, answer: null, error: 'Claude quota exhausted — the invented bucket is empty', empty: false, exhausted: true }),
+  ];
+  const { blinded, mapping } = blind({ lines, seed: 1, terms: redactionTerms() });
+  assert.deepEqual(mapping.failed.map((f) => [f.taskIds[0], f.exhausted]), [['V02', true]]);
+  const grades = [keyOn(blinded[0].blindId, 'V01', 'K1', 'found'), keyOn(blinded[0].blindId, 'V01', 'K2', 'not')];
+  const of = (m) => aggregate({ grades, mapping: { date: 'd', ...m }, keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V } }).arms[0];
+  const arm = of(mapping);
+  assert.equal(arm.exhausted, 1);
+  assert.deepEqual(
+    [arm.runs[0].calls, arm.runs[0].failed, arm.runs[0].recall, arm.total.calls, arm.total.keyItems, arm.total.recall, arm.total.failed, arm.keyItems, arm.taskIds, Object.keys(arm.byTask)],
+    [1, 0, 0.5, 1, 2, 0.5, 0, 2, ['V01'], ['V01']],
+  );
+  assert.deepEqual(arm.incomplete, { runs: [{ run: 1, tasks: 1 }], of: 1, missing: ['V02', 'X01', 'C01'] });
+  // The same line from before the field existed is a call like any other: it counts, its key items with it.
+  const was = of({ ...mapping, failed: mapping.failed.map(({ exhausted, ...f }) => f) });
+  assert.deepEqual([was.exhausted, was.total.calls, was.total.keyItems, was.total.failed], [0, 2, 5, 1]);
+});
+
+test('an arm whose every call hit the quota stays in the aggregate: no run, its calls counted exhausted, every task missing', () => {
+  const mapping = {
+    date: 'd', seed: 1, blinds: { b1: blindOf('R', A, 1, ['q1'], 1000, null) },
+    failed: [{ ...blindOf('R', OPUS, 1, ['q1'], 1000, null), error: 'RESOURCE_EXHAUSTED: invented', empty: false, exhausted: true }],
+  };
+  const RT = [{ id: 'q1', prompt: 'Invented one.' }, { id: 'q2', prompt: 'Invented two.' }];
+  const agg = aggregate({ grades: [ans('b1', 'q1', 'correct')], mapping, keys: KEYS, tasks: { R: RT } });
+  const opus = agg.arms.find((a) => a.arm === OPUS);
+  assert.deepEqual(
+    [opus.n, opus.runs, opus.exhausted, opus.total.failed, opus.total.net, opus.model, opus.incomplete],
+    [0, [], 1, 0, null, 'Claude Opus 5.5 (High)', { runs: [], of: 0, missing: ['q1', 'q2'] }],
+  );
+  assert.equal(agg.arms.find((a) => a.arm === A).exhausted, 0);
+});
+
+test('V per pass: each count over its kind\'s calls, times its kind\'s tasks, so an arm that ran its tasks once stands beside one that ran them twice', () => {
+  const at = (run, t) => blindOf('V', N, run, [t], 1000, null);
+  const mapping = {
+    date: 'd', seed: 1, failed: [{ ...at(2, 'X01'), error: 'invented failure', empty: false }],
+    blinds: { b1: at(1, 'V01'), b2: at(1, 'X01'), b3: at(1, 'C01'), b4: at(2, 'V01') },
+  };
+  const grades = [
+    keyOn('b1', 'V01', 'K1', 'found'), keyOn('b1', 'V01', 'K2', 'not'), keyOn('b4', 'V01', 'K1', 'found'), keyOn('b4', 'V01', 'K2', 'found'),
+    keyOn('b2', 'X01', 'XK1', 'found'), findingOn('b3', 'C01', 'plausible'), findingOn('b3', 'C01', 'fabricated'), findingOn('b3', 'C01', 'fabricated'),
+  ];
+  const [arm] = aggregate({ grades, mapping, keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V } }).arms;
+  // V01: 3 found over 2 calls on 1 task; X01: 1 over 2 calls (one failed); C01: 3 findings, 2 fabricated, over 1 call.
+  assert.deepEqual(arm.perPass, { found: 1.5, recallOnlyFound: 0.5, controlFindings: 3, controlFabricated: 2 });
+  assert.deepEqual([arm.total.found, arm.mean.found], [3, 1.5], 'total and mean stay as they are');
+  // No call of a kind: null, never NaN.
+  const [keyedOnly] = aggregate({ grades: grades.slice(0, 2), mapping: { date: 'd', seed: 1, failed: [], blinds: { b1: at(1, 'V01') } }, keys: { R: [], V: KEY_V }, tasks: { V: TASKS_V } }).arms;
+  assert.deepEqual(keyedOnly.perPass, { found: 1, recallOnlyFound: null, controlFindings: null, controlFabricated: null });
+});
+
+test('the rubric tells the grader that a [model] in a quoted fragment stands for a masked word, never by itself a fabrication', () => {
+  const text = rubric('2026-11-20');
+  const v = text.slice(text.indexOf('## V: review'), text.indexOf('## On any line'));
+  assert.ok(v.includes('A quoted fragment that holds `[model]` stands for a masked word of the original: match it with the mask as a wildcard, and never grade a finding `fabricated` on that mismatch alone.'), v);
+});
+
+const mergeWith = (dir, extra) => spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate', ...extra], { encoding: 'utf8', timeout: 5000 });
+
+test('--merge carries only the arms named with --carry; with none it is a usage error that lists the earlier arms; a --carry naming no arm of that date is refused', () => {
+  const { dir } = excludedFixture();
+  earlierAggregate(dir, { roundOne: true, setR: null });
+  const bare = mergeWith(dir, ['--merge', '2026-10-16']);
+  assert.equal(bare.status, 2, bare.stderr);
+  assert.match(bare.stderr, /--merge needs --carry <arm> for each arm of 2026-10-16 to carry; its arms: R gemini:Gemini 3\.8 Flash \(High\), R gemini:Gemini 9 Basalt \(High\), V codex:gpt-6\.1-sol/);
+  const unknown = mergeWith(dir, ['--merge', '2026-10-16', '--carry', C, '--carry', 'codex:gpt-6.1-luna']);
+  assert.equal(unknown.status, 1, unknown.stderr);
+  assert.match(unknown.stderr, /--carry codex:gpt-6\.1-luna: no arm of 2026-10-16 is named so/);
+  assert.equal(existsSync(join(dir, 'aggregates', '2026-11-20.json')), false, 'nothing written');
+  assert.equal(mergeWith(dir, ['--carry', C]).status, 2, '--carry goes with --merge');
+  const one = mergeWith(dir, ['--merge', '2026-10-16', '--carry', C]);
+  assert.equal(one.status, 0, one.stderr);
+  const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8'));
+  assert.deepEqual(agg.arms.map((a) => [a.suite, a.arm, a.carriedFrom || null]), [['V', C, '2026-10-16'], ['V', N, null]], 'round one\'s R arms were not named');
+  assert.equal(agg.date, '2026-11-20 (1 arm; 1 carried from 2026-10-16)');
+});
+
+test('an arm carried once keeps the date it came from when it is merged again', () => {
+  const { dir } = excludedFixture();
+  earlierAggregate(dir);
+  const prev = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-10-16.json'), 'utf8'));
+  prev.arms = prev.arms.map((a) => (a.arm === C ? { ...a, carriedFrom: '2026-09-30' } : a));
+  writeFileSync(join(dir, 'aggregates', '2026-10-16.json'), JSON.stringify(prev));
+  const res = mergeWith(dir, ['--merge', '2026-10-16', '--carry', C]);
+  assert.equal(res.status, 0, res.stderr);
+  const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8'));
+  assert.deepEqual(agg.arms.filter((a) => a.carriedFrom).map((a) => [a.arm, a.carriedFrom]), [[C, '2026-09-30']]);
+});
+
+test('--aggregate refuses a date whose mapping misses an R or V run line filed after it was blinded, naming each arm and its count; a quota line or an excluded call is not looked for', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omelette-evals-late-'));
+  const runs = join(dir, 'runs', '2026-11-20');
+  mkdirSync(runs, { recursive: true });
+  const write = (name, ls) => writeFileSync(join(runs, name), ls.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const first = runLine({});
+  write('R-a.jsonl', [first]);
+  assert.equal(spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--seed', '1'], { encoding: 'utf8', timeout: 5000 }).status, 0);
+  const g = join(dir, 'grading', '2026-11-20');
+  const [blindId] = Object.keys(JSON.parse(readFileSync(join(g, 'mapping.json'), 'utf8')).blinds);
+  writeFileSync(join(g, 'grades.jsonl'), JSON.stringify(ans(blindId, 'q1', 'correct')) + '\n');
+  mkdirSync(join(dir, 'suites', 'R'), { recursive: true });
+  writeFileSync(join(dir, 'suites', 'R', 'key.jsonl'), JSON.stringify({ id: 'q1' }) + '\n');
+  const aggregateCli = () => spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-20', '--dir', dir, '--aggregate'], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(aggregateCli().status, 0);
+  // Filed after the blinding: a second run of the arm, and another arm's two calls, one of them failed.
+  write('R-a.jsonl', [first, runLine({ run: 2 })]);
+  write('V-b.jsonl', [runLine({ suite: 'V', arm: C, taskIds: ['v1'] }), runLine({ suite: 'V', arm: C, taskIds: ['v1'], run: 2, ok: false, answer: null, error: 'invented failure' })]);
+  const late = aggregateCli();
+  assert.equal(late.status, 1);
+  assert.equal(late.stderr, `eval-blind: the mapping of 2026-11-20 holds no entry for run lines filed after it was blinded — R ${first.arm}: 1 line(s); V ${C}: 2 line(s) — the date must be blinded again\n`);
+  // A quota line is no call to grade; a call the session excluded is not looked for, a second line of it included.
+  write('R-a.jsonl', [first, first, runLine({ run: 2, ok: false, answer: null, error: 'RESOURCE_EXHAUSTED: invented', exhausted: true })]);
+  write('V-b.jsonl', []);
+  assert.equal(aggregateCli().status, 1, 'the second line of run 1 is in no entry');
+  mkdirSync(join(dir, 'exclusions'), { recursive: true });
+  writeFileSync(join(dir, 'exclusions', '2026-11-20.jsonl'), JSON.stringify({ suite: 'R', arm: first.arm, run: 1, taskId: 'q1', reason: 'invented' }) + '\n');
+  const ok = aggregateCli();
+  assert.equal(ok.status, 0, ok.stderr);
 });

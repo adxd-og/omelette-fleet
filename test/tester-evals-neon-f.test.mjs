@@ -576,18 +576,18 @@ test('P arms: uneven runs, a call with no check line, the last check per call, a
   assert.deepEqual([h.arm, n.arm], [H, N], 'sorted by arm');
   assert.equal(n.n, 3);
   assert.deepEqual(n.runs.map((r) => [r.run, r.calls]), [[1, 3], [2, 2], [3, 1]]);
-  assert.deepEqual(n.runs[0], { run: 1, calls: 3, green: 1, red: 1, doesNotApply: 0, noDiff: 0, failed: 1, empty: 0, errors: 0, unchecked: 0, linesChanged: 20, wallMs: 1000, tokens: 2, tokensReported: '2 of 2' });
+  assert.deepEqual(n.runs[0], { run: 1, calls: 3, green: 1, greenStar: 0, red: 1, doesNotApply: 0, noDiff: 0, failed: 1, empty: 0, errors: 0, unchecked: 0, overruled: 0, linesChanged: 20, wallMs: 1000, tokens: 2, tokensReported: '2 of 2' });
   assert.equal(n.runs[1].linesChanged, null, 'a diff that did not apply has no size here');
   assert.deepEqual([n.runs[1].doesNotApply, n.runs[1].failed, n.runs[1].empty, n.runs[1].tokensReported], [1, 1, 1, '1 of 1']);
   assert.deepEqual([n.runs[2].unchecked, n.runs[2].calls, n.runs[2].green], [1, 1, 0]);
-  assert.deepEqual(n.total, { calls: 6, green: 1, red: 1, doesNotApply: 1, noDiff: 0, failed: 2, empty: 1, errors: 0, unchecked: 1 });
-  assert.deepEqual(n.byTask.P03, { calls: 2, green: 0, linesChanged: null, goldLines: 9 });
-  assert.deepEqual(n.byTask.P01, { calls: 2, green: 1, linesChanged: 10, goldLines: 9 });
-  assert.deepEqual(n.byTask.P02, { calls: 2, green: 0, linesChanged: 30, goldLines: 9 });
+  assert.deepEqual(n.total, { calls: 6, green: 1, greenStar: 0, red: 1, doesNotApply: 1, noDiff: 0, failed: 2, empty: 1, errors: 0, unchecked: 1, overruled: 0 });
+  assert.deepEqual(n.byTask.P03, { calls: 2, green: 0, greenStar: 0, linesChanged: null, goldLines: 9 });
+  assert.deepEqual(n.byTask.P01, { calls: 2, green: 1, greenStar: 0, linesChanged: 10, goldLines: 9 });
+  assert.deepEqual(n.byTask.P02, { calls: 2, green: 0, greenStar: 0, linesChanged: 30, goldLines: 9 });
   assert.deepEqual(n.taskIds, ['P01', 'P02', 'P03']);
   assert.equal(n.mean.green, 1 / 3);
   assert.equal(n.wallMsMedian, 1000);
-  assert.deepEqual(h.total, { calls: 1, green: 1, red: 0, doesNotApply: 0, noDiff: 0, failed: 0, empty: 0, errors: 0, unchecked: 0 });
+  assert.deepEqual(h.total, { calls: 1, green: 1, greenStar: 0, red: 0, doesNotApply: 0, noDiff: 0, failed: 0, empty: 0, errors: 0, unchecked: 0, overruled: 0 });
   assert.equal(h.runs[0].tokens, 150);
 });
 
@@ -981,7 +981,7 @@ test('P arms: tokens are input plus output when both are numbers, else usage.tot
   const [a] = aggregateP({ runLines: lines, checkLines: checks });
   assert.deepEqual([a.runs[0].tokens, a.runs[0].tokensReported], [(7 + 40) / 2, '2 of 3']);
   assert.deepEqual({ ...a.runs[0], run: undefined, wallMs: undefined, tokens: undefined, tokensReported: undefined }, {
-    run: undefined, calls: 3, green: 1, red: 1, doesNotApply: 0, noDiff: 1, failed: 0, empty: 0, errors: 0, unchecked: 0, linesChanged: 4.5, wallMs: undefined, tokens: undefined, tokensReported: undefined,
+    run: undefined, calls: 3, green: 1, greenStar: 0, red: 1, doesNotApply: 0, noDiff: 1, failed: 0, empty: 0, errors: 0, unchecked: 0, overruled: 0, linesChanged: 4.5, wallMs: undefined, tokens: undefined, tokensReported: undefined,
   });
   assert.deepEqual({ failed: a.runs[1].failed, unchecked: a.runs[1].unchecked, errors: a.runs[1].errors }, { failed: 1, unchecked: 0, errors: 1 });
   assert.equal(a.runs[1].wallMs, 1000, 'a failed call\'s time is no part of the run\'s');
