@@ -1000,13 +1000,42 @@ test('extractDiff on the shapes an answer takes: what the rule gives for each', 
     'a hunk header and no +++ line': ['```diff\n--- a/x.go\n@@ -1 +1 @@\n-a\n+b\n```\n', null],
     'prose that only mentions a header': ['The bug is in --- a/x.go, see below.\n--- a/x.go is the old side,\nand @@ -1 +1 @@ would be its hunk.\n', null],
     'no text at all': [null, null],
-    // The rule's answer where a reader would want another (the coder's report lists these as open questions):
-    'unfenced with prose after it: the prose is in the diff': [`Invented prose.\n${withProse}`, withProse],
-    'a fence indented with its body, as in a numbered list': [`1. Apply this:\n\n   \`\`\`diff\n${indented(FILE_A, 3)}   \`\`\`\n\n2. Run the tests.\n`, null],
+    'unfenced with prose after it: the diff ends before the prose': [`Invented prose.\n${withProse}`, FILE_A],
+    'a fence indented with its body, as in a numbered list': [`1. Apply this:\n\n   \`\`\`diff\n${indented(FILE_A, 3)}   \`\`\`\n\n2. Run the tests.\n`, FILE_A],
+    'a fenced diff beside an unfenced one: the unfenced one is dropped': [`${FILE_B}\n\`\`\`diff\n${FILE_A}\`\`\`\n`, FILE_A],
+    // The rule's answer where a reader would want another (the session reads every `no-diff` answer and re-files one that holds a diff):
     'a fence in a block quote': [`\`\`\`diff\n${FILE_A}\`\`\`\n`.split('\n').map((l) => (l ? `> ${l}` : l)).join('\n'), null],
     'a fence opened on a list item\'s own line': [`- \`\`\`diff\n${indented(FILE_A, 2)}  \`\`\`\n`, null],
   };
   for (const [name, [text, expected]] of Object.entries(cases)) assert.equal(extractDiff(text), expected, name);
+});
+
+test('extractDiff, the rulings after the build: what an indented fence takes off a line, what a fence line may say, where an unfenced diff ends', () => {
+  const head = ['--- a/widget/widget.go', '+++ b/widget/widget.go', '@@ -1,4 +1,4 @@'];
+  const lined = (...lines) => `${lines.join('\n')}\n`;
+  const withContext = lined(...head, ' package widget', ' ', '-old', '+new');
+
+  // (9) A body line loses spaces only, as many as it has and never more than the opening fence stands in.
+  assert.equal(extractDiff(`   \`\`\`diff\n${FILE_A.split('\n').map((l) => (l ? `\t${l}` : l)).join('\n')}   \`\`\`\n`), null, 'a tab is not taken off');
+  assert.equal(extractDiff(lined('   ```diff', ` ${head[0]}`, `  ${head[1]}`, `   ${head[2]}`, '    package widget', '   -old', '+new', '   ```')), lined(...head, ' package widget', '-old', '+new'), 'one, two, three and none');
+  // The rule's answer where a reader would want another: under an indented fence a body written at column 0 loses the blank of its context lines.
+  assert.equal(extractDiff(`  \`\`\`diff\n${withContext}\`\`\`\n`), lined(...head, 'package widget', '', '-old', '+new'));
+
+  // (10) After backticks, not one more backtick; after tildes, anything.
+  assert.equal(extractDiff(`\`\`\`sh \`invented\`\n~~~diff\n${FILE_A}~~~\n`), FILE_A, 'a single backtick in the info string: the line opens nothing');
+  assert.equal(extractDiff(`~~~diff ~~~ \`\`\`invented\`\`\`\n${FILE_A}~~~\nInvented prose.\n`), FILE_A, 'a tilde fence\'s info string holds tildes and backticks');
+
+  // (11) Context lines and the empty lines among diff lines are the diff's; the empty lines after its last line are not.
+  assert.equal(extractDiff(`Invented lead-in.\n${withContext}\nInvented prose.\n`), withContext);
+  assert.equal(extractDiff(lined(...head, ' package widget', '', '', '-old', '+new', '', '', 'Invented prose.')), lined(...head, ' package widget', '', '', '-old', '+new'));
+  // Nothing ends the diff before its first hunk header.
+  const aside = lined('diff --git a/widget/widget.go b/widget/widget.go', 'An invented aside, before the headers.', '', ...head, '-old', '+new');
+  assert.equal(extractDiff(`${aside}Invented prose.\n+++ nothing of a diff\n`), aside);
+  // Unavoidable: prose that opens with `-` or `+` directly after the diff, or after empty lines alone, reads as its lines.
+  assert.equal(extractDiff(`${FILE_A}- an invented bullet\n\n+ another\nInvented prose.\n- a bullet too late\n`), `${FILE_A}- an invented bullet\n\n+ another\n`);
+
+  // (12) Empty lines alone are what a block's end loses: a line of one blank is a context line, an empty line inside stays.
+  assert.equal(extractDiff(`\`\`\`diff\n${lined(...head, ' package widget', '', '-old', '+new', ' ', '', '')}\`\`\`\n`), lined(...head, ' package widget', '', '-old', '+new', ' '));
 });
 
 test('a model\'s diff is counted leniently, whatever its hunk headers declare; the gold\'s stays strict', () => {

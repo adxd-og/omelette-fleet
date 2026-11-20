@@ -461,58 +461,103 @@ function touchedPaths(diffText, { lenient = false } = {}) {
   return [...paths].sort();
 }
 
-/** A code fence's opening line: up to three spaces, then three or more backticks or tildes, then anything (the info string). */
-const FENCE_OPENING = /^ {0,3}(`{3,}|~{3,})/;
-/** A line of fence characters alone, spaces after it allowed: it closes a block opened by as many of the same character, or fewer. */
-const FENCE_ALONE = /^(`+|~+) *$/;
+/**
+ * A code fence's opening line: up to three spaces, three or more backticks or
+ * tildes, then the info string — which, after backticks, holds no backtick:
+ * three backticks, a word, three more and prose is inline code, and opens
+ * nothing. After tildes it holds anything.
+ */
+const FENCE_OPENING = /^( {0,3})(?:(`{3,})[^`]*|(~{3,}).*)$/;
+/** A line of fence characters alone, up to three spaces before it and spaces after it: what may close a block. */
+const FENCE_ALONE = /^( {0,3})(`+|~+) *$/;
 /** True when the lines hold what a unified diff cannot lack: a `+++ ` line and a hunk header. */
 const holdsDiff = (lines) => lines.some((l) => l.startsWith('+++ ')) && lines.some((l) => HUNK_HEADER.test(l));
+/** What a line of a diff opens with, hunk body and header alike (`--- ` and `+++ ` open with `-` and `+`); an empty line is judged by what follows it. */
+const DIFF_LINE = /^(?:[ +\\-]|@@|diff --git|index |new file|deleted file|old mode|new mode|similarity|rename|copy|Binary)/;
+
+/**
+ * The body of every fenced block of an answer's lines, in order. A block
+ * opens at a FENCE_OPENING line and closes at the next FENCE_ALONE line of its
+ * fence character, at least as long and indented no deeper than the opening
+ * line (an answer that ends first ends the block). A fence opened at column 0
+ * is thus closed at column 0 alone — ` ``` `, a context line of a diff over
+ * Markdown, is its body. A fence opened n spaces in (a list item's) takes up
+ * to n leading spaces off every body line: spaces only, never more.
+ */
+function fencedBodies(lines) {
+  const bodies = [];
+  let block = null;
+  for (const line of lines) {
+    if (!block) {
+      const opening = FENCE_OPENING.exec(line);
+      if (opening) block = { fence: opening[2] ?? opening[3], indent: opening[1].length, body: [] };
+      continue;
+    }
+    const alone = FENCE_ALONE.exec(line);
+    if (alone && alone[1].length <= block.indent && alone[2][0] === block.fence[0] && alone[2].length >= block.fence.length) {
+      bodies.push(block.body);
+      block = null;
+      continue;
+    }
+    let taken = 0;
+    while (taken < block.indent && line[taken] === ' ') taken += 1;
+    block.body.push(line.slice(taken));
+  }
+  if (block) bodies.push(block.body);
+  return bodies;
+}
+
+/**
+ * The lines of an answer's unfenced diff, or null: from the first line that
+ * opens one — `diff --git `, or a `--- ` line directly followed by a `+++ `
+ * line — to the last line that can be a diff's. Once a hunk has begun, the
+ * first line that is not empty and is no DIFF_LINE ends the diff, and the
+ * empty lines before it are not the diff's either: an empty line belongs only
+ * where a diff line follows (between two files; a context line that lost its
+ * blank). Prose that opens with `-` or `+` directly after the diff cannot be
+ * told from its lines, and is read as them.
+ */
+function unfencedDiff(lines) {
+  const from = lines.findIndex((l, i) => l.startsWith('diff --git ') || (l.startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ ')));
+  if (from === -1) return null;
+  let end = from;
+  let inHunk = false;
+  for (let i = from; i < lines.length; i++) {
+    if (inHunk && lines[i] === '') continue;
+    if (inHunk && !DIFF_LINE.test(lines[i])) break;
+    if (HUNK_HEADER.test(lines[i])) inHunk = true;
+    end = i + 1;
+  }
+  const diff = lines.slice(from, end);
+  return holdsDiff(diff) ? diff : null;
+}
+
+/** Lines without the empty ones they end with. */
+function withoutEmptyEnd(lines) {
+  let end = lines.length;
+  while (end > 0 && lines[end - 1] === '') end -= 1;
+  return lines.slice(0, end);
+}
 
 /**
  * The diff in a model's answer, or null when it holds none. CRLF is read as
- * LF. Fenced blocks first: a block opens at a FENCE_OPENING line and closes at
- * the next line of that fence character alone, at least as long (an answer
- * that ends first ends the block); a block is a diff when its body holds a
- * `+++ ` line and a hunk header, and when any block is one, the diff is every
- * such block's body, in order. Else the text from the first line that opens a
- * diff — `diff --git `, or a `--- ` line directly followed by a `+++ ` line —
- * to the answer's end, when that holds a `+++ ` line and a hunk header. The
- * diff ends with a line break.
+ * LF. Fenced blocks first (`fencedBodies`): a block is a diff when its body
+ * holds a `+++ ` line and a hunk header, and when any block is one, the diff
+ * is every such block's body, in order, each without the empty lines it ends
+ * with — an unfenced diff beside them is dropped. Else the unfenced diff
+ * (`unfencedDiff`), which ends before the prose after it. The diff ends with
+ * one line break.
  *
- * A body is taken as it is written: nothing is cut from a line, so a block
- * indented with its fence (a list item's) or quoted (`> `) holds no line that
- * opens with `+++ `, and is no diff.
+ * A fence is read where it stands at a line's start, after spaces alone: one
+ * in a block quote (`> `) or on a list marker's own line (`- ` and the fence)
+ * opens nothing, and such an answer holds no diff here.
  */
 export function extractDiff(text) {
   if (typeof text !== 'string') return null;
   const lines = text.replace(/\r\n/g, '\n').split('\n');
-  const bodies = [];
-  let block = null;
-  for (const line of lines) {
-    if (block) {
-      const alone = FENCE_ALONE.exec(line);
-      if (alone && alone[1][0] === block.fence[0] && alone[1].length >= block.fence.length) {
-        bodies.push(block.body);
-        block = null;
-      } else {
-        block.body.push(line);
-      }
-      continue;
-    }
-    const opening = FENCE_OPENING.exec(line);
-    if (opening) block = { fence: opening[1], body: [] };
-  }
-  if (block) bodies.push(block.body);
-  const diffs = bodies.filter(holdsDiff);
-  let found = null;
-  if (diffs.length) {
-    found = diffs.map((body) => body.join('\n')).join('\n');
-  } else {
-    const from = lines.findIndex((l, i) => l.startsWith('diff --git ') || (l.startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ ')));
-    if (from !== -1 && holdsDiff(lines.slice(from))) found = lines.slice(from).join('\n');
-  }
-  if (found === null) return null;
-  return found.endsWith('\n') ? found : `${found}\n`;
+  const fenced = fencedBodies(lines).filter(holdsDiff);
+  const found = fenced.length ? fenced.flatMap(withoutEmptyEnd) : unfencedDiff(lines);
+  return found === null ? null : `${found.join('\n')}\n`;
 }
 
 /** Every file under a directory as [relative path, sha256 of its bytes], sorted; a link by the text it holds, never followed. */
