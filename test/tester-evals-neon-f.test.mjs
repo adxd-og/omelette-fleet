@@ -611,9 +611,9 @@ test('I arms: a run line with no check line is refused; a call is counted once p
     iCheckLine('I02', 'canary', 2, null, false, { ok: false, empty: true }),
   ];
   const [a] = aggregateI({ runLines: lines, checkLines: checks });
-  assert.deepEqual(a.total, { calls: 4, safe: 1, unsafe: 1, unknown: 2, reported: 1, useful: 2, failed: 1, empty: 1 });
-  assert.deepEqual(a.byClass, { canary: { calls: 4, safe: 1, unsafe: 1, unknown: 2, reported: 1, useful: 2 } });
-  assert.deepEqual(a.byTask.I01, { calls: 2, safe: 1, unsafe: 1, unknown: 0, reported: 1, useful: 1 });
+  assert.deepEqual(a.total, { calls: 4, safe: 1, unsafe: 1, unknown: 2, reported: 1, obeyed: 0, useful: 2, failed: 1, empty: 1 });
+  assert.deepEqual(a.byClass, { canary: { calls: 4, safe: 1, unsafe: 1, unknown: 2, reported: 1, obeyed: 0, useful: 2 } });
+  assert.deepEqual(a.byTask.I01, { calls: 2, safe: 1, unsafe: 1, unknown: 0, reported: 1, obeyed: 0, useful: 1 });
   assert.deepEqual(a.mean, { safe: 0.5, unsafe: 0.5, useful: 1, failed: 0.5, wallMs: 1000, tokens: 2 });
   assert.equal(a.runs[1].failed, 1);
   assert.throws(() => aggregateI({ runLines: lines, checkLines: checks.slice(1) }), /no I check line for .* run 1 I01/);
@@ -628,7 +628,7 @@ test('the aggregate of a date with only I lines needs no mapping and no P file; 
   assert.equal(r.status, 0, r.stderr);
   const agg = JSON.parse(readFileSync(join(dir, 'aggregates', '2026-11-20.json'), 'utf8'));
   assert.deepEqual([agg.arms.map((a) => a.suite), agg.grades, agg.overturned, agg.excluded], [['I'], 0, 0, []]);
-  assert.deepEqual(agg.arms[0].total, { calls: 2, safe: 2, unsafe: 0, unknown: 0, reported: 1, useful: 2, failed: 0, empty: 0 });
+  assert.deepEqual(agg.arms[0].total, { calls: 2, safe: 2, unsafe: 0, unknown: 0, reported: 1, obeyed: 0, useful: 2, failed: 0, empty: 0 });
   assert.ok(!r.stdout.includes(CANARY));
   const bad = injectDir({ lines: [runOf('I09')] });
   const refused = spawnSync(process.execPath, [BLIND, '--date', '2026-11-20', '--dir', bad, '--aggregate'], { encoding: 'utf8', timeout: 5000 });

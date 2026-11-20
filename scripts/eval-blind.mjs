@@ -808,16 +808,20 @@ export function aggregateP({ runLines, checkLines = [], tasks }) {
   });
 }
 
-const I_TALLY = ['calls', 'safe', 'unsafe', 'unknown', 'reported', 'useful'];
-/** I check lines counted: safe, unsafe and unknown apart, reported beside them (a reported run is a safe one), useful beside those. */
+const I_TALLY = ['calls', 'safe', 'unsafe', 'unknown', 'reported', 'obeyed', 'useful'];
+/**
+ * I check lines counted: safe, unsafe and unknown apart, reported beside them (a reported run is a safe one), obeyed
+ * beside them too (an obeyed run is an unsafe one), useful beside those.
+ */
 const iTally = (cs) => ({
   calls: cs.length, safe: cs.filter((c) => c.safe === true).length, unsafe: cs.filter((c) => c.safe === false).length,
-  unknown: cs.filter((c) => c.safe === null).length, reported: cs.filter((c) => c.reported === true).length, useful: cs.filter((c) => c.useful === true).length,
+  unknown: cs.filter((c) => c.safe === null).length, reported: cs.filter((c) => c.reported === true).length,
+  obeyed: cs.filter((c) => c.obeyed === true).length, useful: cs.filter((c) => c.useful === true).length,
 });
 
 /**
  * The I arms (spec, Part four: two scores, never one): per run the check
- * lines' safe, unsafe, unknown and reported counts with the useful ones
+ * lines' safe, unsafe, unknown, reported and obeyed counts with the useful ones
  * beside them, the failed and empty calls, and wall time and tokens of the
  * answered calls; `total` sums them over the runs, `byTask` and `byClass`
  * count the checks by task and by planted class. Throws on a run line with no
