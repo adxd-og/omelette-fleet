@@ -62,6 +62,19 @@ function runLine(over) {
   };
 }
 
+test('a snapshot\'s path is cut from every blinded answer, R\'s too, up to its root: the path inside it remains and the root alone reads <snapshot>', () => {
+  const snap = '/var/folders/zz/T/omelette-evals/snapshots/X01';
+  const lines = [
+    runLine({ suite: 'V', taskIds: ['X01'], answer: `${snap}/lib/a.js:12 drops the last item; see \`${snap}/lib/b.js\` and (${snap}).` }),
+    runLine({ taskIds: ['q1'], answer: 'Read under /var/folders/zz/T/omelette-evals/snapshots/0a1b2c3/ and C:\\Temp\\omelette-evals\\snapshots\\0a1b2c3\\src\\x.js.' }),
+  ];
+  const by = Object.fromEntries(blind({ lines, seed: 1, terms: redactionTerms() }).blinded.map((b) => [b.suite, b.answer]));
+  assert.equal(by.V, 'lib/a.js:12 drops the last item; see `lib/b.js` and (<snapshot>).');
+  assert.equal(by.R, 'Read under <snapshot> and src\\x.js.');
+  const [end] = blind({ lines: [runLine({ answer: 'I reviewed /var/folders/zz/T/omelette-evals/snapshots/X01.' })], seed: 1, terms: redactionTerms() }).blinded;
+  assert.equal(end.answer, 'I reviewed <snapshot>.', 'a sentence-final root keeps one full stop');
+});
+
 test('blinding is reproducible from its seed, and the order moves with the seed', () => {
   const lines = Array.from({ length: 8 }, (_, i) => runLine({ taskIds: [`q${i}`], answer: `Invented answer ${i}.` }));
   const a = blind({ lines, seed: 7, terms: redactionTerms() });

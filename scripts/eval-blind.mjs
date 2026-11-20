@@ -26,6 +26,9 @@
  * left next to its version or level collapses with it, so `Gemini 4 Argon`
  * leaves `[model]`, not `[model] 4 [model]`. Partial markers name the unit and
  * its timeout and become `[partial]`. Timings are not carried at all.
+ * Every blinded answer, R's included, has a snapshot's path cut up to and
+ * including its root (`…/omelette-evals/snapshots/<name>/`, the root alone
+ * read as `<snapshot>`), since a cwd arm quotes it and Gemini does not.
  *
  * AGGREGATE joins `grades.jsonl` with the mapping, the keys and each V task's
  * kind (`suites/V/tasks.jsonl`: keyed, recall-only or control) into
@@ -166,6 +169,16 @@ const facts = (l) => ({
 });
 
 /**
+ * A snapshot's path, from its first character up to and including the
+ * snapshot's root directory (`…/omelette-evals/snapshots/<name>/`); `inside` is
+ * the separator when a path inside the snapshot follows it.
+ * A temp path holding a space keeps the part before the space: left as it is.
+ */
+const SNAPSHOT_ROOT = /[^\s"'`<>()[\]{}]*omelette-evals[\\/]snapshots[\\/][A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?(?:(?<inside>[\\/]+)(?=[^\s"'`<>()[\]{}]))?[\\/]*/g;
+/** `text` with every snapshot path cut to the path inside the snapshot, the root alone to `<snapshot>`. */
+const cutSnapshotRoots = (text) => String(text ?? '').replace(SNAPSHOT_ROOT, (...m) => (m.at(-1).inside ? '' : '<snapshot>'));
+
+/**
  * Blind run lines: `{blinded, mapping}`. The answered lines are shuffled with
  * `seed` and numbered in their new order; a failed or empty one goes to
  * `mapping.failed`, marked `empty` (null when its line did not record it).
@@ -183,8 +196,9 @@ export function blind({ lines, seed, terms }) {
   order.forEach((idx, i) => {
     const l = ok[idx];
     const blindId = `b${String(i + 1).padStart(3, '0')}`;
-    blinded.push({ blindId, suite: l.suite, taskIds: l.taskIds, answer: l.suite === 'V' ? redact(l.answer, terms) : l.answer });
-    // R is kept whole: its questions are about models, so masking their names would make the answers ungradable.
+    const answer = cutSnapshotRoots(l.answer);
+    blinded.push({ blindId, suite: l.suite, taskIds: l.taskIds, answer: l.suite === 'V' ? redact(answer, terms) : answer });
+    // R is kept whole but for a snapshot's path: its questions are about models, so masking their names would make the answers ungradable.
     blinds[blindId] = facts(l);
   });
   const failed = lines.filter((l) => !gradable(l)).map((l) => ({ ...facts(l), error: l.error ?? null, empty: emptyOf(l) }));
