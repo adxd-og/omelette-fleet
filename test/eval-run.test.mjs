@@ -476,3 +476,35 @@ test('--task reaches the plan: a dry run with --task q2 plans q2 alone', () => {
   assert.equal(calls.length, 1, r.stdout);
   assert.match(calls[0], /run 1 {2}q2 /);
 });
+
+/** A fake gemini_research server: its first call answers, every later one answers as an empty Claude bucket does. */
+function exhaustingServer(dir, counter) {
+  const p = join(dir, 'exhausting-server.mjs');
+  writeFileSync(p, [
+    'import { appendFileSync, existsSync, readFileSync } from "node:fs";',
+    'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
+    'let buf = ""; process.stdin.setEncoding("utf8");',
+    'process.stdin.on("data", (c) => { buf += c; let nl; while ((nl = buf.indexOf("\\n")) >= 0) { const l = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!l) continue; const m = JSON.parse(l);',
+    '  if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "f", version: "0" } } });',
+    '  else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "gemini_research", description: "d", inputSchema: { type: "object" } }] } });',
+    '  else if (m.id === 3) {',
+    `    const n = existsSync(${JSON.stringify(counter)}) ? readFileSync(${JSON.stringify(counter)}, "utf8").length : 0;`,
+    `    appendFileSync(${JSON.stringify(counter)}, "x");`,
+    '    if (n === 0) send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: "An invented answer." }] } });',
+    '    else send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: "Claude quota exhausted — the invented bucket is empty; try after it resets." }], isError: true } }); } } });',
+  ].join('\n'));
+  return p;
+}
+
+test('an arm stops at its first quota-exhausted call and says how many calls it did not make', async () => {
+  const home = tmp('omelette-evals-home-');
+  const dir = evalsDir({ R: [...R_TASKS, { id: 'q3', prompt: 'Invented question three: which imaginary port?' }] });
+  const counter = join(home, 'calls');
+  const { lines, stopped } = await runArm({
+    suite: 'R', arm: parseArm('gemini:Claude Opus 5.5:high'), runs: 2, dir, out: quiet,
+    serverPath: exhaustingServer(home, counter), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }),
+  });
+  assert.equal(readFileSync(counter, 'utf8'), 'xx', 'two calls made, the second exhausted');
+  assert.deepEqual(lines.map((l) => [l.taskIds[0], l.ok]), [['q1', true], ['q2', false]]);
+  assert.deepEqual(stopped, { after: ['q2'], left: 4 });
+});

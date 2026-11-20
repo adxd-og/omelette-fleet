@@ -365,6 +365,9 @@ const NO_OUTPUT = /produced no output|ended with no answer/i;
 /** A call that ended with no answer text: a blank answer, or a failure the unit reports as no output. */
 export const isEmptyCall = ({ ok, answer, error }) => (ok ? !String(answer ?? '').trim() : NO_OUTPUT.test(String(error ?? '')));
 
+/** A failure that says the arm's quota is spent: every later call of the arm would fail the same way. */
+const EXHAUSTED = /quota exhausted|RESOURCE_EXHAUSTED/i;
+
 /**
  * Run one arm of one suite `runs` times; every call appends its line as soon
  * as it ends. Returns `{file, lines}`. `serverPath` replaces the unit's server
@@ -392,7 +395,8 @@ export async function runArm({
   out(`${suite} ${arm.arm} · ${cli} · ${calls.length} call(s) × ${runs} run(s) → ${file}`);
   const lines = [];
   let unmatched = 0;
-  for (let pass = 0; pass < runs; pass++) {
+  let stopped = null;
+  passes: for (let pass = 0; pass < runs; pass++) {
     for (const [i, call] of calls.entries()) {
       const run = firstOf[i] + pass;
       const before = convDir ? conversationState(convDir) : null;
@@ -429,10 +433,15 @@ export async function runArm({
       appendFileSync(file, JSON.stringify(line) + '\n', { mode: 0o600 });
       lines.push(line);
       out(`  run ${run}  ${call.taskIds.join(',')}  ${ok ? 'ok' : 'FAILED'}  ${(line.wallMs / 1000).toFixed(1)}s`);
+      if (!ok && EXHAUSTED.test(String(error ?? ''))) {
+        stopped = { after: call.taskIds, left: calls.length * runs - lines.length };
+        out(`  stopped: the quota is exhausted after ${call.taskIds.join(',')} — ${stopped.left} call(s) not made`);
+        break passes;
+      }
     }
   }
   if (unmatched) out(`  note: ${unmatched} call(s) had no spool record (is \`results\` off for ${arm.unit}?) — their model, effort and usage are null`);
-  return { file, lines };
+  return { file, lines, stopped };
 }
 
 /** The dry run: the calls each arm would make, by task id and prompt length. Writes and spawns nothing. */
@@ -489,9 +498,9 @@ export async function main(argv = process.argv.slice(2), { out = (l) => console.
     for (const arm of arms) {
       if (values['dry-run']) printPlan({ ...opts, arm });
       else {
-        const { lines } = await runArm({ ...opts, arm });
+        const { lines, stopped } = await runArm({ ...opts, arm });
         const failed = lines.filter((l) => !l.ok).length;
-        out(`  ${lines.length} call(s), ${failed} failed`);
+        out(`  ${lines.length} call(s), ${failed} failed${stopped ? `, ${stopped.left} not made (quota)` : ''}`);
       }
     }
   } catch (e) { err(`eval-run: ${(e && e.message) || e}`); return 1; }
