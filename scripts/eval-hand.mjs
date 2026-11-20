@@ -21,18 +21,19 @@
  * `<D>/runs/<date>/<suite>-<arm>.jsonl` (`<date>` defaulting to today, local):
  * the answer file's text (a P line's answer is the text holding its diff), or
  * the failure. `usage` is `{total}`, the harness's sub-agent token total — not
- * input plus output, which the harness does not report apart. It prints the
- * suite, arm, task, run and file: never the answer.
+ * input plus output, which the harness does not report apart. A P task
+ * without a fresh gold proof is refused, as BRIEF refuses it, and nothing is
+ * filed. It prints the suite, arm, task, run and file: never the answer.
  *
  * PRIVATE IN, PRIVATE OUT: D defaults to `<repo>/.omelette/evals` (ignored by
  * git). This file holds no task text, no key and no answer.
  */
-import { closeSync, fchmodSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
-  appendRunLine, armSlug, assertProven, briefFor, DEFAULT_DIR, isEmptyCall, localDate, nextRunFor, prepareTasks, readTasks, selectTasks,
+  appendRunLine, armSlug, assertProven, briefFor, DEFAULT_DIR, isEmptyCall, localDate, nextRunFor, prepareTasks, readTasks, selectTasks, writePrivate,
 } from './eval-run.mjs';
 
 const USAGE = [
@@ -42,8 +43,11 @@ const USAGE = [
 ].join('\n');
 
 const HAND_SUITES = ['V', 'P'];
-const NATIVE_ARM = /^native:[a-z0-9][a-z0-9-]*$/;
+/** A role is lower-case letters and digits in groups joined by single hyphens: `native:a-` would share `native:a`'s run file. */
+const NATIVE_ARM = /^native:[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_ANSWER_BYTES = 1024 * 1024;
+/** Seven days: the longest wall time a hand-filed call may carry, so that its start is always a date. */
+const MAX_WALL_MS = 7 * 24 * 60 * 60 * 1000;
 /** A task id fit for a file name under `<D>/hand/`: nothing that climbs out of it. */
 const FILE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** A native arm reads its task's code as its cwd, as every arm but Gemini's does. */
@@ -64,11 +68,12 @@ const wholeFrom = (text, min) => (typeof text === 'string' && /^\d+$/.test(text)
 /** What is wrong with `file`'s arguments, as messages: each one a usage error. */
 function fileProblems(v) {
   const p = [];
-  if (!NATIVE_ARM.test(v.arm ?? '')) p.push('--arm must be native:<role>, the role in lower-case letters, digits and "-"');
+  if (!NATIVE_ARM.test(v.arm ?? '')) p.push('--arm must be native:<role>, the role lower-case letters and digits in groups joined by single hyphens');
   if ((v.answer === undefined) === (v.failed === undefined)) p.push('exactly one of --answer FILE and --failed TEXT');
   else if (v.failed !== undefined && !v.failed.trim()) p.push('--failed needs the failure\'s text');
   if (!v.model || !v.model.trim()) p.push('--model ID is required');
-  if (wholeFrom(v['wall-ms'], 0) === null) p.push('--wall-ms must be a whole number of milliseconds, 0 or more');
+  const wallMs = wholeFrom(v['wall-ms'], 0);
+  if (wallMs === null || wallMs > MAX_WALL_MS) p.push(`--wall-ms must be a whole number of milliseconds from 0 to ${MAX_WALL_MS} (seven days)`);
   if (v.tokens !== undefined && wholeFrom(v.tokens, 0) === null) p.push('--tokens must be a whole number, 0 or more');
   if (v.run !== undefined && wholeFrom(v.run, 1) === null) p.push('--run must be a whole number, 1 or more');
   if (v['started-at'] !== undefined && !Number.isFinite(Date.parse(v['started-at']))) p.push('--started-at must be a date and time (ISO 8601)');
@@ -88,18 +93,6 @@ function taskOf(dir, suite, id) {
   return task;
 }
 
-/** `text` to `path`, the operator's alone (0600) before a byte lands, whatever mode a file already there had. */
-function writePrivate(path, text) {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const fd = openSync(path, 'w', 0o600);
-  try {
-    fchmodSync(fd, 0o600);
-    writeFileSync(fd, text);
-  } finally {
-    closeSync(fd);
-  }
-}
-
 /** `brief`: the snapshot and the brief file; returns the lines to print. */
 function cmdBrief({ dir, suite, id, out }) {
   const task = taskOf(dir, suite, id);
@@ -114,6 +107,8 @@ function cmdBrief({ dir, suite, id, out }) {
 /** `file`: one hand-filed run line appended; returns the line to print. */
 function cmdFile({ dir, suite, v, now }) {
   const task = taskOf(dir, suite, v.task);
+  // Brief's gate: a diff filed before its task is proven would make `prove` refuse the task for ever.
+  if (suite === 'P') assertProven({ dir, tasks: [task] });
   const wallMs = wholeFrom(v['wall-ms'], 0);
   const ok = v.answer !== undefined;
   const answer = ok ? readFileSync(v.answer, 'utf8') : null;

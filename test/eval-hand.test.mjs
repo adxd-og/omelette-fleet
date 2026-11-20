@@ -134,6 +134,19 @@ test('brief writes the cwd brief to a private file and prints paths, never the t
   assert.equal(text, briefFor('P', P01));
 });
 
+test('file --suite P meets the gold-proof gate brief meets: no proof, the gate\'s message and nothing filed; a proof, it files', () => {
+  const args = (dir) => ['file', '--suite', 'P', '--arm', 'native:session', '--task', 'P01', '--answer', answerFile(dir, 'a.diff', 'An invented diff.'), '--model', 'm', '--wall-ms', '1', '--date', '2026-11-20', '--dir', dir];
+  const unproven = pDir({ proven: false });
+  const refused = hand(args(unproven));
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.equal(refused.stderr, 'eval-hand: P01 has no fresh gold proof (missing): run node scripts/eval-patch.mjs prove --task P01 first\n');
+  assert.equal(existsSync(join(unproven, 'runs')), false, 'nothing filed');
+  const proven = pDir({ proven: true });
+  const filed = hand(args(proven));
+  assert.equal(filed.status, 0, filed.stderr);
+  assert.deepEqual(readLines(join(proven, 'runs', '2026-11-20', 'P-native-session.jsonl')).map((l) => [l.suite, l.taskIds, l.answer]), [['P', ['P01'], 'An invented diff.']]);
+});
+
 test('a failed hand call is filed failed, and an empty answer empty', () => {
   const dir = evalsDir({ V: [V01] });
   const before = Date.now();
@@ -157,8 +170,11 @@ test('usage errors exit 2 and file nothing; an unknown task exits 1', () => {
   const ok = ['--answer', answer, '--wall-ms', '1000'];
   const refused = [
     ['--arm', 'native:Omelette-Reviewer'], ['--arm', 'codex:gpt-6.1-sol'], ['--arm', 'native:'], ['--arm', 'native:-x'],
+    // A role begins and ends with a letter or digit, its groups joined by single hyphens: `native:a-` and `native:a` share a run file.
+    ['--arm', 'native:a-'], ['--arm', 'native:a--b'],
     ['--failed', 'invented failure'], ['--answer', undefined],
-    ['--model', ''], ['--wall-ms', '-1'], ['--wall-ms', '1.5'], ['--wall-ms', '1e3'], ['--tokens', 'x'], ['--tokens', '-5'], ['--run', '0'],
+    ['--model', ''], ['--wall-ms', '-1'], ['--wall-ms', '1.5'], ['--wall-ms', '1e3'], ['--wall-ms', '604800001'],
+    ['--tokens', 'x'], ['--tokens', '-5'], ['--run', '0'],
     ['--answer', big],
   ];
   for (const [flag, value] of refused) {
@@ -180,4 +196,9 @@ test('usage errors exit 2 and file nothing; an unknown task exits 1', () => {
   assert.equal(unknown.status, 1, unknown.stderr);
   assert.match(unknown.stderr, /no task V09/);
   assert.equal(existsSync(join(dir, 'runs')), false, 'nothing filed');
+  // The bounds that are fine: seven days of wall time, a role of hyphen-joined groups.
+  const week = hand(['file', '--suite', 'V', '--arm', 'native:a1-b2', '--task', 'V01', '--model', 'm', '--date', '2026-11-20', '--dir', dir, '--answer', answer, '--wall-ms', '604800000']);
+  assert.equal(week.status, 0, week.stderr);
+  const [line] = readLines(join(dir, 'runs', '2026-11-20', 'V-native-a1-b2.jsonl'));
+  assert.deepEqual([line.arm, line.wallMs], ['native:a1-b2', 604800000]);
 });
