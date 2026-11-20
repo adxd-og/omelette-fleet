@@ -98,11 +98,38 @@ function sortArms(arms) {
   });
 }
 
-/** A run whose calls all failed: it has no score, and is drawn hollow at the baseline. */
-const failedRun = (r) => r.failed > 0 && (r.correct === null || r.recall === null);
+/** A run with no gradable answer at all (every call failed): it has no score, and is drawn hollow at the baseline. */
+const failedRun = (r) => r.failed > 0 && ['correct', 'found', 'recallOnly', 'control'].every((k) => r[k] === null || r[k] === undefined);
 const FAILED_TITLE = 'failed run';
 
-/** Date, CLI versions and N for the arms one chart draws, the failed runs when there are any, and the arms carried from another date. */
+/** An arm aggregated with `total`'s sums and `incomplete` (eval-blind since this round): its bars are read from `total`; an older one's from its means. */
+const fromTotal = (a) => a.incomplete !== undefined && !!a.total;
+
+/** A run that held every task of its arm: the only kind drawn as a dot. */
+const fullRun = (a, r) => {
+  if (!a.incomplete) return true;
+  const held = a.incomplete.runs.find((x) => x.run === r.run);
+  return !!held && held.tasks === a.incomplete.of;
+};
+
+/**
+ * A count drawn as a bar: the arm's total over the questions it was asked,
+ * times its task count — for an arm of whole passes, the mean of its runs.
+ */
+const countBar = (a, total) => {
+  if (typeof total !== 'number') return null;
+  if (!a.incomplete) return a.n ? total / a.n : null;
+  const asked = a.incomplete.runs.reduce((s, r) => s + r.tasks, 0);
+  return asked ? (total / asked) * a.incomplete.of : null;
+};
+
+/** A run field summed over the arm's runs; null when no run has it. */
+const runSum = (a, k) => (a.runs.some((r) => typeof r[k] === 'number') ? a.runs.reduce((s, r) => s + (typeof r[k] === 'number' ? r[k] : 0), 0) : null);
+
+/**
+ * Date, CLI versions and N for the arms one chart draws, the failed runs when there are any, the arms carried
+ * from another date, and each incomplete arm with its counts.
+ */
 function caption(date, arms) {
   const ns = arms.map((a) => a.n);
   const lo = Math.min(...ns);
@@ -113,7 +140,9 @@ function caption(date, arms) {
   const carried = new Map();
   for (const a of arms) if (a.carriedFrom) carried.set(a.carriedFrom, [...(carried.get(a.carriedFrom) || []), armLabel(a)]);
   const carriedLines = [...carried].map(([d, labels]) => `carried from ${d}, with that round's tasks and CLIs: ${labels.join(', ')}`);
-  return [`${date} · ${n}${hi <= 2 ? ' · runs shown, no intervals' : ''}`, `CLI versions: ${clis.join(', ') || 'not recorded'}`, ...(failed ? [`failed runs: ${failed}`] : []), ...carriedLines];
+  const incompleteLines = arms.filter((a) => a.incomplete).map(({ incomplete: { runs, of, missing }, ...a }) => `${a.suite} ${armLabel(a)}: incomplete, tasks per run ${runs.map((r) => r.tasks).join(', ')} of ${of}` +
+    (missing && missing.length ? `, ${missing.length} of the suite's tasks never run` : ''));
+  return [`${date} · ${n}${hi <= 2 ? ' · runs shown, no intervals' : ''}`, `CLI versions: ${clis.join(', ') || 'not recorded'}`, ...(failed ? [`failed runs: ${failed}`] : []), ...carriedLines, ...incompleteLines];
 }
 
 /** The frame every chart shares: the svg element, its title and desc, the style. */
@@ -165,8 +194,9 @@ const emptyChart = (id, title, date) => frame({
 });
 
 /**
- * Rows of arms, two bars each (a mean per series), a dot per run on each bar.
- * `series`: [{key, name, cls, mean(arm), run(run)}]; values are on one axis.
+ * Rows of arms, two bars each (the arm's value per series), a dot on each bar
+ * per run that held every task of its arm.
+ * `series`: [{key, name, cls, bar(arm), run(run)}]; values are on one axis.
  */
 function barChart({ id, title, subtitle, date, arms, series, axis, fmt, axisTitle, notes = [] }) {
   if (!arms.length) return emptyChart(id, title, date);
@@ -191,16 +221,17 @@ function barChart({ id, title, subtitle, date, arms, series, axis, fmt, axisTitl
   arms.forEach((a, i) => {
     const rowTop = top + i * band;
     body.push(`<text class="t" x="${x0 - 10}" y="${px(rowTop + band / 2 + 4)}" font-size="12" text-anchor="end">${esc(labels[i])}</text>`);
+    const drawn = a.runs.filter((r) => fullRun(a, r));
     series.forEach((s, j) => {
       const y = rowTop + 8 + j * (barH + 2);
-      const m = s.mean(a);
+      const m = s.bar(a);
       const value = m === null ? '' : ` data-value="${r1(m * 1e6) / 1e6}"`;
-      body.push(`<path class="bar ${s.cls}" data-arm="${esc(a.arm)}" data-series="${s.key}"${value} d="${barPath(x0, m === null ? x0 : xOf(m), y, barH)}"><title>${esc(`${armLabel(a)}: ${s.name}, mean ${fmt(m)}`)}</title></path>`);
+      body.push(`<path class="bar ${s.cls}" data-arm="${esc(a.arm)}" data-series="${s.key}"${value} d="${barPath(x0, m === null ? x0 : xOf(m), y, barH)}"><title>${esc(`${armLabel(a)}: ${s.name}, ${fmt(m)}`)}</title></path>`);
       // The value sits past the bar's end and past every run dot on that bar.
-      const runEnds = a.runs.map((r) => s.run(r)).filter((v) => typeof v === 'number').map(xOf);
+      const runEnds = drawn.map((r) => s.run(r)).filter((v) => typeof v === 'number').map(xOf);
       const labelX = Math.max(m === null ? x0 : xOf(m), ...runEnds.map((x) => x + 4));
       body.push(`<text class="t2" x="${px(labelX + 8)}" y="${y + barH - 2}" font-size="11">${esc(fmt(m))}</text>`);
-      for (const r of a.runs) {
+      for (const r of drawn) {
         if (failedRun(r)) {
           body.push(`<circle class="failed-run ${s.cls.replace('c', 'k')}" fill="none" stroke-width="1.5" data-arm="${esc(a.arm)}" data-series="${s.key}" data-run="${r.run}" cx="${px(x0)}" cy="${y + barH / 2}" r="4"><title>${esc(`${armLabel(a)}: ${s.name}, run ${r.run}: ${FAILED_TITLE}`)}</title></circle>`);
           continue;
@@ -215,24 +246,25 @@ function barChart({ id, title, subtitle, date, arms, series, axis, fmt, axisTitl
   const footY = bottom + 58;
   notes.forEach((n, i) => body.push(`<text class="t2" x="16" y="${footY + i * 16}" font-size="12">${esc(n)}</text>`));
   const desc = `${subtitle}. ${caption(date, arms).join('. ')}. ` + arms.map((a) => `${armLabel(a)}${a.batch ? ' (one prompt for all questions)' : ''}: ` +
-    series.map((s) => `${s.name} ${fmt(s.mean(a))} (runs ${a.runs.map((r) => (failedRun(r) ? FAILED_TITLE : fmt(s.run(r)))).join(', ')})`).join('; ')).join('. ') + '.';
+    series.map((s) => `${s.name} ${fmt(s.bar(a))} (runs ${a.runs.filter((r) => fullRun(a, r)).map((r) => (failedRun(r) ? FAILED_TITLE : fmt(s.run(r)))).join(', ') || 'none whole'})`).join('; ')).join('. ') + '.';
   return frame({ id, height: footY + notes.length * 16 + 8, title, desc, body });
 }
 
 function rAccuracy(agg) {
   const arms = sortArms(agg.arms.filter((a) => a.suite === 'R'));
   const tasks = Math.max(0, ...arms.map((a) => a.tasks || 0));
-  const most = Math.max(tasks, ...arms.flatMap((a) => [a.mean.inventedUrls || 0, ...a.runs.map((r) => r.inventedUrls || 0)]));
+  const series = [
+    { key: 'correct', name: `Correct (of ${tasks})`, cls: 'c1', bar: (a) => (fromTotal(a) ? countBar(a, a.total.correct) : a.mean.correct), run: (r) => r.correct },
+    { key: 'invented-urls', name: 'Invented or unreachable URLs', cls: 'c2', bar: (a) => (fromTotal(a) ? countBar(a, runSum(a, 'inventedUrls')) : a.mean.inventedUrls), run: (r) => r.inventedUrls },
+  ];
+  const most = Math.max(tasks, ...arms.flatMap((a) => [series[1].bar(a) || 0, ...a.runs.map((r) => r.inventedUrls || 0)]));
   return barChart({
     id: 'r-accuracy',
     title: 'R: research answers that match the key',
-    subtitle: `Correct answers out of ${tasks} questions, and cited URLs that were unreachable or invented: the bar is the mean, each dot a run`,
+    subtitle: `Correct answers out of ${tasks} questions, and cited URLs that were unreachable or invented: the bar is over every question the arm was asked, a dot a run that asked them all`,
     date: agg.date,
     arms,
-    series: [
-      { key: 'correct', name: `Correct (of ${tasks})`, cls: 'c1', mean: (a) => a.mean.correct, run: (r) => r.correct },
-      { key: 'invented-urls', name: 'Invented or unreachable URLs', cls: 'c2', mean: (a) => a.mean.inventedUrls, run: (r) => r.inventedUrls },
-    ],
+    series,
     axis: countAxis(most),
     fmt: fmtCount,
     axisTitle: 'Count per run',
@@ -247,12 +279,12 @@ function vRecallPrecision(agg) {
   return barChart({
     id: 'v-recall-precision',
     title: 'V: review against a known-defect key',
-    subtitle: `Recall (key defects found, of ${keyItems}) and precision (real findings over all findings): the bar is the mean, each dot a run`,
+    subtitle: `Recall (key defects found, of ${keyItems}) and precision (real findings over all findings): the bar is over every review the arm made, a dot a run that reviewed every task`,
     date: agg.date,
     arms,
     series: [
-      { key: 'recall', name: 'Recall', cls: 'c1', mean: (a) => pct(a.mean.recall), run: (r) => pct(r.recall) },
-      { key: 'precision', name: 'Precision', cls: 'c2', mean: (a) => pct(a.mean.precision), run: (r) => pct(r.precision) },
+      { key: 'recall', name: 'Recall', cls: 'c1', bar: (a) => pct(fromTotal(a) ? a.total.recall : a.mean.recall), run: (r) => pct(r.recall) },
+      { key: 'precision', name: 'Precision', cls: 'c2', bar: (a) => pct(fromTotal(a) ? a.total.precision : a.mean.precision), run: (r) => pct(r.precision) },
     ],
     axis: { max: 100, step: 20 },
     fmt: fmtPct,

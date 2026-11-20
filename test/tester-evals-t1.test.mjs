@@ -270,7 +270,7 @@ test('end to end: a failed call is never put to the grader, is counted failed, a
   assert.deepEqual(dots, arm.runs.filter((r) => r.recall !== null).map((r) => [r.run, r.recall * 100]));
   assert.equal([...svg.matchAll(/<circle class="failed-run[^>]*data-series="recall"/g)].length, 1, 'the failed run is one hollow marker in the recall series');
   const bar = /<path [^>]*data-series="recall"[^>]*data-value="([\d.]+)"/.exec(svg);
-  assert.ok(Math.abs(Number(bar[1]) - arm.mean.recall * 100) < 1e-4);
+  assert.ok(Math.abs(Number(bar[1]) - arm.total.recall * 100) < 1e-4);
   for (const s of Object.values(renderCharts(agg))) assert.ok(!/NaN|undefined|Infinity|null %/.test(s));
 });
 

@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { aggregate } from '../scripts/eval-blind.mjs';
 import { renderCharts } from '../scripts/eval-chart.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -283,6 +284,70 @@ test('carried arms are named in the caption with the date they came from', () =>
   const t = texts(renderCharts({ ...AGG, arms: [carried, AGG.arms[5]] })['v-recall-precision.svg']).join('\n');
   assert.match(t, /carried from 2026-10-16, with that round's tasks and CLIs: GPT-6\.1 Sol · xhigh/);
   assert.doesNotMatch(texts(charts['v-recall-precision.svg']).join('\n'), /carried from/);
+});
+
+// ─── bars from the arm's total; a dot for a run that held every task ─────────
+
+const G = 'gemini:Gemini 4 Neon (High)';
+const at = (suite, run, t, blindId) => [blindId, { suite, arm: G, run, taskIds: [t], unit: 'gemini', model: 'Gemini 4 Neon (High)', effort: 'high', cli: 'agy 9.1.0', wallMs: 1000, usage: null }];
+const answer = (blindId, taskId, grade) => ({ blindId, taskId, item: 'answer', grade });
+const keyLine = (blindId, taskId, keyId, grade) => ({ blindId, taskId, item: 'key', keyId, grade });
+const barOf = (svg, arm, series) => num(elements(svg, 'bar').find((b) => b.attrs['data-arm'] === arm && b.attrs['data-series'] === series).attrs['data-value']);
+const KEYS_RV = { R: [{ id: 'q1' }, { id: 'q2' }, { id: 'q3' }], V: [{ id: 'K1', task: 'V01' }, { id: 'K2', task: 'V01' }, { id: 'K3', task: 'V02' }] };
+
+test('a complete arm\'s bar, read from its total, is where its mean drew it', () => {
+  const blinds = Object.fromEntries([
+    at('R', 1, 'q1', 'r1'), at('R', 1, 'q2', 'r2'), at('R', 1, 'q3', 'r3'), at('R', 2, 'q1', 'r4'), at('R', 2, 'q2', 'r5'), at('R', 2, 'q3', 'r6'),
+    at('V', 1, 'V01', 'v1'), at('V', 1, 'V02', 'v2'), at('V', 2, 'V01', 'v3'), at('V', 2, 'V02', 'v4'),
+  ]);
+  const grades = [
+    answer('r1', 'q1', 'correct'), answer('r2', 'q2', 'correct'), answer('r3', 'q3', 'wrong'),
+    answer('r4', 'q1', 'correct'), answer('r5', 'q2', 'no-answer'), answer('r6', 'q3', 'wrong'),
+    { blindId: 'r1', taskId: 'q1', item: 'url', url: 'https://example.invalid/x', grade: 'unreachable-or-invented' },
+    keyLine('v1', 'V01', 'K1', 'found'), keyLine('v1', 'V01', 'K2', 'not'), keyLine('v2', 'V02', 'K3', 'not'),
+    { blindId: 'v1', taskId: 'V01', item: 'finding', finding: 'x', grade: 'fabricated' },
+    keyLine('v3', 'V01', 'K1', 'found'), keyLine('v3', 'V01', 'K2', 'found'), keyLine('v4', 'V02', 'K3', 'not'),
+  ];
+  const agg = aggregate({ grades, mapping: { date: '2026-11-20', seed: 1, failed: [], blinds }, keys: KEYS_RV });
+  const [r, v] = agg.arms;
+  assert.equal(r.incomplete, null);
+  const out = renderCharts(agg);
+  near(barOf(out['r-accuracy.svg'], G, 'correct'), r.mean.correct, 'R correct');
+  near(barOf(out['r-accuracy.svg'], G, 'invented-urls'), r.mean.inventedUrls, 'R invented URLs');
+  near(barOf(out['v-recall-precision.svg'], G, 'recall'), v.mean.recall * 100, 'V recall');
+  near(barOf(out['v-recall-precision.svg'], G, 'precision'), v.mean.precision * 100, 'V precision');
+});
+
+test('an incomplete arm: its bar is its total over the questions asked, a dot only for a run that held every task, and the caption counts it', () => {
+  const blinds = Object.fromEntries([
+    at('R', 1, 'q1', 'r1'), at('R', 1, 'q2', 'r2'), at('R', 1, 'q3', 'r3'), at('R', 2, 'q1', 'r4'),
+    at('V', 1, 'V01', 'v1'), at('V', 1, 'V02', 'v2'), at('V', 2, 'V01', 'v3'),
+  ]);
+  const grades = [
+    answer('r1', 'q1', 'correct'), answer('r2', 'q2', 'correct'), answer('r3', 'q3', 'wrong'), answer('r4', 'q1', 'correct'),
+    keyLine('v1', 'V01', 'K1', 'found'), keyLine('v1', 'V01', 'K2', 'not'), keyLine('v2', 'V02', 'K3', 'not'),
+    keyLine('v3', 'V01', 'K1', 'found'), keyLine('v3', 'V01', 'K2', 'found'),
+  ];
+  const agg = aggregate({ grades, mapping: { date: '2026-11-20', seed: 1, failed: [], blinds }, keys: KEYS_RV });
+  const out = renderCharts(agg);
+  // R: 3 correct over 4 questions asked, on 3 tasks — not the mean of a 2 and a 1.
+  near(barOf(out['r-accuracy.svg'], G, 'correct'), 2.25, 'R correct');
+  near(barOf(out['v-recall-precision.svg'], G, 'recall'), (3 / 5) * 100, 'V recall');
+  for (const [chart, series, value] of [['r-accuracy.svg', 'correct', 2], ['v-recall-precision.svg', 'recall', (1 / 3) * 100]]) {
+    const dots = elements(out[chart], 'dot').filter((d) => d.attrs['data-series'] === series);
+    assert.deepEqual(dots.map((d) => [d.attrs['data-run'], Math.round(num(d.attrs['data-value']))]), [['1', Math.round(value)]], chart);
+  }
+  const t = texts(out['r-accuracy.svg']);
+  assert.ok(t.includes('R Gemini 4 Neon · High: incomplete, tasks per run 3, 1 of 3'), t.join('\n'));
+  assert.doesNotMatch(t.join('\n'), /each dot a run/);
+});
+
+test('a V run of recall-only tasks has no keyed recall and is no failed run', () => {
+  const arm = vArm('codex:gpt-6.1-sol', { effort: 'xhigh', cli: 'codex 9.2.0', runs: [{ recall: 0.5, precision: 1, failed: 0 }], wallMs: 1000, tokens: 10 });
+  arm.runs.push({ run: 2, found: null, recall: null, findings: null, precision: null, recallOnly: { tasks: 1, bugs: 1, found: 1, findings: 1, plausible: 0, fabricated: 0 }, control: null, ungraded: 0, failed: 1, wallMs: 1000, tokens: 10 });
+  arm.n = 2;
+  const svg = renderCharts({ ...AGG, arms: [arm] })['v-recall-precision.svg'];
+  assert.equal(elements(svg, 'failed-run').length, 0);
 });
 
 test('the effort chart draws Gemini models only, not Claude through agy', () => {
