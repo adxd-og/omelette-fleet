@@ -325,7 +325,10 @@ function treeIn({ dir, rel, under, who }) {
   let st = null;
   try { st = lstatSync(src); } catch { /* reported below */ }
   if (!st || !st.isDirectory()) throw new Error(`tree ${rel} is not a directory under ${dir}`);
-  const fromPlace = relative(realpathSync.native(place), realpathSync.native(src));
+  // The place itself is where it is written: `third-party -> suites` would hand out the keys' own directory.
+  const realPlace = realpathSync.native(place);
+  if (realPlace !== resolve(realpathSync.native(dir), under)) throw new Error(`${place} is reached through a link`);
+  const fromPlace = relative(realPlace, realpathSync.native(src));
   if (fromPlace === '' || fromPlace.startsWith('..') || isAbsolute(fromPlace)) throw new Error(`tree ${rel} leads out of ${place} through a link`);
   return src;
 }
@@ -453,8 +456,9 @@ const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').filter((l) =>
 const V_KINDS = ['keyed', 'recall', 'control'];
 const V_SHOWS = ['file', 'diff'];
 
+/** A file that is itself there: a link named `x.diff` could show an arm any file of the private dir. */
 const isFile = (path) => {
-  try { return statSync(path).isFile(); } catch { return false; }
+  try { return lstatSync(path).isFile(); } catch { return false; }
 };
 
 /**

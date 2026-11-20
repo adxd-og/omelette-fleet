@@ -147,6 +147,11 @@ test('a place is allowlisted: a tree strictly under third-party/, a shown diff a
   const dir = evalsDir({ V: [{ id: 'X01', kind: 'recall', show: 'diff', tree: 'third-party/x01/at-intro', diff: 'suites/V/key.jsonl', prompt: BRIEF }] });
   writeFileSync(join(dir, 'suites', 'V', 'key.jsonl'), '{"id":"XK1","task":"X01"}\n');
   assert.throws(() => readTasks(dir, 'V'), /task X01: .*\.diff/);
+  // A link named `.diff` is no diff file: it would put the key into the brief.
+  const linked = evalsDir({ V: [{ id: 'X01', kind: 'recall', show: 'diff', tree: 'third-party/x01/at-intro', diff: 'suites/V/X01.diff', prompt: BRIEF }] });
+  writeFileSync(join(linked, 'suites', 'V', 'key.jsonl'), '{"id":"XK1","task":"X01"}\n');
+  symlinkSync('key.jsonl', join(linked, 'suites', 'V', 'X01.diff'));
+  assert.throws(() => readTasks(linked, 'V'), /task X01: diff suites\/V\/X01\.diff is not a file/);
 });
 
 test('materializeTree copies only a directory strictly under the place it is given, as the kernel finds it', async () => {
