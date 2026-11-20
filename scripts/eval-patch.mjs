@@ -84,7 +84,12 @@ export const OFFICIAL_IMAGE = /^(?:docker\.io\/library\/)?[a-z0-9]+(?:[._-][a-z0
 /** A step's exit codes that are the harness's, not a test's: the copy, the change, the tests diff, the step name, Docker's own. */
 export const HARNESS_EXITS = [120, 121, 122, 123, 125];
 
-/** The step every container runs, as `/bin/sh /task/run.sh <apply|f2p|p2p>`. */
+/**
+ * The step every container runs, as `/bin/sh /task/run.sh <apply|f2p|p2p>`.
+ * `patch` is the fallback, with a fuzz of 2 (5 would ignore all context) and
+ * no `.orig` left in the tree the tests run in; a restored path gets `./`
+ * before it, so one that opens with `-` is not read as an option.
+ */
 export const RUN_SH = [
   '#!/bin/sh',
   '# omelette-evals suite P: one step in a throwaway container (scripts/eval-patch.mjs).',
@@ -97,7 +102,7 @@ export const RUN_SH = [
   'if [ -f /task/change.diff ]; then',
   '  if git apply --recount --whitespace=nowarn /task/change.diff 2>/tmp/apply.err; then',
   '    method=git',
-  '  elif command -v patch >/dev/null 2>&1 && patch --batch --forward --fuzz=5 -p1 -i /task/change.diff >>/tmp/apply.err 2>&1; then',
+  '  elif command -v patch >/dev/null 2>&1 && patch --batch --forward --fuzz=2 --no-backup-if-mismatch -p1 -i /task/change.diff >>/tmp/apply.err 2>&1; then',
   '    method=patch',
   '  else',
   '    cat /tmp/apply.err >&2',
@@ -109,9 +114,9 @@ export const RUN_SH = [
   'while IFS= read -r f; do',
   '  [ -n "$f" ] || continue',
   '  if [ -e "/task/tree/$f" ]; then',
-  '    mkdir -p "$(dirname "$f")" && cp "/task/tree/$f" "$f" || exit 122',
+  '    mkdir -p "$(dirname "./$f")" && cp "/task/tree/$f" "./$f" || exit 122',
   '  else',
-  '    rm -f "$f" || exit 122',
+  '    rm -f "./$f" || exit 122',
   '  fi',
   'done < /task/test-files',
   'git apply --whitespace=nowarn /task/tests.diff 1>&2 || exit 122',
@@ -413,11 +418,11 @@ export function proofStatus({ dir, task }) {
   return proof.ok === true ? 'ok' : 'failed';
 }
 
-/** One container step's argv: the whole profile. */
+/** One container step's argv: the whole profile. `--memory-swap` equal to `--memory`: alone, `--memory` allows as much swap again. */
 export function dockerRunArgs({ imageId, stage, name, step, uid, gid }) {
   return [
     'run', '--rm', '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--pids-limit', '1024', '--memory', '4g', '--cpus', '2', '--user', `${uid}:${gid}`, '--env', 'HOME=/tmp',
+    '--pids-limit', '1024', '--memory', '4g', '--memory-swap', '4g', '--cpus', '2', '--user', `${uid}:${gid}`, '--env', 'HOME=/tmp',
     '--mount', `type=bind,source=${stage},target=/task,readonly`, '--name', name, '--entrypoint', '/bin/sh',
     imageId, '/task/run.sh', step,
   ];
@@ -597,7 +602,38 @@ async function imageIdOf({ id, docker, env, ref }) {
   return imageId;
 }
 
-const FROM_LINE = /^\s*FROM\s+(?:--\S+\s+)*(\S+)/gim;
+/** A `FROM` line: the image it names and, after `AS`, the stage's name. */
+const FROM_LINE = /^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:[ \t]+AS[ \t]+(\S+))?/gim;
+
+/**
+ * Why building a Dockerfile could fetch an image other than `image`, or null:
+ * a `FROM` naming another one; a `# syntax=` directive (the frontend it names
+ * is an image); a `--from=<x>` flag or a `from=<x>` of a `--mount` whose `<x>`
+ * is neither a stage the file declares (`FROM … AS <x>`, any case) nor the
+ * index of one. Read word by word, whatever instruction the word is in: a
+ * shell command with such a word in it is refused too.
+ */
+function dockerfileProblem(text, image) {
+  const stages = [];
+  let count = 0;
+  for (const [, ref, name] of text.matchAll(FROM_LINE)) {
+    if (ref !== image) return `builds FROM ${ref}, not the task's image`;
+    count += 1;
+    if (name) stages.push(name.toLowerCase());
+  }
+  if (/^[ \t]*#[ \t]*syntax[ \t]*=/im.test(text)) return 'carries a "# syntax=" directive, which fetches the image of another frontend';
+  for (const word of text.split(/\s+/)) {
+    const flag = /^--from=(.*)$/i.exec(word);
+    const mount = /^--mount=(.*)$/i.exec(word);
+    const sources = flag ? [flag[1]] : mount ? mount[1].split(',').filter((o) => /^from=/i.test(o)).map((o) => o.slice('from='.length)) : [];
+    for (const from of sources) {
+      const known = /^\d+$/.test(from) ? Number(from) < count : stages.includes(from.toLowerCase());
+      if (!known) return `takes files from ${JSON.stringify(from)}, which is neither a stage it declares nor the index of one`;
+    }
+  }
+  return null;
+}
+
 /** Text this script did not write, fit for a terminal: without its control characters (C0, DEL, C1). */
 const plain = (text) => String(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
 const lastLine = (text) => plain(String(text || '').trim().split('\n').pop());
@@ -606,15 +642,14 @@ const lastLine = (text) => plain(String(text || '').trim().split('\n').pop());
  * The image a task's steps run, got before any model's diff exists →
  * `{ imageId, built }`. The task's own image is pulled when the daemon does
  * not hold it; with a build directory, an image is built from its Dockerfile,
- * whose every `FROM` must name the task's image (read before docker is
+ * which may fetch no other image (`dockerfileProblem`, read before docker is
  * called). This is the only place the network is used.
  */
 export async function prepareImage({ dir, task, docker, env, out = () => {} }) {
   const paths = taskPaths({ dir, task });
   if (paths.build) {
-    for (const [, ref] of readFileSync(join(paths.build, 'Dockerfile'), 'utf8').matchAll(FROM_LINE)) {
-      if (ref !== task.image) throw new Error(`${task.id}: the Dockerfile builds FROM ${ref}, not the task's image`);
-    }
+    const problem = dockerfileProblem(readFileSync(join(paths.build, 'Dockerfile'), 'utf8'), task.image);
+    if (problem) throw new Error(`${task.id}: the Dockerfile ${problem}`);
   }
   const { id } = task;
   let imageId = await imageIdOf({ id, docker, env, ref: task.image });

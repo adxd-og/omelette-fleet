@@ -172,12 +172,17 @@ test('every container step is the profile: no network, no pull, removed, one rea
   // The whole argv, flag by flag: the fake never enforces one, so nothing else would notice a flag gone.
   assert.deepEqual(dockerRunArgs({ imageId: 'sha256:aa', stage: '/invented/stage', name: 'omelette-evals-1-00000000', step: 'f2p', uid: 501, gid: 20 }), [
     'run', '--rm', '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--pids-limit', '1024', '--memory', '4g', '--cpus', '2', '--user', '501:20', '--env', 'HOME=/tmp',
+    '--pids-limit', '1024', '--memory', '4g', '--memory-swap', '4g', '--cpus', '2', '--user', '501:20', '--env', 'HOME=/tmp',
     '--mount', 'type=bind,source=/invented/stage,target=/task,readonly', '--name', 'omelette-evals-1-00000000', '--entrypoint', '/bin/sh',
     'sha256:aa', '/task/run.sh', 'f2p',
   ]);
   // The in-container half is never executed here either: a changed line of it is a change to the sandbox.
-  assert.equal(sha256(RUN_SH), 'cd98eaa39d2f54e2a26cbf209a58e8da92cc7e54ccf19a67a796f84c3a2d1e74', 'RUN_SH is not the script the plan prints: re-read the profile before moving this digest');
+  assert.equal(sha256(RUN_SH), '02f51da4bf9dd56d3d5ba0623369d600e10f943d47150176b5203b30be1729e4', 'RUN_SH is not the script the plan and the fix round\'s rulings print: re-read the profile before moving this digest');
+  // The lines the fix round ruled, as it printed them: a fuzz of 2 and no `.orig` left in the tree the tests run in; `./` before a restored path, so one that opens with `-` is no option.
+  for (const ruled of [
+    '  elif command -v patch >/dev/null 2>&1 && patch --batch --forward --fuzz=2 --no-backup-if-mismatch -p1 -i /task/change.diff >>/tmp/apply.err 2>&1; then',
+    '  if [ -e "/task/tree/$f" ]; then\n    mkdir -p "$(dirname "./$f")" && cp "/task/tree/$f" "./$f" || exit 122\n  else\n    rm -f "./$f" || exit 122\n  fi',
+  ]) assert.ok(RUN_SH.includes(`\n${ruled}\n`), ruled);
 
   const { dir, task, fake, env } = setup();
   fake.addImage(IMAGE);
@@ -492,6 +497,37 @@ test('a step past its timeout is killed, removed and recorded as timed out', asy
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }
+});
+
+test('a build fetches no image but the task\'s: no syntax directive, no --from or from= that is not a stage of the file', async () => {
+  const stages = `FROM ${IMAGE} AS build\nRUN true\nFROM ${IMAGE}\n`;
+  const refused = {
+    'a syntax directive': [`# syntax=someone/frontend:1\nFROM ${IMAGE}\n`, /^Error: P01: the Dockerfile carries a "# syntax=" directive/],
+    'a syntax directive, spaced and in capitals': [`#  SYNTAX = someone/frontend\nFROM ${IMAGE}\n`, /^Error: P01: the Dockerfile carries a "# syntax=" directive/],
+    'COPY --from an image': [`${stages}COPY --from=someone/tool:1 /a /b\n`, /^Error: P01: the Dockerfile takes files from "someone\/tool:1", /],
+    'ADD --from an image': [`${stages}ADD --from=other /a /b\n`, /^Error: P01: the Dockerfile takes files from "other", /],
+    'RUN --mount from an image': [`${stages}RUN --mount=type=bind,from=other:1,source=/a,target=/b true\n`, /^Error: P01: the Dockerfile takes files from "other:1", /],
+    'RUN --mount, from= first': [`${stages}RUN --mount=from=other,type=bind,target=/b true\n`, /^Error: P01: the Dockerfile takes files from "other", /],
+    'a stage index the file does not have': [`${stages}COPY --from=2 /a /b\n`, /^Error: P01: the Dockerfile takes files from "2", /],
+    'a variable': [`${stages}ARG FROM_IMAGE\nCOPY --from=\${FROM_IMAGE} /a /b\n`, /^Error: P01: the Dockerfile takes files from "\$\{FROM_IMAGE\}", /],
+    'a flag on a continued line': [`${stages}COPY \\\n  --from=other /a /b\n`, /^Error: P01: the Dockerfile takes files from "other", /],
+  };
+  for (const [name, [text, message]] of Object.entries(refused)) {
+    const { dir, task, fake, env } = setup({ task: { build: 'suites/P/P01/build' } });
+    put(dir, 'suites/P/P01/build/Dockerfile', text);
+    await assert.rejects(prepareImage({ dir, task, docker: fake.bin, env, out: quiet }), message, name);
+    assert.deepEqual(fake.log(), [], `${name}: refused before docker is called`);
+  }
+  // A stage by its name in any case or by its index, a mount that takes from one or from nowhere, and prose that only reads alike.
+  const accepted = [
+    '# a comment about syntax', `FROM ${IMAGE} AS Build`, 'RUN echo "copied from the snapshot"', `FROM ${IMAGE}`,
+    'COPY --from=build /a /b', 'COPY --from=0 /a /b', 'ADD --from=1 /a /b',
+    'RUN --mount=type=bind,from=BUILD,source=/a,target=/b --mount=type=cache,target=/c true', '',
+  ].join('\n');
+  const { dir, task, fake, env } = setup({ task: { build: 'suites/P/P01/build' } });
+  fake.addImage(IMAGE);
+  put(dir, 'suites/P/P01/build/Dockerfile', accepted);
+  assert.equal((await prepareImage({ dir, task, docker: fake.bin, env, out: quiet })).built, true);
 });
 
 test('a container that could not be removed is named, with the command that removes it', async () => {
