@@ -368,6 +368,16 @@ export const isEmptyCall = ({ ok, answer, error }) => (ok ? !String(answer ?? ''
 /** A failure that says the arm's quota is spent: every later call of the arm would fail the same way. */
 const EXHAUSTED = /quota exhausted|RESOURCE_EXHAUSTED/i;
 
+/** The write gates an eval never opens: a unit under test runs read-only, whatever the caller's shell exports. */
+export const WRITE_GATES = ['OMELETTE_ALLOW_WRITE', 'ORION_ALLOW_GEMINI_MUTATE', 'OMELETTE_ALLOW_REPRO'];
+
+/** `env` without the write gates: a copy, the caller's object untouched. */
+export function evalEnv(env) {
+  const out = { ...env };
+  for (const k of WRITE_GATES) delete out[k];
+  return out;
+}
+
 /**
  * Run one arm of one suite `runs` times; every call appends its line as soon
  * as it ends. Returns `{file, lines}`. `serverPath` replaces the unit's server
@@ -377,6 +387,7 @@ export async function runArm({
   suite, arm, runs = 1, batch = false, dir = DEFAULT_DIR, repo = ROOT, snapshot, only, env = process.env,
   now = () => new Date(), serverPath, out = (l) => console.log(l),
 }) {
+  env = evalEnv(env);
   const unit = UNITS[arm.unit];
   let tasks = selectTasks(readTasks(dir, suite), only);
   if (suite === 'V') tasks = prepareV(tasks, { arm, dir, repo, snapshot });

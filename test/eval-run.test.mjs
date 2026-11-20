@@ -508,3 +508,27 @@ test('an arm stops at its first quota-exhausted call and says how many calls it 
   assert.deepEqual(lines.map((l) => [l.taskIds[0], l.ok]), [['q1', true], ['q2', false]]);
   assert.deepEqual(stopped, { after: ['q2'], left: 4 });
 });
+
+/** A fake codex_research server that answers with the write gates it was started with. */
+function gateServer(dir) {
+  const p = join(dir, 'gate-server.mjs');
+  writeFileSync(p, [
+    'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
+    'const seen = Object.fromEntries(["OMELETTE_ALLOW_WRITE", "ORION_ALLOW_GEMINI_MUTATE", "OMELETTE_ALLOW_REPRO", "OMELETTE_UPDATE_CHECK"].map((k) => [k, process.env[k] ?? null]));',
+    'let buf = ""; process.stdin.setEncoding("utf8");',
+    'process.stdin.on("data", (c) => { buf += c; let nl; while ((nl = buf.indexOf("\\n")) >= 0) { const l = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!l) continue; const m = JSON.parse(l);',
+    '  if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "f", version: "0" } } });',
+    '  else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "codex_research", description: "d", inputSchema: { type: "object" } }] } });',
+    '  else if (m.id === 3) send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: JSON.stringify(seen) }] } }); } });',
+  ].join('\n'));
+  return p;
+}
+
+test('every eval call runs with the write gates closed, whatever the shell exports', async () => {
+  const home = tmp('omelette-evals-home-');
+  const dir = evalsDir({ R: R_TASKS.slice(0, 1) });
+  const env = baseEnv(home, { CODEX_BIN: fakeCodex(home), OMELETTE_ALLOW_WRITE: 'codex,gemini', ORION_ALLOW_GEMINI_MUTATE: '1', OMELETTE_ALLOW_REPRO: '1' });
+  const { lines } = await runArm({ suite: 'R', arm: parseArm('codex:gpt-6.1-sol'), dir, env, serverPath: gateServer(home), out: quiet });
+  assert.deepEqual(JSON.parse(lines[0].answer), { OMELETTE_ALLOW_WRITE: null, ORION_ALLOW_GEMINI_MUTATE: null, OMELETTE_ALLOW_REPRO: null, OMELETTE_UPDATE_CHECK: '0' });
+  assert.equal(env.OMELETTE_ALLOW_WRITE, 'codex,gemini', 'the caller\'s env is left as it was');
+});
