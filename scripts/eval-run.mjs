@@ -31,17 +31,25 @@
  * the model id the unit reports.
  *
  * THE V SNAPSHOT is `git archive` of the task's commit, extracted with no
- * `.git`. A review runs with it as `cwd`, so it is refused when git can still
- * reach a repository from it: inside the live checkout's tree git walks up to
- * its `.git`, and the later fixes would be one `git log` away.
+ * `.git`, or for a task of another project (`tree`) a fresh copy of its
+ * directory under the private dir, refused when a link in it points out of it.
+ * A review runs with it as `cwd`, so it is refused when git can still reach a
+ * repository from it: inside the live checkout's tree git walks up to its
+ * `.git`, and the later fixes would be one `git log` away. A V task is keyed,
+ * recall-only or a control (run after the others), and shows a file or the
+ * diff of the commit that introduced its bug (`show: "diff"`, every arm gets
+ * it in its brief). Gemini, which has no review tool, gets the shown text in
+ * its brief and no `cwd`.
  *
  * The vendor CLI's `--version` is read once per arm, the way `doctor` reads it
  * (core/spawn.mjs, with the unit's env allowlist and billing scrub).
  */
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync,
+} from 'node:fs';
+import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { callUnitServer } from '../core/client.mjs';
@@ -130,9 +138,30 @@ export function inlineFilePrompt(task) {
   return `${task.prompt}\n\nThe file under review, ${task.file}, as it stood at that commit:\n\n${fence}\n${task.fileText}\n${fence}`;
 }
 
+/** The brief, then the diff of the commit that introduced the bug: what every arm is shown for `show: "diff"`. */
+export function inlineDiffPrompt(task) {
+  const fence = fenceFor(task.diffText);
+  return `${task.prompt}\n\nThe change under review, as a unified diff:\n\n${fence}diff\n${task.diffText}\n${fence}`;
+}
+
+/**
+ * The prompt one task's call sends. V: a shown diff is in every arm's brief; a
+ * shown file is in the brief when `inline` (Gemini), and otherwise read from the cwd.
+ */
+export function briefFor(suite, task, { inline = false } = {}) {
+  switch (suite) {
+    case 'V':
+      if (task.show === 'diff') return inlineDiffPrompt(task);
+      return inline ? inlineFilePrompt(task) : task.prompt;
+    default:
+      throw new Error(`no brief for suite ${suite}`);
+  }
+}
+
 /**
  * The calls one run of an arm makes: `[{taskIds, tool, args}]`, in order. Pure.
- * V tasks arrive with `snapshot` (an absolute path) and, for Gemini, `fileText`.
+ * V tasks arrive with `snapshot` (an absolute path) for a cwd arm, `fileText`
+ * for Gemini, and `diffText` for a task that shows a diff.
  */
 export function planCalls({ suite, arm, tasks, batch = false }) {
   const tool = TOOL_FOR[suite] && TOOL_FOR[suite][arm.unit];
@@ -140,10 +169,11 @@ export function planCalls({ suite, arm, tasks, batch = false }) {
   if (batch && suite !== 'R') throw new Error('--batch is for suite R only: V has one brief per call');
   const base = { model: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) };
   if (batch) return [{ taskIds: tasks.map((t) => t.id), tool, args: { prompt: batchPrompt(tasks), ...base } }];
+  const gemini = arm.unit === 'gemini';
   return tasks.map((t) => {
     if (suite === 'R') return { taskIds: [t.id], tool, args: { prompt: t.prompt, ...base } };
-    if (arm.unit === 'gemini') return { taskIds: [t.id], tool, args: { prompt: inlineFilePrompt(t), ...base } };
-    return { taskIds: [t.id], tool, args: { prompt: t.prompt, ...base, cwd: t.snapshot } };
+    // Gemini V calls keep round one's construction: the shown text inline, no cwd.
+    return { taskIds: [t.id], tool, args: { prompt: briefFor('V', t, { inline: gemini }), ...base, ...(gemini ? {} : { cwd: t.snapshot }) } };
   });
 }
 
@@ -220,6 +250,106 @@ export function ensureSnapshot({ repo = ROOT, commit, path, guard = true }) {
   return path;
 }
 
+/** True for a non-empty relative path that stays inside the directory it is read against. */
+export function isRelativeInside(rel) {
+  return typeof rel === 'string' && rel !== '' && !isAbsolute(rel) && !normalize(rel).startsWith('..');
+}
+
+/** `path` is `root` or under it (both as given: resolve or realpath them alike). */
+const within = (root, path) => {
+  const rel = relative(root, path);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+};
+
+const TREE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Where a tree task's copy lives: under the OS temp dir, outside every work tree, named by the task id. */
+function treeCopyPath(id) {
+  if (!TREE_ID.test(String(id ?? ''))) throw new Error(`task id ${JSON.stringify(id)} cannot name a snapshot directory`);
+  return join(tmpdir(), 'omelette-evals', 'snapshots', id);
+}
+
+/** The first link under `root` that is absolute or resolves outside it, relative to `root`; null when none does. */
+function linkOutOf(root) {
+  const realRoot = realpathSync(root);
+  const walk = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (e.isSymbolicLink()) {
+        const target = readlinkSync(p);
+        if (isAbsolute(target) || !within(root, resolve(d, target))) return relative(root, p);
+        // A link that reaches out through another link: where it really goes, when it goes anywhere.
+        let real = null;
+        try { real = realpathSync(p); } catch { /* dangling: its target, read above, is all there is */ }
+        if (real && !within(realRoot, real)) return relative(root, p);
+      } else if (e.isDirectory()) {
+        const hit = walk(p);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  return walk(root);
+}
+
+/**
+ * A fresh copy of `<dir>/<rel>` (a third-party tree) for task `id`, under the
+ * OS temp dir; any earlier copy is removed first. Links are copied as they are
+ * and refused when one points out of the tree; then no git history may be
+ * reachable from the copy. Returns its path.
+ */
+export function materializeTree({ dir, rel, id }) {
+  const path = treeCopyPath(id);
+  if (!isRelativeInside(rel)) throw new Error(`tree ${JSON.stringify(rel)} is not a relative path inside ${dir}`);
+  const src = resolve(dir, rel);
+  let st = null;
+  try { st = lstatSync(src); } catch { /* reported below */ }
+  if (!st || !st.isDirectory()) throw new Error(`tree ${rel} is not a directory under ${dir}`);
+  rmSync(path, { recursive: true, force: true });
+  const staging = `${path}.tmp-${process.pid}`;
+  rmSync(staging, { recursive: true, force: true });
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  try {
+    cpSync(src, staging, { recursive: true, verbatimSymlinks: true });
+    const out = linkOutOf(staging);
+    if (out) throw new Error(`a link in ${rel} points out of it: ${out}`);
+    assertNoHistory(staging);
+    renameSync(staging, path);
+  } catch (e) {
+    rmSync(staging, { recursive: true, force: true });
+    throw e;
+  }
+  return path;
+}
+
+/**
+ * The directory a cwd arm reviews for a V task: the commit's tree (at
+ * `snapshot` when given) or a fresh copy of the task's tree. `extract: false`
+ * (the dry run) returns the path it would use and makes nothing.
+ */
+export function snapshotFor({ task, dir, repo = ROOT, snapshot, extract = true }) {
+  if (task.tree !== undefined) {
+    if (snapshot) throw new Error('--snapshot is for tasks at a commit of this repository');
+    return extract ? materializeTree({ dir, rel: task.tree, id: task.id }) : treeCopyPath(task.id);
+  }
+  const path = snapshot ? resolve(snapshot) : join(tmpdir(), 'omelette-evals', 'snapshots', task.commit);
+  if (extract) return ensureSnapshot({ repo, commit: task.commit, path });
+  if (existsSync(path)) assertNoHistory(path);
+  return path;
+}
+
+/** `file`'s text under `root`; refused when it, or a link on its way, is outside `root`. */
+function readInside(root, file, id) {
+  let real;
+  let realRoot;
+  try {
+    realRoot = realpathSync(root);
+    real = realpathSync(resolve(root, file));
+  } catch { throw new Error(`task ${id}: no file ${file} under ${root}`); }
+  if (!within(realRoot, real)) throw new Error(`task ${id}: file ${file} is outside ${root}`);
+  return readFileSync(real, 'utf8');
+}
+
 /**
  * The spool record of the call a server with `pid` made with `tool`, started
  * no earlier than `sinceMs` (a second of slack for clock rounding): `{resultId,
@@ -279,17 +409,73 @@ const readJsonl = (path) => readFileSync(path, 'utf8').split('\n').filter((l) =>
   try { return JSON.parse(l); } catch (e) { throw new Error(`${path}:${i + 1}: not JSON (${e.message})`); }
 });
 
-/** The suite's tasks; each needs an id and a prompt, and a V task a commit and a file. */
+const V_KINDS = ['keyed', 'recall', 'control'];
+const V_SHOWS = ['file', 'diff'];
+
+const isFile = (path) => {
+  try { return statSync(path).isFile(); } catch { return false; }
+};
+
+/**
+ * What is wrong with one task line of `suite`, as messages (none: it is
+ * sound). `all` is every line of the suite's file, `dir` the private dir.
+ */
+function taskProblems(suite, task, all, dir) {
+  if (!task || typeof task !== 'object' || Array.isArray(task)) return ['not a JSON object'];
+  const own = typeof task.id !== 'string' || !task.id || typeof task.prompt !== 'string' || !task.prompt ? ['needs an id and a prompt'] : [];
+  switch (suite) {
+    case 'R':
+      return own;
+    case 'V': {
+      const kind = task.kind ?? 'keyed';
+      const show = task.show ?? 'file';
+      if (!V_KINDS.includes(kind)) own.push(`kind ${JSON.stringify(task.kind)} is not one of ${V_KINDS.join(', ')}`);
+      if (!V_SHOWS.includes(show)) own.push(`show ${JSON.stringify(task.show)} is not one of ${V_SHOWS.join(', ')}`);
+      const hasCommit = task.commit !== undefined;
+      if (hasCommit === (task.tree !== undefined)) {
+        own.push(hasCommit ? 'names a commit and a tree: exactly one says where its code is' : 'needs a commit of this repository or a tree under the private dir');
+      } else if (hasCommit && !COMMIT_RE.test(String(task.commit))) own.push(`commit ${JSON.stringify(task.commit)} is not a commit id`);
+      else if (!hasCommit && !isRelativeInside(task.tree)) own.push(`tree ${JSON.stringify(task.tree)} is not a relative path inside the private dir`);
+      if (show === 'file' && !isRelativeInside(task.file)) own.push('shows a file, and needs "file": a relative path inside its code');
+      if (show === 'diff') {
+        if (!isRelativeInside(task.diff)) own.push('shows a diff, and needs "diff": a relative path inside the private dir');
+        else if (!isFile(resolve(dir, task.diff))) own.push(`diff ${task.diff} is not a file under ${dir}`);
+      }
+      if (kind === 'control') {
+        const of = typeof task.of === 'string' && task.of ? all.find((t) => t && t.id === task.of) : undefined;
+        if (typeof task.of !== 'string' || !task.of) own.push('a control needs "of": the recall task it is the control of');
+        else if (!of) own.push(`"of" names ${task.of}, and the suite has no such task`);
+        else if ((of.kind ?? 'keyed') !== 'recall') own.push(`"of" names ${task.of}, a ${of.kind ?? 'keyed'} task: a control is the control of a recall task`);
+        else if (task.prompt !== of.prompt) own.push(`its prompt is not word for word ${task.of}'s: a control's brief is its task's`);
+      }
+      return own;
+    }
+    default:
+      return [`suite ${suite} has no task rules`];
+  }
+}
+
+/** The suite's tasks, every line checked (see taskProblems); ids are unique per suite. */
 export function readTasks(dir, suite) {
   const path = join(dir, 'suites', suite, 'tasks.jsonl');
   if (!existsSync(path)) throw new Error(`no suite at ${path}`);
   const tasks = readJsonl(path);
-  for (const t of tasks) {
-    if (!t || typeof t.id !== 'string' || !t.id || typeof t.prompt !== 'string' || !t.prompt) throw new Error(`${path}: every task needs an id and a prompt`);
-    if (suite === 'V' && (typeof t.commit !== 'string' || typeof t.file !== 'string')) throw new Error(`${path}: task ${t.id} needs a commit and a file`);
-  }
   if (!tasks.length) throw new Error(`${path} holds no task`);
+  const seen = new Set();
+  tasks.forEach((t, i) => {
+    const problems = taskProblems(suite, t, tasks, dir);
+    const id = t && typeof t.id === 'string' && t.id ? t.id : `#${i + 1}`;
+    if (seen.has(id)) problems.push('a second task with this id: ids are unique per suite');
+    if (problems.length) throw new Error(`${path}: task ${id}: ${problems.join('; ')}`);
+    seen.add(id);
+  });
   return tasks;
+}
+
+/** The order an arm runs V tasks in: the keyed and recall tasks as the file has them, then the controls. */
+export function orderTasks(tasks) {
+  const control = (t) => t.kind === 'control';
+  return [...tasks.filter((t) => !control(t)), ...tasks.filter(control)];
 }
 
 /** The first run number this task (or batch of tasks) has not used yet in the arm's file. */
@@ -313,29 +499,36 @@ export function selectTasks(tasks, ids) {
 }
 
 /**
- * V tasks with their snapshot (and, for Gemini, the file's text). A review's
- * snapshot is guarded; Gemini only has the file read out of it. `extract:
- * false` (the dry run) reads what is there and makes nothing.
+ * The suite's tasks made ready for one arm's calls. V: the controls last; a
+ * cwd arm gets the directory it reviews (`snapshot`, guarded); Gemini gets the
+ * shown file's text (`fileText`), read out of the commit's snapshot or straight
+ * from the private dir, nothing copied; every arm gets a shown diff's text
+ * (`diffText`). `extract: false` (the dry run) reads what is there and makes nothing.
  */
-function prepareV(tasks, { arm, dir, repo, snapshot, extract = true }) {
-  const commits = new Set(tasks.map((t) => t.commit));
-  if (snapshot && commits.size > 1) throw new Error('--snapshot names one tree, and these tasks are at more than one commit');
-  const asCwd = arm.unit !== 'gemini';
-  return tasks.map((t) => {
-    // Outside every work tree by default: under the private dir, git would walk up to the live .git and its later fixes.
-    const path = snapshot ? resolve(snapshot) : join(tmpdir(), 'omelette-evals', 'snapshots', t.commit);
-    const present = existsSync(path);
-    if (extract) ensureSnapshot({ repo, commit: t.commit, path, guard: asCwd });
-    else if (present && asCwd) assertNoHistory(path);
-    let fileText = null;
-    if (arm.unit === 'gemini' && (extract || present)) {
-      const file = resolve(path, t.file);
-      const rel = relative(path, file);
-      if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error(`task ${t.id}: file ${t.file} is outside the snapshot`);
-      fileText = readFileSync(file, 'utf8');
+function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract = true }) {
+  switch (suite) {
+    case 'V': {
+      if (snapshot && tasks.some((t) => t.tree !== undefined)) throw new Error('--snapshot is for tasks at a commit of this repository');
+      if (snapshot && new Set(tasks.map((t) => t.commit)).size > 1) throw new Error('--snapshot names one tree, and these tasks are at more than one commit');
+      const asCwd = arm.unit !== 'gemini';
+      return orderTasks(tasks).map((t) => {
+        const diffText = t.show === 'diff' ? readFileSync(resolve(dir, t.diff), 'utf8') : null;
+        if (asCwd) {
+          const path = snapshotFor({ task: t, dir, repo, snapshot, extract });
+          return { ...t, snapshot: path, snapshotPresent: existsSync(path), fileText: null, diffText };
+        }
+        if (t.show === 'diff') return { ...t, snapshot: null, snapshotPresent: false, fileText: null, diffText };
+        if (t.tree !== undefined) return { ...t, snapshot: null, snapshotPresent: false, fileText: readInside(resolve(dir, t.tree), t.file, t.id), diffText };
+        // Outside every work tree by default: under the private dir, git would walk up to the live .git and its later fixes.
+        const path = snapshot ? resolve(snapshot) : join(tmpdir(), 'omelette-evals', 'snapshots', t.commit);
+        const present = existsSync(path);
+        if (extract) ensureSnapshot({ repo, commit: t.commit, path, guard: false });
+        return { ...t, snapshot: path, snapshotPresent: present, fileText: extract || present ? readInside(path, t.file, t.id) : null, diffText };
+      });
     }
-    return { ...t, snapshot: path, snapshotPresent: present, fileText };
-  });
+    default:
+      return tasks;
+  }
 }
 
 /** agy's local conversation store: one SQLite file per conversation, named by its id (seen 2026-11-19). */
@@ -392,8 +585,7 @@ export async function runArm({
 }) {
   env = evalEnv(env);
   const unit = UNITS[arm.unit];
-  let tasks = selectTasks(readTasks(dir, suite), only);
-  if (suite === 'V') tasks = prepareV(tasks, { arm, dir, repo, snapshot });
+  const tasks = prepareTasks(suite, selectTasks(readTasks(dir, suite), only), { arm, dir, repo, snapshot });
   const calls = planCalls({ suite, arm, tasks, batch });
   const file = join(dir, 'runs', localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -460,14 +652,16 @@ export async function runArm({
 
 /** The dry run: the calls each arm would make, by task id and prompt length. Writes and spawns nothing. */
 function printPlan({ suite, arm, runs, batch, dir, repo, snapshot, only, now, out }) {
-  let tasks = selectTasks(readTasks(dir, suite), only);
-  if (suite === 'V') tasks = prepareV(tasks, { arm, dir, repo, snapshot, extract: false });
-  const pending = suite === 'V' && arm.unit === 'gemini' && tasks.some((t) => t.fileText === null);
-  const calls = planCalls({ suite, arm, tasks: tasks.map((t) => (t.fileText === null ? { ...t, fileText: '' } : t)), batch });
+  const tasks = prepareTasks(suite, selectTasks(readTasks(dir, suite), only), { arm, dir, repo, snapshot, extract: false });
+  // A Gemini file brief whose commit snapshot is not extracted yet: its length is the brief's alone.
+  const pending = new Set(tasks.filter((t) => suite === 'V' && arm.unit === 'gemini' && t.show !== 'diff' && t.fileText === null).map((t) => t.id));
+  const calls = planCalls({ suite, arm, tasks: tasks.map((t) => (pending.has(t.id) ? { ...t, fileText: '' } : t)), batch });
   const file = join(dir, 'runs', localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
   const firstOf = calls.map((c) => nextRunFor(file, c.taskIds));
   out(`${suite} ${arm.arm} → ${file} (the CLI version is read when it runs)`);
   for (const t of suite === 'V' ? tasks : []) {
+    if (!t.snapshot) continue;
+    if (t.tree !== undefined) { out(`  snapshot ${t.snapshot} (a fresh copy of ${t.tree} when it runs)`); continue; }
     const reached = !t.snapshotPresent && arm.unit !== 'gemini' ? reachableGitDir(nearestExisting(t.snapshot)) : null;
     out(`  snapshot ${t.snapshot} ${t.snapshotPresent ? '(present)' : `(absent: would be extracted from ${t.commit})`}` +
       (reached ? ` — would be REFUSED: git reaches ${reached} from there; pass --snapshot outside every git work tree` : ''));
@@ -476,7 +670,7 @@ function printPlan({ suite, arm, runs, batch, dir, repo, snapshot, only, now, ou
     for (const [i, c] of calls.entries()) {
       const { prompt, ...rest } = c.args;
       const opts = Object.entries(rest).map(([k, v]) => `${k}=${v}`).join('  ');
-      out(`  run ${firstOf[i] + pass}  ${c.taskIds.join(',')}  ${c.tool}  ${opts}  prompt ${prompt.length} chars${pending ? ' + the file\'s text' : ''}`);
+      out(`  run ${firstOf[i] + pass}  ${c.taskIds.join(',')}  ${c.tool}  ${opts}  prompt ${prompt.length} chars${pending.has(c.taskIds[0]) ? ' + the file\'s text' : ''}`);
     }
   }
 }
