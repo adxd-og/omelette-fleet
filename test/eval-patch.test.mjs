@@ -10,7 +10,7 @@ import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CALL_BOUNDS_S, dockerRunArgs, linesChanged, main, makeStage, prepareImage, proofInputs, proofStatus, prove, pTaskProblems, readPTasks, RUN_SH, runStep, testFiles,
@@ -336,6 +336,142 @@ test('testFiles and linesChanged read headers, not removed lines that look like 
   assert.throws(() => testFiles('--- "a/notes/na me.txt"\n+++ "b/notes/na me.txt"\n'), /a quoted path in the tests diff/);
 });
 
+test('a hunk is as long as its header says: a removed "-- x" before an added "++ y" is its body, not a file header', () => {
+  const diff = [
+    '--- a/notes/a.sql',
+    '+++ b/notes/a.sql',
+    '@@ -1,3 +1,3 @@',
+    ' select 1;',
+    '--- invented/old.sql',
+    '+++ invented/new.sql',
+    ' select 2;',
+    // No `diff --git` line: the hunk above is over by its counts, so this pair is a header.
+    '--- a/notes/b.sql',
+    '+++ b/notes/b.sql',
+    '@@ -5 +5 @@',
+    '--- /invented/absolute',
+    '+++ ../invented/up',
+    '',
+  ].join('\n');
+  assert.deepEqual(testFiles(diff), ['notes/a.sql', 'notes/b.sql']);
+  assert.equal(linesChanged(diff), 4);
+  // A CRLF diff: the carriage return is no part of a path.
+  assert.deepEqual(testFiles(diff.replaceAll('\n', '\r\n')), ['notes/a.sql', 'notes/b.sql']);
+  assert.equal(linesChanged(diff.replaceAll('\n', '\r\n')), 4);
+  // A line the hunk has no room for ends it: no new line is left for `+b`, and `-c` is outside.
+  assert.equal(linesChanged('@@ -1,2 +1,0 @@\n-a\n+b\n-c\n'), 1);
+});
+
+test('testFiles refuses a path that is absolute or climbs: run.sh would copy or remove outside its work tree', () => {
+  const pair = (old, now) => `--- ${old}\n+++ ${now}\n@@ -1 +1 @@\n-a\n+b\n`;
+  for (const [old, now, named] of [
+    ['/invented/abs.go', 'b/x.go', '/invented/abs.go'], ['a/x.go', '/invented/abs.go', '/invented/abs.go'], ['a/../x.go', 'b/x.go', 'a/../x.go'],
+    ['a/x.go', '../x.go', '../x.go'], ['a/dir/../../x.go', 'b/x.go', 'a/dir/../../x.go'], ['a//invented/abs.go', 'b/x.go', 'a//invented/abs.go'], ['a/x.go', 'b/dir/..', 'b/dir/..'],
+  ]) {
+    assert.throws(() => testFiles(pair(old, now)), (e) => e.message.includes(JSON.stringify(named)) && /absolute or holds a "\.\." segment/.test(e.message), `${old} ${now}`);
+  }
+  assert.deepEqual(testFiles(pair('a/-x.go', 'b/..x/y...go')), ['-x.go', '..x/y...go'], 'a dash or dots in a name are a name');
+  assert.deepEqual(testFiles(pair('/dev/null', 'b/new.go')), ['new.go']);
+});
+
+test('a change naming a path outside the tree is refused on the host, before a stage exists', async () => {
+  const { dir, task, fake, env } = setup();
+  const hunk = '@@ -1 +1 @@\n-a\n+b\n';
+  const file = `--- a/x.go\n+++ b/x.go\n${hunk}`;
+  const unsafe = {
+    'an absolute old side': `--- /invented/abs\n+++ b/x.go\n${hunk}`,
+    'an absolute new side': `--- a/x.go\n+++ /invented/abs\n${hunk}`,
+    'a climb behind the prefix': `--- a/../x.go\n+++ b/x.go\n${hunk}`,
+    'a climb in the middle': `--- a/x.go\n+++ b/dir/../../x.go\n${hunk}`,
+    'an absolute path behind the prefix': `--- a//invented/abs\n+++ b/x.go\n${hunk}`,
+    'a CRLF header': `--- a/x.go\r\n+++ ../x.go\r\n@@ -1 +1 @@\r\n-a\r\n+b\r\n`,
+    'a quoted path, its dots as escapes': `--- "a/\\056\\056/x.go"\n+++ "b/x.go"\n${hunk}`,
+    'a quoted path with no end': `--- "a/x.go\n+++ b/x.go\n${hunk}`,
+    'diff --git, the first name': `diff --git a/../x.go b/x.go\n${file}`,
+    'diff --git, the second name': `diff --git a/x.go /invented/abs\n${file}`,
+    'diff --git, quoted': `diff --git "a/\\056./x.go" "b/x.go"\n${file}`,
+    'rename from': `diff --git a/x.go b/y.go\nrename from ../x.go\nrename to y.go\n`,
+    'rename to': `diff --git a/x.go b/y.go\nrename from x.go\nrename to /invented/abs\n`,
+    'copy from': `diff --git a/x.go b/y.go\ncopy from dir/../../x.go\ncopy to y.go\n`,
+    'copy to': `diff --git a/x.go b/y.go\ncopy from x.go\ncopy to "\\057invented\\057abs"\n`,
+    'Index:': `Index: ../x.go\n${file}`,
+    'a header after a hunk that its counts ended': `${file}--- /invented/abs\n+++ /invented/abs\n${hunk}`,
+    'a header where the hunk has no old line left to remove': `--- a/x.go\n+++ b/x.go\n@@ -1,0 +1,9 @@\n--- /invented/abs\n+++ /invented/abs\n${hunk}`,
+  };
+  const safe = {
+    'the gold': GOLD,
+    'a new file': `--- /dev/null\n+++ b/new.go\n@@ -0,0 +1 @@\n+a\n`,
+    'a hunk whose body reads like a header': `--- a/x.sql\n+++ b/x.sql\n@@ -1,2 +1,2 @@\n select 1;\n--- /invented/abs\n+++ ../invented/up\n`,
+    'dots and a dash in names': `diff --git a/-x.go b/..x/y...go\nrename from -x.go\nrename to ..x/y...go\n`,
+    'a quoted name': `--- "a/na\\303\\257ve.go"\n+++ "b/na\\303\\257ve.go"\n${hunk}`,
+  };
+  const mine = tmp('omelette-evals-unsafe-');
+  const was = process.env.TMPDIR;
+  process.env.TMPDIR = mine;
+  try {
+    for (const [name, change] of Object.entries(unsafe)) {
+      assert.throws(() => makeStage({ dir, task, change }), (e) => e.code === 'UNSAFE_PATH' && /^P01: the change names a path that is absolute or holds a "\.\." segment: "/.test(e.message), name);
+      assert.deepEqual(readdirSync(mine), [], `${name}: no stage was made`);
+    }
+    for (const [name, change] of Object.entries(safe)) {
+      const stage = makeStage({ dir, task, change });
+      assert.equal(readFileSync(join(stage, 'change.diff'), 'utf8'), change, name);
+      rmSync(stage, { recursive: true, force: true });
+    }
+  } finally {
+    if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was;
+  }
+
+  // A gold with such a path fails its proof with that message, and so does a tests diff: no docker call for either.
+  writeFileSync(join(dir, P01.gold), unsafe['a climb behind the prefix']);
+  await assert.rejects(prove({ dir, task, docker: fake.bin, env, reps: 1, out: quiet }), (e) => e.code === 'UNSAFE_PATH' && /^P01: the change names a path .*"a\/\.\.\/x\.go"$/.test(e.message));
+  writeFileSync(join(dir, P01.gold), GOLD);
+  writeFileSync(join(dir, P01.tests), unsafe['an absolute new side']);
+  await assert.rejects(prove({ dir, task, docker: fake.bin, env, reps: 1, out: quiet }), /^Error: P01: a path in the tests diff that is absolute or holds a "\.\." segment: "\/invented\/abs"$/);
+  assert.deepEqual(fake.log(), []);
+  assert.equal(existsSync(join(dir, 'checks')), false);
+});
+
+test('what a failed pull or build printed reaches the terminal without its control characters', async () => {
+  for (const failing of ['pull', 'build']) {
+    const { dir, task, fake, env } = setup({ task: failing === 'build' ? { build: 'suites/P/P01/build' } : {} });
+    put(dir, 'suites/P/P01/build/Dockerfile', `FROM ${IMAGE}\n`);
+    if (failing === 'build') fake.addImage(IMAGE);
+    const loud = join(env.HOME, 'docker-loud');
+    writeFileSync(loud, `#!${process.execPath}
+if (process.argv[2] === ${JSON.stringify(failing)}) {
+  process.stderr.write('an earlier line\\n\\u001b[2J\\u001b]0;invented title\\u0007denied:\\t\\u009b31minvented\\u007f\\r\\n');
+  process.exit(1);
+}
+const r = require('child_process').spawnSync(${JSON.stringify(fake.bin)}, process.argv.slice(2), { stdio: 'inherit', timeout: 4000 });
+process.exit(r.status);
+`);
+    chmodSync(loud, 0o755);
+    await assert.rejects(prepareImage({ dir, task, docker: loud, env, out: quiet }), (e) => {
+      assert.equal(e.message, `P01: docker ${failing} failed (exit 1): [2J]0;invented titledenied:31minvented`);
+      return true;
+    });
+  }
+
+  // The word an apply step prints is printed too, and kept in the proof.
+  const { dir, task, fake, env } = setup();
+  fake.addImage(IMAGE);
+  const coloured = join(env.HOME, 'docker-coloured');
+  writeFileSync(coloured, `#!${process.execPath}
+if (process.argv[2] === 'run' && process.argv[process.argv.length - 1] === 'apply') {
+  process.stdout.write('applied-by \\u001b[31mgit\\u0007\\n');
+  process.exit(0);
+}
+const r = require('child_process').spawnSync(${JSON.stringify(fake.bin)}, process.argv.slice(2), { stdio: 'inherit', timeout: 4000 });
+process.exit(r.status);
+`);
+  chmodSync(coloured, 0o755);
+  const printed = [];
+  const proof = await prove({ dir, task, docker: coloured, env, reps: 1, out: (l) => printed.push(l) });
+  assert.deepEqual([proof.ok, proof.reps[0].gold.apply.method], [true, '[31mgit']);
+  assert.ok(printed.some((l) => l.includes('gold applies ([31mgit)')), printed.join('\n'));
+});
+
 test('a step past its timeout is killed, removed and recorded as timed out', async () => {
   const { dir, task, fake, env } = setup();
   fake.addImage(IMAGE);
@@ -637,14 +773,22 @@ test('a stage holds the task\'s tree and its own files: the gold only as a gold 
 test('a stage path a --mount would misread is refused', () => {
   const { dir, task } = pDir();
   const was = process.env.TMPDIR;
+  // Each odd directory under a root of its own, all made before TMPDIR moves: no path holds another's character.
+  const odd = ['a,b', 'a=b', 'a"b', 'a\nb', 'a\rb'].map((name) => {
+    const place = join(tmp('omelette-evals-odd-'), name);
+    mkdirSync(place);
+    return place;
+  });
+  const sound = tmp('omelette-evals-odd-');
   try {
-    for (const name of ['a,b', 'a=b']) {
-      const odd = join(tmp('omelette-evals-odd-'), name);
-      mkdirSync(odd);
-      process.env.TMPDIR = odd;
-      assert.throws(() => makeStage({ dir, task, change: null }), /holds "," or "="/);
-      assert.deepEqual(readdirSync(odd), [], 'no stage is left behind');
+    for (const place of [...odd, relative(process.cwd(), sound)]) {
+      process.env.TMPDIR = place;
+      assert.throws(() => makeStage({ dir, task, change: null }), /holds "," or "="/, JSON.stringify(place));
+      assert.deepEqual(readdirSync(place), [], `${JSON.stringify(place)}: no stage is left behind`);
     }
+    // The same root, written absolute, is a stage's place.
+    process.env.TMPDIR = sound;
+    rmSync(makeStage({ dir, task, change: null }), { recursive: true, force: true });
   } finally {
     if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was;
   }

@@ -26,6 +26,13 @@
  * is: in the container it resolves against the container's own files and the
  * stage, so it reaches nothing of this machine but the stage.
  *
+ * A DIFF IS TEXT NOBODY VOUCHES FOR, and is read as such before a stage
+ * exists: a change (the gold, later a model's diff) whose headers name a path
+ * that is absolute or climbs with `..` is refused on the host (`UNSAFE_PATH`)
+ * — git refuses such a path, the `patch` an image falls back to may not — and
+ * so is a tests diff that would have `RUN_SH` restore a file outside its work
+ * tree.
+ *
  * WHERE A TASK'S FILES MAY BE. The tree sits strictly under `third-party/`,
  * the gold, the tests diff and a build directory strictly under `suites/P/`,
  * as written and as the kernel resolves them (`realpathSync.native`): a tree
@@ -257,35 +264,111 @@ function taskPaths({ dir, task }) {
   };
 }
 
-/** A `--- ` line directly followed by a `+++ ` line: a file header, not a removed line that starts with `-- `. */
-const isFileHeader = (lines, i) => lines[i].startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ ');
+/** A hunk's header, `@@ -a,b +c,d @@`: `b` and `d` are how many lines it has on each side, 1 when left out. */
+const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/;
+/** The headers of a git or `diff -u` change that name one path each, the rest of the line being the path. */
+const PATH_LINE = /^(?:rename from|rename to|copy from|copy to|Index:) (.*)$/;
 
-/** The paths a diff touches, sorted: both sides of every file header, `/dev/null` aside. */
-export function testFiles(diffText) {
-  const lines = String(diffText).split('\n');
-  const paths = new Set();
-  lines.forEach((line, i) => {
-    if (!isFileHeader(lines, i)) return;
-    for (const side of [line, lines[i + 1]]) {
-      const path = side.slice(4).split('\t')[0];
-      if (path.startsWith('"')) throw new Error('a quoted path in the tests diff');
-      if (path !== '/dev/null') paths.add(/^[ab]\//.test(path) ? path.slice(2) : path);
+/**
+ * A unified diff nobody vouches for, read once → what its headers name and how
+ * many lines its hunks change. A hunk is as long as its header says: inside it
+ * a removed line `-- x` followed by an added line `++ y` (the diff reads
+ * `--- x` / `+++ y`) is body, and a `--- ` line directly followed by a `+++ `
+ * line is a file header only where no hunk is open. A line the open hunk
+ * cannot hold — its side is used up, or it opens with nothing a hunk's line
+ * opens with — ends the hunk and is read as any other. A trailing carriage
+ * return is no part of a line.
+ *   pairs: the text after `--- ` and after `+++ ` of every file header;
+ *   gitLines: the text after `diff --git `; pathLines: the text of every PATH_LINE.
+ */
+function scanDiff(diffText) {
+  const lines = String(diffText).split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
+  const found = { pairs: [], gitLines: [], pathLines: [], changed: 0 };
+  let oldLeft = 0;
+  let newLeft = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (oldLeft > 0 || newLeft > 0) {
+      const mark = line === '' ? ' ' : line[0]; // a context line that lost its blank
+      if (mark === '\\') continue; // `\ No newline at end of file`
+      if (mark === ' ' && oldLeft > 0 && newLeft > 0) { oldLeft -= 1; newLeft -= 1; continue; }
+      if (mark === '-' && oldLeft > 0) { oldLeft -= 1; found.changed += 1; continue; }
+      if (mark === '+' && newLeft > 0) { newLeft -= 1; found.changed += 1; continue; }
+      oldLeft = 0;
+      newLeft = 0;
     }
-  });
+    const hunk = HUNK_HEADER.exec(line);
+    const pathLine = PATH_LINE.exec(line);
+    if (hunk) {
+      oldLeft = Number(hunk[1] ?? 1);
+      newLeft = Number(hunk[2] ?? 1);
+    } else if (line.startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ ')) {
+      found.pairs.push(line.slice(4), lines[i + 1].slice(4));
+      i += 1;
+    } else if (line.startsWith('diff --git ')) {
+      found.gitLines.push(line.slice('diff --git '.length));
+    } else if (pathLine) {
+      found.pathLines.push(pathLine[1]);
+    }
+  }
+  return found;
+}
+
+/** A path that would land outside the tree it is applied in: absolute, or with a `..` segment. */
+const leavesTree = (path) => path.startsWith('/') || path.split('/').includes('..');
+/** A header's path as `-p1` reads it: without its `a/` or `b/`. */
+const unprefixed = (path) => (/^[ab]\//.test(path) ? path.slice(2) : path);
+
+/** The paths a diff touches, sorted: both sides of every file header, `/dev/null` aside. Throws for a quoted path, and for one that leaves the tree. */
+export function testFiles(diffText) {
+  const paths = new Set();
+  for (const side of scanDiff(diffText).pairs) {
+    const path = side.split('\t')[0];
+    if (path.startsWith('"')) throw new Error('a quoted path in the tests diff');
+    if (path === '/dev/null') continue;
+    // RUN_SH copies or removes each of these under its work tree: one that leaves it would do so elsewhere.
+    if (leavesTree(path) || leavesTree(unprefixed(path))) throw new Error(`a path in the tests diff that is absolute or holds a ".." segment: ${JSON.stringify(path)}`);
+    paths.add(unprefixed(path));
+  }
   return [...paths].sort();
 }
 
-/** The lines a diff adds or removes: those starting `+` or `-` inside its hunks, file headers aside. */
+/** The lines a diff adds or removes: those starting `+` or `-` inside its hunks, each hunk as long as its header says. */
 export function linesChanged(diffText) {
-  const lines = String(diffText).split('\n');
-  let inHunk = false;
-  let changed = 0;
-  lines.forEach((line, i) => {
-    if (line.startsWith('diff --git ') || isFileHeader(lines, i)) inHunk = false;
-    else if (line.startsWith('@@ ')) inHunk = true;
-    else if (inHunk && (line.startsWith('+') || line.startsWith('-'))) changed += 1;
-  });
-  return changed;
+  return scanDiff(diffText).changed;
+}
+
+const C_ESCAPES = { a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+/** The escapes of a C-quoted name, as git writes one with an unusual byte: `\056` is a dot, and it counts as one. */
+const unescaped = (text) => text.replace(/\\([0-7]{1,3}|.)/g, (_, e) => (/^[0-7]/.test(e) ? String.fromCharCode(parseInt(e, 8) & 0xff) : C_ESCAPES[e] ?? e));
+/** A header's path as written, or what its quotes hold; null for a quoted path that does not end. */
+function namedPath(text) {
+  if (!text.startsWith('"')) return text;
+  const quoted = /^"((?:[^"\\]|\\.)*)"/.exec(text);
+  return quoted ? unescaped(quoted[1]) : null;
+}
+
+/**
+ * Refuse, on the host, a change one of whose headers names a path outside the
+ * tree: the two sides of a file header, the names of a `diff --git` line (each
+ * word of it: where one name ends is not written), `rename` and `copy` lines,
+ * `Index:` lines. git refuses such a path; the `patch` an unknown image falls
+ * back to may not. Throws an error whose `code` is `UNSAFE_PATH`.
+ */
+function refuseUnsafeChange(change) {
+  const { pairs, gitLines, pathLines } = scanDiff(change);
+  const refuse = (text) => { throw Object.assign(new Error(`the change names a path that is absolute or holds a ".." segment: ${JSON.stringify(text)}`), { code: 'UNSAFE_PATH' }); };
+  const check = (text, path) => {
+    if (path === null || leavesTree(path) || leavesTree(unprefixed(path))) refuse(text);
+  };
+  for (const side of pairs) {
+    const text = side.split('\t')[0];
+    if (text !== '/dev/null') check(text, namedPath(text));
+  }
+  for (const text of pathLines) check(text, namedPath(text));
+  for (const text of gitLines) {
+    for (const word of unescaped(text).split(/[\s"]+/)) check(text, word);
+  }
 }
 
 /** Every file under a build directory as [relative path, sha256], sorted; a link by the text it holds, never followed. */
@@ -341,6 +424,25 @@ export function dockerRunArgs({ imageId, stage, name, step, uid, gid }) {
 }
 
 /**
+ * What a stage is made of, read and refused on the host before a stage exists
+ * (and, in `prove`, before docker is called): the task's files in their
+ * places, the tests diff and the paths it restores (`testFiles` refuses one
+ * that leaves the tree), and a change whose headers name no path outside the
+ * tree (`refuseUnsafeChange`, `code: 'UNSAFE_PATH'`).
+ */
+function stageTexts({ dir, task, change }) {
+  const paths = taskPaths({ dir, task });
+  const tests = readFileSync(paths.tests, 'utf8');
+  try {
+    if (change !== null) refuseUnsafeChange(change);
+    return { paths, tests, restored: testFiles(tests) };
+  } catch (e) {
+    e.message = `${task.id}: ${e.message}`;
+    throw e;
+  }
+}
+
+/**
  * The read-only copy of a task a container is given, and its only mount: a
  * fresh directory under the OS temp dir with `tree/` (the task's tree, links
  * as links), `change.diff` (`change`: the gold or a model's diff, written as
@@ -349,14 +451,15 @@ export function dockerRunArgs({ imageId, stage, name, step, uid, gid }) {
  * removes it, with `removeStage`. Returns its path.
  */
 export function makeStage({ dir, task, change }) {
-  const paths = taskPaths({ dir, task });
-  const tests = readFileSync(paths.tests, 'utf8');
-  const restored = testFiles(tests);
-  const stage = mkdtempSync(join(tmpdir(), 'omelette-evals-p-'));
+  const { paths, tests, restored } = stageTexts({ dir, task, change });
+  // `--mount` takes comma-separated key=value pairs, quoted as CSV, and the daemon an absolute source: another path would be read as something else.
+  const place = join(tmpdir(), 'omelette-evals-p-');
+  if (!isAbsolute(place) || /[,="\n\r]/.test(place)) {
+    throw new Error(`the OS temp dir ${JSON.stringify(tmpdir())} is relative or holds "," or "=", a double quote or a line break, which --mount would misread: set TMPDIR to an absolute path without them`);
+  }
+  const stage = mkdtempSync(place);
   LIVE_STAGES.add(stage);
   try {
-    // `--mount` takes comma-separated key=value pairs: such a path would be read as more of them.
-    if (/[,=]/.test(stage)) throw new Error(`the stage's path ${stage} holds "," or "=", which --mount would misread: set TMPDIR to a path without them`);
     cpSync(paths.tree, join(stage, 'tree'), { recursive: true, verbatimSymlinks: true });
     if (change !== null) writeFileSync(join(stage, 'change.diff'), change);
     writeFileSync(join(stage, 'tests.diff'), tests);
@@ -495,7 +598,9 @@ async function imageIdOf({ id, docker, env, ref }) {
 }
 
 const FROM_LINE = /^\s*FROM\s+(?:--\S+\s+)*(\S+)/gim;
-const lastLine = (text) => String(text || '').trim().split('\n').pop();
+/** Text this script did not write, fit for a terminal: without its control characters (C0, DEL, C1). */
+const plain = (text) => String(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+const lastLine = (text) => plain(String(text || '').trim().split('\n').pop());
 
 /**
  * The image a task's steps run, got before any model's diff exists →
@@ -566,7 +671,7 @@ async function runState({ dir, task, change, docker, imageId, env, out }) {
   try {
     const applied = await step('apply');
     const method = applied.exit === 0 ? /^applied-by (\S+)/m.exec(applied.stdout) : null;
-    const apply = { exit: applied.exit, method: method ? method[1] : null };
+    const apply = { exit: applied.exit, method: method ? plain(method[1]) : null };
     state = applied.exit !== 0 ? { apply, failToPass: null, passToPass: null } : { apply, failToPass: await test('f2p'), passToPass: await test('p2p') };
   } catch (e) {
     failure = e instanceof Error ? e : new Error(String(e));
@@ -595,6 +700,7 @@ export async function prove({ dir, task, docker, env, reps = 3, out = () => {} }
   const paths = taskPaths({ dir, task });
   if (hasRunLine(dir, task.id)) throw new Error(`${task.id}: a model's diff already exists — a build now would use the network after it`);
   const gold = readFileSync(paths.gold, 'utf8');
+  stageTexts({ dir, task, change: gold }); // what its stages would be refused for, before docker is called
   const inputs = proofInputs({ dir, task });
   const { imageId, built } = await prepareImage({ dir, task, docker, env, out });
   const results = [];
