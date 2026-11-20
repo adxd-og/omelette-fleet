@@ -85,7 +85,7 @@ export function redactionTerms(extra = []) {
 // of the same name. Any whitespace (a newline and every Unicode space too), a
 // hyphen or dash (U+2010–U+2015 among them) and · _ / join them; a full stop
 // never does. Inside a version, a dash may stand for the dot (`6‑1`).
-const COLLAPSE = /\[model\](?:[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\-\u2010-\u2015·_/]*(?:v?\d+(?:[.\u2010-\u2015]\d+)*|\((?:low|medium|high|xhigh|max|ultra)\)|·\s*(?:low|medium|high)|\[model\])|[-_\u2010-\u2015](?:low|medium|high|xhigh|max|ultra)(?!\p{L}))+/giu;
+const COLLAPSE = /\[model\](?:[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\-\u2010-\u2015·_/]*(?:v?\d+(?:[.\u2010-\u2015]\d+)*|\((?:low|medium|high|xhigh|max|ultra)\)|·\s*(?:low|medium|high|xhigh)|\[model\])|[-_\u2010-\u2015](?:low|medium|high|xhigh|max|ultra)(?!\p{L}))+/giu;
 const PARTIAL_ALL = new RegExp(PARTIAL_MARK_RE.source, 'g');
 
 /** `text` with every term masked; see the header. */

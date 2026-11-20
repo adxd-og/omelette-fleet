@@ -66,7 +66,9 @@ export const TOOL_FOR = {
 };
 
 const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V --arm <unit>:<model>[:<effort>] [--arm …] [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]';
-const GEMINI_LEVEL = /\((Low|Medium|High)\)$/;
+const GEMINI_LEVEL = /\((Low|Medium|High|XHigh)\)$/;
+/** The catalog's spelling of each level word an arm may name: `xhigh` is `XHigh`, not `Xhigh`. */
+const GEMINI_LEVEL_WORD = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh' };
 const COMMIT_RE = /^[0-9a-f]{4,40}$/i;
 
 /**
@@ -89,8 +91,9 @@ export function parseArm(spec) {
     let id = model;
     if (effort) {
       if (GEMINI_LEVEL.test(model)) throw new Error(`${where}: the effort is already in the model id`);
-      const level = effort.toLowerCase();
-      id = `${model} (${level.charAt(0).toUpperCase()}${level.slice(1)})`;
+      const level = GEMINI_LEVEL_WORD[effort.toLowerCase()];
+      if (!level) throw new Error(`${where}: unknown effort "${effort}" — a Gemini level is one of ${Object.keys(GEMINI_LEVEL_WORD).join(', ')}`);
+      id = `${model} (${level})`;
     }
     if (!catalog.isAllowedModel(id)) {
       throw new Error(`${where}: unknown model "${id}"${effort ? ' (or effort)' : ''} — the catalog has: ${catalog.ids.join(', ')}`);

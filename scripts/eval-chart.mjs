@@ -37,8 +37,8 @@ const DEFAULT_OUT = join(ROOT, 'evals', 'charts');
 const USAGE = 'usage: node scripts/eval-chart.mjs --date YYYY-MM-DD [--dir D] [--out DIR]';
 
 const W = 760;
-const LEVELS = ['Low', 'Medium', 'High'];
-const LEVEL_RE = /^(.*) \((Low|Medium|High)\)$/;
+const LEVELS = ['Low', 'Medium', 'High', 'XHigh'];
+const LEVEL_RE = /^(.*) \((Low|Medium|High|XHigh)\)$/;
 const BATCH_NOTE = '* one prompt for all questions';
 const GEMINI_TOKENS_NOTE = "Gemini's token counts exclude thinking tokens: the unit reports input and output only.";
 
@@ -258,7 +258,7 @@ const score = (a, src = a.mean) => {
 
 function effort(agg) {
   const id = 'effort';
-  const title = 'Effort: Gemini scores at Low, Medium and High';
+  const title = 'Effort: Gemini scores at each level';
   const arms = agg.arms.filter((a) => a.unit === 'gemini' && LEVEL_RE.test(a.model || ''));
   if (!arms.length) return emptyChart(id, title, agg.date);
   const families = [...new Set(arms.map((a) => LEVEL_RE.exec(a.model)[1]))].sort((x, y) => x.localeCompare(y)).slice(0, 3);
@@ -276,7 +276,7 @@ function effort(agg) {
     const x1 = x0 + pw;
     const y0 = top + h;
     const y1 = top;
-    const xs = Object.fromEntries(LEVELS.map((l, i) => [l, x0 + 24 + i * ((pw - 48) / 2)]));
+    const xs = Object.fromEntries(LEVELS.map((l, i) => [l, x0 + 24 + i * ((pw - 48) / (LEVELS.length - 1))]));
     const yOf = (v) => y0 - (v / 100) * (y0 - y1);
     body.push(`<text class="t" x="${x0}" y="${top - 14}" font-size="13" font-weight="600">${suite === 'R' ? 'R · share correct' : 'V · recall'}</text>`);
     body.push(`<g class="plot" data-suite="${suite}" data-y0="${y0}" data-y1="${y1}" ${LEVELS.map((l) => `data-x-${l.toLowerCase()}="${px(xs[l])}"`).join(' ')}>`);

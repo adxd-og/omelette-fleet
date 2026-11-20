@@ -245,3 +245,22 @@ test('a failed run is a hollow marker at the baseline titled "failed run", never
 test('the cost chart\'s caption says Gemini\'s tokens exclude thinking', () => {
   assert.ok(texts(charts['cost.svg']).some((s) => /Gemini.*exclude thinking/.test(s)));
 });
+
+test('effort: an XHigh arm is a fourth column, right of High, labelled as the catalog labels it', () => {
+  const agg = {
+    date: '2026-11-20', grades: 0, overturned: 0,
+    arms: [
+      rArm('gemini:Gemini 4 Neon (High)', { effort: 'high', runs: [{ correct: 8, inventedUrls: 0 }], wallMs: 1000, tokens: 10 }),
+      rArm('gemini:Gemini 4 Neon (XHigh)', { effort: 'xhigh', runs: [{ correct: 9, inventedUrls: 0 }], wallMs: 2000, tokens: 20 }),
+    ],
+  };
+  const out = renderCharts(agg);
+  const [plot] = elements(out['effort.svg'], 'plot');
+  const cols = ['low', 'medium', 'high', 'xhigh'].map((l) => num(plot.attrs[`data-x-${l}`]));
+  for (let i = 1; i < cols.length; i++) assert.ok(cols[i] > cols[i - 1], `column ${i} right of column ${i - 1}`);
+  const p = elements(out['effort.svg'], 'mean').find((x) => x.attrs['data-level'] === 'XHigh');
+  assert.ok(p, 'an XHigh mean point');
+  near(num(p.attrs.cx), cols[3], 'in the XHigh column');
+  near(num(p.attrs['data-value']), 90, 'its share correct');
+  assert.ok(texts(out['r-accuracy.svg']).some((s) => s.includes('Gemini 4 Neon · XHigh')));
+});

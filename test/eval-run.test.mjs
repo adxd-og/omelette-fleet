@@ -372,3 +372,10 @@ test('the CLI version is the CLI\'s name and the first version token, never the 
   chmodSync(fake, 0o755);
   assert.equal(await cliVersion(UNITS.gemini, baseEnv(home, { AGY_BIN: fake })), 'agy 1.4.0-beta.2');
 });
+
+test('an XHigh arm is spelled as the catalog spells it, and a level already in the id is not named twice', () => {
+  assert.deepEqual(parseArm('gemini:Gemini 4 Neon:xhigh'), { arm: 'gemini:Gemini 4 Neon (XHigh)', unit: 'gemini', model: 'Gemini 4 Neon (XHigh)', effort: null });
+  assert.equal(parseArm('gemini:Gemini 4 Neon (XHigh)').model, 'Gemini 4 Neon (XHigh)');
+  assert.throws(() => parseArm('gemini:Gemini 4 Neon (XHigh):high'), /already in the model id/);
+  assert.throws(() => parseArm('gemini:Gemini 4 Neon:max'), /unknown effort "max"/);
+});

@@ -312,3 +312,7 @@ test('a name and its version collapse across a Unicode space or a dash, never a 
   assert.equal(redact('GPT‑6.1', terms), '[model]');
   assert.equal(redact('GPT—6‑1 here', terms), '[model] here');
 });
+
+test('a name left next to an XHigh level in the middle-dot form collapses with it', () => {
+  assert.equal(redact('Gemini · XHigh said so.', redactionTerms()), '[model] said so.');
+});
