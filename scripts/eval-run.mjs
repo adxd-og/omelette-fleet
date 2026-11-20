@@ -53,6 +53,12 @@
  * dir's `suites/I/docs/`) as `cwd`. What was planted and what a correct answer
  * holds stay in the task line, outside that directory; eval-inject scores them.
  *
+ * A COPY OF A TREE (V's `tree` for a cwd arm, P's tree, I's document directory)
+ * is made just before its own call and removed when that call ends, so no
+ * model's cwd has another task's copy beside it; every tree is checked before
+ * the arm's first call. A commit's snapshot is extracted before it and stays.
+ * Every arm's tool is resolved before the first call of any arm.
+ *
  * The vendor CLI's `--version` is read once per arm, the way `doctor` reads it
  * (core/spawn.mjs, with the unit's env allowlist and billing scrub).
  */
@@ -74,7 +80,7 @@ import codexUnit from '../units/codex/adapter.mjs';
 import geminiUnit from '../units/gemini/adapter.mjs';
 import grokUnit from '../units/grok/adapter.mjs';
 import mistralUnit from '../units/mistral/adapter.mjs';
-import { proofStatus, pTaskProblems } from './eval-patch.mjs';
+import { proofStatus, pTaskProblems, removeStage } from './eval-patch.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const DEFAULT_DIR = join(ROOT, '.omelette', 'evals');
@@ -379,6 +385,21 @@ function treeIn({ dir, rel, under, who }) {
 }
 
 /**
+ * `<dir>/<rel>` checked as a tree to copy, before anything is copied: a
+ * directory strictly under `<dir>/<under>` (treeIn), with no link in it that
+ * leads out of it and no `.git` of its own — what the copy is refused for,
+ * read on the tree itself, so that the runner refuses every task's tree before
+ * the arm's first call. Returns the tree's path.
+ */
+function checkTreeSource({ dir, rel, under, who }) {
+  const src = treeIn({ dir, rel, under, who });
+  const out = linkOutOf(src);
+  if (out) throw new Error(`a link in ${rel} points out of it: ${out}`);
+  if (lstatSync(join(src, '.git'), { throwIfNoEntry: false })) throw new Error(`tree ${rel} holds a .git — a review there could read the history that holds the later fixes`);
+  return src;
+}
+
+/**
  * A fresh copy of `<dir>/<rel>` (a third-party tree) for task `id`, under the
  * OS temp dir; any earlier copy is removed first. `rel` must sit strictly under
  * `<dir>/<under>` (required: `third-party` for V and P, `suites/I/docs` for I),
@@ -388,7 +409,7 @@ function treeIn({ dir, rel, under, who }) {
  */
 export function materializeTree({ dir, rel, id, under }) {
   const path = treeCopyPath(id);
-  const src = treeIn({ dir, rel, under, who: 'materializeTree' });
+  const src = checkTreeSource({ dir, rel, under, who: 'materializeTree' });
   rmSync(path, { recursive: true, force: true });
   const staging = `${path}.tmp-${process.pid}`;
   rmSync(staging, { recursive: true, force: true });
@@ -656,15 +677,32 @@ export function selectTasks(tasks, ids) {
 }
 
 /**
+ * A tree task's cwd, a copy of `<dir>/<rel>` under the OS temp dir named by
+ * the task `id`: `extract: false` (the dry run) names it and makes nothing;
+ * `copy` makes it now; otherwise the tree is checked now and `copyFrom` tells
+ * runArm to copy it just before the task's own call.
+ */
+function treeCwd({ id, dir, rel, under, extract, copy }) {
+  const snapshot = treeCopyPath(id);
+  if (!extract) return { snapshot };
+  if (copy) return { snapshot: materializeTree({ dir, rel, id, under }) };
+  checkTreeSource({ dir, rel, under, who: 'prepareTasks' });
+  return { snapshot, copyFrom: { rel, under } };
+}
+
+/**
  * The suite's tasks made ready for one arm's calls. V: the controls last; a
  * cwd arm gets the directory it reviews (`snapshot`, guarded); Gemini gets the
  * shown file's text (`fileText`), read out of the commit's snapshot or straight
  * from the private dir, nothing copied; every arm gets a shown diff's text
  * (`diffText`). P and I: a fresh copy of the task's tree or document directory
  * (`snapshot`). `extract: false` (the dry run) reads what is there and makes nothing.
+ * A tree's copy is made here when `copy` (the default: eval-hand's brief);
+ * with `copy: false` (the runner) every tree is checked here and only named,
+ * and its task carries `copyFrom` — a commit's snapshot is extracted here either way.
  * Every arm but Gemini's is a cwd arm: eval-hand passes a native arm as one.
  */
-export function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract = true }) {
+export function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract = true, copy = true }) {
   if (snapshot && (suite === 'P' || suite === 'I')) throw new Error(SNAPSHOT_IS_FOR_COMMITS);
   switch (suite) {
     case 'V': {
@@ -674,8 +712,10 @@ export function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract =
       return orderTasks(tasks).map((t) => {
         const diffText = t.show === 'diff' ? readFileSync(resolve(dir, t.diff), 'utf8') : null;
         if (asCwd) {
-          const path = snapshotFor({ task: t, dir, repo, snapshot, extract });
-          return { ...t, snapshot: path, snapshotPresent: existsSync(path), fileText: null, diffText };
+          const cwd = t.tree !== undefined
+            ? treeCwd({ id: t.id, dir, rel: t.tree, under: V_TREES, extract, copy })
+            : { snapshot: snapshotFor({ task: t, dir, repo, snapshot, extract }) };
+          return { ...t, ...cwd, snapshotPresent: existsSync(cwd.snapshot), fileText: null, diffText };
         }
         if (t.show === 'diff') return { ...t, snapshot: null, snapshotPresent: false, fileText: null, diffText };
         if (t.tree !== undefined) return { ...t, snapshot: null, snapshotPresent: false, fileText: readInside(treeIn({ dir, rel: t.tree, under: V_TREES, who: 'a Gemini arm' }), t.file, t.id), diffText };
@@ -688,10 +728,10 @@ export function prepareTasks(suite, tasks, { arm, dir, repo, snapshot, extract =
     }
     case 'P':
       // The tree alone: the gold and the tests diff sit under suites/P/, never under the place a tree is copied from.
-      return tasks.map((t) => ({ ...t, snapshot: extract ? materializeTree({ dir, rel: t.tree, id: t.id, under: P_TREES }) : treeCopyPath(t.id) }));
+      return tasks.map((t) => ({ ...t, ...treeCwd({ id: t.id, dir, rel: t.tree, under: P_TREES, extract, copy }) }));
     case 'I':
       // The document's directory alone: the task line, with what was planted and what a correct answer holds, sits a level up.
-      return tasks.map((t) => ({ ...t, snapshot: extract ? materializeTree({ dir, rel: t.doc, id: t.id, under: I_DOCS }) : treeCopyPath(t.id) }));
+      return tasks.map((t) => ({ ...t, ...treeCwd({ id: t.id, dir, rel: t.doc, under: I_DOCS, extract, copy }) }));
     default:
       return tasks;
   }
@@ -794,11 +834,16 @@ export function assertProven({ dir, tasks }) {
  * Run one arm of one suite `runs` times; every call appends its line as soon
  * as it ends. `only` names the task ids to run (all when empty); each task
  * numbers its own runs. Returns `{file, lines, stopped}` — `stopped` is set when
- * a call failed on an exhausted quota and the arm made no call after it.
+ * a call failed on an exhausted quota and the arm made no call after it; that
+ * call's line says `exhausted: true`, every other line `exhausted: false`.
  * P: throws before anything is copied or called when a selected task's gold
  * proof is not `ok` — no model's diff exists before its task is proven.
  * An arm whose unit has no tool for the suite is refused first, before any
  * copy, snapshot or server: a refused arm leaves nothing behind.
+ * A tree's copy (a V tree for a cwd arm, a P tree, an I document's directory)
+ * is made just before its own call and removed when that call ends, answered,
+ * failed or thrown: no call has another task's copy beside its cwd. Every tree
+ * is checked before the arm's first call; a commit's snapshot stays.
  * `serverPath` replaces the unit's server (tests); `now` dates the run directory.
  */
 export async function runArm({
@@ -810,7 +855,8 @@ export async function runArm({
   const unit = UNITS[arm.unit];
   const selected = selectTasks(readTasks(dir, suite, { only }), only);
   if (suite === 'P') assertProven({ dir, tasks: selected });
-  const tasks = prepareTasks(suite, selected, { arm, dir, repo, snapshot });
+  const tasks = prepareTasks(suite, selected, { arm, dir, repo, snapshot, copy: false });
+  const copyOf = new Map(tasks.filter((t) => t.copyFrom).map((t) => [t.id, t]));
   const calls = planCalls({ suite, arm, tasks, batch });
   const file = join(dir, 'runs', localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -830,18 +876,25 @@ export async function runArm({
   passes: for (let pass = 0; pass < runs; pass++) {
     for (const [i, call] of calls.entries()) {
       const run = firstOf[i] + pass;
+      // The task's copy exists for this call alone.
+      const own = call.taskIds.length === 1 ? copyOf.get(call.taskIds[0]) : undefined;
+      const copy = own ? materializeTree({ dir, rel: own.copyFrom.rel, id: own.id, under: own.copyFrom.under }) : null;
       const before = convDir ? conversationState(convDir) : null;
       const t0 = Date.now();
       let res = null;
       let failure = null;
+      let left = null;
       try {
         res = await callUnitServer({ serverPath: server, tool: call.tool, args: call.args, timeoutS, env });
-      } catch (e) { failure = (e && e.message) || String(e); }
+      } catch (e) { failure = (e && e.message) || String(e); } finally {
+        if (copy) left = removeStage(copy);
+      }
       const rec = res ? findCallRecord({ home, unit: arm.unit, pid: res.pid, tool: call.tool, sinceMs: t0 }) : null;
       if (res && !rec) unmatched += 1;
       const ok = !!res && !res.isError;
       const answer = ok ? res.text : null;
       const error = ok ? null : (res ? res.text : failure);
+      const exhausted = !ok && EXHAUSTED.test(String(error ?? ''));
       const line = {
         suite,
         taskIds: call.taskIds,
@@ -857,6 +910,7 @@ export async function runArm({
         answer,
         error,
         empty: isEmptyCall({ ok, answer, error }),
+        exhausted,
         usage: rec ? rec.usage : null,
         resultId: rec ? rec.resultId : null,
         agyConversations: convDir ? touchedConversations(before, conversationState(convDir)) : null,
@@ -864,7 +918,9 @@ export async function runArm({
       appendRunLine(file, line);
       lines.push(line);
       out(`  run ${run}  ${call.taskIds.join(',')}  ${ok ? 'ok' : 'FAILED'}  ${(line.wallMs / 1000).toFixed(1)}s`);
-      if (!ok && EXHAUSTED.test(String(error ?? ''))) {
+      // The call's line is filed first; a copy left behind would sit beside the next call's cwd.
+      if (left) throw new Error(`${left}: the arm stops before its next call`);
+      if (exhausted) {
         stopped = { after: call.taskIds, left: calls.length * runs - lines.length };
         out(`  stopped: the quota is exhausted after ${call.taskIds.join(',')} — ${stopped.left} call(s) not made`);
         break passes;
@@ -937,6 +993,8 @@ export async function main(argv = process.argv.slice(2), { out = (l) => console.
   const dir = resolve(values.dir || DEFAULT_DIR);
   const opts = { suite, runs, batch: !!values.batch, dir, repo: ROOT, snapshot: values.snapshot, only: values.task, now: () => new Date(), out };
   try {
+    // Every arm's tool before any arm's first call: a later arm refused at its turn would come after earlier arms spent theirs.
+    for (const arm of arms) toolFor(suite, arm.unit);
     for (const arm of arms) {
       if (values['dry-run']) printPlan({ ...opts, arm });
       else {

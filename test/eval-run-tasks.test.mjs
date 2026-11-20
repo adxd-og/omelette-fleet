@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { proofInputs } from '../scripts/eval-patch.mjs';
 import { iTaskProblems, main, materializeTree, P_SUFFIX, parseArm, planCalls, readTasks, runArm, snapshotFor, writePrivate } from '../scripts/eval-run.mjs';
 
@@ -57,16 +58,24 @@ function fixtureRepo() {
   return { repo, commit };
 }
 
-/** A fake `codex` that answers with the directory it ran in; `marker` records every run. */
-function fakeCodex(dir, { marker } = {}) {
+/**
+ * A fake `codex` that answers with the directory it ran in; `marker` records every run. With `listing`, it answers
+ * instead with what it read there during the call: every file under its cwd (relative) and the names beside the cwd.
+ */
+function fakeCodex(dir, { marker, listing = false } = {}) {
   const p = join(dir, 'fake-codex');
   writeFileSync(p, [
     `#!${process.execPath}`,
+    'const fs = require("fs"); const path = require("path");',
     'const a = process.argv.slice(2);',
     'if (a[0] === "--version") { console.log("fake-codex 1.2.3"); process.exit(0); }',
-    marker ? `require("fs").appendFileSync(${JSON.stringify(marker)}, "run\\n");` : '',
+    marker ? `fs.appendFileSync(${JSON.stringify(marker)}, "run\\n");` : '',
+    'const listingOf = (root) => { const files = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else files.push(path.relative(root, f)); } }; walk(root); return { files: files.sort(), beside: fs.readdirSync(path.dirname(root)).sort() }; };',
+    `const text = ${listing ? 'JSON.stringify(listingOf(process.cwd()))' : '"ok " + process.cwd()'};`,
     'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => {',
-    '  process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "ok " + process.cwd() } }) + "\\n");',
+    '  process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }) + "\\n");',
+    // A whole run: without turn.completed the unit marks the answer partial, and it is no longer the listing alone.
+    listing ? '  process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }) + "\\n");' : '',
     '});',
   ].join('\n'));
   chmodSync(p, 0o755);
@@ -81,17 +90,25 @@ function fakeAgy(dir) {
   return p;
 }
 
-/** A fake MCP server for `tool` whose every call answers with the arguments it was sent; `marker` records every start. */
-function echoServer(dir, tool, { marker } = {}) {
+/**
+ * A fake MCP server for `tool` whose every call answers with the arguments it was sent; `marker` records every start.
+ * With `listing`, a call given a cwd also answers what it read there during the call: `files`, every file under
+ * the cwd as [relative path, text], and `beside`, the names in the cwd's parent directory.
+ */
+function echoServer(dir, tool, { marker, listing = false } = {}) {
   const p = join(dir, 'echo-server.mjs');
   writeFileSync(p, [
+    'import { readdirSync, readFileSync } from "node:fs";',
+    'import { dirname, join, relative } from "node:path";',
     marker ? `(await import("node:fs")).appendFileSync(${JSON.stringify(marker)}, "started\\n");` : '',
+    'const filesUnder = (root) => { const found = []; const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const f = join(d, e.name); if (e.isDirectory()) walk(f); else found.push([relative(root, f), readFileSync(f, "utf8")]); } }; walk(root); return found.sort(([a], [b]) => (a < b ? -1 : 1)); };',
+    `const answer = (args) => (${listing ? 'true' : 'false'} && args.cwd ? { ...args, files: filesUnder(args.cwd), beside: readdirSync(dirname(args.cwd)).sort() } : args);`,
     'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
     'let buf = ""; process.stdin.setEncoding("utf8");',
     'process.stdin.on("data", (c) => { buf += c; let nl; while ((nl = buf.indexOf("\\n")) >= 0) { const l = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!l) continue; const m = JSON.parse(l);',
     '  if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "f", version: "0" } } });',
     `  else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: ${JSON.stringify(tool)}, description: "d", inputSchema: { type: "object" } }] } });`,
-    '  else if (m.id === 3) send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: JSON.stringify(m.params.arguments) }] } }); } });',
+    '  else if (m.id === 3) send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: JSON.stringify(answer(m.params.arguments)) }] } }); } });',
   ].join('\n'));
   return p;
 }
@@ -261,13 +278,42 @@ test('a cwd arm reviews a fresh copy of a third-party tree outside every work tr
     const snap = join(fresh, 'omelette-evals', 'snapshots', 'X01');
     mkdirSync(snap, { recursive: true });
     writeFileSync(join(snap, 'stray.txt'), 'left by an earlier run');
-    const { lines } = await runArm({ suite: 'V', arm: parseArm('codex:gpt-6.1-sol'), dir, out: quiet, env: baseEnv(home, { CODEX_BIN: fakeCodex(home) }) });
+    const { lines } = await runArm({ suite: 'V', arm: parseArm('codex:gpt-6.1-sol'), dir, out: quiet, env: baseEnv(home, { CODEX_BIN: fakeCodex(home, { listing: true }) }) });
     assert.equal(lines[0].ok, true, lines[0].error);
     const spooled = readFileSync(join(home, 'results', 'codex', `${lines[0].resultId}.md`), 'utf8');
     assert.match(spooled, new RegExp(`^cwd: ${snap.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
-    assert.equal(existsSync(join(snap, 'stray.txt')), false, 'the earlier copy is gone');
-    assert.equal(existsSync(join(snap, 'lib', 'widget.js')), true);
-    assert.equal(existsSync(join(snap, '.git')), false);
+    // What the reviewer found in its cwd during the call: the tree, not the earlier copy's stray file, and no .git.
+    assert.deepEqual(JSON.parse(lines[0].answer), { files: ['lib/widget.js'], beside: ['X01'] });
+    assert.equal(existsSync(snap), false, 'the copy is removed when its call ends');
+  });
+});
+
+test('each tree copy is made for its own call and removed when that call ends: no call has a sibling copy, a commit snapshot stays', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const { repo, commit } = fixtureRepo();
+  const dir = evalsDir({
+    V: [
+      { id: 'V01', commit, file: 'src/thing.js', prompt: BRIEF },
+      { id: 'X01', kind: 'recall', tree: 'third-party/x01/before-fix', file: 'lib/widget.js', prompt: BRIEF },
+      { id: 'C01', kind: 'control', of: 'X01', tree: 'third-party/x01/after-fix', file: 'lib/widget.js', prompt: BRIEF },
+    ],
+  });
+  writeTree(dir, 'third-party/x01/before-fix', { 'lib/widget.js': 'export const items = []; // invented, before the fix\n' });
+  writeTree(dir, 'third-party/x01/after-fix', { 'lib/widget.js': 'export const items = [1]; // invented, after the fix\n' });
+  await withTmpdir(async (fresh) => {
+    const snaps = join(fresh, 'omelette-evals', 'snapshots');
+    const { lines } = await runArm({
+      suite: 'V', arm: parseArm('codex:gpt-6.1-sol'), dir, repo, runs: 2, out: quiet,
+      serverPath: echoServer(home, 'codex_code_review', { listing: true }), env: baseEnv(home, { CODEX_BIN: fakeCodex(home) }),
+    });
+    const seen = lines.map((l) => { const a = JSON.parse(l.answer); return [l.taskIds[0], l.run, a.cwd, a.beside, a.files.map(([rel, text]) => `${rel}: ${text}`)]; });
+    const pass = (run) => [
+      ['V01', run, join(snaps, commit), [commit], ['src/thing.js: export const thing = 1; // the reviewed state\n']],
+      ['X01', run, join(snaps, 'X01'), [commit, 'X01'].sort(), ['lib/widget.js: export const items = []; // invented, before the fix\n']],
+      ['C01', run, join(snaps, 'C01'), [commit, 'C01'].sort(), ['lib/widget.js: export const items = [1]; // invented, after the fix\n']],
+    ];
+    assert.deepEqual(seen, [...pass(1), ...pass(2)]);
+    assert.deepEqual(readdirSync(snaps), [commit], 'the copies are gone; the commit\'s snapshot may stay');
   });
 });
 
@@ -365,13 +411,15 @@ test('P: the bug report with the diff instruction, a fresh copy of the tree as c
   await withTmpdir(async (fresh) => {
     const { lines } = await runArm({
       suite: 'P', arm: parseArm(HYDROGEN), dir, out: quiet,
-      serverPath: echoServer(home, 'gemini_research'), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }),
+      serverPath: echoServer(home, 'gemini_research', { listing: true }), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }),
     });
     const copy = join(fresh, 'omelette-evals', 'snapshots', 'P01');
     assert.deepEqual(lines.map((l) => [l.suite, l.taskIds, l.ok]), [['P', ['P01'], true]]);
     // The whole of what the call sends: the report, a blank line, the instruction; the copy as cwd; nothing else.
-    assert.deepEqual(JSON.parse(lines[0].answer), { prompt: `${p01.prompt}\n\n${P_SUFFIX}`, model: 'Gemini 4 Hydrogen (High)', cwd: copy });
-    const files = filesUnder(copy);
+    const { files, beside, ...sent } = JSON.parse(lines[0].answer);
+    assert.deepEqual(sent, { prompt: `${p01.prompt}\n\n${P_SUFFIX}`, model: 'Gemini 4 Hydrogen (High)', cwd: copy });
+    // What the cwd held during the call.
+    assert.deepEqual(beside, ['P01']);
     assert.deepEqual(files.map(([rel]) => rel), ['widget/widget.go', 'widget/widget_test.go'], 'a copy of the tree, no more');
     for (const [rel, text] of files) {
       assert.ok(!rel.split('/').includes('suites'), rel);
@@ -380,6 +428,7 @@ test('P: the bug report with the diff instruction, a fresh copy of the tree as c
         assert.ok(!text.includes(secret), rel);
       }
     }
+    assert.equal(existsSync(copy), false, 'the copy is removed when its call ends');
   });
 });
 
@@ -517,12 +566,13 @@ test('I: the honest question alone, with a fresh copy of the document\'s directo
   const was = process.env.TMPDIR;
   process.env.TMPDIR = fakeTmp;
   try {
-    const { lines } = await runArm({ suite: 'I', arm: parseArm('gemini:Gemini 4 Neon:high'), dir, serverPath: echoServer(home, 'gemini_research'), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }), out: quiet });
+    const { lines } = await runArm({ suite: 'I', arm: parseArm('gemini:Gemini 4 Neon:high'), dir, serverPath: echoServer(home, 'gemini_research', { listing: true }), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }), out: quiet });
     const sent = JSON.parse(lines[0].answer);
     assert.equal(sent.prompt, 'Invented question about NOTES.md.');
     assert.equal(sent.cwd, join(fakeTmp, 'omelette-evals', 'snapshots', 'I01'));
-    assert.equal(readFileSync(join(sent.cwd, 'NOTES.md'), 'utf8'), 'Invented release notes.');
-    assert.deepEqual(readdirSync(sent.cwd), ['NOTES.md'], 'the document\'s directory, no more: the task line stays in the private dir');
+    // What the cwd held during the call.
+    assert.deepEqual(sent.files, [['NOTES.md', 'Invented release notes.']], 'the document\'s directory, no more: the task line stays in the private dir');
+    assert.equal(existsSync(sent.cwd), false, 'the copy is removed when its call ends');
   } finally {
     if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was;
   }
@@ -613,4 +663,59 @@ test('writePrivate makes the parent directories 0700 and leaves the file 0600 ho
   chmodSync(file, 0o644);
   writePrivate(file, 'invented two\n');
   assert.deepEqual([readFileSync(file, 'utf8'), statSync(file).mode & 0o777], ['invented two\n', 0o600]);
+});
+
+// ─── copies per call (RV1): every unit is a fake, every task invented ─────────
+
+test('a copy is removed when its call fails or the server dies, and a P arm\'s calls see no other task\'s tree', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const { dir } = pSuite(['P01', 'P02']);
+  await withTmpdir(async (fresh) => {
+    const snaps = join(fresh, 'omelette-evals', 'snapshots');
+    const run = (serverPath) => runArm({ suite: 'P', arm: parseArm(HYDROGEN), dir, out: quiet, serverPath, env: baseEnv(home, { AGY_BIN: fakeAgy(home) }) });
+    const { lines } = await run(echoServer(home, 'gemini_research', { listing: true }));
+    assert.deepEqual(lines.map((l) => [l.taskIds[0], JSON.parse(l.answer).beside]), [['P01', ['P01']], ['P02', ['P02']]]);
+    assert.equal(existsSync(snaps) && readdirSync(snaps).length, 0, 'no copy is left');
+    const dying = join(home, 'dying-server.mjs');
+    writeFileSync(dying, 'process.exit(3);\n');
+    const died = await run(dying);
+    assert.deepEqual(died.lines.map((l) => [l.taskIds[0], l.ok]), [['P01', false], ['P02', false]]);
+    assert.equal(readdirSync(snaps).length, 0, 'no copy is left by a call that failed');
+  });
+});
+
+test('a refused tree is refused before any call of the arm, the later task\'s tree too, and nothing is copied', async () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const marker = join(home, 'server-started');
+  const i02 = { ...I01, id: 'I02', doc: 'suites/I/docs/I02' };
+  const dir = evalsDir({ I: [I01, i02] });
+  writeTree(dir, 'suites/I/docs/I01', { 'NOTES.md': 'Invented release notes.' });
+  writeTree(dir, 'suites/I/docs/I02', { 'NOTES.md': 'Invented release notes.' });
+  symlinkSync(join('..', '..', 'tasks.jsonl'), join(dir, 'suites', 'I', 'docs', 'I02', 'PEEK.md'));
+  await withTmpdir(async (fresh) => {
+    await assert.rejects(
+      runArm({ suite: 'I', arm: parseArm('gemini:Gemini 4 Neon:high'), dir, out: quiet, serverPath: echoServer(home, 'gemini_research', { marker }), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }) }),
+      /a link in suites\/I\/docs\/I02 points out of it: PEEK\.md/,
+    );
+    assert.equal(existsSync(join(fresh, 'omelette-evals')), false, 'nothing copied, the first task\'s tree neither');
+  });
+  assert.equal(existsSync(marker), false, 'no call was made');
+  assert.equal(existsSync(join(dir, 'runs')), false, 'no run file');
+});
+
+test('every arm\'s tool is resolved before the first call of any arm: a later arm with none stops the run before it starts', () => {
+  const home = tmp('omelette-evals-tasks-home-');
+  const dir = evalsDir({ I: [I01] });
+  writeTree(dir, 'suites/I/docs/I01', { 'NOTES.md': 'Invented release notes.' });
+  const script = join(dirname(dirname(fileURLToPath(import.meta.url))), 'scripts', 'eval-run.mjs');
+  for (const extra of [['--dry-run'], []]) {
+    const r = spawnSync(process.execPath, [script, '--suite', 'I', '--arm', 'gemini:Gemini 4 Neon:high', '--arm', 'codex:gpt-6.1-sol', '--dir', dir, ...extra], {
+      encoding: 'utf8', timeout: 5000, env: { ...baseEnv(home, { AGY_BIN: fakeAgy(home) }), TMPDIR: home },
+    });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.equal(r.stderr, 'eval-run: no tool for suite "I" on unit "codex"\n');
+    assert.equal(r.stdout, '', `${extra.join(' ') || 'a run'}: the first arm planned and called nothing`);
+  }
+  assert.equal(existsSync(join(dir, 'runs')), false, 'no run file');
+  assert.equal(existsSync(join(home, 'omelette-evals')), false, 'nothing copied');
 });

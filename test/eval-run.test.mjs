@@ -299,7 +299,8 @@ test('R through the real codex server: one line per call with every field, usage
   const lines = readLines(file);
   assert.equal(lines.length, 2);
   for (const [i, l] of lines.entries()) {
-    assert.deepEqual(Object.keys(l).sort(), ['agyConversations', 'answer', 'arm', 'cli', 'effort', 'empty', 'error', 'model', 'ok', 'resultId', 'run', 'startedAt', 'suite', 'taskIds', 'unit', 'usage', 'wallMs'].sort());
+    assert.deepEqual(Object.keys(l).sort(), ['agyConversations', 'answer', 'arm', 'cli', 'effort', 'empty', 'error', 'exhausted', 'model', 'ok', 'resultId', 'run', 'startedAt', 'suite', 'taskIds', 'unit', 'usage', 'wallMs'].sort());
+    assert.equal(l.exhausted, false);
     assert.equal(l.suite, 'R');
     assert.deepEqual(l.taskIds, [R_TASKS[i].id]);
     assert.equal(l.arm, 'codex:gpt-6.1-sol');
@@ -500,13 +501,16 @@ test('an arm stops at its first quota-exhausted call and says how many calls it 
   const home = tmp('omelette-evals-home-');
   const dir = evalsDir({ R: [...R_TASKS, { id: 'q3', prompt: 'Invented question three: which imaginary port?' }] });
   const counter = join(home, 'calls');
-  const { lines, stopped } = await runArm({
+  const { lines, stopped, file } = await runArm({
     suite: 'R', arm: parseArm('gemini:Claude Opus 5.5:high'), runs: 2, dir, out: quiet,
     serverPath: exhaustingServer(home, counter), env: baseEnv(home, { AGY_BIN: fakeAgy(home) }),
   });
   assert.equal(readFileSync(counter, 'utf8'), 'xx', 'two calls made, the second exhausted');
   assert.deepEqual(lines.map((l) => [l.taskIds[0], l.ok]), [['q1', true], ['q2', false]]);
   assert.deepEqual(stopped, { after: ['q2'], left: 4 });
+  // The call that hit the quota is no call the arm made: its line says so, every other line says it is not.
+  assert.deepEqual(lines.map((l) => l.exhausted), [false, true]);
+  assert.deepEqual(readLines(file).map((l) => l.exhausted), [false, true]);
 });
 
 /** A fake codex_research server that answers with the write gates it was started with. */

@@ -50,17 +50,18 @@ const fakeAgy = (dir) => {
   chmodSync(p, 0o755);
   return p;
 };
-/** A fake MCP server for `tool` that answers with the arguments it was sent and records every start in `marker`. */
+/** A fake MCP server for `tool` that answers with the arguments it was sent (and, given a cwd, the names in it during the call) and records every start in `marker`. */
 function echoServer(dir, tool, marker) {
   const p = join(dir, 'echo-server.mjs');
   writeFileSync(p, [
+    'import { readdirSync } from "node:fs";',
     `(await import("node:fs")).appendFileSync(${JSON.stringify(marker)}, "started\\n");`,
     'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
     'let buf = ""; process.stdin.setEncoding("utf8");',
     'process.stdin.on("data", (c) => { buf += c; let nl; while ((nl = buf.indexOf("\\n")) >= 0) { const l = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!l) continue; const m = JSON.parse(l);',
     '  if (m.id === 1) send({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "f", version: "0" } } });',
     `  else if (m.id === 2) send({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: ${JSON.stringify(tool)}, description: "d", inputSchema: { type: "object" } }] } });`,
-    '  else if (m.id === 3) send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: JSON.stringify(m.params.arguments) }] } }); } });',
+    '  else if (m.id === 3) { const a = m.params.arguments; send({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: JSON.stringify(a.cwd ? { ...a, cwdNames: readdirSync(a.cwd) } : a) }] } }); } } });',
   ].join('\n'));
   return p;
 }
@@ -230,7 +231,7 @@ test('an I doc outside suites/I/docs, through a link, or holding a link out is r
       const { lines } = await run(dir);
       const sent = JSON.parse(lines[0].answer);
       assert.equal(sent.prompt, I_TASK.prompt);
-      const names = readdirSync(sent.cwd).sort();
+      const names = [...sent.cwdNames].sort();
       assert.ok(names.includes('NOTES.md') && !names.includes('tasks.jsonl') && !names.includes('suites') && !names.includes('key.jsonl'), `${doc}: ${names}`);
     }
   });
