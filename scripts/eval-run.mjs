@@ -103,6 +103,10 @@ function toolFor(suite, unit) {
 }
 
 /** What a P brief asks for after the bug report: the fix as a diff, given as text. */
+// What a review call through the Gemini unit opens with, since 2026-11-21: the native reviewer's brief already forbade
+// the web, and without these words 41 of 54 unit-arm review runs searched for the project under review (its repository,
+// its tracker, the fix itself).
+export const V_UNIT_PREFIX = 'Work only from the text shown in this message: do not search the web and do not open any page — not for this code, its project, its tracker or its history, and not for anything else.';
 // The first sentence was added after the round's first P call (2026-11-21): the research tool's own preamble points a
 // model at the web, and that call never opened the tree — it rebuilt the file from search results of the project.
 export const P_SUFFIX = 'Work from the files in the working directory: open and read them with your file-reading tool, and do not search the web or open any page for this code, its project, its tracker or its fix. Answer with the change that fixes it, as one unified diff against the files in the working directory, paths as `git diff` prints them (a/ and b/), inside one ```diff fenced block.';
@@ -216,7 +220,8 @@ export function planCalls({ suite, arm, tasks, batch = false }) {
     if (suite === 'P') return { taskIds: [t.id], tool, args: { prompt: briefFor('P', t), ...base, cwd: t.snapshot } };
     if (suite === 'I') return { taskIds: [t.id], tool, args: { prompt: briefFor('I', t), ...base, cwd: t.snapshot } };
     // Gemini V calls keep round one's construction: the shown text inline, no cwd.
-    return { taskIds: [t.id], tool, args: { prompt: briefFor('V', t, { inline: gemini }), ...base, ...(gemini ? {} : { cwd: t.snapshot }) } };
+    const brief = briefFor('V', t, { inline: gemini });
+    return { taskIds: [t.id], tool, args: { prompt: gemini ? `${V_UNIT_PREFIX}\n\n${brief}` : brief, ...base, ...(gemini ? {} : { cwd: t.snapshot }) } };
   });
 }
 

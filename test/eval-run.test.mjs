@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { callUnitServer } from '../core/client.mjs';
 import { renderResult } from '../core/results.mjs';
-import { cliVersion, ensureSnapshot, parseArm, planCalls, runArm, UNITS } from '../scripts/eval-run.mjs';
+import { cliVersion, ensureSnapshot, parseArm, planCalls, runArm, UNITS, V_UNIT_PREFIX } from '../scripts/eval-run.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRIPT = join(ROOT, 'scripts', 'eval-run.mjs');
@@ -216,7 +216,9 @@ test('V: Codex and Grok review the snapshot as cwd; Gemini gets the file\'s text
   const [g] = planCalls({ suite: 'V', arm: parseArm('gemini:Gemini 4 Hydrogen:low'), tasks: [task] });
   assert.equal(g.tool, 'gemini_research');
   assert.equal(g.args.cwd, undefined);
-  assert.ok(g.args.prompt.startsWith(task.prompt));
+  // A unit arm's review brief opens by keeping it off the web, as the native reviewer's does; a cwd arm's is the task's alone (above).
+  assert.ok(g.args.prompt.startsWith(`${V_UNIT_PREFIX}\n\n${task.prompt}`), g.args.prompt);
+  assert.match(V_UNIT_PREFIX, /do not search the web and do not open any page/);
   assert.ok(g.args.prompt.includes(task.fileText));
   assert.ok(g.args.prompt.includes(task.file));
 });

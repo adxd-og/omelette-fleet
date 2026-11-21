@@ -9,7 +9,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MUTATE_RE } from '../core/unit.mjs';
 import { proofInputs } from '../scripts/eval-patch.mjs';
-import { iTaskProblems, main, materializeTree, P_SUFFIX, parseArm, planCalls, readTasks, runArm, snapshotFor, writePrivate } from '../scripts/eval-run.mjs';
+import { iTaskProblems, main, materializeTree, P_SUFFIX, V_UNIT_PREFIX, parseArm, planCalls, readTasks, runArm, snapshotFor, writePrivate } from '../scripts/eval-run.mjs';
 
 const tmp = (p) => mkdtempSync(join(tmpdir(), p));
 
@@ -228,7 +228,10 @@ test('V runs controls last, and a third-party file or diff comes from the privat
   }));
   assert.deepEqual(lines.map((l) => l.taskIds[0]), ['V01', 'X01', 'X02', 'C01']);
   const sent = Object.fromEntries(lines.map((l) => [l.taskIds[0], JSON.parse(l.answer)]));
-  assert.ok(sent.X01.prompt.startsWith(BRIEF));
+  // The file form and the diff form both open with the words that keep a unit arm off the web.
+  assert.ok(sent.X01.prompt.startsWith(`${V_UNIT_PREFIX}\n\n${BRIEF}`), sent.X01.prompt);
+  assert.ok(sent.X02.prompt.startsWith(`${V_UNIT_PREFIX}\n\n${BRIEF}`), sent.X02.prompt);
+  assert.equal(MUTATE_RE.test(V_UNIT_PREFIX), false);
   assert.ok(sent.X01.prompt.includes('invented, before the fix'), sent.X01.prompt);
   assert.ok(sent.X02.prompt.includes(`\`\`\`diff\n${DIFF}\n\`\`\``), sent.X02.prompt);
   assert.ok(sent.C01.prompt.includes('invented, after the fix'));
