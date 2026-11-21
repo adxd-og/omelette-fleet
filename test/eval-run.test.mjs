@@ -393,6 +393,22 @@ test('--dry-run prints the plan of calls and makes none: no vendor run, no run f
   for (const t of R_TASKS) assert.ok(!r.stdout.includes(t.prompt));
 });
 
+test('--date names the run directory, so a round that runs past midnight stays in one; a malformed one is a usage error', async () => {
+  const home = tmp('omelette-evals-home-');
+  const dir = evalsDir({ R: R_TASKS });
+  const env = baseEnv(home, { CODEX_BIN: fakeCodex(home) });
+  const { file } = await runArm({ suite: 'R', arm: parseArm('codex:gpt-6.1-sol'), dir, env, date: '2026-11-20', now: () => new Date(2026, 10, 21, 0, 5, 0), out: quiet });
+  assert.equal(file, join(dir, 'runs', '2026-11-20', 'R-codex-gpt-6.1-sol.jsonl'));
+  assert.equal(existsSync(join(dir, 'runs', '2026-11-21')), false);
+  const plan = spawnSync(process.execPath, [SCRIPT, '--suite', 'R', '--arm', 'codex:gpt-6.1-sol', '--date', '2026-11-20', '--dir', dir, '--dry-run'], { encoding: 'utf8', cwd: home, env });
+  assert.equal(plan.status, 0, plan.stderr);
+  assert.ok(plan.stdout.includes(file), plan.stdout);
+  assert.ok(/run 2 {2}/.test(plan.stdout), plan.stdout); // numbered after the line that date already holds
+  const bad = spawnSync(process.execPath, [SCRIPT, '--suite', 'R', '--arm', 'codex:gpt-6.1-sol', '--date', '20-11-2026', '--dir', dir, '--dry-run'], { encoding: 'utf8', cwd: home, env });
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /--date must be YYYY-MM-DD/);
+});
+
 test('usage errors exit 2 and run nothing', () => {
   const dir = evalsDir({ R: R_TASKS });
   const run = (args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', env: baseEnv(dir) });

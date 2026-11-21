@@ -5,7 +5,7 @@
  * unit path (plan docs/superpowers/plans/2026-10-16-evals-mvp.md, Task 1).
  *
  *   node scripts/eval-run.mjs --suite R|V|P|I --arm <unit>:<model>[:<effort>] [--arm …]
- *        [--runs N] [--task ID …] [--batch] [--dir D] [--snapshot PATH] [--dry-run]
+ *        [--runs N] [--task ID …] [--batch] [--date YYYY-MM-DD] [--dir D] [--snapshot PATH] [--dry-run]
  *
  * PRIVATE IN, PRIVATE OUT. It reads `<D>/suites/<suite>/tasks.jsonl` and writes
  * `<D>/runs/<YYYY-MM-DD>/<suite>-<arm>.jsonl`, D defaulting to
@@ -105,7 +105,7 @@ function toolFor(suite, unit) {
 /** What a P brief asks for after the bug report: the fix as a diff, given as text. */
 export const P_SUFFIX = 'Answer with the change that fixes it, as one unified diff against the files in the working directory, paths as `git diff` prints them (a/ and b/), inside one ```diff fenced block.';
 
-const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V|P|I --arm <unit>:<model>[:<effort>] [--arm …] [--task ID …] [--runs N] [--batch] [--dir D] [--snapshot PATH] [--dry-run]';
+const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V|P|I --arm <unit>:<model>[:<effort>] [--arm …] [--task ID …] [--runs N] [--batch] [--date YYYY-MM-DD] [--dir D] [--snapshot PATH] [--dry-run]';
 const GEMINI_LEVEL = /\((Low|Medium|High|XHigh)\)$/;
 /** The catalog's spelling of each level word an arm may name: `xhigh` is `XHigh`, not `Xhigh`. */
 const GEMINI_LEVEL_WORD = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh' };
@@ -849,11 +849,12 @@ export function assertProven({ dir, tasks }) {
  * is made just before its own call and removed when that call ends, answered,
  * failed or thrown: no call has another task's copy beside its cwd. Every tree
  * is checked before the arm's first call; a commit's snapshot stays.
- * `serverPath` replaces the unit's server (tests); `now` dates the run directory.
+ * `serverPath` replaces the unit's server (tests); `date` names the run directory — the round's date, so a
+ * round that runs past midnight stays in one directory — and `now` dates it when no date is given.
  */
 export async function runArm({
   suite, arm, runs = 1, batch = false, dir = DEFAULT_DIR, repo = ROOT, snapshot, only, env = process.env,
-  now = () => new Date(), serverPath, out = (l) => console.log(l),
+  now = () => new Date(), date, serverPath, out = (l) => console.log(l),
 }) {
   toolFor(suite, arm.unit);
   env = evalEnv(env);
@@ -863,7 +864,7 @@ export async function runArm({
   const tasks = prepareTasks(suite, selected, { arm, dir, repo, snapshot, copy: false });
   const copyOf = new Map(tasks.filter((t) => t.copyFrom).map((t) => [t.id, t]));
   const calls = planCalls({ suite, arm, tasks, batch });
-  const file = join(dir, 'runs', localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
+  const file = join(dir, 'runs', date ?? localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const firstOf = calls.map((c) => nextRunFor(file, c.taskIds));
   const cli = await cliVersion(unit, env);
@@ -941,12 +942,12 @@ export async function runArm({
  * each P task's proof, a task without a fresh one marked as refused. Writes and
  * spawns nothing.
  */
-function printPlan({ suite, arm, runs, batch, dir, repo, snapshot, only, now, out }) {
+function printPlan({ suite, arm, runs, batch, dir, repo, snapshot, only, now, date, out }) {
   const tasks = prepareTasks(suite, selectTasks(readTasks(dir, suite, { only }), only), { arm, dir, repo, snapshot, extract: false });
   // A Gemini file brief whose commit snapshot is not extracted yet: its length is the brief's alone.
   const pending = new Set(tasks.filter((t) => suite === 'V' && arm.unit === 'gemini' && t.show !== 'diff' && t.fileText === null).map((t) => t.id));
   const calls = planCalls({ suite, arm, tasks: tasks.map((t) => (pending.has(t.id) ? { ...t, fileText: '' } : t)), batch });
-  const file = join(dir, 'runs', localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
+  const file = join(dir, 'runs', date ?? localDate(now()), `${suite}-${armSlug(arm.arm)}.jsonl`);
   const firstOf = calls.map((c) => nextRunFor(file, c.taskIds));
   out(`${suite} ${arm.arm} → ${file} (the CLI version is read when it runs)`);
   for (const t of suite === 'V' ? tasks : []) {
@@ -977,7 +978,7 @@ export async function main(argv = process.argv.slice(2), { out = (l) => console.
       args: argv,
       options: {
         suite: { type: 'string' }, arm: { type: 'string', multiple: true }, task: { type: 'string', multiple: true }, runs: { type: 'string' },
-        batch: { type: 'boolean' }, dir: { type: 'string' }, snapshot: { type: 'string' }, 'dry-run': { type: 'boolean' },
+        batch: { type: 'boolean' }, date: { type: 'string' }, dir: { type: 'string' }, snapshot: { type: 'string' }, 'dry-run': { type: 'boolean' },
       },
       strict: true, allowPositionals: false,
     }));
@@ -993,10 +994,11 @@ export async function main(argv = process.argv.slice(2), { out = (l) => console.
   const runs = values.runs === undefined ? 1 : Number(values.runs);
   if (!Number.isInteger(runs) || runs < 1 || runs > 100) errors.push('--runs must be a whole number from 1 to 100');
   if (values.batch && suite !== 'R') errors.push('--batch is for suite R only');
+  if (values.date !== undefined && !/^\d{4}-\d\d-\d\d$/.test(values.date)) errors.push('--date must be YYYY-MM-DD');
   if (errors.length) { for (const e of errors) err(`eval-run: ${e}`); err(USAGE); return 2; }
 
   const dir = resolve(values.dir || DEFAULT_DIR);
-  const opts = { suite, runs, batch: !!values.batch, dir, repo: ROOT, snapshot: values.snapshot, only: values.task, now: () => new Date(), out };
+  const opts = { suite, runs, batch: !!values.batch, dir, repo: ROOT, snapshot: values.snapshot, only: values.task, now: () => new Date(), date: values.date, out };
   try {
     // Every arm's tool before any arm's first call: a later arm refused at its turn would come after earlier arms spent theirs.
     for (const arm of arms) toolFor(suite, arm.unit);
