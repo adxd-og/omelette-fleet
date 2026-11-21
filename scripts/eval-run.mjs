@@ -103,7 +103,9 @@ function toolFor(suite, unit) {
 }
 
 /** What a P brief asks for after the bug report: the fix as a diff, given as text. */
-export const P_SUFFIX = 'Answer with the change that fixes it, as one unified diff against the files in the working directory, paths as `git diff` prints them (a/ and b/), inside one ```diff fenced block.';
+// The first sentence was added after the round's first P call (2026-11-21): the research tool's own preamble points a
+// model at the web, and that call never opened the tree — it rebuilt the file from search results of the project.
+export const P_SUFFIX = 'Work from the files in the working directory: open and read them with your file-reading tool, and do not search the web or open any page for this code, its project, its tracker or its fix. Answer with the change that fixes it, as one unified diff against the files in the working directory, paths as `git diff` prints them (a/ and b/), inside one ```diff fenced block.';
 
 const USAGE = 'usage: node scripts/eval-run.mjs --suite R|V|P|I --arm <unit>:<model>[:<effort>] [--arm …] [--task ID …] [--runs N] [--batch] [--date YYYY-MM-DD] [--dir D] [--snapshot PATH] [--dry-run]';
 const GEMINI_LEVEL = /\((Low|Medium|High|XHigh)\)$/;

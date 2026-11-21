@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MUTATE_RE } from '../core/unit.mjs';
 import { proofInputs } from '../scripts/eval-patch.mjs';
 import { iTaskProblems, main, materializeTree, P_SUFFIX, parseArm, planCalls, readTasks, runArm, snapshotFor, writePrivate } from '../scripts/eval-run.mjs';
 
@@ -404,6 +405,14 @@ function filesUnder(root) {
 }
 
 const HYDROGEN = 'gemini:Gemini 4 Hydrogen:high';
+
+test('P: the instruction sends the arm to the tree in its cwd and off the web, and the unit\'s intent gate lets it through', () => {
+  // The research tool's preamble points a model at the web: without these words a P call rebuilt the file from search results.
+  assert.match(P_SUFFIX, /^Work from the files in the working directory/);
+  assert.match(P_SUFFIX, /do not search the web/);
+  assert.match(P_SUFFIX, /as one unified diff against the files in the working directory/);
+  assert.equal(MUTATE_RE.test(P_SUFFIX), false, 'a brief the unit refuses is a failed call for every arm');
+});
 
 test('P: the bug report with the diff instruction, a fresh copy of the tree as cwd, and neither the gold nor the tests in it', async () => {
   const home = tmp('omelette-evals-tasks-home-');
