@@ -154,7 +154,7 @@ All of it lives in `.omelette/evals/`, which git ignores. The scripts read and w
 
 ## Re-running
 
-From the repository root, with the suites in `.omelette/evals/suites/`. Each `eval-run.mjs` command takes `--dry-run`. The `<…>` are the operator's inputs. Runs are numbered per task, so a task named again gets its next run.
+From the repository root, with the suites in `.omelette/evals/suites/`. Each `eval-run.mjs` command takes `--dry-run`. The `<…>` are the operator's inputs. Runs are numbered per task, so a task named again gets its next run. A round is one date: its run files sit in `runs/<date>/`, today's by default, so once a round runs past midnight every `eval-run.mjs` and `eval-hand.mjs` command takes `--date <the round's date>`.
 
 ```sh
 # R: one arm per command, two runs each; read the Gemini pool before the first and after each
