@@ -54,6 +54,7 @@ What has actually been measured on this project, how each number was taken, and 
 | Question | Where |
 |---|---|
 | How do the fleet's units score on our own research and review tasks? | [The fleet's units on our own tasks](#the-fleets-units-on-our-own-tasks) |
+| Is Gemini 4 Neon better than Hydrogen at research, a reviewer beside the native one, or a patch writer — and what did the spec's three rules say? | [Round two: Gemini 4 Neon](#round-two-gemini-4-neon-2026-11-20) |
 | How did Mistral Large 4 score on the 2026-10-20 security audit, read-only and with a sandboxed shell, and what did the first live repro runs cost? | [Mistral: the security-audit replay (2026-11-06)](#mistral-the-security-audit-replay-2026-11-06) |
 
 **About these numbers:**
@@ -595,15 +596,76 @@ Round one of the evals, 2026-10-16, on agy 1.4.0, codex 0.162.1 and grok 1.0.60:
 | Effort | Neither Gemini model gains steadily from Low to High: Flash's best V recall is at Medium, and Argon High doubles Low's precision at ten times the wall time. |
 | Grok | 20 of 20 on research here does not lift [never a sole source](ORCHESTRATION.md#never-a-sole-source): ten questions, two runs. |
 
-<img src="../evals/charts/r-accuracy.svg" alt="R: correct answers out of 10 and invented URLs per arm, the bar the mean and each dot a run." width="760">
-
-<img src="../evals/charts/v-recall-precision.svg" alt="V: recall of the 7 key defects and precision per arm, the bar the mean and each dot a run." width="760">
-
-<img src="../evals/charts/effort.svg" alt="Effort: Gemini 3.8 Flash and Gemini 4 Argon at Low, Medium and High, R share correct and V recall." width="760">
-
-<img src="../evals/charts/cost.svg" alt="Cost: R share correct and V recall per arm against mean wall time and tokens per call, log scales." width="760">
+Round one's four charts are in the repository's history (`43610be`); the files under `evals/charts/` now hold [round two's](#round-two-gemini-4-neon-2026-11-20).
 
 **How it was graded.** One clean `omelette-reviewer` graded the blinded answers (383 lines). The session checked every uncertain grade and every claimed new defect, plus a seeded 10 % sample of the rest (33 lines, none changed). It overturned 8 grades: 7 under one ruling (a race in the tick that the key's stale-tick defect covers), 1 for consistency with a matching finding. It dropped 13 duplicate lines for that same race.
+
+### Round two: Gemini 4 Neon, 2026-11-20
+
+Run on 2026-11-20 and 21 under one date, on agy 1.5.13 (all of R and the first review calls) and 1.5.14 (the rest: agy updated itself mid-round): 193 unit calls and 18 hand-filed runs of the native reviewer. The spec and its three rules, written before the run, are in [the round's design](superpowers/specs/2026-11-19-evals-neon-design.md).
+
+| Suite | What it asks | Checked by |
+|---|---|---|
+| R | 12 research questions, 3 of them traps (the figure asked for is not published) | a blind grader against a written key |
+| V | 9 reviews: 2 files of our own with keys; 4 bugs from public repositories, shown before the fix (recall only); 3 of those files after the fix (controls: every finding is noise) | a blind grader; each finding outside a key checked against the file |
+| P | 3 small bugs from public repositories, answered as a diff | the maintainers' own tests in a container with no network |
+| I | 4 documents with a planted instruction, and an honest question about each | a string match and a read of the run's tool calls |
+
+**Research**, 24 answers an arm (net is correct minus wrong; tokens are input plus output as the unit reports them, thinking excluded):
+
+| Arm | Correct | Partly | Wrong | Net | Traps passed | Median per call | Tokens per call |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Gemini 4 Hydrogen · High | 17 | 5 | 2 | 15 | 6 of 6 | 65 s | 53 k |
+| Gemini 4 Neon · Medium | 16 | 6 | 2 | 14 | 6 of 6 | 57 s | 35 k |
+| Gemini 4 Neon · High | 16 | 7 | 1 | 15 | 6 of 6 | 90 s | 57 k |
+
+**Review**, the calls that count (an arm's runs that searched the web for the project are excluded, below):
+
+| Arm | Calls | Key defects, our first file | Precision | Fabricated | Public bugs found | Findings on controls | Median per call |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `omelette-reviewer`, native (Opus 5.5, xhigh) | 18 | 7 of 14 | 75 % | 0 | 6 of 8 | 14 | 404 s |
+| Gemini 4 Neon · High | 16 | 5 of 14 | 41 % | 4 | 8 of 8 | 23 | 403 s |
+| Gemini 4 Hydrogen · High | 16 | 3 of 14 | 50 % | 0 | 5 of 8 | 18 | 167 s |
+| Gemini 4 Neon · XHigh ‡ | 2 | 3 of 7 | 31 % | 1 | — | 5, one call | 1 038 s |
+| Claude Opus 5.5 · High, through agy ‡ | 2 | — | — | 0 | 2 of 2 | — | 59 s |
+
+‡ Two counted calls: not an arm to compare. Precision is key defects and confirmed findings over all findings on our own files; the native reviewer's includes the second file, which only it was given (0 of 4 key defects in either run, 9 of its 11 other findings confirmed). Carried from round one, on the first file only: Grok 4.7 5 of 14 at 64 %, GPT-6.1 Sol 6 of 14 at 83 %, GPT-6 Astra 6 of 14 at 93 %.
+
+**Patches**, six calls an arm:
+
+| Arm | Green | Diff did not apply | Median per call | Lines changed per task, against the fix's 39 / 12 / 10 |
+|---|---:|---:|---:|---|
+| Gemini 4 Neon · High | 6 | 0 | 158 s | 156 / 24 / 57 |
+| Gemini 4 Hydrogen · High | 5 | 1 | 56 s | 109 / 22 / 11 |
+
+**Planted instructions**: Hydrogen (High), Neon (Medium) and Neon (High) each 8 of 8 safe and 8 of 8 useful — one read of the document in every run, the planted text neither obeyed nor repeated.
+
+| Question | What round two says (N = 2) |
+|---|---|
+| Research | No arm clears another: net 15, 14 and 15, every trap passed in all 18 answers, no cited URL invented (22 graded). All five wrong answers are one question, which asks to open a page and report a date: every arm answered from search summaries a day or more stale, all six saying outright that they have no page-reading tool. The two questions that ask what a fix changed and which commit a commit message names came back `partly` twelve times of twelve for the same reason. The unit's research is search, not reading. |
+| Review | Neon (High) found all four public bugs in both runs; the native reviewer and Hydrogen missed the same one twice. On our own file it found 5 key defects of 14 against the native reviewer's 7, wrote the round's fabricated findings (4, and 1 more at XHigh), and on the files with nothing left to find it reported 23 findings against 14. No arm fabricated on another project's code: none of 126 findings there cites something that is not in the file. |
+| Our guard, reviewed | The native reviewer found none of the four key defects of the guard as it stood at that commit and eleven others. The session ran each against that guard and a shell: nine are real — seven command shapes the guard passes and a shell runs, two quadratic costs. Seven shapes and one cost still hold on this branch. |
+| Patches | Neon (High) 6 of 6, Hydrogen (High) 5 of 6 in a third of the time; Hydrogen's miss is the right fix in a diff whose hunk header miscounts its lines. Every green diff was read and each is a fix: two tasks match the maintainers' change line for line, the third is one other shape in all four answers of both models (convergence or recall, not checked). |
+| The research tool on code | With no word about the web in the brief, the models searched for the project instead of reading what they were given: 39 of 54 answered review calls, and the first patch call (134 searches, no file read). Those runs are excluded. With one sentence forbidding the web, 33 of 33 calls made no search. |
+| The unit's own limits | Its intent gate refused one of our two review tasks for every unit arm (the task's text holds git words), so that file ran for the native reviewer only. Claude through agy stopped on quota after six answers and was not run on patches. |
+
+**The spec's rules against these numbers** — what the session recommends; the rulings are the operator's:
+
+- **Neon as the research default: not met.** The rule asks a net score 4 above Hydrogen (High)'s or 2 more traps passed; Neon (High) has the same 15 and the same 6, at 1.4 times the median time.
+- **A review role for Neon: not met.** It holds the recall clauses (2.5 key defects a run against the native reviewer's 3.5 less one; 8 public bugs of 8 against 6) and returned no empty answer, and fails two: precision 41 % against Grok's 64 %, and 23 findings on the controls against the native reviewer's 14 plus two.
+- **A sandbox spike: half measured.** Neon (High) is 6 of 6 green where the rule asks 4; the rule's second clause compares it with the Opus arm, which was not run.
+
+**How it was graded.** Three clean `omelette-reviewer` graders, one per set of tasks, wrote 354 lines; the 39 excluded answers were not graded. The session read all 18 trap answers, every uncertain line (41), every `fabricated` line (5) and every finding outside the key on our own two files (51). It overturned 4 grades — two trap answers marked down for an aside that another question already counts, two URL lines — and confirmed 18 findings.
+
+**Limits of this round.** Two runs an arm. The unit arms were shown a file's or a diff's text, the native reviewer the whole snapshot. An arm's counted review answers mix two briefs: the runs of the first brief that did not search, and the re-runs under the brief that forbids the web. A race the key's stale-tick defect covers in the tick has a second instance outside it; round one dropped those lines as duplicates, this round counts them as confirmed findings. The Gemini quota was not read: the usage snapshot did not refresh.
+
+<img src="../evals/charts/r-accuracy.svg" alt="R: correct answers out of 12 and invented URLs for Gemini 4 Hydrogen High, Neon Medium and Neon High, the bar the mean and each dot a run." width="760">
+
+<img src="../evals/charts/v-recall-precision.svg" alt="V: recall of the key defects and precision per arm on the keyed tasks, round one's three arms carried, the bar over every keyed review and each dot a run." width="760">
+
+<img src="../evals/charts/effort.svg" alt="Effort: Gemini 4 Hydrogen at High and Gemini 4 Neon at Medium, High and XHigh, R share correct and V recall." width="760">
+
+<img src="../evals/charts/cost.svg" alt="Cost: R share correct and V recall per arm against mean wall time and tokens per call, log scales." width="760">
 
 ## Mistral: the security-audit replay (2026-11-06)
 

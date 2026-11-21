@@ -134,13 +134,13 @@ This round's:
 
 `scripts/eval-chart.mjs` draws four SVG charts from one date's aggregate: R accuracy, V recall and precision on the keyed tasks, effort, and cost. Each caption names its date, the CLI versions and N, the arms carried from another date, and each incomplete arm with counts. Bars are read from `total`; a dot is drawn only for a run that held every task of its arm. The effort chart never drops a model family the date ran; a carried family left out for want of room is named. The recall-only tasks, the controls and suites P and I are tables, not charts.
 
-**The charts below are round one's** (2026-10-16, with Argon's R arms re-run on 2026-10-21): ten R questions, one V file, models since removed from the catalog. They stay until the new round's are drawn. No Gemini answer cited a URL in round one, so its invented-URL count says nothing about Gemini.
+**The charts below are round two's** (2026-11-20): twelve R questions, nine V tasks, with round one's three V arms carried. Its numbers and limits are in [MEASUREMENTS](../docs/MEASUREMENTS.md#round-two-gemini-4-neon-2026-11-20). Round one's charts (2026-10-16) are in the repository's history, at `43610be`.
 
 ![R: correct answers and invented URLs per arm](charts/r-accuracy.svg)
 
 ![V: recall and precision per arm](charts/v-recall-precision.svg)
 
-![Effort: Argon and Flash at Low, Medium and High](charts/effort.svg)
+![Effort: Hydrogen at High and Neon at Medium, High and XHigh](charts/effort.svg)
 
 ![Cost: score against wall time and tokens per call](charts/cost.svg)
 
