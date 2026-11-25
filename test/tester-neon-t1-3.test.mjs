@@ -1,9 +1,9 @@
 // Tester rows for the 1.13.0 plan's T1-T3 (runProcess outFd, ctx.spawn wrap/outFd, a tool's modelKey).
 // Only what test/spawn.test.mjs and test/unit.test.mjs do not already pin. No real CLI, no network:
 // every child is node -e, every child has a bound.
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { closeSync, mkdtempSync, openSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProcess, liveGroupCount } from '../core/spawn.mjs';
@@ -11,7 +11,10 @@ import { defineUnit, createUnitRuntime } from '../core/unit.mjs';
 import { makeCatalog } from '../core/catalog.mjs';
 
 const node = process.execPath;
-const tmp = () => mkdtempSync(join(tmpdir(), 'neon-t13-'));
+// Every temp dir a row makes is removed when the file ends: a full run left about 25 behind before this.
+const made = [];
+const tmp = (prefix = 'neon-t13-') => { const d = mkdtempSync(join(tmpdir(), prefix)); made.push(d); return d; };
+after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 async function until(check, what, capMs = 5000) {
   const end = Date.now() + capMs;
@@ -122,7 +125,7 @@ const unitWith = (go, extra = {}) => defineUnit({
   ...extra,
 });
 const runtime = (unit, config, envExtra = {}, opts = {}) => {
-  const dir = mkdtempSync(join(tmpdir(), 'neon-t13-home-'));
+  const dir = tmp('neon-t13-home-');
   if (config) writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify(config));
   return { dir, rt: createUnitRuntime(unit, { env: { ...process.env, OMELETTE_HOME: dir, ...envExtra }, ...opts }) };
 };
