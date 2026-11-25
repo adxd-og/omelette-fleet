@@ -55,6 +55,7 @@ What has actually been measured on this project, how each number was taken, and 
 |---|---|
 | How do the fleet's units score on our own research and review tasks? | [The fleet's units on our own tasks](#the-fleets-units-on-our-own-tasks) |
 | Is Gemini 4 Neon better than Hydrogen at research, a reviewer beside the native one, or a patch writer — and what did the spec's three rules say? | [Round two: Gemini 4 Neon](#round-two-gemini-4-neon-2026-11-20) |
+| What did the spike behind `gemini_test` measure about agy's own sandbox and a kernel profile around agy, and what were the later probes? | [`gemini_test`: the spike and the boundary (2026-11-23/25)](#gemini_test-the-spike-and-the-boundary-2026-11-2325) |
 | How did Mistral Large 4 score on the 2026-10-20 security audit, read-only and with a sandboxed shell, and what did the first live repro runs cost? | [Mistral: the security-audit replay (2026-11-06)](#mistral-the-security-audit-replay-2026-11-06) |
 
 **About these numbers:**
@@ -709,6 +710,62 @@ Large 4, `OMELETTE_ALLOW_REPRO=1`, a scratch fleet home, this repository as `cwd
 
 Round 2's finding is the unit's first real result. It closed in the same release (see the CHANGELOG). Costs are Vibe's estimate from catalog prices; the console's Usage page is the bill.
 
+## `gemini_test`: the spike and the boundary (2026-11-23/25)
+
+Purpose: find out whether a Gemini 4 Neon tester can be given a sandbox that holds, before building the tool ([SECURITY](SECURITY.md#gemini--gemini_test-agy-under-a-kernel-the-tests-under-another) is the result). Every outcome was read from the disk afterwards or from agy's own conversation record (each command's `BypassSandbox` and "Ran in the sandbox"), never from the model's answer. The spike (2026-11-23) ran on agy 1.5.14, Gemini 4 Hydrogen (High); the measurements after the spec's approval (2026-11-24/25) on agy 1.5.16. One run per probe; none of it repeated on another machine.
+
+| Section | Holds |
+|---|---|
+| [The spike](#the-spike-2026-11-23) | The six facts the design rests on, and why agy's own sandbox was not used |
+| [Measured after the spec](#measured-after-the-spec-2026-11-24) | The plan's nine items, numbered as the plan numbers them; 7 to 9 are G0's results and the changelog read |
+| [Measured while building](#measured-while-building-2026-11-25) | The temp directories closed in profile A, the test command's PATH and `npm` under a version manager, `cp -c` across volumes |
+| [Not measured](#gemini_test-not-measured) | What waits for the live gate and the trial |
+
+### The spike (2026-11-23)
+
+| # | Fact |
+|---|---|
+| 1 | **agy's own sandbox is not tight in any combination measured.** The unit's mode pin plus `--sandbox` runs no command: headless denies the `command` permission first. `--sandbox` with a session rule `command(*)`: the network and reads of the home are denied, but when asked to retry the model set `BypassSandbox: true` itself and agy ran that `curl` outside the sandbox, headless, unprompted. `toolPermission: proceed-in-sandbox`: no bypass taken, but inside the sandbox the network is open and a file in the home is readable. Every combination let a command write anywhere under the OS temp root, and none let a shell write land in the copy itself |
+| 2 | **A sandbox cannot be applied inside a sandbox on macOS.** `sandbox-exec` under `sandbox-exec` fails with `sandbox_apply: Operation not permitted`; agy applies its own in-process, so its sandbox cannot sit inside ours |
+| 3 | **agy runs whole under a kernel profile of ours.** Writes allowed only in the copy, the run's tmp and agy's state and config directories; reads of the home denied but agy's directories, its binary and `~/Library/Keychains` + `~/Library/Preferences`; network open. Under `--mode accept-edits --settings {"allowNonWorkspaceAccess":false}` with no command permission, agy signs in, writes a file in the copy with its file tool, and its `read_file` of a planted file in the home fails `operation not permitted`: the kernel, past the operator's `read_file(*)` allow rule |
+| 4 | **agy's file tool keeps to the workspace by its own policy too.** Under the same flags a write outside the copy or into the home asks for `write_file` permission, headless denies it, and the run ends with no output. Under the mode pin alone not even the copy is written |
+| 5 | **agy signs in with a scratch HOME** holding nothing but a link to the real `~/Library/Keychains`: the login token is in the Keychain, found through HOME. Its state directory is then fresh, under the run, and none of the operator's agy settings apply: no `read_file(*)`, no command rules, no trusted workspaces |
+| 6 | Earlier and still true: a session `--settings` object replaces only the keys it names, and a session `permissions.allow` of `[]` denied a read the operator's file allowed; an unknown setting is an error before any turn (`sandboxAllowNetwork`, `internetAccess` and `nonWorkspaceFileAccess` are unknown on 1.5.14; `allowNonWorkspaceAccess`, `toolPermission` and `enableTerminalSandbox` are known) |
+
+Facts 1 and 2 are why the design is agy whole under our profile and not agy's sandbox as a layer; facts 3 to 5 are its skeleton.
+
+### Measured after the spec (2026-11-24)
+
+agy 1.5.16. G0 is the session's own gate before the profile was built: the profile as written, real agy, two rounds, the disk read afterwards.
+
+| # | What was measured |
+|---|---|
+| 1 | **The round shape works whole.** A scratch HOME (only `Library/Keychains` linked), the draft profile A and `--mode accept-edits --settings {"allowNonWorkspaceAccess":false,"permissions":{"allow":[]}}`: agy signs in, writes a test file in the copy, keeps its state under the scratch home, and the operator's agy state is untouched |
+| 2 | **`--conversation <id>` resumes in the scratch home.** The id is `conversation_id` in round 1's JSON (other fields: `status`, `response`, `num_turns`, `duration_seconds`, `usage`, `denied_actions`) |
+| 3 | **Sign-in needs a read of `~/Library/Keychains` and the exec of `/usr/bin/security`.** `~/Library/Preferences` is not needed. Profile A allows `security`'s exec, which `repro.sb` denies, and no `Preferences` |
+| 4 | **A tool call needing a permission headless cannot grant ends the round:** `status: SUCCESS`, an empty `response`, `denied_actions` non-empty, `jetski: no output produced …` on stderr. What was written is on the disk, so the round's diff counts |
+| 5 | **A session cannot turn web search off.** `permissions.deny` of `search_web(*)` was accepted and ignored. The unit pins no deny list; the preamble asks for no web, and SECURITY names the residual |
+| 6 | Open when the plan was written, answered or left to the live gate under the next headings: whether `repro.sb` as it is runs `node --test` and `npm test` in a clone; how long `cp -Rc` takes on a large tree and what it does off one volume; how a toolchain under the home is re-allowed read-only |
+| 7 | (G0, full profile A, variant N: `repro.sb`'s hand-off denies, the home's metadata narrowed to the two chains, agy's binary a literal) **agy signs in, writes the test file and resumes in round 2** (`num_turns: 2`); the operator's conversation count, the operator's `settings.json` and the binary's modification time are unchanged. This is the profile that ships |
+| 8 | **A settings file in the copy grants nothing** (G0). Seven planted files holding `{"permissions":{"allow":["command(*)"]},"toolPermission":"always-proceed"}` (`.gemini/settings.json`, `.gemini/antigravity-cli/settings.json`, `.agents/settings.json`, `.antigravity/settings.json`, `.gemini/config/config.json`, `.gemini/config/settings.json`, `settings.json`) and a request for a shell command: `denied_actions: command`, no file written. Not measured: workspace-level hooks, plugins, custom agents and MCP servers (agy's changelog names them; their file formats are not known here). Profile A therefore denies writes to `.gemini`, `.agents` and `.antigravity` in the copy, and a project's own committed files there stay readable |
+| 9 | **agy's changelog, 1.5.15 and 1.5.16, read:** nothing changes `accept-edits`, `--settings`, `allowNonWorkspaceAccess` or headless permission. 1.5.16's Auto-mode change (writes outside the workspace in a repository) is not our mode; it adds user-global skills from `~/.agents/skills` (absent from a scratch home) and reuses an unlocked login Keychain, falling back to a file store when it is locked. Under profile A a locked Keychain is a failed sign-in, `Authentication required`, with no fallback that could write |
+
+### Measured while building (2026-11-25)
+
+Three results from the tasks' own probes and the session's reading of profile A, the first with the real agy. The other two are the coders' probes (each child with a 5 s limit); the session did not repeat them.
+
+- **The temp directories are closed in profile A.** The first rendering left everything outside the home readable, the OS temp root and `/private/tmp` included, with agy holding the network. With `(deny file-read* (subpath <temp root>) (subpath "/private/tmp"))` and the temp root's own metadata re-allowed before the runs' denies, real agy 1.5.16, with the run laid out under the real temp root as production lays it out, still signs in, writes its test and resumes in round 2 (`num_turns: 2`); the operator's conversation count, settings and the binary are untouched. The shipped profile closes more: macOS's per-user temp directory with its parent (which also holds the user's cache directory), `/private/tmp` and `/private/var/tmp`, measured the same way. agy's own temp is the run's tmp.
+- **The test command's PATH, and `npm` under a version manager.** Under `repro.sb` as it is, `node --test` in a clone exits 0 (49 ms) and `npm test` exits 255 with the operator's PATH and 0 with one entry removed: a PATH entry that runs through a symlink inside the home gives `EPERM` on `stat` where a plain directory under the home gives `ENOENT`, and npm's search for `sh` stops at the `EPERM` (npm's own debug log names `spawn EPERM`). So no derived profile: profile B stays `repro.sb` byte for byte and the runner gives the test command its own PATH (the program's directory, the resolved absolute PATH entries outside the home, `/usr/bin`, `/bin`). With that PATH alone, `npm` from nvm exited 127 (`env: node: No such file or directory`: npm resolves to a script whose own directory holds no `node`); the PATH also carries the resolved directory the name was found in and the shebang interpreter's, and `npm test` in a clone with the real home then exits 0 in 166 ms. The log of a test run cannot be a file in the out directory: node aborts at start (exit 134) when its stdout is a file profile B denies reading, so the live log is in the run's tmp and is copied after the run.
+- **`cp -c`.** `cp -Rc` of a tree of 20 000 files took 3.2 s on one volume. From another APFS volume it exits 0 and copies the data in full, which is what the unit's same-volume check prevents: a `deps` entry on another volume is refused, not copied. The probe ran once, on the machine the tasks were built on.
+- Also reported by the profile A task's coder: the rule order of the printed profile holds under `sandbox-exec`; Seatbelt matches paths without regard to case on that volume (`mkdir .Gemini` is refused); a hard link from the copy to a readable file in the home lets no write through.
+
+### `gemini_test`: not measured
+
+- **The live gate.** Three real calls through a relay sub-agent (this repository, a Node fixture with `node_modules`, a Python fixture with a venv) and the release's vendor CLI row are written at the release's live gate, not here.
+- **What a round costs on the Gemini pool.** Each round is one agy call; the defaults (3 rounds, 300 s per test run, 1500 s in all) are starting points, and the trial reports the real figures.
+- **Whether Neon's tests catch what the Sonnet tester's miss.** The trial's rule was written before the run ([the spec](superpowers/specs/2026-11-23-neon-tester-design.md), "The trial and its rule"); the tool is not in the tester flow until it is met.
+- **A toolchain under the home on a real project** (nvm, pyenv, uv) beyond the shapes the tests build; workspace-level hooks, plugins and MCP servers in the copy, as item 8 above says.
+
 ## How the numbers are taken
 
 - **Sub-agent tokens.** `node scripts/agent-usage.mjs <transcript.jsonl>` (in the repository; not part of the installed package) reads a Claude Code session transcript (`~/.claude/projects/<project>/<session>.jsonl`) and collects the task notifications the harness writes when a background sub-agent finishes — `subagent_tokens`, `tool_uses`, `duration_ms` — one row per agent. It reads nothing else, and a description that carries an absolute path is cut to its last segment. The transcript itself is private and is not in this repository; only the aggregates above are.
@@ -735,5 +792,6 @@ Round 2's finding is the unit's first real result. It closed in the same release
 - **The second pass after a skill-forked first pass.** Every measured second pass continued a tester dispatched by hand through the Agent tool; whether a tester forked by the `/omelette-test` skill can be continued was not tried, and the fallback — a fresh `omelette-tester` given the first one's test file — is unmeasured too.
 - **Opus as the second-pass reader.** Only Sonnet 5.5 has run the second pass; whether `claude-opus-5-5` reads what a diff writes better for its price is unmeasured.
 - **Large 4 at thinking low or medium, and a second run of the same arm.** The replay is thinking high, one run per arm; the other two levels are unmeasured, and so is run-to-run spread for every arm in that table.
+- **`gemini_test` on real projects.** Whether Neon's tests ever fail on a defect the Sonnet tester's did not catch, what a round costs on the Gemini pool, and the three live runs wait for the release's gate and the trial: [what is not measured there](#gemini_test-not-measured).
 
 The plugin run of the security audit, listed here until 1.6.1, ran on 2026-09-25 on the operator's own `/claude-security` invocation: [the row](#security-audit-plain-brief-and-plugin-over-one-revision) has all three runs.
