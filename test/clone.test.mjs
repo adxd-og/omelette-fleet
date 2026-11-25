@@ -142,6 +142,18 @@ test('cloneDiff refuses the git dir\'s own index and an empty indexFile', () => 
   assert.throws(() => core.cloneDiff(run.clone, gitDirOf(run), { indexFile: '' }), (e) => e.message === 'cloneDiff: indexFile must be an absolute path (got "")');
 });
 
+test('cloneDiff\'s exclude drops untracked files under the named directories only', () => {
+  const run = open(committed());
+  for (const d of ['a', 'ab', 'b/a']) {
+    mkdirSync(join(run.clone, d), { recursive: true });
+    writeFileSync(join(run.clone, d, 'x'), 'x\n');
+  }
+  const d = core.cloneDiff(run.clone, gitDirOf(run), { exclude: ['a'] });
+  assert.match(d, /^\+\+\+ b\/ab\/x$/m);
+  assert.match(d, /^\+\+\+ b\/b\/a\/x$/m);
+  assert.doesNotMatch(d, /^\+\+\+ b\/a\/x$/m);
+});
+
 test('prepareClone refuses dirs that is not an array, and a setup cannot change CLONE_CONFIG', () => {
   const src = committed();
   assert.throws(() => open(src, { dirs: 'tmp' }), (e) => e.message === 'prepareClone: dirs must be an array of directory names');

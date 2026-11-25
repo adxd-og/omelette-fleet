@@ -229,7 +229,10 @@ export function assertRun(run, message) {
  * git dir's index before each diff, so the git dir's own index stays pristine
  * and one path serves every diff of a run. A run passes it on every diff or on
  * none: a diff without it writes its intent-to-add entries into the git dir's
- * own index.
+ * own index. `exclude` names directories relative to the clone (no leading or
+ * trailing `/`): an untracked path that is one of them or lies under one of
+ * them is dropped before the intent-to-add and never enters the diff, whatever
+ * any ignore file in the clone says (the model can write `.gitignore`).
  *
  * This runs outside the sandbox, so it reads nothing the model could have
  * written but the work tree itself: the git dir is `gitDir`, the copy
@@ -238,7 +241,7 @@ export function assertRun(run, message) {
  * global config applies (no external diff, textconv or filter driver), and
  * submodules and nested repositories are never entered.
  */
-export function cloneDiff(clone, gitDir = join(dirname(clone), 'out', 'git'), { keepKey = 'mistral.reproKeep', indexFile } = {}) {
+export function cloneDiff(clone, gitDir = join(dirname(clone), 'out', 'git'), { keepKey = 'mistral.reproKeep', indexFile, exclude = [] } = {}) {
   const base = ['--git-dir', gitDir, '--work-tree', clone, '--literal-pathspecs', ...DIFF_CONFIG];
   const env = isolatedGitEnv();
   if (indexFile !== undefined) {
@@ -253,7 +256,8 @@ export function cloneDiff(clone, gitDir = join(dirname(clone), 'out', 'git'), { 
     env.GIT_INDEX_FILE = indexFile;
   }
   const opts = { cwd: clone, env };
-  const untracked = git([...base, 'ls-files', '--others', '--exclude-standard', '-z'], opts).split('\0').filter(Boolean);
+  const excluded = (p) => exclude.some((e) => p === e || p.startsWith(e + '/'));
+  const untracked = git([...base, 'ls-files', '--others', '--exclude-standard', '-z'], opts).split('\0').filter((p) => p && !excluded(p));
   const nested = untracked.filter((p) => inNestedRepo(clone, p));
   const plain = untracked.filter((p) => !nested.includes(p));
   if (plain.length) git([...base, 'add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], { ...opts, input: plain.join('\0') });
