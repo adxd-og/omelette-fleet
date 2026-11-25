@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { runProcess, buildChildEnv, ALLOWED_ENV } from '../core/spawn.mjs';
@@ -343,3 +343,31 @@ test('buildChildEnv: PATH reaches the child with its ABSOLUTE entries only, in o
     // is itself a search of the cwd).
     assert.equal('PATH' in buildChildEnv({ env: { PATH: '.:rel' } }), false);
   });
+
+test('outFd: stdout and stderr land in the file in the order written, and the result\'s streams are empty', async () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'spawn-outfd-')), 'out.txt');
+  const fd = openSync(f, 'wx', 0o600);
+  try {
+    const r = await runProcess({
+      bin: node,
+      args: ['-e', "process.stdout.write('a\\n');process.stderr.write('b\\n');process.stdout.write('c\\n')"],
+      outFd: fd, hardKillMs: 5000,
+    });
+    assert.equal(r.code, 0);
+    assert.equal(r.stdout, '');
+    assert.equal(r.stderr, '');
+    assert.equal(r.capped, false);
+  } finally { closeSync(fd); }
+  assert.equal(readFileSync(f, 'utf8'), 'a\nb\nc\n');
+});
+
+test('outFd: a hard kill still kills the group', async () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'spawn-outfd-')), 'out.txt');
+  const fd = openSync(f, 'wx', 0o600);
+  const t0 = Date.now();
+  try {
+    const r = await runProcess({ bin: node, args: ['-e', 'setTimeout(() => {}, 30000)'], outFd: fd, hardKillMs: 300 });
+    assert.equal(r.killed, true);
+  } finally { closeSync(fd); }
+  assert.ok(Date.now() - t0 < 3000);
+});

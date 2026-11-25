@@ -234,7 +234,7 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
  * @param {{bin:string, args:string[], cwd?:string, env?:object, envPassthrough?:string[],
  *          extraEnv?:object, scrubEnv?:string[], inheritEnv?:boolean, hardKillMs?:number,
  *          outputCap?:number, stdinText?:string, notFoundHelp?:string, log?:(m:string)=>void,
- *          signal?:AbortSignal, killGroupOnExit?:boolean}} o
+ *          signal?:AbortSignal, killGroupOnExit?:boolean, outFd?:number}} o
  *   env is the PARENT environment to select from — never the child env itself.
  *   inheritEnv: hand the parent env over, PATH's relative entries removed (operator tools only, see header).
  *   outputCap: tail-keeping cap on stdout — the unit's `outputCap` config value.
@@ -243,6 +243,9 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
  *   killGroupOnExit: when the child closes, SIGKILL whatever is left in its
  *     group — a process it backgrounded must not outlive the call. Off by
  *     default: only a caller whose child runs a model's commands asks for it.
+ *   outFd: an open file descriptor that takes the child's stdout AND stderr, in
+ *     the order written; the result's `stdout` and `stderr` are then '' and
+ *     `capped` false.
  * @returns {Promise<{stdout:string, stderr:string, code:number|null, signal:string|null,
  *                    killed:boolean, capped:boolean, cancelled:boolean}>}
  *   capped: the cap dropped characters, so `stdout` starts mid-stream.
@@ -250,7 +253,7 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
  */
 export function runProcess({
   bin, args, cwd, env = process.env, envPassthrough = [], extraEnv, scrubEnv = [], inheritEnv = false,
-  hardKillMs = 0, outputCap = OUTPUT_CAP, stdinText, notFoundHelp, log = () => {}, signal, killGroupOnExit = false,
+  hardKillMs = 0, outputCap = OUTPUT_CAP, stdinText, notFoundHelp, log = () => {}, signal, killGroupOnExit = false, outFd,
 }) {
   return new Promise((resolve, reject) => {
     const childEnv = inheritEnv
@@ -263,7 +266,7 @@ export function runProcess({
         cwd: cwd || process.cwd(),
         env: childEnv,
         detached: true,
-        stdio: [stdinText != null ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+        stdio: [stdinText != null ? 'pipe' : 'ignore', outFd ?? 'pipe', outFd ?? 'pipe'],
       });
     } catch (err) {
       reject(new Error(`${bin} spawn failed: ${(err && err.message) || err}`));
@@ -295,19 +298,24 @@ export function runProcess({
     const capping = outputCap > 0;
     let errBuf = '';
     let capped = false;
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (c) => {
-      chunks.push(c);
-      total += c.length;
-      while (capping && chunks.length > 1 && total - chunks[0].length >= outputCap) {
-        total -= chunks.shift().length;
-        dropped = true;
-      }
-    });
-    child.stdout.on('error', () => {});
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (c) => { errBuf = (errBuf + c).slice(-STDERR_CAP); });
-    child.stderr.on('error', () => {});
+    // With `outFd` both streams go to that file and there is no pipe to read.
+    if (child.stdout) {
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (c) => {
+        chunks.push(c);
+        total += c.length;
+        while (capping && chunks.length > 1 && total - chunks[0].length >= outputCap) {
+          total -= chunks.shift().length;
+          dropped = true;
+        }
+      });
+      child.stdout.on('error', () => {});
+    }
+    if (child.stderr) {
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (c) => { errBuf = (errBuf + c).slice(-STDERR_CAP); });
+      child.stderr.on('error', () => {});
+    }
     if (stdinText != null) {
       child.stdin.on('error', () => {});
       child.stdin.end(stdinText);
