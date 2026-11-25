@@ -36,7 +36,7 @@ How to run a session with a fleet: who decides, who proposes, and which unit get
 | Is Claude Code's advisor worth attaching to a role? | [Effort by role and model](#effort-by-role-and-model) |
 | Which model and effort did a sub-agent actually run, and how do I probe it? | [Effort by role and model](#effort-by-role-and-model) |
 | The tester stopped at its turn limit. What now? | [When the tester runs out of turns](#when-the-tester-runs-out-of-turns) |
-| Which unit should a given task be routed to, and when does a security review go to Mistral? | [Routing by task](#routing-by-task) |
+| Which unit should a given task be routed to, when does a security review go to Mistral, and where does the second tester on Gemini (`gemini_test`, on trial) stand? | [Routing by task](#routing-by-task) |
 | When should I escalate to a stronger model or higher effort, and which Mistral alias is the default? | [Model and effort escalation](#model-and-effort-escalation) |
 | How much should I trust a unit's claims on their own (Grok's one in three, Mistral's three of nine)? | [Never a sole source](#never-a-sole-source) |
 | How do I tell a slow run from a stuck one? | [Supervising with the status feed](#supervising-with-the-status-feed) |
@@ -290,7 +290,7 @@ The one exception, and it runs the other way: **the tester may fix or drop its O
 Delegation multiplies reading: four planners re-read the same modules, and a report in free prose has to be taken on faith or re-derived. The answer is a funnel — explore once, pass compact evidence up — with one guard against the funnel's own failure: a digest that cannot be checked turns one agent's mistake into everyone's premise. So evidence is written as **pointer lines**, and a command verifies them.
 
 ```
-- `core/unit.mjs:540` · `const finish = (text, isError` · finish() closes the status entry and spools the record
+- `core/unit.mjs:559` · `const finish = (text, isError` · finish() closes the status entry and spools the record
 ```
 
 `path:line` — relative to the project root, never absolute, one line and not a range · a **verbatim fragment** of that line in backticks — at least 8 characters and a run of three letters or digits, no backtick inside it · the claim, which is not optional. Quote, never paraphrase: paraphrase is where mistakes enter. A line that opens like a pointer and does not parse is `malformed`, and a fragment too short or without a run of three alphanumerics proves nothing and is `weak` — both fail, because evidence that silently stops counting is the failure this shape exists to prevent. Everything else is prose and is ignored.
@@ -407,6 +407,7 @@ The most common case is the tester running out of turns on a big diff. `maxTurns
 | Research where the answer depends on running things | **Codex** → `codex_research` | The same default (`gpt-6.1-sol` at `xhigh`) and the same sandbox, plus web search, and it reports real token usage per call |
 | Final pre-release security audit | **Codex** on `gpt-6-astra` (heavy reviews only) — pass `model: "gpt-6-astra"` | Leads gpt-5.6-sol on the vendor's own cyber evals (ExploitBench 100.0 vs 78.5, ExploitGym 42.4 vs 30.3). Five times 6.1-sol's input and output price and slower (51 tok/s against 68) — two or three runs per release, not one per PR |
 | Security review by a model that reproduces | **Mistral** → `mistral_security_review`, then `mistral_security_repro` under `OMELETTE_ALLOW_REPRO=1` | Large 4 at thinking high found half the 2026-10-20 audit's key with no wrong claim, and with a sandboxed shell it ran the finding no read-only arm found. Repro works in a disposable clone under a kernel sandbox and returns a diff the session applies, or does not. macOS only |
+| A second tester on another vendor's model | **Gemini** → `gemini_test` under `OMELETTE_ALLOW_REPRO=1`, through a relay sub-agent, the answer read with `gemini_result` | not yet in the tester flow — on trial (1.13.0 spec, «The trial») |
 | Tie-breaker when Grok and Hydrogen disagree | **Gemini** → `Gemini 4 Neon (High)`; if agy refuses it, **Codex** → `codex_research` on `gpt-6.1-sol` | A third voice inside the fleet: Neon, a model that is neither Grok nor the default Hydrogen |
 | Image generation | **Gemini** → `gemini_image`, **Grok** → `grok_image`, or **Codex** → `codex_image` (gpt-image-2) | All three save outside your project — a temp directory, or Grok's session directory — and return an absolute path you import by hand |
 | Image-to-image editing | **Grok** → `grok_image_edit` | The only unit in the fleet that edits images |
