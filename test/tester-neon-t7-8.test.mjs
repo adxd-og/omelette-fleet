@@ -281,7 +281,9 @@ while (written < total) {
 }
 `;
   const exact = `process.stdout.write('q'.repeat(1024 * 1024 - 1) + '\\n');`;
-  const w = world({ files: { 'big.mjs': lines3, 'exact.mjs': exact } });
+  // Two runs: a run's test command is pinned at its first test run.
+  const w = world({ files: { 'big.mjs': lines3 } });
+  const w2 = world({ files: { 'exact.mjs': exact } });
   try {
     const r = await w.exec({ args: [node(), 'big.mjs'] });
     assert.equal(r.code, 0);
@@ -296,22 +298,32 @@ while (written < total) {
     assert.equal(nums.length, 8192);
     assert.equal(nums[0], 24576 - 8192);
     assert.ok(r.tail.endsWith(`${String(24575).padStart(7, '0')} ${'z'.repeat(119)}\n`));
-    const e = await w.exec({ args: [node(), 'exact.mjs'], round: 2 });
+    const e = await w2.exec({ args: [node(), 'exact.mjs'] });
     assert.equal(statSync(e.log).size, 1024 * 1024);
     assert.equal(readFileSync(e.log, 'latin1').startsWith('qqqq'), true, 'no header on a log that is not cut');
-  } finally { w.done(); }
+  } finally {
+    w.done();
+    w2.done();
+  }
 });
 
 test('the home and the fleet home given through a link (/tmp) are resolved: the real path of a secret stays unreadable', KROW, async () => {
-  const w = world({ files: { 'readhome.mjs': 'import { readFileSync } from "node:fs";\ntry { readFileSync(process.argv[2]); console.log("read:ok"); } catch (e) { console.log("read:" + e.code); }\n' } });
+  // Two runs, one per command: a run's test command is pinned at its first test run.
+  const files = { 'readhome.mjs': 'import { readFileSync } from "node:fs";\ntry { readFileSync(process.argv[2]); console.log("read:ok"); } catch (e) { console.log("read:" + e.code); }\n' };
+  const w = world({ files });
+  const w2 = world({ files });
   try {
     const spelled = `/tmp/${w.home.split('/').pop()}`;
     assert.equal(realpathSync(spelled), w.home, 'the fixture needs /tmp to be a link to /private/tmp');
     const r = await w.exec({ args: [node(), 'readhome.mjs', join(w.home, '.ssh', 'id')], home: spelled, fleet: `${spelled}/.omelette` });
     assert.equal(r.tail, 'read:EPERM\n');
-    const f = await w.exec({ args: [node(), 'readhome.mjs', join(w.fleet, 'fleet-secret')], home: spelled, fleet: `${spelled}/.omelette`, round: 2 });
+    const spelled2 = `/tmp/${w2.home.split('/').pop()}`;
+    const f = await w2.exec({ args: [node(), 'readhome.mjs', join(w2.fleet, 'fleet-secret')], home: spelled2, fleet: `${spelled2}/.omelette` });
     assert.equal(f.tail, 'read:EPERM\n');
-  } finally { w.done(); }
+  } finally {
+    w.done();
+    w2.done();
+  }
 });
 
 test('a time limit ends a command that ignores SIGTERM, and says so', KROW, async () => {
