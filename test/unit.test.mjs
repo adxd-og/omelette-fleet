@@ -882,6 +882,18 @@ test('wrap receives the located CLI and the call\'s args, and its command is wha
   assert.match(bad.text, /wrap must return \{ bin, args \}/);
 });
 
+test('a wrap that throws is a rejection of ctx.spawn, not a throw', async () => {
+  const rt = createUnitRuntime(fakeUnit({
+    tools: [...fakeUnit().tools, {
+      name: 'fake_wrap_throws', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+      run(_a, ctx) {
+        return ctx.spawn({ args: [], wrap: () => { throw new Error('boom'); } }).then(() => 'resolved', (e) => `rejected ${e.message}`);
+      },
+    }],
+  }), env(null));
+  assert.equal((await rt.callTool('fake_wrap_throws', {})).text, 'rejected boom');
+});
+
 test('outFd passes through ctx.spawn', async () => {
   const f = join(mkdtempSync(join(tmpdir(), 'unit-outfd-')), 'out.txt');
   const fd = openSync(f, 'wx', 0o600);

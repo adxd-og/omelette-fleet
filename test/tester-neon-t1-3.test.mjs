@@ -206,6 +206,8 @@ test('wrap: a wrapped bin that does not exist is an error, not a hang', async ()
   const r = await rt.callTool('fake_go', {});
   assert.equal(r.isError, true, r.text);
   assert.ok(Date.now() - t0 < 5000);
+  assert.ok(r.text.includes(join(dir, 'no-such-wrapper')), r.text);
+  assert.ok(!r.text.includes('install the'), r.text);
 });
 
 test('wrap is not called when the CLI cannot be located (the not-found error comes first)', async () => {

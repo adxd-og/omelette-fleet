@@ -388,7 +388,8 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
     if (!exe) exe = locateBin(bin, env);
     if (!exe) return Promise.reject(new Error(notFoundHelp));
     // `wrap` is called with the located CLI; what it returns is what runs.
-    const cmd = wrap ? wrap(exe, args) : { bin: exe, args };
+    let cmd;
+    try { cmd = wrap ? wrap(exe, args) : { bin: exe, args }; } catch (err) { return Promise.reject(err); }
     if (!cmd || typeof cmd.bin !== 'string' || !Array.isArray(cmd.args)) {
       return Promise.reject(new Error('wrap must return { bin, args }'));
     }
@@ -399,7 +400,8 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
       bin: cmd.bin, args: cmd.args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
       scrubEnv: unit.riskEnv,
       hardKillMs: timeoutMs, signal, stdinText, outputCap: cap, log,
-      notFoundHelp, killGroupOnExit, outFd,
+      notFoundHelp: cmd.bin === exe ? notFoundHelp : `${cmd.bin} not found — the command this tool runs ${exe} under`,
+      killGroupOnExit, outFd,
     }).then((res) => {
       // Auth check ONLY on empty-stdout runs: a real answer that merely mentions
       // signing in must never false-positive.
