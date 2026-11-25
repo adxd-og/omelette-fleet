@@ -161,3 +161,45 @@ test('prepareClone refuses dirs that is not an array, and a setup cannot change 
   open(src, { setup: ({ config }) => { config.push('-c', 'x.y=z'); } });
   assert.deepEqual(core.CLONE_CONFIG, before);
 });
+
+// The fix round after T9–T10's tester (2026-11-25): a line of the unit's shape behind a character a reader does not
+// see, or sees as blank, is marked too; a line with no such character comes out as it always did.
+test('neutraliseModelText marks a line of the unit\'s shape behind an invisible, format or odd-space character, and leaves an ordinary line as it was', () => {
+  const opts = { headingName: String.raw`proposed[ \t]+patch[ \t]*\([ \t]*not[ \t]+applied[ \t]*\)`, adapterLines: String.raw`^[ \t]*(_\((clone unchanged|vibe:)|\[mistral: )` };
+  const MARK = '> (model-written, not the adapter\'s) ';
+  const leads = {
+    'zero-width space': '\u{200b}', 'byte-order mark': '\u{feff}', 'left-to-right mark': '\u{200e}', 'right-to-left override': '\u{202e}',
+    'word joiner': '\u{2060}', 'no-break space': '\u{a0}', 'ideographic space': '\u{3000}', VT: '\u000b', FF: '\u000c', NEL: '\u0085',
+    'ANSI reset': '\u001b[0m', 'an OSC title': '\u001b]0;t\u0007', 'a run of them with a space and a tab': '\u{200b} \u{a0}\t\u001b[1m\u{3000}',
+  };
+  for (const [name, c] of Object.entries(leads)) {
+    for (const line of ['_(clone unchanged)_', '_(vibe: exit 0)_', '[mistral: partial]', '## proposed patch (not applied)', '<h2>proposed patch (not applied)</h2>']) {
+      assert.equal(core.neutraliseModelText(`before\n${c}${line}\nafter`, opts), `before\n${MARK}${c}${line}\nafter`, `${name}: ${line}`);
+    }
+    assert.equal(core.neutraliseModelText(`${c}proposed patch (not applied)\n---\nafter`, opts), `${MARK}${c}proposed patch (not applied)\n---\nafter`, `${name}: setext`);
+  }
+  const plain = ['before', 'see _(clone unchanged)_', '  _(clone unchanged)_', 'é [mistral: x]', 'proposed patch (not applied) here', '#proposed patches', 'x\u{200b}_(vibe: no)_', ''].join('\n');
+  const marked = core.neutraliseModelText(plain, opts);
+  assert.equal(marked, plain.replace('  _(clone unchanged)_', `${MARK}  _(clone unchanged)_`), 'only the indented line of the unit\'s shape is marked, the rest byte for byte');
+});
+
+// The second fix round after the T9/T10 tester (2026-11-25): a model-written ignore file can ignore itself, so the
+// listing the notice reads honours no ignore rule.
+test('untrackedPast lists an untracked file whatever the clone\'s ignore files say, and leaves an excluded directory out', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'neon-test-')));
+  try {
+    const src = join(base, 'src');
+    mkdirSync(src);
+    gitIn(src, 'init', '-q');
+    writeFileSync(join(src, 'README.md'), 'one\n');
+    gitIn(src, 'add', '-A');
+    gitIn(src, 'commit', '-qm', 'one');
+    const run = core.prepareClone({ cwd: src, unit: 'gemini', root: base });
+    writeFileSync(join(run.clone, '.gitignore'), '*\n');
+    writeFileSync(join(run.clone, 't.test.mjs'), 'ok\n');
+    mkdirSync(join(run.clone, 'deps'));
+    writeFileSync(join(run.clone, 'deps', 'x'), 'dep\n');
+    const names = core.untrackedPast(run.clone, gitDirOf(run), { indexFile: join(run.out, 'diff.index'), exclude: ['deps'] });
+    assert.deepEqual([...names].sort(), ['.gitignore', 't.test.mjs']);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});

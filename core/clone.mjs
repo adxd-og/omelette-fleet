@@ -242,6 +242,52 @@ export function assertRun(run, message) {
  * submodules and nested repositories are never entered.
  */
 export function cloneDiff(clone, gitDir = join(dirname(clone), 'out', 'git'), { keepKey = 'mistral.reproKeep', indexFile, exclude = [] } = {}) {
+  const { base, opts, nested } = markUntracked(clone, gitDir, { indexFile, exclude });
+  const diff = gitRun([...base, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all'], { ...opts, cap: DIFF_CAP });
+  const lines = [
+    ...nested.map((p) => `(nested repository ${oneLine(p.replace(/\/+$/, ''))} not diffed)\n`),
+    diff.text,
+    ...(diff.truncated ? [`… diff truncated at 1 MB — set ${keepKey}=true to inspect the clone\n`] : []),
+  ];
+  return lines.join('');
+}
+
+/**
+ * The paths the run changed in the clone, relative to it: what cloneDiff
+ * diffs, as names — `git diff --name-only -z --no-renames` (a rename is both its
+ * old and its new name) with cloneDiff's base args and env, after the same
+ * preparation (`indexFile` seeded, untracked files under `exclude` dropped,
+ * the rest marked intent-to-add). A repository the model nested in the clone
+ * is not a name here: cloneDiff names it on its own line.
+ * @returns {string[]}
+ */
+export function changedPaths(clone, gitDir, { indexFile, exclude = [] } = {}) {
+  const { base, opts } = markUntracked(clone, gitDir, { indexFile, exclude });
+  return git([...base, 'diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all'], opts).split('\0').filter(Boolean);
+}
+
+/**
+ * Every untracked path in the clone, relative to it, **whatever any ignore rule
+ * says**: `git ls-files --others -z` with cloneDiff's base args, env and
+ * `indexFile` handling, without `--exclude-standard`, dropping only the paths
+ * at or under an `exclude` directory. Why no ignore rule: a `.gitignore` the
+ * model writes can ignore itself and everything else, so a listing that
+ * honours it misses the very file that hides the rest from the diff.
+ * @returns {string[]}
+ */
+export function untrackedPast(clone, gitDir, { indexFile, exclude = [] } = {}) {
+  const { base, opts } = diffSetup(clone, gitDir, indexFile);
+  return git([...base, 'ls-files', '--others', '-z'], opts).split('\0').filter((p) => p && !underAny(p, exclude));
+}
+
+/** `p` is one of the `exclude` directories or lies under one. */
+const underAny = (p, exclude) => exclude.some((e) => p === e || p.startsWith(e + '/'));
+
+/**
+ * The base args and options of every git call of the diff: `indexFile`, when
+ * given, checked and seeded from the git dir's index.
+ */
+function diffSetup(clone, gitDir, indexFile) {
   const base = ['--git-dir', gitDir, '--work-tree', clone, '--literal-pathspecs', ...DIFF_CONFIG];
   const env = isolatedGitEnv();
   if (indexFile !== undefined) {
@@ -255,19 +301,22 @@ export function cloneDiff(clone, gitDir = join(dirname(clone), 'out', 'git'), { 
     copyFileSync(join(gitDir, 'index'), indexFile);
     env.GIT_INDEX_FILE = indexFile;
   }
-  const opts = { cwd: clone, env };
-  const excluded = (p) => exclude.some((e) => p === e || p.startsWith(e + '/'));
-  const untracked = git([...base, 'ls-files', '--others', '--exclude-standard', '-z'], opts).split('\0').filter((p) => p && !excluded(p));
+  return { base, opts: { cwd: clone, env } };
+}
+
+/**
+ * What cloneDiff and changedPaths do before their diff: `indexFile` checked and
+ * seeded from the git dir's index, the untracked files listed, those under an
+ * `exclude` directory dropped, a nested repository's set aside (returned as
+ * `nested`), the rest marked intent-to-add.
+ */
+function markUntracked(clone, gitDir, { indexFile, exclude }) {
+  const { base, opts } = diffSetup(clone, gitDir, indexFile);
+  const untracked = git([...base, 'ls-files', '--others', '--exclude-standard', '-z'], opts).split('\0').filter((p) => p && !underAny(p, exclude));
   const nested = untracked.filter((p) => inNestedRepo(clone, p));
   const plain = untracked.filter((p) => !nested.includes(p));
   if (plain.length) git([...base, 'add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], { ...opts, input: plain.join('\0') });
-  const diff = gitRun([...base, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all'], { ...opts, cap: DIFF_CAP });
-  const lines = [
-    ...nested.map((p) => `(nested repository ${oneLine(p.replace(/\/+$/, ''))} not diffed)\n`),
-    diff.text,
-    ...(diff.truncated ? [`… diff truncated at 1 MB — set ${keepKey}=true to inspect the clone\n`] : []),
-  ];
-  return lines.join('');
+  return { base, opts, nested };
 }
 
 /** `p` gone, never followed: rmdir, or unlink when a link or a file stands there; absent is gone. Throws otherwise (a directory not empty). */
@@ -315,17 +364,60 @@ export function removeRun(runDir, { log = () => {}, fix = null, clear = null, di
 const MODEL_WRITTEN = '> (model-written, not the adapter\'s) ';
 
 /**
+ * A run of what a line may open with that a reader does not see, or sees as
+ * blank: an ANSI CSI or OSC sequence (7- or 8-bit), a Unicode space separator,
+ * U+2028, U+2029, a format character (zero-width, bidi, BOM, word joiner…), or
+ * a C0, DEL or C1 control other than LF. Sticky: matched at a line's start.
+ */
+const LEADING_UNSEEN = /(?:(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]|(?:\u001b\]|\u009d)[^\u0007\u001b\u009c\n]*(?:\u0007|\u001b\\|\u009c)|[\p{Zs}\u{2028}\u{2029}\p{Cf}\u0000-\u0009\u000b-\u001f\u007f-\u009f])+/uy;
+
+/**
+ * `text` with the model-written prefix put at the start of every line that
+ * opens with a LEADING_UNSEEN run holding more than spaces and tabs and, past
+ * that run, matches `source` (a regex source anchored with `^`, read with
+ * `flags` within that line and the next: a setext underline is the most it
+ * looks ahead). Line starts are those of a multiline `^`. The pass after the
+ * plain replace, so a line with no such run comes out exactly as that left it.
+ */
+function markUnseenLed(text, source, flags) {
+  const re = new RegExp(source, `${flags}y`);
+  let out = '';
+  let last = 0;
+  let covered = 0;
+  for (let pos = 0; pos < text.length; pos++) {
+    if (pos > 0 && !'\n\r\u{2028}\u{2029}'.includes(text[pos - 1])) continue;
+    if (pos < covered) continue;
+    LEADING_UNSEEN.lastIndex = pos;
+    const lead = LEADING_UNSEEN.exec(text);
+    if (!lead || /^[ \t]*$/.test(lead[0])) continue;
+    const from = pos + lead[0].length;
+    const eol = text.indexOf('\n', from);
+    const next = eol < 0 ? -1 : text.indexOf('\n', eol + 1);
+    re.lastIndex = 0;
+    if (!re.test(text.slice(from, next < 0 ? text.length : next))) continue;
+    out += text.slice(last, pos) + MODEL_WRITTEN;
+    last = pos;
+    covered = pos + lead[0].length;
+  }
+  return out + text.slice(last);
+}
+
+/** `text` with every match of `source` (read per line with `flags`) marked model-written, also behind a LEADING_UNSEEN run. */
+function markLines(text, source, flags) {
+  return markUnseenLed(text.replace(new RegExp(source, `g${flags}`), (l) => MODEL_WRITTEN + l), source, flags);
+}
+
+/**
  * `text` with every heading of `headingName` (a regex source: the unit's
  * heading as a model may write it) marked model-written: ATX at any level, an
  * HTML `<h1>`–`<h6>`, or setext (a line opening with the name over a line of
- * `=` or `-`); any case, indent or spacing.
+ * `=` or `-`); any case, indent or spacing, and behind any run of invisible,
+ * format, space or control characters or ANSI sequences (LEADING_UNSEEN).
  */
 export function demoteHeadings(text, headingName) {
   const atx = String.raw`^[ \t]*(?:#+[ \t]*|<h[1-6](?:[ \t][^>\n]*)?>[ \t]*)${headingName}`;
   const setext = String.raw`^[ \t]*${headingName}[^\n]*(?=\n[ \t]{0,3}(?:=+|-+)[ \t]*$)`;
-  return text
-    .replace(new RegExp(atx, 'gim'), (h) => MODEL_WRITTEN + h)
-    .replace(new RegExp(setext, 'gim'), (h) => MODEL_WRITTEN + h);
+  return markLines(markLines(text, atx, 'im'), setext, 'im');
 }
 
 /** The longest run of `char` (a backtick or a tilde) in `text`. */
@@ -353,14 +445,16 @@ function openFence(text) {
  * made LF (a CR alone ends a line for a renderer), then a line matching
  * `adapterLines` (a regex source, read per line: the lines only the unit
  * writes, its partial markers among them) and a heading of `headingName`
- * (demoteHeadings) get the model-written prefix, and a code fence the answer
+ * (demoteHeadings) get the model-written prefix at the line's start, also
+ * when the line opens with a run of invisible, format, space or control
+ * characters or ANSI sequences (LEADING_UNSEEN), and a code fence the answer
  * left open (backticks or tildes) is closed by one of its character, one
  * longer than the longest run of it in the answer, so nothing the unit
  * appends after it lands inside the model's block.
  */
 export function neutraliseModelText(text, { headingName, adapterLines }) {
   const plain = String(text).replace(/\r\n?/g, '\n');
-  const own = demoteHeadings(plain.replace(new RegExp(adapterLines, 'gm'), (l) => MODEL_WRITTEN + l), headingName);
+  const own = demoteHeadings(markLines(plain, adapterLines, 'm'), headingName);
   const open = openFence(own);
   return open ? `${own}\n${open.char.repeat(Math.max(3, longestRun(own, open.char) + 1))}` : own;
 }
