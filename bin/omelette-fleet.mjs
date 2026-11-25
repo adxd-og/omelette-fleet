@@ -457,13 +457,21 @@ function mistralLines(fleetDir) {
  * line reads it), whether sandbox-exec is there, and the model a call that
  * names none runs on. A `gemini.testModel` outside the catalog is ignored at
  * call time with a warning on the server's stderr, where an MCP client does
- * not see it, so here it is a problem: the caller adds it to the unit's.
+ * not see it, so here it is a problem: the caller adds it to the unit's. A
+ * Claude id (catalog family `claude`) is marked too, and any other family but
+ * `gemini` as not a Gemini id: every call refuses both.
  */
 function geminiTestLine(cfg) {
   const model = cfg.values.testModel;
-  const known = UNITS.gemini.catalog.isAllowedModel(model);
+  const catalog = UNITS.gemini.catalog;
+  const known = catalog.isAllowedModel(model);
+  // The family test gemini_test's own refusal makes: a Claude id is in the catalog, and every call refuses it.
+  const entry = known ? catalog.find(model) : null;
+  const mark = !known ? ' — NOT in the catalog: gemini_test refuses every call until it names a Gemini id'
+    : entry && entry.family === 'claude' ? ' — a Claude id: gemini_test refuses every call until it names a Gemini id'
+      : entry && entry.family !== 'gemini' ? ' — not a Gemini id: gemini_test refuses every call until it names one' : '';
   return {
-    line: `  test        gemini_test ${reproAllowed() ? 'open in this shell (OMELETTE_ALLOW_REPRO=1) — the registration\'s env decides' : 'closed in this shell — the registration\'s env decides; set OMELETTE_ALLOW_REPRO=1 there'} · sandbox-exec ${sandboxExecFound() ? 'found' : 'macOS only (1.13.0)'} · model ${fmtValue(model)}${known ? '' : " — NOT in the catalog: gemini_test refuses every call until it names a Gemini id"}`,
+    line: `  test        gemini_test ${reproAllowed() ? 'open in this shell (OMELETTE_ALLOW_REPRO=1) — the registration\'s env decides' : 'closed in this shell — the registration\'s env decides; set OMELETTE_ALLOW_REPRO=1 there'} · sandbox-exec ${sandboxExecFound() ? 'found' : 'macOS only (1.13.0)'} · model ${fmtValue(model)}${mark}`,
   };
 }
 
@@ -832,8 +840,22 @@ const GEMINI_HARD_KILL_S = 60;
 /** gemini_deep_research: decompose, gather, synthesise — each stage retried once. */
 const DEEP_STAGES = 3;
 const DEEP_ATTEMPTS = 2;
-/** gemini_test: past its budget (gemini.testTimeoutS), the diff and the run's cleanup. */
-const TEST_TAIL_S = 360;
+/**
+ * gemini_test: what can run past its budget (gemini.testTimeoutS), each step at
+ * its own bound — the sum, in seconds (units/gemini/test.mjs, test-run.mjs,
+ * core/clone.mjs):
+ *    30  the chmod under profile B before a round's link check, started with up to 1 s of the budget left
+ *    30  the chmod under profile B before the diff
+ *   180  testDiff: ls-files, add --intent-to-add, diff (60 each)
+ *   180  testChangedPaths: the same three calls
+ *   300  testGuards: untrackedPast (60), testChangedPaths (180), ignoreRules' check-ignore (60)
+ *    60  testIgnored: one ls-files
+ *   300  the removal: chmod and rm under profiles B and A (4 × 30), the fix's two chmods (2 × 30), the four once more (4 × 30)
+ * = 1080. gemini.testKeep's diff of the last round (a chmod and testDiff, 210) is not in it: a kept run is not
+ * removed, and the removal it replaces is the longer (with it, the link check's chmod is that round's own). The
+ * link walk itself (findRunLink) is bounded by entries, not time.
+ */
+const TEST_TAIL_S = 1080;
 
 /**
  * The settings files a read tripped over, each named ONCE. Two readers open

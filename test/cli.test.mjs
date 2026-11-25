@@ -454,6 +454,19 @@ test('doctor marks a gemini.testModel outside the catalog on the test line, with
     assert.doesNotMatch(block, /FAULT/);
     assert.equal(r.code, 0, r.out + r.err);
 
+    // A Claude id is in the catalog, and gemini_test refuses it on every call: marked in the same shape, no fault.
+    writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, units: { gemini: { testModel: 'Claude Opus 5.5 (High)' } } }));
+    const claude = cli(['doctor'], { dir, env });
+    assert.match(geminiBlock(claude.out), /^ {2}test {8}gemini_test .* · model Claude Opus 5\.5 \(High\) — a Claude id: gemini_test refuses every call until it names a Gemini id$/m, claude.out);
+    assert.doesNotMatch(geminiBlock(claude.out), /FAULT/);
+    assert.equal(claude.code, 0, claude.out + claude.err);
+
+    // Another family than gemini is refused as well: marked as not a Gemini id.
+    writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, units: { gemini: { testModel: 'GPT-OSS 120B (Medium)' } } }));
+    const gpt = cli(['doctor'], { dir, env });
+    assert.match(geminiBlock(gpt.out), /^ {2}test {8}gemini_test .* · model GPT-OSS 120B \(Medium\) — not a Gemini id: gemini_test refuses every call until it names one$/m, gpt.out);
+    assert.doesNotMatch(geminiBlock(gpt.out), /FAULT/);
+
     // The default is in the catalog: the same registered gemini is healthy.
     writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1 }));
     const ok = cli(['doctor'], { dir, env });
