@@ -855,7 +855,7 @@ export default defineUnit({
           testCommand: {
             type: 'array',
             items: { type: 'string' },
-            description: 'The one command the unit runs, as an argv array (no shell): its first word a name on gemini.testPrograms (node, npm, npx, pnpm, yarn, python3 by default) or a path under a `deps` entry (".venv/bin/pytest").',
+            description: 'The one command the unit runs, as an argv array (no shell): its first word a name on gemini.testPrograms (node, npm, npx, pnpm, yarn, python3 by default) or a path under a `deps` entry (".venv/bin/pytest"), which must be a regular file of at most 1 GB.',
           },
           deps: {
             type: 'array',

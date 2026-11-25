@@ -25,10 +25,24 @@
  * only one the profile lets run; cwd the clone, HOME the scratch home, TMPDIR
  * the run's tmp. Then the test command, under profile B.
  *
+ * THE LOOP — round k > 1 resumes round 1's conversation (`--conversation`)
+ * with the test command's end, time and output (roundPrompt). It goes on only
+ * after an answer without DONE, below `rounds`, with an id to resume and no
+ * cancel; the test command runs after every round but a quota, failed or
+ * cancelled one. One budget, gemini.testTimeoutS: no round starts with less
+ * than a second left, and no spawn's kill bound passes what is left. A round
+ * killed or cancelled marks the answer partial (core/partial.mjs), as does a
+ * cancel in a test run; a CLI failure (sign-in, quota, `failed — …`) in round
+ * 1 that left nothing in the copy is an error saying what to do, and anywhere
+ * else marks the answer partial. Each round's raw stdout and stderr are kept
+ * in `out/` (read only when the run is kept). Nothing of stderr reaches the
+ * answer or an error with a URL or the operator's home in it (cliSafe).
+ *
  * THE DIFF — taken only through testDiff, testChangedPaths and testGuards,
  * after `chmod -R u+rwX` over the clone under profile B (git skips a mode-000
- * directory silently); each caught: a failure is one line of the answer, never
- * the answer's loss.
+ * directory silently); the first that fails stops the others, and is one line
+ * of the answer (unavailableOf), never the answer's loss. Every chmod and rm
+ * the tool runs is bounded at 30 s.
  *
  * THE CLEANUP — a failure before any sandboxed spawn: discardRun. After one:
  * `chmod -R u+rwX` then `rm -rf` under profile B for the clone and tmp and
@@ -41,7 +55,7 @@
  * Zero deps.
  */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, realpathSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, openSync, readSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
 import { appendDiff, assertRun, longestRun, neutraliseModelText, removeRun } from '../../core/clone.mjs';
@@ -49,7 +63,8 @@ import { reproAllowed } from '../../core/config.mjs';
 import { checkCwd } from '../../core/cwd.mjs';
 import { INVISIBLE_CHARS } from '../../core/log.mjs';
 import { SANDBOX_EXEC, sandboxExecFound } from '../../core/seatbelt.mjs';
-import { HARD_KILL_GRACE_MS, parseAgyResult } from './agy.mjs';
+import { partialMark, withPartial } from '../../core/partial.mjs';
+import { EXHAUSTED_PATTERNS, HARD_KILL_GRACE_MS, parseAgyResult } from './agy.mjs';
 import {
   checkDeps, checkTestCommand, copyDeps, discardRun, parsePrograms, prepareTestRun, profileBArgs, programNeeds, resolveProgram,
   runTestCommand, safeOutput, testChangedPaths, testDiff, testGuards, testRunsRoot, toolchainReach, writeProfileA,
@@ -140,8 +155,8 @@ function last40(tail) {
  * command did not run); Neon's last message neutralised (headed by the round
  * it is from when that is not the last round), or `_(Neon left no message)_`
  * — the message goes through safeOutput before it is neutralised; the files of
- * `changed` outside the test directories (isTestPath), or the line saying there
- * are none; when `guards` (testGuards' names) holds any, the line naming them
+ * `changed`, then of `guards`, outside the test directories (isTestPath, no
+ * name twice), or the line saying there are none; when `guards` (testGuards' names) holds any, the line naming them
  * (a model-written ignore or attributes file can hide files from the diff or
  * blank their content); both lists through nameList: at most 50 names, then
  * ` <ellipsis> and <n> more`, a name past 200 characters cut, an odd one quoted; the
@@ -170,7 +185,8 @@ export function assembleAnswer({ model, argv, rounds, maxRounds, ended, totalMs,
   }
   if (typeof unavailable === 'string') blocks.push(`_(diff unavailable: ${oneSafeLine(unavailable)})_`);
   else {
-    const outside = changed.filter((p) => !isTestPath(p));
+    // A guard outside the tests too: a `.gitignore` of `*` ignores itself and is in no changed name.
+    const outside = [...new Set([...changed, ...guards].filter((p) => !isTestPath(p)))];
     blocks.push(outside.length ? `_(changed outside the test directories: ${nameList(outside)})_` : '_(no file outside the test directories changed)_');
     if (guards.length) blocks.push(`_(ignore or attributes files changed in the copy: ${nameList(guards)} \u{2014} files they cover may be missing from this diff, or shown without their content)_`);
     blocks.push(appendDiff('', diff, { heading: TEST_HEADING, headingName: TEST_HEADING_NAME, unchanged: '_(the copy is unchanged)_' }).replace(/^\n+/, ''));
@@ -217,6 +233,49 @@ export function testPreamble({ argv, rounds, deps }) {
 /** An error's message as one line. */
 const messageOf = (e) => String((e && e.message) || e).trim().split(/\r\n|\r|\n/)[0];
 
+/**
+ * The `diff unavailable` line's text for a git call that failed: what to do
+ * when it timed out (gitRun's 60 s); otherwise the error's first line made safe
+ * (cliSafe), its `git --git-dir …` argument list cut, from git's own `fatal:`
+ * or `error:` when there is one.
+ */
+export function unavailableOf(e) {
+  if ((e && e.code === 'ETIMEDOUT') || /\bETIMEDOUT\b/.test(messageOf(e))) {
+    return 'git did not finish in 60 s on what the run left in the copy — set gemini.testKeep=true and call again to read the run, or ask for fewer and smaller files';
+  }
+  const rest = oneSafeLine(cliSafe(messageOf(e))).replace(/^git --git-dir .*?: /, 'git: ');
+  const at = rest.search(/\b(?:fatal|error):/);
+  return at >= 0 ? rest.slice(at) : rest;
+}
+
+/** A round end that is a failure of the CLI itself: a failed sign-in, quota exhausted, `failed — …`. */
+const cliFailed = (end) => end === 'quota exhausted' || end.startsWith('failed');
+
+/** What to do after a first round that failed and wrote nothing. */
+function failureAdvice(end) {
+  if (end === SIGN_IN_FAILED) return 'then call again; nothing was retried';
+  if (end === 'quota exhausted') return 'the Gemini pool is exhausted — call again after it resets; nothing was retried';
+  if (/\bE2BIG\b/.test(end)) return 'the brief is too large for one command line — shorten "prompt"';
+  return 'nothing ran in the copy; the call was not retried';
+}
+
+/** The most of a round's stdout or stderr kept in `out/`. */
+const ENVELOPE_MAX = 1024 * 1024;
+
+/** Round k's raw stdout to `<out>/agy-round-<k>.json` and its stderr, when not empty, to `.err`: `wx`, 0600, the last 1 MB each; a failure is logged. */
+function keepEnvelope(run, k, res, log) {
+  const tail = (s) => {
+    const b = Buffer.from(String(s ?? ''), 'utf8');
+    return b.length > ENVELOPE_MAX ? b.subarray(b.length - ENVELOPE_MAX) : b;
+  };
+  try {
+    writeFileSync(join(run.out, `agy-round-${k}.json`), tail(res.stdout), { flag: 'wx', mode: 0o600 });
+    if (String(res.stderr ?? '') !== '') writeFileSync(join(run.out, `agy-round-${k}.err`), tail(res.stderr), { flag: 'wx', mode: 0o600 });
+  } catch (e) {
+    log(`gemini_test · round ${k} envelope not kept: ${messageOf(e)}`);
+  }
+}
+
 /** `p` is `dir` or under it (both resolved). */
 const within = (p, dir) => p === dir || p.startsWith(dir.endsWith(sep) ? dir : `${dir}${sep}`);
 
@@ -227,23 +286,150 @@ function usageOf(parsed) {
   return { input: u.input_tokens ?? null, output: u.output_tokens ?? null };
 }
 
-/** One agy round's outcome read off its spawn result: `end`, the round line's word; `text`, Neon's message; `usage`. */
-function readRound(res) {
-  if (res.cancelled) return { end: 'cancelled', text: '', usage: null };
-  const parsed = parseAgyResult(res.stdout);
-  const text = parsed ? String(parsed.response ?? '').trim() : '';
-  if (res.killed) return { end: 'hard-killed', text, usage: usageOf(parsed) };
-  if (!parsed) return { end: `failed — agy exited ${res.code}: ${safeOutput(String(res.stderr || '')).trim().slice(-200)}`, text: '', usage: null };
-  return { end: text ? 'answered' : 'no output', text, usage: usageOf(parsed) };
+/** A conversation id the loop resumes: never one agy could read as a flag (`-…`), never a space or a control character. */
+const CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+
+/** A URL of any scheme (`https://`, `wss://`, `file://`…), to the next whitespace. */
+const URL_RE = /[a-z][a-z0-9+.-]*:\/\/\S+/gi;
+
+/** The operator's home as given and as resolved, the longer first, never `/` or empty. */
+function homesOf() {
+  const given = String(process.env.HOME || homedir()).replace(/\/+$/, '');
+  let real = given;
+  try { real = realpathSync(given); } catch { /* the given one only */ }
+  return [...new Set([real, given])].filter(Boolean).sort((a, b) => b.length - a.length);
 }
 
-/** The test run's word for the round line. */
+/**
+ * A string derived from the CLI's stderr (or a spawn's error) made safe for a
+ * round line, an `ended` word or an error: safeOutput, then every URL
+ * `<url removed>`, then the operator's home (as given and resolved) `~` — the
+ * home as a whole path component, so a sibling whose name merely starts like it
+ * is left as it is.
+ */
+export function cliSafe(s) {
+  let out = safeOutput(String(s)).replace(URL_RE, '<url removed>');
+  for (const h of homesOf()) {
+    out = out.replace(new RegExp(`${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9._-])`, 'g'), '~');
+  }
+  return out;
+}
+
+/** What agy prints when it cannot sign in (a locked login Keychain, no login at all). */
+const SIGN_IN = /authentication required/i;
+
+/**
+ * A failed sign-in on stderr: agy's own phrase, whatever else the round holds —
+ * or, for a round that did not answer (`byUrl`), a URL whose host is
+ * accounts.google.com or whose path or query holds `oauth`. The URL alone is a
+ * weaker sign: a round that answered may mention one in a note.
+ */
+function asksSignIn(stderr, byUrl) {
+  if (SIGN_IN.test(stderr)) return true;
+  if (!byUrl) return false;
+  return (stderr.match(URL_RE) || []).some((m) => {
+    try {
+      const u = new URL(m);
+      return u.hostname.toLowerCase() === 'accounts.google.com' || /oauth/i.test(`${u.pathname}${u.search}`);
+    } catch { return false; }
+  });
+}
+
+/** A failed sign-in's round word: named, and never the URL agy prints with it. */
+export const SIGN_IN_FAILED = 'failed — agy asked for a sign-in: under gemini_test it reads the login Keychain only — unlock the Keychain, or sign in once with agy';
+
+/** A string of the CLI's made one safe line of at most `n` characters. */
+const safeLine = (s, n) => [...safeOutput(String(s)).replace(/\s+/g, ' ').trim()].slice(0, n).join('');
+
+/** Up to five names from `denied_actions`: a string as it is, an object's `tool`, `name` or `action`, else its JSON; each one safe line of 80. */
+function deniedNames(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 5).map((d) => {
+    const named = d && typeof d === 'object' ? [d.tool, d.name, d.action].find((v) => typeof v === 'string') : undefined;
+    return safeLine(cliSafe(typeof d === 'string' ? d : named ?? JSON.stringify(d)), 80);
+  });
+}
+
+/** Neon said it is done: its last non-empty line is `DONE` alone (emphasis, a quote mark and a stop allowed). */
+export function isDone(text) {
+  const lines = String(text).split('\n').filter((l) => l.trim());
+  return lines.length > 0 && /^[\s*_`>]*DONE[.!]?[\s*_`]*$/.test(lines[lines.length - 1]);
+}
+
+/**
+ * One agy round read off its spawn result: `end`, the round line's word
+ * (answered | answered DONE | no output [(denied: …)] | ended early
+ * (status=<S>)[: <stderr's first line>] | hard-killed | quota exhausted |
+ * failed — <why> | cancelled); `text`, Neon's message; `conversationId`, the
+ * id to resume (null when absent or not of CONVERSATION_ID's shape); `denied`;
+ * `usage`. A cancel first; then a failed sign-in, named whatever the envelope
+ * says; a kill keeps what the envelope held; with no envelope, the quota
+ * patterns, else the exit and stderr's last 200 characters; an envelope with
+ * no response checks the quota first.
+ * @param {{stdout?: string, stderr?: string, code?: number|null, killed?: boolean, cancelled?: boolean}} res
+ */
+export function readRound(res) {
+  const stdout = String(res.stdout || '');
+  const stderr = String(res.stderr || '');
+  const parsed = parseAgyResult(stdout);
+  const quota = () => EXHAUSTED_PATTERNS.some((re) => re.test(`${stderr}\n${stdout}`));
+  const none = { text: '', conversationId: null, denied: [], usage: usageOf(parsed) };
+  if (res.cancelled) return { ...none, end: 'cancelled' };
+  // A round that answered is not a failed sign-in for a URL its stderr mentions (a note about a refreshed token names an oauth URL).
+  const answered = !!parsed && (typeof parsed.status !== 'string' || !parsed.status || parsed.status === 'SUCCESS') && String(parsed.response ?? '').trim() !== '';
+  if (asksSignIn(stderr, !answered)) return { ...none, end: SIGN_IN_FAILED };
+  if (!parsed) {
+    if (res.killed) return { ...none, end: 'hard-killed' };
+    if (quota()) return { ...none, end: 'quota exhausted' };
+    return { ...none, end: `failed — agy exited ${res.code}: ${cliSafe(stderr).trim().slice(-200)}` };
+  }
+  const id = typeof parsed.conversation_id === 'string' && CONVERSATION_ID.test(parsed.conversation_id) ? parsed.conversation_id : null;
+  const got = { ...none, text: String(parsed.response ?? '').trim(), conversationId: id, denied: deniedNames(parsed.denied_actions) };
+  if (res.killed) return { ...got, end: 'hard-killed' };
+  if (!got.text && quota()) return { ...got, end: 'quota exhausted' };
+  const status = typeof parsed.status === 'string' && parsed.status ? parsed.status : 'SUCCESS';
+  if (status !== 'SUCCESS') {
+    const first = cliSafe(stderr).split('\n').map((l) => l.trim()).find(Boolean);
+    return { ...got, end: `ended early (status=${safeLine(status, 40).replace(/[()]/g, '')})${first ? `: ${safeLine(first, 200)}` : ''}` };
+  }
+  if (!got.text) return { ...got, end: got.denied.length ? `no output (denied: ${got.denied.join(', ')})` : 'no output' };
+  return { ...got, end: isDone(got.text) ? 'answered DONE' : 'answered' };
+}
+
+/** The prompt of round k > 1: the test command's end, time and output tail, and the rules again. */
+export function roundPrompt({ k, rounds, argv, testEnd, testMs, tail }) {
+  return `Round ${k} of ${rounds}. The unit ran ${JSON.stringify(argv)}: ${testEnd} after ${secs(testMs ?? 0)} s. The last 16 KB of its output:\n\n`
+    + `${fenced(tail || '(no output)')}\n\n`
+    + 'The same rules hold: work from the files in this directory only; do not search the web; file tools only, no command. Fix what keeps a test from running as intended; never weaken an assertion to match the code — a test that fails on a breach of the spec stays and is named as a candidate defect with its spec line. When the tests run and test what the brief asks, whatever their result, end with a last line that says DONE alone.';
+}
+
+/** The first line of a round's log (its first 512 bytes), made safe. */
+function firstLogLine(log) {
+  const fd = openSync(log, 'r');
+  try {
+    const buf = Buffer.alloc(512);
+    return safeOutput(buf.subarray(0, readSync(fd, buf, 0, buf.length, 0)).toString('utf8')).split('\n')[0];
+  } finally { closeSync(fd); }
+}
+
+/**
+ * The test run's word for the round line: cancelled; killed at the limit that
+ * bound it; `not started — <line>` when sandbox-exec itself refused (exit 65
+ * or 71, the output opening `sandbox-exec:`); a signal; else the exit code.
+ */
 function testEndOf(r, { budgetBound }) {
   if (r.cancelled) return 'cancelled';
   if (r.killed) return budgetBound ? 'killed at gemini.testTimeoutS' : 'killed at gemini.testRunTimeoutS';
+  if (r.code === 65 || r.code === 71) {
+    const line = firstLogLine(r.log);
+    if (line.startsWith('sandbox-exec:')) return `not started — ${safeLine(line, 200)}`;
+  }
   if (r.code === null) return `signal ${r.signal}`;
   return `exit ${r.code}`;
 }
+
+/** Two token counts summed; null stays null only when both are. */
+const addCount = (a, b) => (a == null ? b : b == null ? a : a + b);
 
 /**
  * Before a spawn: the run's dirs are still the ones made (assertRun), then the
@@ -255,14 +441,17 @@ function readyRun(run) {
   chmodSync(run.tmp, 0o700);
 }
 
-/** `cmd` under profile B over the run (the clone and tmp writable), no shell, 120 s, its exit ignored. */
+/** The bound on every chmod and rm the tool runs (doctor's TEST_TAIL_S counts it). */
+const CHMOD_RM_MS = 30_000;
+
+/** `cmd` under profile B over the run (the clone and tmp writable), no shell, 30 s, its exit ignored. */
 function underB(run, { home, fleet, reach }, cmd) {
-  spawnSync(SANDBOX_EXEC, [...profileBArgs(run, { home, fleet, reach }), ...cmd], { cwd: '/', env: { PATH: '/usr/bin:/bin', HOME: run.tmp }, stdio: 'ignore', timeout: 120_000 });
+  spawnSync(SANDBOX_EXEC, [...profileBArgs(run, { home, fleet, reach }), ...cmd], { cwd: '/', env: { PATH: '/usr/bin:/bin', HOME: run.tmp }, stdio: 'ignore', timeout: CHMOD_RM_MS });
 }
 
-/** `cmd` under the run's profile A (the scratch home writable), no shell, 120 s, its exit ignored. */
+/** `cmd` under the run's profile A (the scratch home writable), no shell, 30 s, its exit ignored. */
 function underA(run, cmd) {
-  spawnSync(SANDBOX_EXEC, ['-f', run.profileA.profile, ...cmd], { cwd: '/', env: { PATH: '/usr/bin:/bin', HOME: run.home }, stdio: 'ignore', timeout: 120_000 });
+  spawnSync(SANDBOX_EXEC, ['-f', run.profileA.profile, ...cmd], { cwd: '/', env: { PATH: '/usr/bin:/bin', HOME: run.home }, stdio: 'ignore', timeout: CHMOD_RM_MS });
 }
 
 /**
@@ -282,7 +471,7 @@ function removeSandboxedRun(run, o, log) {
     chmodAll();
     try { underB(run, o, ['/bin/rm', '-rf', run.clone, run.tmp]); } catch { /* logged by chmodAll */ }
     if (run.profileA) underA(run, ['/bin/rm', '-rf', run.home]);
-    else spawnSync('/bin/rm', ['-rf', run.home], { stdio: 'ignore', timeout: 120_000 });
+    else spawnSync('/bin/rm', ['-rf', run.home], { stdio: 'ignore', timeout: CHMOD_RM_MS });
   };
   return removeRun(run.runDir, { log, dirs: ['clone', 'tmp', 'home'], clear, fix: chmodAll });
 }
@@ -291,6 +480,9 @@ function removeSandboxedRun(run, o, log) {
 const operatorHome = () => realpathSync(process.env.HOME || homedir());
 
 const refuse = (text) => ({ text, isError: true });
+
+/** The largest brief, in UTF-8 bytes: it travels on agy's command line. */
+const PROMPT_MAX = 256 * 1024;
 
 /**
  * gemini_test: Neon writes tests in a disposable copy under profile A, the
@@ -303,6 +495,7 @@ export async function runGeminiTest(args, ctx) {
   if (!sandboxExecFound()) return refuse(`Error: gemini_test: macOS only (1.13.0) — sandbox-exec is not available on ${process.platform}`);
   const prompt = String(args.prompt || '').trim();
   if (!prompt) return refuse('Error: "prompt" is required.');
+  if (Buffer.byteLength(prompt, 'utf8') > PROMPT_MAX) return refuse('Error: "prompt" is larger than 256 KB — the brief travels on agy\'s command line; put the detail in a file in the work tree and name it');
   const c = checkCwd(args.cwd);
   if (c.error) return refuse(c.error);
   if (!c.cwd) return refuse('Error: "cwd" is required: the top of the git work tree to copy');
@@ -310,6 +503,8 @@ export async function runGeminiTest(args, ctx) {
   const maxRounds = args.rounds === undefined ? 3 : args.rounds;
   if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 5) return refuse('Error: "rounds" must be a whole number from 1 to 5');
   const programs = parsePrograms(ctx.cfg.testPrograms);
+  // A bare name off the list: resolveProgram's own refusal, which it throws before it reads the run — none exists yet.
+  if (!argv[0].includes('/') && !programs.includes(argv[0])) resolveProgram({ word: argv[0], programs, deps: [], run: null });
   if (!ctx.model) return refuse(`Error: gemini.testModel "${ctx.cfg.testModel}" is not in the catalog — set it to a Gemini id (omelette-fleet set gemini.testModel=…)`);
   const entry = ctx.catalog.find(ctx.model);
   if (entry && entry.family === 'claude') return refuse(`Error: gemini_test does not run on a Claude model ("${ctx.model}"): a call is up to five agy runs on Antigravity's small, separate Claude quota`);
@@ -349,51 +544,97 @@ export async function runGeminiTest(args, ctx) {
     let lastMessage = '';
     let lastFrom = 0;
     let ended = '';
-    const k = 1;
-    const left = deadline - Date.now();
-    if (left < 1000) ended = BUDGET_SPENT;
-    else {
+    let marker = null;
+    let conversation = null;
+    let prev = null;
+    const own = timeoutS * 1000 + HARD_KILL_GRACE_MS;
+    const limit = ctx.cfg.testRunTimeoutS * 1000;
+    for (let k = 1; ; k++) {
+      const left = deadline - Date.now();
+      if (left < 1000) { ended = BUDGET_SPENT; break; }
       const printS = Math.max(1, Math.min(timeoutS, Math.floor((left - HARD_KILL_GRACE_MS) / 1000)));
-      const hardKillMs = Math.min(timeoutS * 1000 + HARD_KILL_GRACE_MS, left);
-      const roundText = `${testPreamble({ argv, rounds: maxRounds, deps })}\n\nThe brief:\n\n${prompt}`;
+      const hardKillMs = Math.min(own, left);
+      const roundText = k === 1
+        ? `${testPreamble({ argv, rounds: maxRounds, deps })}\n\nThe brief:\n\n${prompt}`
+        : roundPrompt({ k, rounds: maxRounds, argv, ...prev });
       readyRun(run);
       ctx.log(`gemini_test · round ${k} · model=${ctx.model} · print-timeout=${printS}s · hard-kill=${Math.round(hardKillMs / 1000)}s`);
       const t0 = Date.now();
       let round;
       try {
         const res = await ctx.spawn({
-          args: buildRoundArgs({ prompt: roundText, model: ctx.model, printS }),
+          args: buildRoundArgs({ prompt: roundText, model: ctx.model, printS, conversation: k > 1 ? conversation : null }),
           cwd: run.clone,
           extraEnv: { HOME: run.home, TMPDIR: run.tmp },
           hardKillMs,
           killGroupOnExit: true,
           wrap,
         });
+        keepEnvelope(run, k, res, ctx.log);
         round = readRound(res);
       } catch (e) {
-        round = { end: `failed — ${messageOf(e)}`, text: '', usage: null };
+        round = { end: `failed — ${cliSafe(messageOf(e))}`, text: '', conversationId: null, denied: [], usage: null };
       }
       const agyMs = Date.now() - t0;
-      if (round.usage) usage = round.usage;
+      if (round.usage) usage = usage ? { input: addCount(usage.input, round.usage.input), output: addCount(usage.output, round.usage.output) } : { ...round.usage };
       if (round.text) { lastMessage = round.text; lastFrom = k; }
+      if (k === 1) conversation = round.conversationId;
+      const byBudget = hardKillMs < own;
+      if (round.end === 'hard-killed') {
+        marker = byBudget
+          ? partialMark('gemini', 'killed', { after: ctx.cfg.testTimeoutS, key: 'testTimeoutS' })
+          : partialMark('gemini', 'killed', { after: own / 1000 });
+      }
       const line = { k, agyEnd: round.end, agyMs, testEnd: 'not run', testMs: null, tail: null };
       rounds.push(line);
-      ended = round.end === 'cancelled' ? 'cancelled' : round.end.startsWith('failed') ? 'agy failed' : 'rounds reached';
-      if (!['cancelled'].includes(round.end) && !round.end.startsWith('failed')) {
-        const limit = ctx.cfg.testRunTimeoutS * 1000;
+
+      // The test command, after every round but a quota, failed or cancelled one, while the budget lasts.
+      let refused = null;
+      let testCancelled = false;
+      if (!(round.end === 'cancelled' || cliFailed(round.end))) {
         const timeoutMs = Math.min(limit, deadline - Date.now(), 2147483647);
         if (timeoutMs <= 0) line.testEnd = 'not run — the call\'s budget was spent';
         else {
           readyRun(run);
           try {
             const r = await runTestCommand(ctx, run, { args: testArgs, round: k, timeoutMs, reach, home, fleet, pathDirs: needs.dirs });
-            Object.assign(line, { testEnd: testEndOf(r, { budgetBound: timeoutMs < limit }), testMs: r.ms, tail: r.tail });
+            const empty = statSync(r.log).size === 0;
+            testCancelled = !!r.cancelled;
+            Object.assign(line, { testEnd: testEndOf(r, { budgetBound: timeoutMs < limit }), testMs: r.ms, tail: empty ? null : r.tail });
           } catch (e) {
-            ended = `the test command could not be run — ${messageOf(e)}`;
+            refused = `the test command could not be run — ${messageOf(e)}`;
           }
         }
       }
+      if (keep) {
+        try {
+          assertRun(run, WITHHELD);
+          underB(run, { home, fleet, reach }, ['/bin/chmod', '-R', 'u+rwX', run.clone]);
+          writeFileSync(join(run.out, `round-${k}.diff`), testDiff(run), { flag: 'wx', mode: 0o600 });
+        } catch (e) {
+          if (e && e.message === WITHHELD) throw e;
+          ctx.log(`gemini_test · round ${k} diff not kept: ${messageOf(e)}`);
+        }
+      }
+
+      // A cancel — in agy's round, in the test run, or seen now — ends the call cancelled, whatever the round said.
+      if (round.end === 'cancelled' || testCancelled || (ctx.signal && ctx.signal.aborted)) ended = 'cancelled';
+      else if (refused) ended = refused;
+      else if (round.end === 'quota exhausted') ended = 'quota exhausted';
+      else if (round.end.startsWith('failed')) ended = 'agy failed';
+      else if (round.end === 'hard-killed') ended = byBudget ? BUDGET_SPENT : 'agy failed';
+      else if (round.end.startsWith('ended early')) ended = round.end.replace(/^(ended early \(status=[^)]*\)).*$/, '$1');
+      else if (round.end.startsWith('no output')) ended = 'a round ended with no output';
+      else if (round.end === 'answered DONE') ended = 'DONE';
+      else if (k >= maxRounds) ended = 'rounds reached';
+      else if (!conversation) ended = 'no conversation id to resume';
+      else {
+        prev = { testEnd: line.testEnd, testMs: line.testMs, tail: line.tail };
+        continue;
+      }
+      break;
     }
+    if (ended === 'cancelled') marker = partialMark('gemini', 'cancelled');
 
     assertRun(run, WITHHELD);
     let diff = '';
@@ -407,13 +648,22 @@ export async function runGeminiTest(args, ctx) {
       changed = testChangedPaths(run);
       guards = testGuards(run);
     } catch (e) {
-      unavailable = messageOf(e);
+      // The first git call that fails stops the three: one line says why.
+      unavailable = unavailableOf(e);
+    }
+    // A CLI failure: in round 1 with nothing in the copy, an error saying what to do; otherwise the answer, marked partial.
+    const last = rounds[rounds.length - 1];
+    if (ended !== 'cancelled' && last && cliFailed(last.agyEnd)) {
+      if (last.k === 1 && unavailable === null && changed.length === 0 && guards.length === 0) {
+        return refuse(`Error: gemini_test: ${oneSafeLine(cliSafe(last.agyEnd))} — ${failureAdvice(last.agyEnd)}${keep ? ` — run kept: ${run.runDir}` : ''}`);
+      }
+      marker = partialMark('gemini', 'stopped', { n: last.k });
     }
     const text = assembleAnswer({
       model: ctx.model, argv, rounds, maxRounds, ended, totalMs: Date.now() - start, lastMessage, lastFrom,
       diff, changed, guards, keptRun: keep ? run.runDir : null, unavailable,
     });
-    return { text, usage };
+    return marker ? withPartial({ text, usage }, marker) : { text, usage };
   } catch (e) {
     if (keep) throw new Error(`${messageOf(e)} — run kept: ${run.runDir}`);
     throw e;

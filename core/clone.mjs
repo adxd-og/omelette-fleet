@@ -66,7 +66,10 @@ export function gitRun(args, { timeout = 60_000, cwd, env, input, cap = 0 } = {}
   const overflow = cap > 0 && !!r.error && r.error.code === 'ENOBUFS';
   if (!overflow && (r.error || r.status !== 0)) {
     const err = r.stderr ? r.stderr.toString().trim() : '';
-    throw new Error(`git ${args.join(' ')}: ${err ? err.split('\n').slice(-2).join(' ') : (r.error && r.error.message) || `exit ${r.status}`}`);
+    const e = new Error(`git ${args.join(' ')}: ${err ? err.split('\n').slice(-2).join(' ') : (r.error && r.error.message) || `exit ${r.status}`}`);
+    // The spawn's own code (ETIMEDOUT at `timeout`), which the message loses when git wrote to stderr first.
+    if (r.error && r.error.code) e.code = r.error.code;
+    throw e;
   }
   const out = r.stdout;
   if (!cap || out.length <= cap) return { text: out.toString(), truncated: false };

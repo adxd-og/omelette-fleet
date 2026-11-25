@@ -12,7 +12,7 @@
 /** kind → (detail) => text after `[<unit>: ` and before `]`. */
 const KINDS = {
   capped: ({ outputCap }) => `output capped at ${outputCap} chars — the beginning of the stream was dropped; treat the answer as partial`,
-  // `key` as for deadline: mistral's repro passes `reproTimeoutS`; every other caller leaves the default.
+  // `key` as for deadline: mistral's repro passes `reproTimeoutS`, gemini_test's budget `testTimeoutS`; every other caller leaves the default.
   killed: ({ unit, after, key = 'timeoutS' }) => `hard-killed after ${after}s — treat the answer as partial; raise ${unit}.${key} in the fleet config`,
   // mistral: Vibe stopped itself at `--time-limit` (exit 3, outcome deadline) and still wrote its answer; `key`
   // is the config key that set the limit (review `timeoutS`, repro `reproTimeoutS`).
@@ -20,6 +20,8 @@ const KINDS = {
   // grok appends what the CLI had reported instead of the standard tail (adapter.mjs `cancelTail`).
   cancelled: ({ tail } = {}) => `cancelled by the client${tail || ' — treat the answer as partial'}`,
   exited: ({ code }) => `CLI exited ${code} — treat the answer as partial`,
+  // gemini_test: a round's CLI failed (sign-in, quota, no envelope) after round 1, or in a round 1 that left files.
+  stopped: ({ n }) => `CLI failed in round ${n} — treat the answer as partial`,
   early: ({ stopReason }) => `run ended early — stopReason=${stopReason}`,
   status: ({ status }) => `run ended early — status=${status}`,   // gemini: agy reported a non-SUCCESS status
   unfinished: () => 'run ended before turn.completed — treat as partial',
@@ -47,10 +49,11 @@ export function partialMark(unit, kind, detail = {}) {
 export const PARTIAL_MARK_RE = new RegExp(
   '\\[(gemini|grok|codex|mistral): (' +
   'output capped at \\d+ chars — the beginning of the stream was dropped; treat the answer as partial' +
-  '|hard-killed after [\\d.?]+s — treat the answer as partial; raise \\1\\.(?:timeoutS|reproTimeoutS) in the fleet config' +
-  '|stopped at the \\d+s time limit — treat the answer as partial; raise \\1\\.(?:timeoutS|reproTimeoutS) in the fleet config' +
+  '|hard-killed after [\\d.?]+s — treat the answer as partial; raise \\1\\.(?:timeoutS|reproTimeoutS|testTimeoutS) in the fleet config' +
+  '|stopped at the \\d+s time limit — treat the answer as partial; raise \\1\\.(?:timeoutS|reproTimeoutS|testTimeoutS) in the fleet config' +
   '|cancelled by the client( — [^\\]]*)?' +
   '|CLI exited (-?\\d+|null) — treat the answer as partial' +
+  '|CLI failed in round \\d+ — treat the answer as partial' +
   '|run ended early — stopReason=[^\\]]*' +
   '|run ended early — status=[^\\]]*' +
   '|run ended before turn\\.completed — treat as partial' +

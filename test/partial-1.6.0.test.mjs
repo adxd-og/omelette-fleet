@@ -116,3 +116,14 @@ test('codex: flag ⇔ marker on every text-returning path', () => {
   assert.equal(unfinished.partial, true);
   assert.match(unfinished.text, /\[codex: run ended before turn\.completed — treat as partial\]/);
 });
+
+test('gemini_test: the budget marker names gemini.testTimeoutS and matches', () => {
+  assert.match(partialMark('gemini', 'killed', { after: 1500, key: 'testTimeoutS' }), PARTIAL_MARK_RE);
+  assert.equal(partialMark('gemini', 'killed', { after: 1500, key: 'testTimeoutS' }), '[gemini: hard-killed after 1500s — treat the answer as partial; raise gemini.testTimeoutS in the fleet config]');
+});
+
+test('gemini_test: a CLI failure after round 1, or after a round 1 that wrote files, is the stopped marker and matches', () => {
+  assert.equal(partialMark('gemini', 'stopped', { n: 2 }), '[gemini: CLI failed in round 2 — treat the answer as partial]');
+  assert.match(partialMark('gemini', 'stopped', { n: 2 }), PARTIAL_MARK_RE);
+  assert.doesNotMatch('[gemini: CLI failed in round x — treat the answer as partial]', PARTIAL_MARK_RE);
+});

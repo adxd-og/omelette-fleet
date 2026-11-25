@@ -258,7 +258,8 @@ test('the notice\'s list stops at 50, and a 300-character name is cut at 200 in 
   assert.equal(longOutside.length, 300);
   assert.equal(longGuard.length, 300);
   const a = assembleAnswer({ ...ANSWER, changed: [longOutside], guards: [longGuard] });
-  assert.equal(outsideLine(a), `_(changed outside the test directories: ${longOutside.slice(0, 200)}${ELLIPSIS})_`);
+  // The guard is outside the tests: it is in the outside list too (the fix round after the T11–T12 tester).
+  assert.equal(outsideLine(a), `_(changed outside the test directories: ${longOutside.slice(0, 200)}${ELLIPSIS}, ${longGuard.slice(0, 200)}${ELLIPSIS})_`);
   assert.equal(noticeLine(a), `_(${NOTICE}: ${longGuard.slice(0, 200)}${ELLIPSIS}${TAIL}`);
   // A name of exactly 200 is not cut; one cut that needs quoting is cut first, then quoted.
   const two = `src/${'c'.repeat(196)}`;
@@ -506,8 +507,9 @@ test('never retried: an agy spawn that fails is one spawn', STUB_ROW, async () =
   const r = await w.call({ rounds: 3 });
   assert.equal(w.spawns.length, 1, 'one agy spawn, no test run after a failed round');
   assert.equal(w.retries(), 0);
-  assert.match(r.text, /^round 1 · agy: failed — agy not found in PATH \(\d+\.\d s\) · test command: not run$/m);
-  assert.match(r.text, /· ended: agy failed ·/);
+  // Nothing was written in the copy: an error naming the failure (the fix round after the T11–T12 tester).
+  assert.equal(r.isError, true, r.text);
+  assert.equal(r.text, 'Error: gemini_test: failed — agy not found in PATH — nothing ran in the copy; the call was not retried');
 });
 
 test('one round end to end: the test the fake wrote is under ## proposed tests (not applied), round 1\'s line carries the exit code and the wall time, the answer is spooled and gemini_result returns it', KROW, async () => {
@@ -593,8 +595,8 @@ test('a diff git cannot take is one line of the answer, never the answer\'s loss
   });
   const r = await w.call();
   assert.equal(r.isError, undefined, r.text);
-  assert.match(r.text, /^_\(diff unavailable: git .+\)_$/m);
-  assert.match(r.text, /^round 1 · agy: answered \(\d+\.\d s\) · test command: exit 0/m);
+  assert.match(r.text, /^_\(diff unavailable: fatal: .+\)_$/m);
+  assert.match(r.text, /^round 1 · agy: answered DONE \(\d+\.\d s\) · test command: exit 0/m);
   assert.equal(r.text.includes(TEST_HEADING), false);
 });
 
@@ -628,7 +630,7 @@ test('a test command the runner refuses ends the round saying why, and the diff 
   const r = await w.call({ deps: ['node_modules'] });
   assert.equal(r.isError, undefined, r.text);
   assert.ok(r.text.split('\n')[0].includes('· ended: the test command could not be run — gemini: a dependency directory of the copy was replaced during the run — the test command is not run ·'), r.text.split('\n')[0]);
-  assert.match(r.text, /^round 1 · agy: answered \(\d+\.\d s\) · test command: not run$/m);
+  assert.match(r.text, /^round 1 · agy: answered DONE \(\d+\.\d s\) · test command: not run$/m);
   assert.ok(r.text.includes('+++ b/test/added.test.mjs'), r.text);
   assert.equal(w.spawns.length, 1);
 });
@@ -640,4 +642,394 @@ test('a directory the test left mode 000 is in the diff, and the run is still re
   assert.match(r.text, /test command: exit 0/);
   assert.ok(r.text.includes('+++ b/test/locked/inner.test.mjs'), r.text);
   assert.deepEqual(runs(), []);
+});
+
+// ─── T12: the loop ────────────────────────────────────────────────────────────
+// Darwin rows over a stub ctx.spawn that answers agy rounds and test runs from a script, told apart by
+// `--output-format` in the argv; each agy round writes test/r<k>.test.mjs in its cwd, each test run writes its
+// scripted output to the descriptor the runner hands it.
+import { statSync, writeSync } from 'node:fs';
+import { PARTIAL_MARK_RE } from '../core/partial.mjs';
+import { roundPrompt } from '../units/gemini/test.mjs';
+
+/**
+ * A stub over `agy` and `test`, arrays of results by round (a function gets the spawn options); a round past
+ * either array repeats its last entry. `delayMs` holds each agy round that long.
+ */
+function scripted({ agy = [agyOk({ response: 'wrote', conversation_id: 'c-1' })], test = [{ out: 'ok 1\n', code: 0 }], delayMs = 0, seen = [] } = {}) {
+  let a = 0;
+  let t = 0;
+  return async (o) => {
+    seen.push({ at: Date.now(), o });
+    if (isAgy(o)) {
+      const k = ++a;
+      if (delayMs) await new Promise((res) => setTimeout(res, delayMs));
+      mkdirSync(join(o.cwd, 'test'), { recursive: true });
+      writeFileSync(join(o.cwd, 'test', `r${k}.test.mjs`), `round ${k}\n`);
+      const r = agy[Math.min(k, agy.length) - 1];
+      return typeof r === 'function' ? r(o) : r;
+    }
+    const s = test[Math.min(++t, test.length) - 1];
+    const r = typeof s === 'function' ? s(o) : s;
+    if (r.out) writeSync(o.outFd, r.out);
+    return { ...testOk(r.code ?? 0), ...(r.killed ? { killed: true, code: null, signal: 'SIGKILL' } : {}) };
+  };
+}
+const NO_DONE = agyOk({ response: 'wrote a test' });
+const headerOf = (text) => text.split('\n')[0];
+const roundLines = (text) => text.split('\n').filter((l) => /^round \d+ · /.test(l));
+
+test('round 2 resumes round 1\'s conversation and carries the test output in its prompt', STUB_ROW, async () => {
+  const w = toolWorld({ stub: scripted({ agy: [NO_DONE, agyOk()], test: [{ out: 'not ok 1 - first\n', code: 1 }, { out: 'ok 1\n', code: 0 }] }) });
+  const r = await w.call();
+  assert.equal(r.isError, undefined, r.text);
+  const agy = w.spawns.filter(isAgy);
+  assert.equal(agy.length, 2);
+  assert.equal(agy[0].args.includes('--conversation'), false);
+  assert.deepEqual(agy[1].args.slice(-2), ['--conversation', 'c-1']);
+  const p = agy[1].args[agy[1].args.indexOf('-p') + 1];
+  assert.ok(p.startsWith('Round 2 of 3. The unit ran ["node","--test","test/added.test.mjs"]: exit 1 after '), p);
+  assert.ok(p.includes('The last 16 KB of its output:\n\n```\nnot ok 1 - first\n```\n\nThe same rules hold: '), p);
+  assert.ok(!p.includes(BRIEF), 'the brief is round 1\'s');
+  assert.equal(roundPrompt({ k: 2, rounds: 3, argv: ['node'], testEnd: 'exit 1', testMs: 1234, tail: '' }),
+    'Round 2 of 3. The unit ran ["node"]: exit 1 after 1.2 s. The last 16 KB of its output:\n\n```\n(no output)\n```\n\nThe same rules hold: work from the files in this directory only; do not search the web; file tools only, no command. Fix what keeps a test from running as intended; never weaken an assertion to match the code — a test that fails on a breach of the spec stays and is named as a candidate defect with its spec line. When the tests run and test what the brief asks, whatever their result, end with a last line that says DONE alone.');
+});
+
+test('DONE in round 2 ends the loop after that round\'s test run', STUB_ROW, async () => {
+  const w = toolWorld({ stub: scripted({ agy: [NO_DONE, agyOk({ response: 'report\n**DONE**' })] }) });
+  const r = await w.call();
+  assert.equal(w.spawns.filter(isAgy).length, 2);
+  assert.equal(w.spawns.filter((o) => !isAgy(o)).length, 2);
+  assert.ok(headerOf(r.text).includes(' · 2 of at most 3 rounds · ended: DONE · '), headerOf(r.text));
+  assert.match(roundLines(r.text)[1], /^round 2 · agy: answered DONE \(\d+\.\d s\) · test command: exit 0 \(\d+\.\d s\)$/);
+  assert.ok(r.text.includes('+++ b/test/r1.test.mjs') && r.text.includes('+++ b/test/r2.test.mjs'), r.text);
+});
+
+test('rounds caps the loop', STUB_ROW, async () => {
+  const w = toolWorld({ stub: scripted({ agy: [NO_DONE] }) });
+  const r = await w.call({ rounds: 2 });
+  assert.equal(w.spawns.filter(isAgy).length, 2);
+  assert.equal(w.spawns.filter((o) => !isAgy(o)).length, 2);
+  assert.ok(headerOf(r.text).includes(' · 2 of at most 2 rounds · ended: rounds reached · '), headerOf(r.text));
+});
+
+test('a no-output round with denied actions ends the loop, its test still runs and its file is in the diff', STUB_ROW, async () => {
+  for (const [denied, name] of [[['read_file'], 'read_file'], [[{ tool: 'write_file' }], 'write_file']]) {
+    const w = toolWorld({ stub: scripted({ agy: [agyOk({ response: '', denied_actions: denied })] }) });
+    const r = await w.call();
+    assert.equal(w.spawns.length, 2, 'one agy round, one test run');
+    assert.match(roundLines(r.text)[0], new RegExp(`^round 1 · agy: no output \\(denied: ${name}\\) \\(\\d+\\.\\d s\\) · test command: exit 0`));
+    assert.ok(headerOf(r.text).includes('ended: a round ended with no output'), headerOf(r.text));
+    assert.ok(r.text.includes('+++ b/test/r1.test.mjs'), r.text);
+  }
+});
+
+test('quota exhausted stops the loop with no test run', STUB_ROW, async () => {
+  const w = toolWorld({ stub: scripted({ agy: [{ ...agyOk(), stdout: '', stderr: 'RESOURCE_EXHAUSTED: quota', code: 1 }] }) });
+  const r = await w.call();
+  assert.equal(w.spawns.length, 1);
+  assert.match(roundLines(r.text)[0], /^round 1 · agy: quota exhausted \(\d+\.\d s\) · test command: not run$/);
+  assert.ok(headerOf(r.text).includes('ended: quota exhausted'), headerOf(r.text));
+});
+
+test('no conversation id, or one starting with "-", stops after round 1 saying so', STUB_ROW, async () => {
+  for (const id of [undefined, '-rm', 'a b']) {
+    const w = toolWorld({ stub: scripted({ agy: [agyOk({ response: 'wrote a test', conversation_id: id })] }) });
+    const r = await w.call();
+    assert.equal(w.spawns.filter(isAgy).length, 1, String(id));
+    assert.equal(w.spawns.length, 2, 'the round\'s test still runs');
+    assert.ok(headerOf(r.text).includes('ended: no conversation id to resume'), headerOf(r.text));
+  }
+});
+
+test('a non-SUCCESS status with text ends the loop as ended early', STUB_ROW, async () => {
+  const w = toolWorld({ stub: scripted({ agy: [{ ...agyOk({ status: 'TIMEOUT', response: 'half a report' }), stderr: '\n  print timeout reached\nmore\n' }] }) });
+  const r = await w.call();
+  assert.equal(w.spawns.filter(isAgy).length, 1);
+  assert.match(roundLines(r.text)[0], /^round 1 · agy: ended early \(status=TIMEOUT\): print timeout reached \(\d+\.\d s\) · test command: exit 0/);
+  assert.ok(headerOf(r.text).includes('ended: ended early (status=TIMEOUT)'), headerOf(r.text));
+  assert.ok(r.text.includes('\nhalf a report\n'), r.text);
+});
+
+test('a failed sign-in is named and its URL is not in the answer', STUB_ROW, async () => {
+  const stderr = 'Authentication required. Please visit the URL to log in:\n  https://accounts.example/o/oauth2/auth?x=1';
+  const w = toolWorld({ stub: scripted({ agy: [{ ...agyOk({ status: 'ERROR', response: 'see https://accounts.example/o/oauth2/auth?x=1' }), stderr, code: 1 }] }) });
+  const r = await w.call();
+  assert.equal(w.spawns.length, 1, 'no test command runs');
+  assert.match(roundLines(r.text)[0], /^round 1 · agy: failed — agy asked for a sign-in: under gemini_test it reads the login Keychain only — unlock the Keychain, or sign in once with agy \(/);
+  assert.equal(r.text.includes('https://'), false, r.text);
+  assert.ok(headerOf(r.text).includes('ended: agy failed'), headerOf(r.text));
+});
+
+test('readRound: an agy that printed no envelope, a denied list of odd shapes, a usage pair', () => {
+  // Pure, through the stub-free reader the loop uses.
+  return import('../units/gemini/test.mjs').then(({ readRound }) => {
+    assert.equal(readRound({ stdout: 'plain', stderr: 'x'.repeat(300) + '\u001b[31m!', code: 3, killed: false }).end, `failed — agy exited 3: ${'x'.repeat(199)}!`);
+    const d = readRound({ stdout: JSON.stringify({ status: 'SUCCESS', response: '', denied_actions: ['a', { name: 'b' }, { action: 'c' }, { other: 1 }, 'e', 'f'] }), stderr: '', code: 0, killed: false });
+    assert.equal(d.end, 'no output (denied: a, b, c, {"other":1}, e)');
+    assert.deepEqual(readRound({ stdout: JSON.stringify({ response: 'r', usage: { input_tokens: 3, output_tokens: 4 }, conversation_id: 'ok.1:2-3_x' }), stderr: '', code: 0, killed: false }), { end: 'answered', text: 'r', conversationId: 'ok.1:2-3_x', denied: [], usage: { input: 3, output: 4 } });
+  });
+});
+
+test('the budget: no round starts once testTimeoutS is spent, and no spawn\'s hardKillMs exceeds what is left', { ...STUB_ROW, timeout: 10_000 }, async () => {
+  const seen = [];
+  const w = toolWorld({ config: { testTimeoutS: 2 }, stub: scripted({ agy: [NO_DONE], delayMs: 1500, seen }) });
+  const t0 = Date.now();
+  const r = await w.call();
+  assert.equal(w.spawns.filter(isAgy).length, 1);
+  assert.ok(headerOf(r.text).includes('ended: the call\'s budget (gemini.testTimeoutS) was spent'), headerOf(r.text));
+  const [agy, run] = seen.map((s) => s.o);
+  assert.ok(agy.hardKillMs <= 2000, String(agy.hardKillMs));
+  assert.equal(agy.args[agy.args.indexOf('--print-timeout') + 1], '1s');
+  assert.ok(run.hardKillMs <= 2000 - (seen[1].at - t0) + 50, `${run.hardKillMs} after ${seen[1].at - t0} ms`);
+  assert.ok(run.hardKillMs < 1000, String(run.hardKillMs));
+});
+
+test('an agy round killed at the budget marks the answer partial naming gemini.testTimeoutS, one killed at its own bound names timeoutS', STUB_ROW, async () => {
+  const killed = { ...agyOk(), stdout: '', code: null, signal: 'SIGKILL', killed: true };
+  const w = toolWorld({ config: { testTimeoutS: 5 }, stub: scripted({ agy: [killed] }) });
+  const r = await w.call();
+  assert.match(roundLines(r.text)[0], /^round 1 · agy: hard-killed \(/);
+  assert.ok(r.text.endsWith('[gemini: hard-killed after 5s — treat the answer as partial; raise gemini.testTimeoutS in the fleet config]'), r.text.slice(-200));
+  assert.match(r.text, PARTIAL_MARK_RE);
+  assert.equal(w.records.at(-1).partial, true);
+  assert.ok(headerOf(r.text).includes('ended: the call\'s budget (gemini.testTimeoutS) was spent'), headerOf(r.text));
+  const own = toolWorld({ config: { timeoutS: 30 }, stub: scripted({ agy: [killed] }) });
+  const o = await own.call();
+  assert.ok(o.text.endsWith('[gemini: hard-killed after 90s — treat the answer as partial; raise gemini.timeoutS in the fleet config]'), o.text.slice(-200));
+  assert.ok(headerOf(o.text).includes('ended: agy failed'), headerOf(o.text));
+  assert.equal(own.spawns.length, 2, 'the round\'s test still runs');
+});
+
+test('a cancelled call stops the loop and carries the cancelled marker', STUB_ROW, async () => {
+  const ac = new AbortController();
+  const during = toolWorld({ signal: ac.signal, stub: scripted({ agy: [() => { ac.abort(); return { ...agyOk(), stdout: '', killed: true, cancelled: true, code: null }; }] }) });
+  const r = await during.call();
+  assert.equal(during.spawns.length, 1, 'no test run after a cancelled round');
+  assert.match(roundLines(r.text)[0], /^round 1 · agy: cancelled \(/);
+  assert.ok(r.text.endsWith('[gemini: cancelled by the client — treat the answer as partial]'), r.text.slice(-120));
+  assert.ok(headerOf(r.text).includes('ended: cancelled'), headerOf(r.text));
+  const ac2 = new AbortController();
+  const after = toolWorld({ signal: ac2.signal, stub: scripted({ agy: [() => { ac2.abort(); return NO_DONE; }] }) });
+  const a = await after.call();
+  assert.equal(after.spawns.filter(isAgy).length, 1, 'no round 2 once the call is cancelled');
+  assert.ok(headerOf(a.text).includes('ended: cancelled'), headerOf(a.text));
+  assert.ok(a.text.endsWith('[gemini: cancelled by the client — treat the answer as partial]'), a.text.slice(-120));
+});
+
+test('usage sums the rounds', STUB_ROW, async () => {
+  const w = toolWorld({ stub: scripted({ agy: [NO_DONE, agyOk({ usage: { input_tokens: 7, output_tokens: 1 } })] }) });
+  await w.call();
+  assert.deepEqual(w.records.at(-1).usage, { input: 12, output: 3 });
+  const none = toolWorld({ stub: scripted({ agy: [agyOk({ usage: undefined })] }) });
+  await none.call();
+  assert.equal(none.records.at(-1).usage, null);
+});
+
+test('testKeep keeps round-1.diff and round-2.diff in out/', STUB_ROW, async () => {
+  const w = toolWorld({ config: { testKeep: true }, stub: scripted({ agy: [NO_DONE, agyOk()] }) });
+  const r = await w.call();
+  try {
+    const runDir = /^_\(run kept: (.+)\)_$/m.exec(r.text)[1];
+    const one = readFileSync(join(runDir, 'out', 'round-1.diff'), 'utf8');
+    const two = readFileSync(join(runDir, 'out', 'round-2.diff'), 'utf8');
+    assert.ok(one.includes('+++ b/test/r1.test.mjs') && !one.includes('r2.test.mjs'), one);
+    assert.ok(two.includes('+++ b/test/r2.test.mjs'), two);
+  } finally { dropKept(r.text); }
+  const plain = toolWorld({ stub: scripted({ agy: [NO_DONE, agyOk()], test: [(o) => { assert.equal(existsSync(join(dirname(o.cwd), 'out', 'round-1.diff')), false); return { code: 0 }; }] }) });
+  await plain.call();
+});
+
+test('a test run sandbox-exec could not start says so, a kill names the limit that bound it, and an empty log is no output', STUB_ROW, async () => {
+  const w = toolWorld({ config: { testTimeoutS: 60, testRunTimeoutS: 300 }, stub: scripted({ agy: [NO_DONE], test: [{ out: 'sandbox-exec: sandbox_apply: Operation not permitted\n', code: 71 }, { killed: true }, { code: 0 }] }) });
+  const r = await w.call();
+  const lines = roundLines(r.text);
+  assert.match(lines[0], /test command: not started — sandbox-exec: sandbox_apply: Operation not permitted \(\d+\.\d s\)$/);
+  assert.match(lines[1], /test command: killed at gemini\.testTimeoutS \(\d+\.\d s\)$/);
+  assert.match(lines[2], /test command: exit 0 \(\d+\.\d s\)$/);
+  const blocks = r.text.split('\n\n');
+  assert.equal(blocks.find((b) => b.startsWith('round 3 ')).split('\n')[1], '_(no output)_');
+  const own = toolWorld({ stub: scripted({ agy: [agyOk()], test: [{ out: '\u001b[0m', killed: true }] }) });
+  const o = await own.call();
+  assert.match(roundLines(o.text)[0], /test command: killed at gemini\.testRunTimeoutS \(\d+\.\d s\)$/);
+  assert.equal(o.text.includes('_(no output)_'), false, 'a log holding only an escape sequence is not empty');
+});
+
+test('before each spawn the clone and tmp are put back to 0700, and the test time limit never passes what a timer holds', STUB_ROW, async () => {
+  const modes = [];
+  const w = toolWorld({
+    config: { testTimeoutS: 4000000, testRunTimeoutS: 4000000 },
+    stub: scripted({
+      agy: [(o) => { modes.push([statSync(o.cwd).mode & 0o777, statSync(join(dirname(o.cwd), 'tmp')).mode & 0o777]); return NO_DONE; }],
+      test: [(o) => { chmodSync(o.cwd, 0o500); chmodSync(join(dirname(o.cwd), 'tmp'), 0); return { code: 0 }; }],
+    }),
+  });
+  const r = await w.call({ rounds: 2 });
+  assert.equal(r.isError, undefined, r.text);
+  assert.deepEqual(modes, [[0o700, 0o700], [0o700, 0o700]]);
+  for (const o of w.spawns.filter((s) => !isAgy(s))) assert.equal(o.hardKillMs, 2147483647);
+});
+
+// ─── The fix round after the T11–T12 tester (2026-11-25) ─────────────────────
+// The envelopes kept, a guard outside the tests listed, a bare program refused early, nothing of stderr's URLs or the
+// home in what the session reads, a first round that wrote nothing is an error, the diff's git calls stop at the first
+// failure and its unavailable line names no git arguments.
+import { SIGN_IN_FAILED, cliSafe, readRound, unavailableOf } from '../units/gemini/test.mjs';
+
+test('each round\'s envelope is kept in out/ when the run is kept', STUB_ROW, async () => {
+  const one = { ...NO_DONE, stderr: '' };
+  const two = { ...agyOk(), stderr: 'a warning\n' };
+  const w = toolWorld({ config: { testKeep: true }, stub: scripted({ agy: [one, two] }) });
+  const r = await w.call();
+  try {
+    const out = join(/^_\(run kept: (.+)\)_$/m.exec(r.text)[1], 'out');
+    assert.equal(readFileSync(join(out, 'agy-round-1.json'), 'utf8'), one.stdout);
+    assert.equal(statSync(join(out, 'agy-round-1.json')).mode & 0o777, 0o600);
+    assert.equal(existsSync(join(out, 'agy-round-1.err')), false, 'an empty stderr is not kept');
+    assert.equal(readFileSync(join(out, 'agy-round-2.json'), 'utf8'), two.stdout);
+    assert.equal(readFileSync(join(out, 'agy-round-2.err'), 'utf8'), 'a warning\n');
+    assert.equal(statSync(join(out, 'agy-round-2.err')).mode & 0o777, 0o600);
+  } finally { dropKept(r.text); }
+});
+
+test('a guard file outside the tests is in the outside list', () => {
+  // A .gitignore of `*` ignores itself: it is in no changed name, only in guards.
+  const a = assembleAnswer({ ...ANSWER, changed: ['src/a.mjs', 'test/a.test.mjs'], guards: ['.gitignore', 'test/.gitignore'] });
+  assert.equal(outsideLine(a), '_(changed outside the test directories: src/a.mjs, .gitignore)_');
+  assert.equal(a.includes('_(no file outside the test directories changed)_'), false);
+  assert.equal(outsideLine(assembleAnswer({ ...ANSWER, changed: ['test/a.test.mjs'], guards: ['.gitignore'] })), '_(changed outside the test directories: .gitignore)_');
+  assert.equal(outsideLine(assembleAnswer({ ...ANSWER, changed: ['.gitignore', 'src/a.mjs'], guards: ['.gitignore'] })), '_(changed outside the test directories: .gitignore, src/a.mjs)_', 'no duplicate, the changed names first');
+  assert.ok(assembleAnswer({ ...ANSWER, changed: ['test/a.test.mjs'], guards: ['test/.gitignore'] }).includes('_(no file outside the test directories changed)_'));
+});
+
+test('a bare program not on the list is refused before the run is made', STUB_ROW, async () => {
+  const w = toolWorld({ stub: () => { throw new Error('no spawn may happen'); } });
+  const before = runs();
+  // `deps: ['.']` is what checkDeps refuses: the program's refusal comes first.
+  const r = await w.call({ testCommand: ['make', 'test'], deps: ['.'] });
+  assert.equal(r.isError, true);
+  assert.equal(r.text, 'Gemini error: gemini: "make" is not on gemini.testPrograms (node, npm, npx, pnpm, yarn, python3) — name a program on it, add one with omelette-fleet set gemini.testPrograms=…, or name a path under a deps entry');
+  assert.equal(w.spawns.length, 0);
+  assert.deepEqual(runs(), before);
+});
+
+test('nothing from the CLI\'s stderr carries a URL or the home', STUB_ROW, async () => {
+  // HOME as given (/tmp/…) and as resolved (/private/tmp/…): both are replaced by ~.
+  const w = toolWorld({ stub: scripted({ agy: [(o) => ({ ...testOk(1), stdout: '', stderr: `boom: see https://example.test/a?state=abc-1 in ${given}/Library/agy.log and ${w.home}/b\n` })] }) });
+  const given = w.home.replace(/^\/private\/tmp\//, '/tmp/');
+  assert.notEqual(given, w.home);
+  const r = await w.call({}, { HOME: given });
+  assert.match(roundLines(r.text)[0], /^round 1 · agy: failed — agy exited 1: boom: see <url removed> in ~\/Library\/agy\.log and ~\/b \(/);
+  for (const bad of ['https://', 'state=', given]) assert.equal(r.text.includes(bad), false, `${bad} in\n${r.text}`);
+  // An ERROR envelope whose stderr asks for a Google sign-in without the English phrase: the sign-in end, as an error.
+  const s = toolWorld({ stub: () => ({ ...testOk(1), stdout: JSON.stringify({ status: 'ERROR', response: '' }), stderr: `Please visit https://accounts.google.com/o/oauth2/auth?state=x to continue (${given})\n` }) });
+  const e = await s.call({}, { HOME: given });
+  assert.equal(e.isError, true, e.text);
+  assert.equal(e.text, `Error: gemini_test: ${SIGN_IN_FAILED} — then call again; nothing was retried`);
+  // The reader alone: a URL whose path holds oauth is a sign-in on any host; one without it is not.
+  const read = (stderr) => readRound({ stdout: JSON.stringify({ status: 'ERROR', response: '' }), stderr, code: 1, killed: false }).end;
+  assert.equal(read('open https://login.example/OAuth/authorize?x=1'), SIGN_IN_FAILED);
+  assert.equal(read('open https://login.example/x?flow=oauth2'), SIGN_IN_FAILED);
+  assert.equal(read('see https://status.example/incident?id=state%3Dx'), 'ended early (status=ERROR): see <url removed>');
+});
+
+test('a first round that fails with nothing written is an error naming what to do', STUB_ROW, async () => {
+  const cases = [
+    ['sign-in', () => ({ ...testOk(1), stdout: '', stderr: 'Authentication required\n' }), `${SIGN_IN_FAILED} — then call again; nothing was retried`],
+    ['quota', () => ({ ...testOk(1), stdout: '', stderr: 'RESOURCE_EXHAUSTED: quota\n' }), 'quota exhausted — the Gemini pool is exhausted — call again after it resets; nothing was retried'],
+    ['E2BIG', () => { throw new Error('spawn E2BIG'); }, 'failed — spawn E2BIG — the brief is too large for one command line — shorten "prompt"'],
+    ['other', () => ({ ...testOk(2), stdout: 'plain', stderr: 'boom\n' }), 'failed — agy exited 2: boom — nothing ran in the copy; the call was not retried'],
+  ];
+  for (const [label, stub, end] of cases) {
+    const before = runs();
+    const w = toolWorld({ stub });
+    const r = await w.call();
+    assert.equal(r.isError, true, `${label}: ${r.text}`);
+    assert.equal(r.text, `Error: gemini_test: ${end}`, label);
+    assert.equal(w.records.at(-1).status, 'error', label);
+    assert.equal(w.spawns.length, 1, `${label}: no test run`);
+    assert.deepEqual(runs(), before, `${label}: the run is gone`);
+  }
+});
+
+test('a later round that fails marks the answer partial', STUB_ROW, async () => {
+  const quota = { ...testOk(1), stdout: '', stderr: 'RESOURCE_EXHAUSTED: quota\n' };
+  const w = toolWorld({ stub: scripted({ agy: [NO_DONE, quota] }) });
+  const r = await w.call();
+  assert.equal(r.isError, undefined, r.text);
+  assert.match(roundLines(r.text)[1], /^round 2 · agy: quota exhausted \(/);
+  assert.ok(r.text.endsWith('[gemini: CLI failed in round 2 — treat the answer as partial]'), r.text.slice(-200));
+  assert.match(r.text, PARTIAL_MARK_RE);
+  assert.equal(w.records.at(-1).partial, true);
+  // Round 1 failed, but the copy holds what it wrote: the answer, marked.
+  const first = toolWorld({ stub: scripted({ agy: [{ ...testOk(2), stdout: 'plain', stderr: 'boom\n' }] }) });
+  const f = await first.call();
+  assert.equal(f.isError, undefined, f.text);
+  assert.ok(f.text.includes('+++ b/test/r1.test.mjs'), f.text);
+  assert.ok(f.text.endsWith('[gemini: CLI failed in round 1 — treat the answer as partial]'), f.text.slice(-200));
+  assert.equal(first.records.at(-1).partial, true);
+});
+
+test('a prompt past 256 KB is refused before the run is made', STUB_ROW, async () => {
+  const w = toolWorld({ stub: () => { throw new Error('no spawn may happen'); } });
+  const before = runs();
+  const text = 'Error: "prompt" is larger than 256 KB — the brief travels on agy\'s command line; put the detail in a file in the work tree and name it';
+  // 131 073 two-byte characters: under 256 K characters, over 256 KB.
+  for (const prompt of ['x'.repeat(256 * 1024 + 1), '\u{e9}'.repeat(131_073)]) {
+    const r = await w.call({ prompt });
+    assert.equal(r.isError, true);
+    assert.equal(r.text, text);
+  }
+  assert.equal(w.spawns.length, 0);
+  assert.deepEqual(runs(), before);
+});
+
+test('after a diff that fails the other two git calls are not made', STUB_ROW, async () => {
+  // Counted through git itself: a `git` first on PATH that logs its argv and runs the real one.
+  const real = spawnSync('/usr/bin/which', ['git'], { timeout: 5_000 }).stdout.toString().trim();
+  const bin = mkdtempSync(join(BASE, 'gitlog-'));
+  const log = join(bin, 'calls');
+  writeFileSync(join(bin, 'git'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${real}' "$@"\n`, { mode: 0o755 });
+  const w = toolWorld({
+    stub: (o) => {
+      if (!isAgy(o)) return testOk();
+      rmSync(join(dirname(o.cwd), 'out', 'git', 'HEAD'));
+      return agyOk();
+    },
+  });
+  const r = await w.call({}, { PATH: `${bin}:${process.env.PATH}` });
+  assert.match(r.text, /^_\(diff unavailable: /m);
+  const diffCalls = readFileSync(log, 'utf8').split('\n').filter((l) => l.includes('/out/git --work-tree'));
+  assert.equal(diffCalls.length, 1, diffCalls.join('\n'));
+});
+
+test('the diff-unavailable line names no git arguments', STUB_ROW, async () => {
+  const timedOut = Object.assign(new Error('git --git-dir /x/out/git --work-tree /x/clone ls-files --others -z: spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
+  assert.equal(unavailableOf(timedOut), 'git did not finish in 60 s on what the run left in the copy — set gemini.testKeep=true and call again to read the run, or ask for fewer and smaller files');
+  assert.equal(unavailableOf(new Error('git --git-dir /x/out/git -c a=b diff: warning: w error: bad index')), 'error: bad index');
+  assert.equal(unavailableOf(new Error('git --git-dir /x/out/git -c a=b diff: exit 3')), 'git: exit 3');
+  const w = toolWorld({
+    stub: (o) => {
+      if (!isAgy(o)) return testOk();
+      rmSync(join(dirname(o.cwd), 'out', 'git', 'HEAD'));
+      return agyOk();
+    },
+  });
+  const r = await w.call();
+  const line = r.text.split('\n').find((l) => l.startsWith('_(diff unavailable: '));
+  assert.match(line, /^_\(diff unavailable: fatal: .+\)_$/, line);
+  assert.equal(line.includes('--git-dir'), false, line);
+});
+
+test('a round that answered is not a failed sign-in for an oauth URL in its stderr; a denied action\'s URL and home never reach the round line; a sibling of the home is left as it is', () => {
+  const ok = readRound({ code: 0, stdout: JSON.stringify({ status: 'SUCCESS', response: 'wrote it', conversation_id: 'c-1' }), stderr: 'note: token refreshed, see https://docs.example/oauth2/refresh\n' });
+  assert.equal(ok.end, 'answered');
+  assert.equal(ok.text, 'wrote it');
+  // The same stderr under an envelope that did not answer is a failed sign-in.
+  assert.equal(readRound({ code: 1, stdout: JSON.stringify({ status: 'ERROR', response: '' }), stderr: 'see https://docs.example/oauth2/refresh\n' }).end, SIGN_IN_FAILED);
+  const home = String(process.env.HOME).replace(/\/+$/, '');
+  const denied = readRound({ code: 0, stdout: JSON.stringify({ status: 'SUCCESS', response: '', denied_actions: [{ path: `${home}/.ssh/id`, url: 'wss://h/x?state=S8' }] }), stderr: '' });
+  assert.ok(denied.end.startsWith('no output (denied: '), denied.end);
+  assert.ok(!denied.end.includes(home) && !denied.end.includes('state=S8') && !denied.end.includes('wss://'), denied.end);
+  assert.equal(cliSafe(`${home}bc/other and ${home}/x and ftp://h/y?z=1`), `${home}bc/other and ~/x and <url removed>`);
 });
