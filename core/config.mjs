@@ -86,7 +86,7 @@ export function configPath(env = process.env) {
 /** A plain object — the shape every nested block of this file has to have. */
 const isObj = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
 
-/** The words read as true: a boolean config value, ORION_ALLOW_GEMINI_MUTATE, and OMELETTE_ALLOW_REPRO (units/mistral/repro.mjs). */
+/** The words read as true: a boolean config value, ORION_ALLOW_GEMINI_MUTATE, and OMELETTE_ALLOW_REPRO (reproAllowed). */
 export const TRUE_WORDS = new Set(['1', 'true', 'on', 'yes']);
 const FALSE_WORDS = new Set(['0', 'false', 'off', 'no']);
 
@@ -404,6 +404,11 @@ export function allowWriteUnits(env = process.env) {
   );
   if (TRUE_WORDS.has(String(env.ORION_ALLOW_GEMINI_MUTATE || '').trim().toLowerCase())) set.add('gemini');
   return set;
+}
+
+/** The repro gate: `OMELETTE_ALLOW_REPRO` in the true words; `OMELETTE_ALLOW_WRITE` is not consulted. */
+export function reproAllowed(env = process.env) {
+  return TRUE_WORDS.has(String(env.OMELETTE_ALLOW_REPRO || '').trim().toLowerCase());
 }
 
 /**
