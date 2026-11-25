@@ -203,3 +203,13 @@ test('untrackedPast lists an untracked file whatever the clone\'s ignore files s
     assert.deepEqual([...names].sort(), ['.gitignore', 't.test.mjs']);
   } finally { rmSync(base, { recursive: true, force: true }); }
 });
+
+// The release-review fix round (2026-11-25): the rule that decides a directory, for gemini_test's guards.
+test('ignoreRules names the deciding source of an ignored directory, not one a negation re-includes, and reads a name opening with ":" as a name', () => {
+  const run = open(committed());
+  writeFileSync(join(run.clone, '.gitignore'), 'cache/\n:odd/\nkeep/\n!keep/\n');
+  for (const d of ['cache', ':odd', 'keep', 'plain']) mkdirSync(join(run.clone, d));
+  const rules = core.ignoreRules(run.clone, gitDirOf(run), { indexFile: join(BASE, `index-${n++}`), paths: ['cache', ':odd', 'keep', 'plain'] });
+  assert.deepEqual([...rules.entries()], [['cache', { source: '.gitignore', pattern: 'cache/' }], [':odd', { source: '.gitignore', pattern: ':odd/' }]]);
+  assert.equal(core.ignoreRules(run.clone, gitDirOf(run), { paths: [] }).size, 0, 'no path: no git call');
+});

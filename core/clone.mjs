@@ -33,7 +33,7 @@
  * Zero deps.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, rmdirSync, unlinkSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, rmdirSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -281,6 +281,67 @@ export function changedPaths(clone, gitDir, { indexFile, exclude = [] } = {}) {
 export function untrackedPast(clone, gitDir, { indexFile, exclude = [] } = {}) {
   const { base, opts } = diffSetup(clone, gitDir, indexFile);
   return git([...base, 'ls-files', '--others', '-z'], opts).split('\0').filter((p) => p && !underAny(p, exclude));
+}
+
+/**
+ * The untracked paths in the clone that git's ignore rules ignore, relative to
+ * it: `git ls-files --others --ignored --exclude-standard --directory -z` with
+ * cloneDiff's base args, env and `indexFile` handling — a directory ignored
+ * whole is one entry ending in `/`, and an entry under another directory entry
+ * is dropped. An entry at or under an `exclude` directory is left out; an
+ * ignored directory that holds one is listed by what else it holds (its
+ * entries read without following a link, a directory ending in `/`), so an
+ * excluded directory is never named through its parent.
+ * @returns {string[]}
+ */
+export function ignoredPast(clone, gitDir, { indexFile, exclude = [] } = {}) {
+  const { base, opts } = diffSetup(clone, gitDir, indexFile);
+  const listed = git([...base, 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], opts).split('\0').filter(Boolean);
+  const holds = (dir) => exclude.some((e) => e.startsWith(`${dir}/`));
+  const around = (dir) => readdirSync(join(clone, dir), { withFileTypes: true }).flatMap((d) => {
+    const rel = `${dir}/${d.name}`;
+    if (underAny(rel, exclude)) return [];
+    if (holds(rel)) return around(rel);
+    return [d.isDirectory() ? `${rel}/` : rel];
+  });
+  const entries = listed.flatMap((e) => {
+    const p = e.replace(/\/+$/, '');
+    if (underAny(p, exclude)) return [];
+    return e.endsWith('/') && holds(p) ? around(p) : [e];
+  });
+  const dirs = entries.filter((e) => e.endsWith('/'));
+  return entries.filter((e) => !dirs.some((d) => d !== e && e.startsWith(d)));
+}
+
+/**
+ * The ignore rule that decides each of `paths` (relative to the clone, read
+ * as they stand: a directory is lstat'ed as one), with cloneDiff's base args,
+ * env and `indexFile` handling: `git check-ignore -v -z --stdin`, the index
+ * consulted (a path git tracks, or a directory holding a tracked file, is not
+ * ignored). A path whose deciding pattern is a negation (`!…`) is not ignored.
+ * check-ignore refuses `--literal-pathspecs`, so each path goes in as `./<path>`:
+ * a name opening with `:` is never read as pathspec magic.
+ * @returns {Map<string, {source: string, pattern: string}>} the ignored paths only
+ */
+export function ignoreRules(clone, gitDir, { indexFile, paths }) {
+  const { base, opts } = diffSetup(clone, gitDir, indexFile);
+  const rules = new Map();
+  if (!paths.length) return rules;
+  const args = [...base.filter((a) => a !== '--literal-pathspecs'), 'check-ignore', '-v', '-z', '--stdin'];
+  const r = spawnSync('git', args, { ...opts, input: paths.map((p) => `./${p}`).join('\0'), timeout: 60_000, maxBuffer: 64 * MB });
+  // Exit 1: none of the paths is ignored.
+  if (r.error || (r.status !== 0 && r.status !== 1)) {
+    const err = r.stderr ? r.stderr.toString().trim() : '';
+    const e = new Error(`git ${args.join(' ')}: ${err ? err.split('\n').slice(-2).join(' ') : (r.error && r.error.message) || `exit ${r.status}`}`);
+    if (r.error && r.error.code) e.code = r.error.code;
+    throw e;
+  }
+  const f = r.stdout.toString().split('\0');
+  for (let i = 0; i + 3 < f.length; i += 4) {
+    const [source, , pattern, path] = f.slice(i, i + 4);
+    if (source && !pattern.startsWith('!')) rules.set(path.replace(/^\.\//, ''), { source, pattern });
+  }
+  return rules;
 }
 
 /** `p` is one of the `exclude` directories or lies under one. */
