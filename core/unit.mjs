@@ -57,12 +57,14 @@
  * what its adapter pins — while `ctx.model` stays the explicit or configured
  * one ('' when nothing named a model). Any other unit's unnamed model stays
  * `null` in the feed: the vendor's own default.
- * `ctx.spawn({ args, cwd?, stdinText?, extraEnv?, hardKillMs?, outputCap?, killGroupOnExit? })`
+ * `ctx.spawn({ args, cwd?, stdinText?, extraEnv?, hardKillMs?, outputCap?, killGroupOnExit?, outFd?, wrap? })`
  * resolves to core/spawn.mjs's result — `{ stdout, stderr, code, signal,
  * killed, capped }`. Both bounds come from the unit's config (`timeoutS`,
  * `outputCap`) unless the call passes its own. `capped: true` means the tail
  * cap dropped the BEGINNING of stdout: the adapter's parser is reading a
  * fragment and must say so rather than pass it off as a whole answer.
+ * `wrap(exe, args)` puts a command in front of the CLI (gemini_test runs agy
+ * under `sandbox-exec`); `outFd` sends both streams to a file.
  * `partial: true` marks an answer whose text carries an incompleteness marker
  * — one rule, core/partial.mjs: a hard kill, a cap, a cancel, a non-zero exit,
  * an early stop, a missing `turn.completed`, a deep-research stage or gather
@@ -365,7 +367,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
   const bootCfg = cfgFor();
   if (bootCfg.values.results) storeFor(bootCfg).prune();
 
-  function spawnFor(cfg, { args, cwd, stdinText, extraEnv, hardKillMs, outputCap, killGroupOnExit }, signal) {
+  function spawnFor(cfg, { args, cwd, stdinText, extraEnv, hardKillMs, outputCap, killGroupOnExit, outFd, wrap }, signal) {
     const timeoutMs = hardKillMs ?? cfg.values.timeoutS * 1000;
     // Both bounds come from the unit's config unless this call knows better.
     // The config value is a validated posint; a call's is not, and `slice(-0)`
@@ -378,14 +380,19 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
     // program in the call's cwd never is.
     if (!exe) exe = locateBin(bin, env);
     if (!exe) return Promise.reject(new Error(notFoundHelp));
-    log(`spawn · bin=${exe} · argc=${args.length} · cwd=${cwd || '(process cwd)'} · hard-kill=${Math.round(timeoutMs / 1000)}s · output-cap=${cap}`);
+    // `wrap` is called with the located CLI; what it returns is what runs.
+    const cmd = wrap ? wrap(exe, args) : { bin: exe, args };
+    if (!cmd || typeof cmd.bin !== 'string' || !Array.isArray(cmd.args)) {
+      return Promise.reject(new Error('wrap must return { bin, args }'));
+    }
+    log(`spawn · bin=${cmd.bin} · argc=${cmd.args.length} · cwd=${cwd || '(process cwd)'} · hard-kill=${Math.round(timeoutMs / 1000)}s · output-cap=${cap}`);
     return runProcess({
       // env is the PARENT env to select from: core/spawn.mjs builds the child
       // from the allowlist + this unit's passthrough, never by inheritance.
-      bin: exe, args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
+      bin: cmd.bin, args: cmd.args, cwd, env, envPassthrough: unit.envPassthrough, extraEnv,
       scrubEnv: unit.riskEnv,
       hardKillMs: timeoutMs, signal, stdinText, outputCap: cap, log,
-      notFoundHelp, killGroupOnExit,
+      notFoundHelp, killGroupOnExit, outFd,
     }).then((res) => {
       // Auth check ONLY on empty-stdout runs: a real answer that merely mentions
       // signing in must never false-positive.

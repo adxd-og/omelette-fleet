@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineUnit, createUnitRuntime, boundedRetry, makeResultId, MUTATE_RE, PROGRESS_EVERY_MS, TOOL_KINDS } from '../core/unit.mjs';
@@ -851,4 +851,52 @@ test('the tokens an adapter reports reach the spooled record, the feed, and noth
   const rt = createUnitRuntime(countingUnit({ input: 1, output: 2 }), { env: feed.env });
   await rt.callTool('fake_tokens', {});
   assert.deepEqual(rt.status.lastEvent.usage, { input: 1, output: 2 });
+});
+
+/** The fake unit plus one tool that spawns with whatever `wrap` / `outFd` the test hands it. */
+const wrappingUnit = (spawnExtra) => fakeUnit({
+  tools: [
+    ...fakeUnit().tools,
+    {
+      name: 'fake_wrap', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+      async run(_a, ctx) {
+        const r = await ctx.spawn({ args: ['-e', 'console.log(process.argv.slice(1).join(" "))'], hardKillMs: 5000, ...spawnExtra() });
+        return r.stdout.trim() || '(nothing on stdout)';
+      },
+    },
+  ],
+});
+
+test('wrap receives the located CLI and the call\'s args, and its command is what runs', async () => {
+  let seen;
+  let wrap = (exe, a) => { seen = { exe, a }; return { bin: exe, args: [...a, 'x', 'y'] }; };
+  const rt = createUnitRuntime(wrappingUnit(() => ({ wrap })), env(null));
+  const r = await rt.callTool('fake_wrap', {});
+  assert.equal(r.isError, undefined, r.text);
+  assert.equal(r.text, 'x y');
+  assert.equal(seen.exe, node);
+  assert.deepEqual(seen.a, ['-e', 'console.log(process.argv.slice(1).join(" "))']);
+  wrap = () => ({ bin: 7 });
+  const bad = await rt.callTool('fake_wrap', {});
+  assert.equal(bad.isError, true);
+  assert.match(bad.text, /wrap must return \{ bin, args \}/);
+});
+
+test('outFd passes through ctx.spawn', async () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'unit-outfd-')), 'out.txt');
+  const fd = openSync(f, 'wx', 0o600);
+  const rt = createUnitRuntime(fakeUnit({
+    tools: [...fakeUnit().tools, {
+      name: 'fake_outfd', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} },
+      async run(_a, ctx) {
+        const r = await ctx.spawn({ args: ['-e', "process.stdout.write('o\\n');process.stderr.write('e\\n')"], hardKillMs: 5000, outFd: fd });
+        return `stdout=${JSON.stringify(r.stdout)}`;
+      },
+    }],
+  }), env(null));
+  try {
+    const r = await rt.callTool('fake_outfd', {});
+    assert.equal(r.text, 'stdout=""');
+  } finally { closeSync(fd); }
+  assert.equal(readFileSync(f, 'utf8'), 'o\ne\n');
 });
