@@ -4,13 +4,17 @@
  * Written from spec 2026-11-19-gemini-neon-design.md, not from the implementer's tests.
  * Runtime behaviour only: no assertion on catalog prose.
  */
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import unit from '../units/gemini/adapter.mjs';
 import { createUnitRuntime } from '../core/unit.mjs';
+
+// Every temp dir a row makes is removed when the file ends.
+const made = [];
+after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 
 const NEON = ['Gemini 4 Neon (Low)', 'Gemini 4 Neon (Medium)', 'Gemini 4 Neon (High)', 'Gemini 4 Neon (XHigh)'];
 const RETIRED = [
@@ -21,6 +25,7 @@ const res = (over) => Promise.resolve({ stdout: '', stderr: '', code: 0, signal:
 
 function rig(config = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'omelette-neon-'));
+  made.push(dir);
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: { timeoutS: 30, ...config } } }));
   const env = { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath };
   const calls = { spawn: [] };
