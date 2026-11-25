@@ -46,6 +46,16 @@
  * interpreter, which profile B denies, to the copy's. Nothing else of the work
  * tree enters the copy.
  *
+ * PROFILE B — the test command runs once per round under units/mistral/repro.sb,
+ * read in place, byte for byte (runTestCommand): no network, writes only the
+ * clone and the run's tmp, no read of the operator's home but the adapter's
+ * node, the work tree, the fleet home, the out dir and every other run denied;
+ * HOME and TMPDIR are the run's tmp, PATH the unit's own (testPath), both streams
+ * go to `tmp/round-<n>.log` (node aborts at start on a stdout the profile denies
+ * reading, and it denies `out/`), copied by the unit to `out/round-<n>.log`
+ * after the run, the group is killed when the command exits, a time
+ * limit ends a run, and the model gets the last 16 KB, made safe to show.
+ *
  * DROP — the workspace config paths agy honours, removed from the clone as
  * Mistral drops `.vibe`. G0 (2026-11-24, agy 1.5.16) found none: settings
  * files planted at seven candidate paths granted nothing. Empty; the constant
@@ -54,9 +64,13 @@
  * Zero deps.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, posix } from 'node:path';
+import { appendFileSync, chmodSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, posix } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CLONE_CONFIG, cloneDiff, cloneGitEnv, gitRun, prepareClone, removeRun, runsRootAt } from '../../core/clone.mjs';
+import { INVISIBLE_CHARS } from '../../core/log.mjs';
+import { SANDBOX_EXEC, regexLiteral } from '../../core/seatbelt.mjs';
 
 /** The name of gemini_test's runs root under the OS temp dir. */
 export const TEST_RUNS = 'omelette-gemini-test';
@@ -324,4 +338,175 @@ export function relocateVenv(copy, src) {
     count++;
   }
   return count;
+}
+
+/**
+ * Profile B: Mistral's repro profile, byte for byte, read in place (spec, «What
+ * it leaves open»: «with the same profile») — never a copy that could drift.
+ */
+export const PROFILE_B = fileURLToPath(new URL('../mistral/repro.sb', import.meta.url));
+
+/**
+ * sandbox-exec's arguments for profile B over this run: a `-D` for every param
+ * repro.sb reads, then `-f PROFILE_B`. Every path is resolved (Seatbelt matches
+ * real paths; a spelling through a link would deny nothing): CLONE, TMP, OUT and
+ * RUN from the run, RUNS the run dir's parent, HOME the operator's, FLEET the
+ * fleet home, SRC the work tree's top, TMPROOT the OS temp root as a regex
+ * literal; NODE and NODEUP are `reach`'s regexes (`{ node, up }`).
+ * @param {{clone: string, tmp: string, out: string, runDir: string, top: string}} run
+ * @param {{home: string, fleet: string, reach: {node: string, up: string}}} o
+ * @returns {string[]}
+ */
+export function profileBArgs(run, { home, fleet, reach }) {
+  const params = [
+    ['CLONE', realpathSync(run.clone)],
+    ['TMP', realpathSync(run.tmp)],
+    ['HOME', realpathSync(home)],
+    ['FLEET', realpathSync(fleet)],
+    ['OUT', realpathSync(run.out)],
+    ['RUNS', realpathSync(dirname(run.runDir))],
+    ['RUN', realpathSync(run.runDir)],
+    ['TMPROOT', regexLiteral(realpathSync(tmpdir()))],
+    ['SRC', realpathSync(run.top)],
+    ['NODE', reach.node],
+    ['NODEUP', reach.up],
+  ];
+  return [...params.flatMap(([k, v]) => ['-D', `${k}=${v}`]), '-f', PROFILE_B];
+}
+
+/**
+ * The test command's PATH (the session's ruling on T7's probe, 2026-11-25):
+ * under repro.sb a stat through a symlink inside the home is EPERM, not ENOENT,
+ * and a PATH search stops at it — npm's spawn of `sh` failed with the
+ * operator's own PATH. In order, duplicates dropped (the first wins): the
+ * program's own directory; each entry of `inherited` that is absolute and
+ * resolves, kept only when neither its spelling nor its real path is the home
+ * or under it (the home as given and resolved); then `/usr/bin` and `/bin`.
+ * Nothing under the home is searched but the program's own directory.
+ * @param {{program: string, home: string, inherited?: string}} o `program` the absolute path the runner executes
+ * @returns {string}
+ */
+export function testPath({ program, home, inherited = process.env.PATH || '' }) {
+  const homes = [home];
+  try { homes.push(realpathSync(home)); } catch { /* the spelling alone */ }
+  const under = (p) => homes.some((h) => p === h || p.startsWith(h.endsWith('/') ? h : `${h}/`));
+  const path = [];
+  const add = (d) => { if (!path.includes(d)) path.push(d); };
+  add(dirname(program));
+  for (const entry of String(inherited).split(':')) {
+    if (!entry || !isAbsolute(entry)) continue;
+    let real;
+    try { real = realpathSync(entry); } catch { continue; }
+    if (under(entry) || under(real)) continue;
+    add(entry);
+  }
+  add('/usr/bin');
+  add('/bin');
+  return path.join(':');
+}
+
+const INVISIBLE_ALL = new RegExp(INVISIBLE_CHARS.source, 'gu');
+/** An OSC sequence (a title, a hyperlink), ended by BEL or ST. */
+const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
+/** A CSI sequence (colour, cursor). */
+const CSI = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+
+/**
+ * A command's output made safe to show: CRLF and lone CR become LF (a CR-only
+ * line cannot overwrite what was printed before it), ANSI OSC and CSI sequences
+ * removed, then every INVISIBLE_CHARS character but LF and TAB (control
+ * characters, a stray ESC, bidi and zero-width characters).
+ */
+export function safeOutput(s) {
+  return String(s)
+    .replace(/\r\n?/g, '\n')
+    .replace(OSC, '')
+    .replace(CSI, '')
+    .replace(INVISIBLE_ALL, (c) => (c === '\n' || c === '\t' ? c : ''));
+}
+
+/**
+ * The last `bytes` bytes of the file at `path`, a UTF-8 character cut at the
+ * start dropped, through safeOutput.
+ */
+export function readTail(path, bytes = 16384) {
+  const fd = openSync(path, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    const len = Math.min(size, bytes);
+    const buf = Buffer.alloc(len);
+    let got = 0;
+    while (got < len) {
+      const r = readSync(fd, buf, got, len - got, size - len + got);
+      if (r === 0) break;
+      got += r;
+    }
+    let start = 0;
+    // Continuation bytes (10xxxxxx) at the cut belong to a character whose lead was cut off.
+    if (size > len) while (start < got && (buf[start] & 0xc0) === 0x80) start++;
+    return safeOutput(buf.subarray(start, got).toString('utf8'));
+  } finally { closeSync(fd); }
+}
+
+/**
+ * One run of the test command under profile B: `args` (its first word the
+ * absolute program) in the clone, through the unit's ctx.spawn — the env
+ * allowlist, the billing scrub, the cancel signal and the live-group kill hold —
+ * with `sandbox-exec` put in front (wrap), HOME and TMPDIR the run's tmp, PATH
+ * testPath's, the process group killed when the command exits, `timeoutMs` its
+ * hard kill. Both streams go, in the order written, to `<tmp>/round-<round>.log`
+ * (created `wx+`, 0600, never following a link): node aborts at start when its
+ * stdout is a file the profile denies reading, and repro.sb denies OUT. After
+ * the run the unit copies that file's last 1 MB, through its own descriptor (a
+ * path the command replaced is never followed), to `<out>/round-<round>.log`
+ * (`wx`, 0600), which is `log`; `tail` is that copy's last 16 KB through safeOutput.
+ * Sets `run.sandboxed` before the spawn: from then on a model-written program
+ * has run in the clone. `ms` is the unit's own wall time of the run.
+ * @returns {Promise<{code: number|null, signal: string|null, killed: boolean, cancelled: boolean, ms: number, tail: string, log: string}>}
+ */
+export async function runTestCommand(ctx, run, { args, round, timeoutMs, reach, home, fleet }) {
+  const live = join(run.tmp, `round-${round}.log`);
+  const log = join(run.out, `round-${round}.log`);
+  const outFd = openSync(live, 'wx+', 0o600);
+  let r;
+  let ms;
+  try {
+    run.sandboxed = true;
+    const t0 = Date.now();
+    r = await ctx.spawn({
+      args,
+      cwd: run.clone,
+      extraEnv: { HOME: run.tmp, TMPDIR: run.tmp, PATH: testPath({ program: args[0], home }) },
+      hardKillMs: timeoutMs,
+      killGroupOnExit: true,
+      outFd,
+      wrap: (_exe, a) => ({ bin: SANDBOX_EXEC, args: [...profileBArgs(run, { home, fleet, reach }), ...a] }),
+    });
+    ms = Date.now() - t0;
+    copyFd(outFd, log);
+  } finally { closeSync(outFd); }
+  return { code: r.code, signal: r.signal, killed: r.killed, cancelled: r.cancelled, ms, tail: readTail(log), log };
+}
+
+/** The most of a round's output the unit keeps in `out/`: the command can grow its live log by path (a sparse truncate) to any size. */
+const LOG_KEEP = 1024 * 1024;
+
+/**
+ * The last LOG_KEEP bytes of the file open at `fd`, as large as it was when the copy began, written to a new file
+ * at `to` (`wx`, 0600), after one line naming what was cut when anything was.
+ */
+function copyFd(fd, to) {
+  const size = fstatSync(fd).size;
+  const from = Math.max(0, size - LOG_KEEP);
+  const outFd = openSync(to, 'wx', 0o600);
+  try {
+    if (from > 0) writeSync(outFd, `[omelette-fleet: the first ${from} bytes of this output cut; the last ${LOG_KEEP} kept]\n`);
+    const buf = Buffer.alloc(Math.min(LOG_KEEP, size - from));
+    for (let at = from; at < size;) {
+      const got = readSync(fd, buf, 0, Math.min(buf.length, size - at), at);
+      if (got === 0) break;
+      writeSync(outFd, buf, 0, got);
+      at += got;
+    }
+  } finally { closeSync(outFd); }
 }
