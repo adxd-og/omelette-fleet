@@ -410,9 +410,13 @@ test('copyDeps: a copy cp cannot finish is refused with cp\'s last line', { ...C
   writeFileSync(join(work, 'README.md'), 'two\n');
   const run = open(work, patchOf(work));
   const priv = join(work, 'node_modules', 'priv');
+  // checkDeps now walks the entry looking for .git and .omelette (fix round ruling 5, 2026-11-25) and refuses a directory it cannot read:
+  // the entry is checked while it is whole, and shut after the check, so cp is what cannot finish.
+  const deps = check(work, ['node_modules']);
   chmodSync(priv, 0);
   try {
-    assert.throws(() => copyDeps(run, check(work, ['node_modules'])), (e) => e.message.startsWith('gemini: copying deps entry "node_modules" failed: cp: ') && /Permission denied$/.test(e.message));
+    assert.throws(() => check(work, ['node_modules']), (e) => e.message === 'gemini: deps entry "node_modules" cannot be walked: "node_modules/priv" is not readable');
+    assert.throws(() => copyDeps(run, deps), (e) => e.message.startsWith('gemini: copying deps entry "node_modules" failed: cp: ') && /Permission denied$/.test(e.message));
   } finally { chmodSync(priv, 0o755); removeRun(run.runDir); }
 });
 

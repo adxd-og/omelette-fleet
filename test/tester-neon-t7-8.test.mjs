@@ -443,16 +443,17 @@ test('runTestCommand hands ctx.spawn the run\'s clone as cwd, its tmp as HOME an
   } finally { w.done(); }
 });
 
-test('profileBArgs: a -D for each parameter profile B reads, every path resolved, then -f the Mistral profile', () => {
+test('profileBArgs: a -D for each parameter profile B reads, every path resolved, then -f the run\'s derived profile (repro.sb first)', () => {
   const w = pureWorld();
   try {
     const link = join(BASE, `home-link-${++n}`);
     symlinkSync(w.home, link);
     const a = profileBArgs(w.run, { home: link, fleet: join(link, '.omelette'), reach: { node: '^(/n)(/|$)', up: '^$' } });
     assert.equal(a.at(-2), '-f');
-    assert.equal(a.at(-1), PROFILE_B);
-    assert.equal(a.at(-1).endsWith(join('units', 'mistral', 'repro.sb')), true);
+    // fix round ruling 1 (2026-11-25): -f names the run's own derived profile, out/b.sb, which opens with repro.sb's text unchanged
+    assert.equal(a.at(-1), join(w.run.out, 'b.sb'));
     assert.equal(existsSync(PROFILE_B), true);
+    assert.equal(readFileSync(a.at(-1), 'utf8').startsWith(readFileSync(PROFILE_B, 'utf8')), true);
     const params = a.slice(0, -2);
     const pairs = [];
     for (let i = 0; i < params.length; i += 2) { assert.equal(params[i], '-D'); pairs.push(params[i + 1]); }

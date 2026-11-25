@@ -156,7 +156,7 @@ test('renderProfileA prints, line by line and in this order, the plan\'s profile
     `(allow file-write* ${roots} (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/"))`,
     '(deny file-read* (regex #"^/dev/ttys"))',
     '(deny file-write* (regex #"^/dev/ttys"))',
-    `(deny file-read* ${subs('/t', '/private/tmp', '/private/var/tmp')})`,
+    `(deny file-read* ${subs('/t', '/private/tmp', '/private/var/tmp', '/Volumes', '/Users/Shared')})`,
     `(deny file-read* ${subs('/h')})`,
     '(allow file-read* (literal "/h/.local/bin/agy"))',
     `(allow file-read* ${subs('/h/Library/Keychains')})`,
@@ -195,13 +195,13 @@ test('the temp deny names the OS temp root, /private/tmp and /private/var/tmp, a
   const line = (text, start) => text.split('\n').find((l) => l.startsWith(start));
   const mac = '/private/var/folders/ab/cd_ef/T';
   const macText = renderProfileA({ ...P, tmproot: mac });
-  assert.equal(line(macText, '(deny file-read* (subpath "/private/var/folders'), '(deny file-read* (subpath "/private/var/folders/ab/cd_ef") (subpath "/private/tmp") (subpath "/private/var/tmp"))');
+  assert.equal(line(macText, '(deny file-read* (subpath "/private/var/folders'), '(deny file-read* (subpath "/private/var/folders/ab/cd_ef") (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath "/Volumes") (subpath "/Users/Shared"))');
   assert.equal(line(macText, '(allow file-read-metadata (literal'), `(allow file-read-metadata (literal "/private/var/folders/ab/cd_ef") (literal "${mac}") (literal "/r") (literal "/r/run-1"))`);
   assert.equal(line(macText, '(deny file-read* (regex "'), `(deny file-read* (regex "^${mac}/omelette-"))`);
   // Any other shape is denied as it is: a sibling `T` of another depth, a name that is not `T`, a different prefix.
   for (const tmproot of ['/private/var/folders/ab/T', '/private/var/folders/ab/cd/ef/T', '/private/var/folders/ab/cd/Tx', '/mnt/private/var/folders/ab/cd/T', '/var/folders/ab/cd/T', '/private/var/folders/ab/cd/T/', '/tmp/x']) {
     const text = renderProfileA({ ...P, tmproot });
-    assert.ok(text.includes(`(deny file-read* (subpath "${tmproot}") (subpath "/private/tmp") (subpath "/private/var/tmp"))`), tmproot);
+    assert.ok(text.includes(`(deny file-read* (subpath "${tmproot}") (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath "/Volumes") (subpath "/Users/Shared"))`), tmproot);
     assert.ok(text.includes(`(allow file-read-metadata (literal "${tmproot}") (literal "/r") (literal "/r/run-1"))`), tmproot);
   }
 });
@@ -290,7 +290,7 @@ test('writeProfileA resolves every path it is given: a home, a fleet home, agy\'
     assert.ok(text.includes(`(allow file-read* (literal "${join(real, 'share', 'agy-real')}"))`), 'agy\'s real path');
     assert.ok(text.includes(`(deny file-read* (subpath "${w.home}"))`), 'the home\'s real path');
     assert.ok(text.includes(`(deny file-read* (subpath "${w.fleet}"))`), 'the fleet home\'s real path');
-    assert.ok(text.includes(`(deny file-read* (subpath "${join(real, 'tmp-real')}") (subpath "/private/tmp") (subpath "/private/var/tmp"))`), 'the OS temp dir\'s real path');
+    assert.ok(text.includes(`(deny file-read* (subpath "${join(real, 'tmp-real')}") (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath "/Volumes") (subpath "/Users/Shared"))`), 'the OS temp dir\'s real path');
     assert.ok(text.includes(`(deny file-read* (subpath "${realpathSync(w.run.top)}"))`), 'the work tree\'s real path');
     assert.equal(w.run.sandboxed, true);
   } finally {
@@ -836,9 +836,9 @@ test('testChangedPaths leaves the copied dependencies out when the model un-igno
 });
 
 test('isTestPath at the boundary names', PURE, () => {
-  for (const p of ['specs/a', 'spec/a.js', '__tests__/a', 'tests/a/b/c', 'a/b/test/c.js', 'x/spec/y', 'a.spec.tsx', 'a.test.cjs', 'a.test.mts', 'a.test.jsx', 'a.spec.js', 'test_.py', 'test_x.py', 'a/test_x.py', 'x_test.py', 'x_test.go', 'a/conftest.py'])
+  for (const p of ['spec/a.js', '__tests__/a', 'tests/a/b/c', 'a/b/test/c.js', 'x/spec/y', 'a.spec.tsx', 'a.test.cjs', 'a.test.mts', 'a.test.jsx', 'a.spec.js', 'test_.py', 'test_x.py', 'a/test_x.py', 'x_test.py', 'x_test.go', 'a/conftest.py'])
     assert.equal(isTestPath(p), true, p);
-  for (const p of ['Test/a.js', 'testing/a.js', 'mytest/a.js', 'src/tests.mjs', 'src/test', 'src/tests', 'test', 'a.tests.js', 'a.test.json', 'a.test.mjs.map', 'test_x.pyc', 'xtest_x.py', 'a_test.rb', 'conftest.pyc', 'contest.py', 'myconftest.py', 'src/xconftest.py', 'src/test.mjs', 'specs.md', 'a.testmjs'])
+  for (const p of ['Test/a.js', 'testing/a.js', 'mytest/a.js', 'src/tests.mjs', 'src/test', 'src/tests', 'test', 'a.tests.js', 'a.test.json', 'a.test.mjs.map', 'test_x.pyc', 'xtest_x.py', 'a_test.rb', 'conftest.pyc', 'contest.py', 'myconftest.py', 'src/xconftest.py', 'src/test.mjs', 'specs.md', 'a.testmjs', 'specs/a', 'docs/superpowers/specs/x-design.md'])
     assert.equal(isTestPath(p), false, p);
 });
 

@@ -520,7 +520,9 @@ test('what reaches agy and the test command: the allowlisted env only, HOME and 
     const run = realpathSync(runDir);
     assert.equal(/^HOMEV (.+)$/m.exec(r.text)[1], join(run, 'home'));
     assert.equal(/^TMPV (.+)$/m.exec(r.text)[1], join(run, 'tmp'));
-    assert.equal(/^CWD (.+)$/m.exec(r.text)[1], join(run, 'clone'));
+    // the model's message names the copy by its path: the answer cuts it (fix round ruling 8, 2026-11-25), the bare path reads '.'
+    assert.equal(/^CWD (.+)$/m.exec(r.text)[1], '.');
+    assert.equal(r.text.includes(join(run, 'clone')), false);
     assert.equal(/^TESTHOME (.+)$/m.exec(r.text)[1], `${join(run, 'tmp')} ${join(run, 'tmp')}`);
     for (const f of ['a.sb', 'round-1.log', 'round-1.diff', 'git', 'diff.index']) assert.ok(existsSync(join(runDir, 'out', f)), `out/${f}`);
     // the clone, shut by the test, is kept as the test left it: the unit puts it right before it reads it
@@ -878,11 +880,11 @@ test('doctor: the gemini test line says sandbox-exec found where it is; the gemi
   const dir = realpathSync(mkdtempSync(join(HOMES, 'neon-test-doctor-')));
   homesMade.push(dir);
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify(ONLY_GEMINI));
-  const on = doctorIn(dir, { MCP_TOOL_TIMEOUT: '1860000' });
+  const on = doctorIn(dir, { MCP_TOOL_TIMEOUT: '2580000' });
   assert.match(on.out, /^ {2}test {8}gemini_test .* \u{b7} sandbox-exec found \u{b7} model /mu);
-  assert.match(on.out, /gemini_test: worst case gemini\.testTimeoutS = 1500 s \+ 360 s for the diff and the cleanup = 1860 s \u{b7} within the wall-clock limit$/mu);
-  const short = doctorIn(dir, { MCP_TOOL_TIMEOUT: '1859999' });
-  assert.match(short.out, /gemini_test: .* \u{b7} ABOVE the wall-clock limit \(1859999 ms\) /mu);
+  assert.match(on.out, /gemini_test: worst case gemini\.testTimeoutS = 1500 s \+ 1080 s for the diff and the cleanup = 2580 s \u{b7} within the wall-clock limit$/mu);
+  const short = doctorIn(dir, { MCP_TOOL_TIMEOUT: '2579999' });
+  assert.match(short.out, /gemini_test: .* \u{b7} ABOVE the wall-clock limit \(2579999 ms\) /mu);
 });
 
 test('doctor: a gemini registration with its own timeout decides the gemini_test line, whatever the env says', { timeout: 60_000, skip: !DARWIN }, () => {
@@ -892,7 +894,7 @@ test('doctor: a gemini registration with its own timeout decides the gemini_test
   writeFileSync(bin, [`#!${process.execPath}`, 'const a = process.argv.slice(2);', "if (a[0] === '--version') { console.log('fake 9.9.9'); process.exit(0); }", "if (a[0] === 'models') { console.log('model-a'); process.exit(0); }", 'process.exit(1);'].join('\n'));
   chmodSync(bin, 0o755);
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify(ONLY_GEMINI));
-  writeFileSync(join(dir, '.claude.json'), JSON.stringify({ mcpServers: { 'omelette-gemini': { command: 'node', args: [join(dirname(BIN), '..', 'servers', 'gemini.mjs')], timeout: 1900000 } } }));
+  writeFileSync(join(dir, '.claude.json'), JSON.stringify({ mcpServers: { 'omelette-gemini': { command: 'node', args: [join(dirname(BIN), '..', 'servers', 'gemini.mjs')], timeout: 2600000 } } }));
   const r = doctorIn(dir, { AGY_BIN: bin, MCP_TOOL_TIMEOUT: '100000' });
   assert.match(r.out, /gemini_test: .* \u{b7} within the wall-clock limit$/mu, r.out);
 });
