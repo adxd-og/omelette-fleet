@@ -900,3 +900,35 @@ test('outFd passes through ctx.spawn', async () => {
   } finally { closeSync(fd); }
   assert.equal(readFileSync(f, 'utf8'), 'o\ne\n');
 });
+
+test('a tool\'s modelKey: an unnamed model comes from that key, not from model', async () => {
+  const keyedUnit = () => fakeUnit({
+    catalog: makeCatalog({ models: [{ id: 'm1' }, { id: 'm2' }] }),
+    extraSchema: { testModel: { type: 'string', default: 'm2' } },
+    tools: [
+      { name: 'fake_keyed', kind: 'research', modelKey: 'testModel', description: 'd', inputSchema: { type: 'object', properties: {} }, run: (_a, ctx) => `model=${ctx.model}` },
+      { name: 'fake_plain', kind: 'research', description: 'd', inputSchema: { type: 'object', properties: {} }, run: (_a, ctx) => `model=${ctx.model}` },
+    ],
+  });
+  const records = [];
+  const { env: e } = env({ units: { fake: { model: 'm1' } } });
+  const rt = createUnitRuntime(keyedUnit(), { env: e, onResult: (rec) => records.push(rec) });
+  assert.equal((await rt.callTool('fake_keyed', {})).text, 'model=m2');
+  assert.equal(records[0].model, 'm2');
+  assert.equal((await rt.callTool('fake_plain', {})).text, 'model=m1');
+  assert.equal((await rt.callTool('fake_keyed', { model: 'm1' })).text, 'model=m1');
+  for (const t of rt.tools) assert.equal('modelKey' in t, false, `${t.name} shows its modelKey in tools/list`);
+
+  // A configured value off the catalog: warned about under the key's own name, and no model.
+  const off = createUnitRuntime(keyedUnit(), env({ units: { fake: { testModel: 'm-gone' } } }));
+  const lines = [];
+  const write = process.stderr.write;
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true; };
+  let r;
+  try { r = await off.callTool('fake_keyed', {}); } finally { process.stderr.write = write; }
+  assert.equal(r.text, 'model=');
+  assert.ok(lines.some((l) => l.includes('config: default testModel "m-gone" is not in the catalog — using the vendor default')), lines.join(''));
+
+  assert.throws(() => fakeUnit({ tools: [{ name: 't', kind: 'research', modelKey: 7, description: 'd', inputSchema: {}, run: () => '' }] }),
+    /tool "t" has a modelKey that is not a string/);
+});

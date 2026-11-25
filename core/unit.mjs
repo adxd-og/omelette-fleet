@@ -25,8 +25,12 @@
  *   auth: { detect: (stderr) => bool, help: 'run `codex login`' },         // checked on empty-stdout runs only
  *   pairedEffort: true,                  // optional boolean, default false: see EFFORT below
  *   catalog: makeCatalog({...}),
- *   tools: [{ name, description, inputSchema, kind, mutateGate?, run(args, ctx) }],
+ *   tools: [{ name, description, inputSchema, kind, mutateGate?, modelKey?, run(args, ctx) }],
  * })
+ *
+ * tool.modelKey: the config key a call that names no model takes its model
+ * from (default 'model'); validated against the catalog as `model` is, and
+ * never shown in tools/list.
  *
  * tool.kind: research | review | image | pipeline | catalog | local. `catalog`
  * tools never spawn and are answered by the runtime from the unit's catalog;
@@ -143,6 +147,7 @@ export function defineUnit(spec) {
     names.add(t.name);
     if (!TOOL_KINDS.has(t.kind)) throw new Error(`${where}: tool "${t.name}" has unknown kind "${t.kind}"`);
     if (t.kind !== 'catalog' && typeof t.run !== 'function') throw new Error(`${where}: tool "${t.name}" needs run()`);
+    if (t.modelKey !== undefined && typeof t.modelKey !== 'string') throw new Error(`${where}: tool "${t.name}" has a modelKey that is not a string`);
   }
   if (typeof spec.catalog.isAllowedModel !== 'function') throw new Error(`${where}: catalog must come from makeCatalog()`);
   // envPassthrough is exact names (1.5.0): a pattern admits whatever the vendor
@@ -437,10 +442,13 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
 
     // model: an explicit arg is validated hard; a configured default that is
     // not in the catalog is ignored with a warning (vendor default applies).
+    // A tool's `modelKey` names the config key its default comes from.
     let model = typeof args.model === 'string' ? args.model.trim() : '';
-    if (!model && cfg.values.model) {
-      if (unit.catalog.isAllowedModel(cfg.values.model)) model = cfg.values.model;
-      else warnOnce(`config: default model "${cfg.values.model}" is not in the catalog — using the vendor default`);
+    const key = tool.modelKey || 'model';
+    const configuredModel = cfg.values[key];
+    if (!model && configuredModel) {
+      if (unit.catalog.isAllowedModel(configuredModel)) model = configuredModel;
+      else warnOnce(`config: default ${key} "${configuredModel}" is not in the catalog — using the vendor default`);
     }
     // The model the run is pinned to. A paired unit's adapter pins the catalog
     // head when nothing names a model (codex: `--ignore-user-config` leaves no
@@ -639,7 +647,7 @@ export function createUnitRuntime(unit, { env = process.env, progressEveryMs = P
   }
 
   // tools/list must show only the public MCP shape.
-  const tools = allTools.map(({ run, kind, mutateGate, ...pub }) => pub);
+  const tools = allTools.map(({ run, kind, mutateGate, modelKey, ...pub }) => pub);
   /**
    * The server is going away: the calls still running end in the feed first,
    * as `cancelled` (no spool record: there is no answer to keep), then the
