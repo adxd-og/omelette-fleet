@@ -71,7 +71,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, chmodSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -579,8 +579,38 @@ export async function runTestCommand(ctx, run, { args, round, timeoutMs, reach, 
   return { code: r.code, signal: r.signal, killed: r.killed, cancelled: r.cancelled, ms, tail: readTail(log), log };
 }
 
-/** The hex SHA-256 of the file at `path`'s bytes. */
-const sha256Of = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
+/** The most a pinned program may weigh; past it the first test run is refused rather than hashed before every round. */
+const PROGRAM_MAX = 1024 * 1024 * 1024;
+
+/**
+ * The size and hex SHA-256 of the regular file at `path`, read through one
+ * descriptor opened without blocking and without following a link at the last
+ * component. After the first test run a program in a dependency copy is the
+ * test command's to replace, and this runs unsandboxed in the server: a FIFO,
+ * a device or a directory put there is refused by fstat instead of being read
+ * (a FIFO with no writer would never open), and with `size` the file must weigh
+ * exactly that — only that many bytes are read, in chunks.
+ */
+function fileDigest(path, size = null) {
+  const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new Error(`gemini: the test program ${path} is not a regular file`);
+    if (size !== null && st.size !== size) throw new Error('another size');
+    if (st.size > PROGRAM_MAX) throw new Error(`gemini: the test program ${path} is larger than 1 GB`);
+    const hash = createHash('sha256');
+    const buf = Buffer.allocUnsafe(1024 * 1024);
+    let left = st.size;
+    while (left > 0) {
+      const n = readSync(fd, buf, 0, Math.min(buf.length, left), null);
+      if (n <= 0) break;
+      hash.update(buf.subarray(0, n));
+      left -= n;
+    }
+    if (left !== 0) throw new Error('short read');
+    return { size: st.size, sha256: hash.digest('hex') };
+  } finally { closeSync(fd); }
+}
 
 /** Two lists of strings hold the same strings in the same order. */
 const sameList = (a, b) => Array.isArray(a) && a.length === b.length && a.every((s, i) => s === b[i]);
@@ -589,8 +619,8 @@ const sameList = (a, b) => Array.isArray(a) && a.length === b.length && a.every(
  * runTestCommand's pin. On a run's first call it returns the pin for the
  * caller to record as `run.pin` once the call is past every refusal — the
  * command's `args`, `pathDirs`, `reach.node`, `reach.up` and `program`, frozen;
- * `program` is `{ real, sha256 }` of `args[0]` (its real path, its bytes' hex
- * SHA-256) when `args[0]` is spelled under `run.clone` (one that does not
+ * `program` is `{ real, size, sha256 }` of `args[0]` (its real path, its size,
+ * its bytes' hex SHA-256 — a regular file of at most 1 GB) when `args[0]` is spelled under `run.clone` (one that does not
  * resolve is refused) or resolves into the run dir (resolved), null for a
  * program that is neither. On a later call it returns null, and the call must
  * bring the same values, and a program in the copy must still resolve to
@@ -604,7 +634,7 @@ function pinTestCommand(run, { args, pathDirs, reach }) {
     let real = null;
     try { real = realpathSync(args[0]); } catch (e) { if (spelled) throw e; }
     let program = null;
-    if (spelled || (real !== null && within(real, realpathSync(run.runDir)))) program = Object.freeze({ real, sha256: sha256Of(real) });
+    if (spelled || (real !== null && within(real, realpathSync(run.runDir)))) program = Object.freeze({ real, ...fileDigest(real) });
     return Object.freeze({ args: Object.freeze([...args]), pathDirs: Object.freeze([...pathDirs]), node: reach.node, up: reach.up, program });
   }
   const pin = run.pin;
@@ -615,7 +645,7 @@ function pinTestCommand(run, { args, pathDirs, reach }) {
   let same = false;
   try {
     const real = realpathSync(args[0]);
-    same = real === pin.program.real && sha256Of(real) === pin.program.sha256;
+    same = real === pin.program.real && fileDigest(real, pin.program.size).sha256 === pin.program.sha256;
   } catch { /* gone or unreadable: refused below */ }
   if (!same) throw new Error('gemini: the test program in the copy changed since the run\'s first test run — the test command is not run');
   return null;

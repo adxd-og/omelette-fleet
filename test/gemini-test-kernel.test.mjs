@@ -937,3 +937,29 @@ test('testChangedPaths leaves a copied dependency out', { ...PURE_RUN, skip: !DA
     assert.deepEqual(testChangedPaths(w.run).sort(), ['.gitignore', 'test/a.test.mjs']);
   } finally { w.done(); }
 });
+
+test('a FIFO or another-size file put where the pinned program was is refused at once, without being read', { timeout: 10_000, skip: process.platform !== 'darwin' }, async () => {
+  const w = world({ ignored: ['tools'], untracked: { 'tools/bin/tool.sh': '#!/bin/sh\n' }, deps: ['tools'] });
+  const tool = join(w.run.clone, 'tools', 'bin', 'tool.sh');
+  chmodT8(tool, 0o755);
+  const refused = 'gemini: the test program in the copy changed since the run\'s first test run \u{2014} the test command is not run';
+  try {
+    const ctx = countingCtx();
+    const o = { args: [tool], timeoutMs: 1_000, reach: w.reach, home: w.home, fleet: w.fleet };
+    await runTestCommand(ctx, w.run, { ...o, round: 1 });
+    assert.equal(w.run.pin.program.size, statSync(tool).size, 'the pin holds the program\'s size');
+    // A FIFO with no writer: opening it to read would never return.
+    rmSync(tool);
+    execFileSync('/usr/bin/mkfifo', [tool], { timeout: 5_000 });
+    const t0 = Date.now();
+    await assert.rejects(runTestCommand(ctx, w.run, { ...o, round: 2 }), (e) => e.message === refused);
+    assert.ok(Date.now() - t0 < 2_000, 'refused without waiting on the FIFO');
+    // The same size, other bytes; then another size.
+    rmSync(tool);
+    writeFileSync(tool, '#!/bin/sX\n');
+    await assert.rejects(runTestCommand(ctx, w.run, { ...o, round: 3 }), (e) => e.message === refused);
+    writeFileSync(tool, '#!/bin/sh\n# longer\n');
+    await assert.rejects(runTestCommand(ctx, w.run, { ...o, round: 4 }), (e) => e.message === refused);
+    assert.equal(ctx.spawned, 1);
+  } finally { w.done(); }
+});
