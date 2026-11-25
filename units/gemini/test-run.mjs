@@ -55,6 +55,12 @@
  * reading, and it denies `out/`), copied by the unit to `out/round-<n>.log`
  * after the run and removed from tmp, the group is killed when the command exits, a time
  * limit ends a run, and the model gets the last 16 KB, made safe to show.
+ * The test program (resolveProgram), its PATH directories (programNeeds) and
+ * its reach (toolchainReach) are computed once per run, before the first test
+ * run; runTestCommand pins them at that run and refuses values that differ
+ * from the first run's, and a program in the copy whose real path or bytes
+ * changed — from the second round on a dependency copy is the command's to
+ * write.
  *
  * DROP — the workspace config paths agy honours, removed from the clone as
  * Mistral drops `.vibe`. G0 (2026-11-24, agy 1.5.16) found none: settings
@@ -64,12 +70,12 @@
  * Zero deps.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, chmodSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CLONE_CONFIG, cloneDiff, cloneGitEnv, gitRun, prepareClone, removeRun, runsRootAt } from '../../core/clone.mjs';
+import { CLONE_CONFIG, changedPaths, cloneDiff, cloneGitEnv, gitRun, prepareClone, removeRun, runsRootAt, untrackedPast } from '../../core/clone.mjs';
 import { INVISIBLE_CHARS } from '../../core/log.mjs';
 import { NODEUP_NONE, SANDBOX_EXEC, nodeEnv, nodeUp, regexLiteral } from '../../core/seatbelt.mjs';
 import { locateBin } from '../../core/unit.mjs';
@@ -178,12 +184,46 @@ export function discardRun(run) {
  * The run's diff: what the model wrote in the clone, taken by core's cloneDiff
  * against the out-dir `.git` with the run's scratch index (`<out>/diff.index`),
  * every copied dependency left out by path whatever the clone's `.gitignore`
- * says. The one way to take this run's diff.
+ * says. The tool takes the run's diff and names only through testDiff and
+ * testChangedPaths.
  * @param {{clone: string, out: string, deps: {rel: string}[]}} run prepareTestRun's result, after copyDeps
  * @returns {string}
  */
 export function testDiff(run) {
   return cloneDiff(run.clone, join(run.out, 'git'), { keepKey: 'gemini.testKeep', indexFile: join(run.out, 'diff.index'), exclude: run.deps.map((d) => d.rel) });
+}
+
+/**
+ * The paths the model changed in the clone (core's changedPaths): against the
+ * out-dir `.git`, with the run's scratch index, every copied dependency left out
+ * by path whatever the clone's `.gitignore` says — testDiff's names. The tool
+ * takes the run's diff and names only through testDiff and testChangedPaths.
+ * @param {{clone: string, out: string, deps: {rel: string}[]}} run prepareTestRun's result, after copyDeps
+ * @returns {string[]}
+ */
+export function testChangedPaths(run) {
+  return changedPaths(run.clone, join(run.out, 'git'), { indexFile: join(run.out, 'diff.index'), exclude: run.deps.map((d) => d.rel) });
+}
+
+/** The base names, in lower case, of the files that decide what the diff shows: a case-insensitive volume reads `.GITIGNORE` as `.gitignore`. */
+const GUARD_NAMES = ['.gitignore', '.gitattributes'];
+
+/**
+ * The ignore and attributes files the model changed in the clone, for the
+ * answer's notice: the paths, relative to the clone, sorted and without
+ * duplicates, whose base name in lower case is `.gitignore` or
+ * `.gitattributes`, among testChangedPaths' names or untracked in the clone
+ * whatever any ignore rule says (core's untrackedPast, with the run's scratch
+ * index and its copied dependencies left out). Why the second set: a
+ * `.gitignore` the model writes can ignore itself, and then it is in no changed
+ * name, nor is anything it hides.
+ * @param {{clone: string, out: string, deps: {rel: string}[]}} run prepareTestRun's result, after copyDeps
+ * @returns {string[]}
+ */
+export function testGuards(run) {
+  const untracked = untrackedPast(run.clone, join(run.out, 'git'), { indexFile: join(run.out, 'diff.index'), exclude: run.deps.map((d) => d.rel) });
+  const guards = [...testChangedPaths(run), ...untracked].filter((p) => GUARD_NAMES.includes(p.split('/').pop().toLowerCase()));
+  return [...new Set(guards)].sort();
 }
 
 /** The most a venv console script may weigh for relocateVenv to rewrite it. */
@@ -465,9 +505,26 @@ export function readTail(path, bytes = 16384) {
  * to the unit's own time limit; 0, a negative or NaN start no timer); a `round`
  * that is not a positive integer, or whose `<out>/round-<round>.log` already
  * exists (lstat: a round number runs once per run); a copied dependency
- * replaced (assertDeps, called here so no caller can forget it); profile B's
+ * replaced (assertDeps, called here so no caller can forget it); a test command
+ * other than the run's first (the pin, below); profile B's
  * arguments that cannot be built (profileBArgs resolves the home and the fleet
  * home) — so a refusal leaves no file in tmp/ and `run.sandboxed` as it was.
+ * THE PIN — the first call of a run records `run.pin`, frozen: `args`,
+ * `pathDirs`, `reach.node`, `reach.up`, and for a program in the copy
+ * (`args[0]` spelled under `run.clone`, or resolving into the run dir — another
+ * spelling of the clone's path) its real path and its bytes' SHA-256 (null for
+ * a program that is neither). The pin is recorded only once the call is past
+ * every refusal above, profile B's arguments included, and its live log is
+ * open: a first call refused for any reason, or whose log cannot be opened,
+ * leaves `run.pin` unset. Every later call must bring the same values
+ * (same length, same strings, same order) and a program in the clone must
+ * still resolve to that path with those bytes, or it is refused. Why: from the
+ * second round on a dependency copy is the test command's to write — profile B
+ * lets it write anywhere in the clone — so the program file, its `#!` line and
+ * the links around it are model-written; were they resolved again, a rewritten
+ * shebang would widen what the kernel allows. The program, PATH and reach are
+ * computed once, before any model-written code runs, and nothing derived from
+ * the copy afterwards may change them.
  * Both streams go, in the order written, to
  * `<tmp>/round-<round>-<12 random hex>.log` (created `wx+`, 0600, never
  * following a link; a name the model cannot plant ahead of the run, though it
@@ -493,9 +550,12 @@ export async function runTestCommand(ctx, run, { args, round, timeoutMs, reach, 
   const log = join(run.out, `round-${round}.log`);
   if (lstatOrNull(log)) throw new Error(`gemini: round ${round} already ran in this run`);
   assertDeps(run);
+  const pin = pinTestCommand(run, { args, pathDirs, reach });
   const sandboxArgs = profileBArgs(run, { home, fleet, reach });
   const live = join(run.tmp, `round-${round}-${randomBytes(6).toString('hex')}.log`);
   const outFd = openSync(live, 'wx+', 0o600);
+  // The first call's pin is the run's only once the call is past every refusal and its live log is open.
+  if (pin) run.pin = pin;
   let r;
   let ms;
   try {
@@ -517,6 +577,48 @@ export async function runTestCommand(ctx, run, { args, round, timeoutMs, reach, 
     removeLive(live);
   }
   return { code: r.code, signal: r.signal, killed: r.killed, cancelled: r.cancelled, ms, tail: readTail(log), log };
+}
+
+/** The hex SHA-256 of the file at `path`'s bytes. */
+const sha256Of = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
+
+/** Two lists of strings hold the same strings in the same order. */
+const sameList = (a, b) => Array.isArray(a) && a.length === b.length && a.every((s, i) => s === b[i]);
+
+/**
+ * runTestCommand's pin. On a run's first call it returns the pin for the
+ * caller to record as `run.pin` once the call is past every refusal — the
+ * command's `args`, `pathDirs`, `reach.node`, `reach.up` and `program`, frozen;
+ * `program` is `{ real, sha256 }` of `args[0]` (its real path, its bytes' hex
+ * SHA-256) when `args[0]` is spelled under `run.clone` (one that does not
+ * resolve is refused) or resolves into the run dir (resolved), null for a
+ * program that is neither. On a later call it returns null, and the call must
+ * bring the same values, and a program in the copy must still resolve to
+ * `real` with the same bytes; otherwise it is refused (a file that is gone or
+ * unreadable included).
+ * @returns {object|null} the first call's pin, unrecorded; null on a later call
+ */
+function pinTestCommand(run, { args, pathDirs, reach }) {
+  if (!run.pin) {
+    const spelled = typeof args[0] === 'string' && args[0].startsWith(`${run.clone}/`);
+    let real = null;
+    try { real = realpathSync(args[0]); } catch (e) { if (spelled) throw e; }
+    let program = null;
+    if (spelled || (real !== null && within(real, realpathSync(run.runDir)))) program = Object.freeze({ real, sha256: sha256Of(real) });
+    return Object.freeze({ args: Object.freeze([...args]), pathDirs: Object.freeze([...pathDirs]), node: reach.node, up: reach.up, program });
+  }
+  const pin = run.pin;
+  if (!sameList(args, pin.args) || !sameList(pathDirs, pin.pathDirs) || reach.node !== pin.node || reach.up !== pin.up) {
+    throw new Error('gemini: the test command, its PATH directories and its reach are fixed at a run\'s first test run');
+  }
+  if (pin.program === null) return null;
+  let same = false;
+  try {
+    const real = realpathSync(args[0]);
+    same = real === pin.program.real && sha256Of(real) === pin.program.sha256;
+  } catch { /* gone or unreadable: refused below */ }
+  if (!same) throw new Error('gemini: the test program in the copy changed since the run\'s first test run — the test command is not run');
+  return null;
 }
 
 /**
@@ -602,6 +704,7 @@ const within = (p, dir) => p === dir || p.startsWith(dir.endsWith('/') ? dir : `
  *     `deps` entry (checkDeps' names), a file in the clone, and resolve either
  *     inside that dependency's copy or outside the run dir (a link to a system
  *     interpreter); returned as `<clone>/<word>`, normalised.
+ * Called once per run, before the first test run; runTestCommand refuses values that differ from the first run's.
  * @param {{word: string, programs: string[], deps: string[], run: {runDir: string, clone: string, top: string}, env?: object}} o
  * @returns {string}
  */
@@ -698,6 +801,7 @@ function alternation(re, close) {
  * computes `program` (resolveProgram), then programNeeds, and passes its
  * `interpreter` here and its `dirs` to runTestCommand as `pathDirs`: one lookup,
  * so the interpreter re-allowed is the one the PATH will find.
+ * Called once per run, before the first test run; runTestCommand refuses values that differ from the first run's.
  * @param {{home: string, binaries: string[], base?: {OMELETTE_REPRO_NODE: string, OMELETTE_REPRO_NODEUP: string}}} o
  * @returns {{node: string, up: string}} `node` one `^(…)(/|$)` regex, `up` one `^(…)$` regex (NODEUP_NONE when empty)
  */
@@ -768,6 +872,7 @@ export function assertDeps(run) {
  * The tool computes `program` (resolveProgram), then this, and passes `dirs` to
  * runTestCommand as `pathDirs` and `interpreter` to toolchainReach's binaries —
  * so the interpreter re-allowed is the one the PATH will find.
+ * Called once per run, before the first test run; runTestCommand refuses values that differ from the first run's.
  * @param {{word: string, program: string, env?: object}} o `word` the command's first word, `program` resolveProgram's result
  * @returns {{dirs: string[], interpreter: string|null}}
  */
@@ -808,7 +913,13 @@ export function sbString(s) {
  * only the run's clone, tmp and scratch home (never a copied dependency, never
  * the copy's `.gemini`, `.agents` or `.antigravity`); the operator's home
  * unreadable but `Library/Keychains` (read only), agy's binary and the metadata
- * of the directories down to both; the work tree, the fleet home, every other
+ * of the directories down to both; the OS temp root, `/private/tmp` and
+ * `/private/var/tmp` unreadable — for a temp root of macOS's per-user shape
+ * (`/private/var/folders/<a>/<b>/T`) its parent instead, which also holds the
+ * user's cache directory `C` and `0`, its path and the temp root's re-allowed
+ * as metadata literals (measured with the real agy, 2026-11-25: it signs in and
+ * works with these denied; its own temp is the run's tmp); the work tree, the
+ * fleet home, every other
  * `omelette-*` temp dir and every other run denied, this run's dirs re-allowed
  * last; no hand-off outside the profile but `/usr/bin/security`, which agy's
  * sign-in runs; the network open. Every path comes resolved, absolute, and goes
@@ -836,6 +947,8 @@ export function renderProfileA({ clone, tmp, shome, home, agyExe, src, fleet, ru
   const keychains = join(home, 'Library', 'Keychains');
   // The two nodeUp chains in one regex: home down to agy's directory, and down to Library (the Keychains' parent).
   const up = [nodeUp({ home, node: agyExe }), nodeUp({ home, node: keychains })].filter((r) => r !== NODEUP_NONE).map((r) => r.slice(2, -2));
+  // macOS's per-user temp dir: its parent also holds the user's cache dirs (`C`, `0`), denied with it.
+  const temp = /^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/.test(tmproot) ? dirname(tmproot) : tmproot;
   const omelette = `^${regexLiteral(tmproot)}/omelette-`;
   const subpaths = (...ps) => ps.map((p) => `(subpath ${q(p)})`).join(' ');
   const literals = (...ps) => ps.map((p) => `(literal ${q(p)})`).join(' ');
@@ -847,6 +960,8 @@ export function renderProfileA({ clone, tmp, shome, home, agyExe, src, fleet, ru
     `(allow file-write* ${subpaths(clone, tmp, shome)} (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/"))`,
     '(deny file-read* (regex #"^/dev/ttys"))',
     '(deny file-write* (regex #"^/dev/ttys"))',
+    '; the OS temp root (macOS\'s per-user one with its parent), /private/tmp and /private/var/tmp: other programs\' temp files are not agy\'s to read (it has the network); this run\'s own dirs are re-allowed last',
+    `(deny file-read* ${subpaths(temp, '/private/tmp', '/private/var/tmp')})`,
     '; the operator\'s home, whole: agy gets the Keychain for its sign-in and its own binary (Measured 1, 3)',
     `(deny file-read* ${subpaths(home)})`,
     `(allow file-read-metadata (regex ${q(`^(${up.join('|')})$`)}))`,
@@ -871,7 +986,7 @@ export function renderProfileA({ clone, tmp, shome, home, agyExe, src, fleet, ru
     `(deny file-write* (regex ${q(omelette)}))`,
     `(deny file-read* ${subpaths(runs)})`,
     `(deny file-write* ${subpaths(runs)})`,
-    `(allow file-read-metadata ${literals(runs, run)})`,
+    `(allow file-read-metadata ${literals(...(temp === tmproot ? [] : [temp]), tmproot, runs, run)})`,
     `(allow file-read* ${subpaths(clone, tmp, shome)})`,
     `(allow file-write* ${subpaths(clone, tmp, shome)})`,
     `(deny file-write-flags ${subpaths(clone, tmp, shome)})`,
@@ -885,22 +1000,35 @@ export function renderProfileA({ clone, tmp, shome, home, agyExe, src, fleet, ru
 }
 
 /**
- * Profile A for this run, rendered once into `<out>/a.sb` (`wx`, 0600: a
- * second call fails EEXIST) with every path resolved — the run's own from
- * `run.*`, never from testRunsRoot(), `agyExe` the real path of `exe`, the dep
- * copies from `run.deps` — and `run.sandboxed` set once it is written.
- * @param {{runDir: string, clone: string, tmp: string, home: string, out: string, top: string, deps: {copy: string}[]}} run
+ * Profile A for this run, once per run: rendered into `<out>/a.sb` (`wx`,
+ * 0600) with every path resolved — the run's own from `run.*`, never from
+ * testRunsRoot(), `agyExe` the real path of `exe`, the dep copies from
+ * `run.deps` — and `{ profile, exe }` (the profile's path, the binary's real
+ * path) kept on the run as `run.profileA`; `run.sandboxed` is set once the file
+ * is written. A later call on the same run whose `exe` resolves to the same
+ * path returns that same object and writes nothing; one whose `exe` resolves
+ * elsewhere (an update mid-run) is refused. The caller execs the returned
+ * `exe`, never the link it found: the profile allows the resolved binary's
+ * literal only.
+ * @param {{runDir: string, clone: string, tmp: string, home: string, out: string, top: string, deps: {copy: string}[], profileA?: {profile: string, exe: string}}} run
  * @param {string} exe agy's binary as found
  * @param {{home: string, fleet: string}} o the operator's home and the fleet home
- * @returns {string} the profile's path
+ * @returns {{profile: string, exe: string}} the profile's path and agy's resolved binary
  */
 export function writeProfileA(run, exe, { home, fleet }) {
+  const agyExe = realpathSync(exe);
+  if (run.profileA) {
+    if (agyExe !== run.profileA.exe) {
+      throw new Error(`gemini: agy's binary changed during the run (${JSON.stringify(run.profileA.exe)} → ${JSON.stringify(agyExe)}) — the profile allows the first only`);
+    }
+    return run.profileA;
+  }
   const text = renderProfileA({
     clone: realpathSync(run.clone),
     tmp: realpathSync(run.tmp),
     shome: realpathSync(run.home),
     home: realpathSync(home),
-    agyExe: realpathSync(exe),
+    agyExe,
     src: realpathSync(run.top),
     fleet: realpathSync(fleet),
     runs: realpathSync(dirname(run.runDir)),
@@ -908,8 +1036,9 @@ export function writeProfileA(run, exe, { home, fleet }) {
     tmproot: realpathSync(tmpdir()),
     deps: run.deps.map((d) => d.copy),
   });
-  const path = join(run.out, 'a.sb');
-  writeFileSync(path, text, { flag: 'wx', mode: 0o600 });
+  const profile = join(run.out, 'a.sb');
+  writeFileSync(profile, text, { flag: 'wx', mode: 0o600 });
+  run.profileA = { profile, exe: agyExe };
   run.sandboxed = true;
-  return path;
+  return run.profileA;
 }

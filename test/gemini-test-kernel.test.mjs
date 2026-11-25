@@ -309,48 +309,72 @@ import { chmodSync as chmodT8 } from 'node:fs';
 import { toolchainReach } from '../units/gemini/test-run.mjs';
 
 test('a program under the home runs under profile B with its reach and fails closed without it', KROW, async () => {
+  // Two runs: a run's reach is pinned at its first test run.
   const w = world();
-  const tool = join(w.home, '.local', 'share', 'tool', 'bin', 'tool');
-  mkdirSync(dirname(tool), { recursive: true });
-  // A script, not a copy of /bin/echo: on macOS 27 a copied platform binary is killed at exec (137), sandbox or not.
-  // /bin/sh opens the script by its path under the home, which only the reach makes readable.
-  writeFileSync(tool, '#!/bin/sh\necho "$@"\n');
-  chmodT8(tool, 0o755);
+  const bare = world();
+  /** The tool under `home`: a script, not a copy of /bin/echo — on macOS 27 a copied platform binary is killed at exec
+   * (137), sandbox or not. /bin/sh opens the script by its path under the home, which only the reach makes readable. */
+  const toolIn = (home) => {
+    const tool = join(home, '.local', 'share', 'tool', 'bin', 'tool');
+    mkdirSync(dirname(tool), { recursive: true });
+    writeFileSync(tool, '#!/bin/sh\necho "$@"\n');
+    chmodT8(tool, 0o755);
+    return tool;
+  };
+  const tool = toolIn(w.home);
+  const bareTool = toolIn(bare.home);
   try {
     const reached = await w.exec({ args: [tool, 'reached'], reach: toolchainReach({ home: w.home, binaries: [tool] }) });
     assert.equal(reached.code, 0, reached.tail);
     assert.equal(reached.tail, 'reached\n');
-    const closed = await w.exec({ args: [tool, 'reached'], round: 2 });
+    const closed = await bare.exec({ args: [bareTool, 'reached'] });
     assert.notEqual(closed.code, 0, 'with nodeEnv alone the program under the home is not readable');
     assert.equal(closed.tail.includes('reached'), false);
-  } finally { w.done(); }
+  } finally {
+    w.done();
+    bare.done();
+  }
 });
 
 // The session's rulings on T8 (2026-11-25): the PATH gets the program's directories; the live log's name is not guessable.
 import { programDirs, programNeeds, resolveProgram } from '../units/gemini/test-run.mjs';
 
 test('a program whose interpreter lives in another directory under the home runs with programDirs and exits 127 without', KROW, async () => {
+  // Two runs: a run's PATH directories are pinned at its first test run.
   const w = world();
-  const v1 = join(w.home, '.tool', 'versions', 'v1');
-  mkdirSync(join(v1, 'bin'), { recursive: true });
-  mkdirSync(join(v1, 'lib', 'prog'), { recursive: true });
-  writeFileSync(join(v1, 'bin', 'interp'), '#!/bin/sh\nexec /bin/sh "$1"\n');
-  writeFileSync(join(v1, 'lib', 'prog', 'prog.sh'), '#!/usr/bin/env interp\necho ran\n');
-  chmodT8(join(v1, 'bin', 'interp'), 0o755);
-  chmodT8(join(v1, 'lib', 'prog', 'prog.sh'), 0o755);
-  symlinkSync('../lib/prog/prog.sh', join(v1, 'bin', 'prog'));
-  const env = { PATH: join(v1, 'bin') };
-  try {
-    const program = resolveProgram({ word: 'prog', programs: ['prog'], deps: [], run: w.run, env });
+  const bare = world();
+  /** Under `home`: `bin/prog`, a link to `lib/prog/prog.sh`, whose `#!/usr/bin/env interp` names `bin/interp`. */
+  const toolIn = (home) => {
+    const v1 = join(home, '.tool', 'versions', 'v1');
+    mkdirSync(join(v1, 'bin'), { recursive: true });
+    mkdirSync(join(v1, 'lib', 'prog'), { recursive: true });
+    writeFileSync(join(v1, 'bin', 'interp'), '#!/bin/sh\nexec /bin/sh "$1"\n');
+    writeFileSync(join(v1, 'lib', 'prog', 'prog.sh'), '#!/usr/bin/env interp\necho ran\n');
+    chmodT8(join(v1, 'bin', 'interp'), 0o755);
+    chmodT8(join(v1, 'lib', 'prog', 'prog.sh'), 0o755);
+    symlinkSync('../lib/prog/prog.sh', join(v1, 'bin', 'prog'));
+    return v1;
+  };
+  /** `prog` resolved in `x`'s run, run once with its reach and the PATH directories `pick` takes from programNeeds. */
+  const runProg = async (x, pick) => {
+    const v1 = toolIn(x.home);
+    const env = { PATH: join(v1, 'bin') };
+    const program = resolveProgram({ word: 'prog', programs: ['prog'], deps: [], run: x.run, env });
     const needs = programNeeds({ word: 'prog', program, env });
     assert.deepEqual(programDirs({ word: 'prog', program, env }), [join(v1, 'bin')]);
-    const reach = toolchainReach({ home: w.home, binaries: [program, needs.interpreter] });
-    const ran = await w.exec({ args: [program], reach, pathDirs: needs.dirs });
+    const reach = toolchainReach({ home: x.home, binaries: [program, needs.interpreter] });
+    return x.exec({ args: [program], reach, pathDirs: pick(needs) });
+  };
+  try {
+    const ran = await runProg(w, (needs) => needs.dirs);
     assert.equal(ran.code, 0, ran.tail);
     assert.equal(ran.tail, 'ran\n');
-    const without = await w.exec({ args: [program], reach, pathDirs: [], round: 2 });
+    const without = await runProg(bare, () => []);
     assert.equal(without.code, 127, without.tail);
-  } finally { w.done(); }
+  } finally {
+    w.done();
+    bare.done();
+  }
 });
 
 test('a file the model planted at tmp/round-1.log does not stop the run', KROW, async () => {
@@ -450,24 +474,26 @@ test('a home that cannot be resolved leaves no live log and the run not marked s
 });
 
 test('the live log is gone from tmp after the run, also when the command replaced it with a directory or a link', { ...KROW, timeout: 4_500 }, async () => {
-  // Each command finds its live log by listing tmp/; the second puts a directory in its place, the third a link to a
-  // directory outside the run that holds a file.
-  const find = 'const at = process.env.TMPDIR + "/" + readdirSync(process.env.TMPDIR).find((x) => /^round-\\d+-[0-9a-f]{12}\\.log$/.test(x));';
-  const w = world({
-    files: {
-      'plain.mjs': 'console.log("plain");\n',
-      'todir.mjs': `import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";\n${find}\nconsole.log("todir");\nunlinkSync(at); mkdirSync(at); writeFileSync(at + "/inside", "x");\n`,
-      'tolink.mjs': `import { readdirSync, symlinkSync, unlinkSync } from "node:fs";\n${find}\nconsole.log("tolink");\nunlinkSync(at); symlinkSync(process.argv[2], at);\n`,
-    },
-  });
+  // One command, pinned at round 1, that counts its rounds in the clone and finds its live log by listing tmp/: the
+  // first leaves it, the second puts a directory in its place, the third a link to a directory outside the run that
+  // holds a file.
+  const live = [
+    'import { existsSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";',
+    'const at = process.env.TMPDIR + "/" + readdirSync(process.env.TMPDIR).find((x) => /^round-\\d+-[0-9a-f]{12}\\.log$/.test(x));',
+    'const k = existsSync("seen-2") ? 3 : existsSync("seen-1") ? 2 : 1;',
+    'writeFileSync(`seen-${k}`, "");',
+    'console.log(["plain", "todir", "tolink"][k - 1]);',
+    'if (k === 2) { unlinkSync(at); mkdirSync(at); writeFileSync(at + "/inside", "x"); }',
+    'if (k === 3) { unlinkSync(at); symlinkSync(process.argv[2], at); }',
+  ].join('\n');
+  const w = world({ files: { 'live.mjs': live } });
   const outside = realpathSync(mkdtempSync(join(BASE, 'outside-')));
   writeFileSync(join(outside, 'keep'), 'kept\n');
   try {
-    const rounds = [[1, 'plain.mjs'], [2, 'todir.mjs'], [3, 'tolink.mjs', outside]];
-    for (const [round, script, ...rest] of rounds) {
-      const r = await w.exec({ args: [node(), script, ...rest], round });
+    for (const [round, said] of [[1, 'plain'], [2, 'todir'], [3, 'tolink']]) {
+      const r = await w.exec({ args: [node(), 'live.mjs', outside], round });
       assert.equal(r.code, 0, r.tail);
-      assert.equal(r.tail, `${script.split('.')[0]}\n`);
+      assert.equal(r.tail, `${said}\n`);
       assert.deepEqual(readdirFix(w.run.tmp).filter((x) => x.startsWith('round-')), [], `round ${round}`);
     }
     assert.equal(readFileSync(join(outside, 'keep'), 'utf8'), 'kept\n', 'the link\'s target and what it holds are untouched');
@@ -487,6 +513,65 @@ test('runTestCommand refuses a time limit past what a timer can hold, and names 
       (e) => e.message === 'gemini: runTestCommand needs a positive whole round number (got "4")');
     assert.equal(ctx.spawned, 0);
     assert.deepEqual(listing(w.run), before);
+  } finally { w.done(); }
+});
+
+// The fix round after the security review (2026-11-25): the test command, its PATH directories and its reach are
+// pinned at a run's first test run, and a program in the copy by its real path and its bytes.
+import { regexLiteral as regexLiteralPin } from '../core/seatbelt.mjs';
+
+const PINNED = 'gemini: the test command, its PATH directories and its reach are fixed at a run\'s first test run';
+
+test('the test command is pinned at the first run: other args, another PATH directory or a wider reach is refused before anything is opened', PURE_RUN, async () => {
+  const w = world();
+  try {
+    const ctx = countingCtx();
+    const first = { args: [node(), 'a.mjs'], timeoutMs: 1_000, reach: w.reach, home: w.home, fleet: w.fleet, pathDirs: ['/usr/local/bin'] };
+    await runTestCommand(ctx, w.run, { ...first, round: 1 });
+    assert.equal(ctx.spawned, 1);
+    const before = listing(w.run);
+    const others = [
+      { args: [node(), 'b.mjs'] },
+      { pathDirs: ['/opt/bin'] },
+      { reach: { ...w.reach, node: `^(${regexLiteralPin(w.home)})(/|$)` } },
+      { reach: { ...w.reach, up: `^(${regexLiteralPin(w.home)})$` } },
+    ];
+    for (const [i, other] of others.entries()) {
+      await assert.rejects(runTestCommand(ctx, w.run, { ...first, ...other, round: 2 + i }), (e) => e.message === PINNED, JSON.stringify(other));
+    }
+    assert.equal(ctx.spawned, 1);
+    assert.deepEqual(listing(w.run), before);
+  } finally { w.done(); }
+});
+
+test('a test that rewrites the test program in a dependency copy cannot run it again', KROW, async () => {
+  // Round 1's command, through the copied script, appends a line to the script itself: profile B lets it write there.
+  const w = world({
+    ignored: ['tools'],
+    untracked: { 'tools/bin/tool.sh': '#!/bin/sh\necho ran >> marks\necho "# rewritten" >> "$0"\n' },
+    deps: ['tools'],
+  });
+  const tool = join(w.run.clone, 'tools', 'bin', 'tool.sh');
+  chmodT8(tool, 0o755);
+  try {
+    const first = await w.exec({ args: [tool] });
+    assert.equal(first.code, 0, first.tail);
+    assert.match(readFileSync(tool, 'utf8'), /# rewritten\n$/);
+    const { r } = await w.call({ args: [tool], round: 2 });
+    assert.equal(r.isError, true);
+    assert.equal(r.text, 'Neon test error: gemini: the test program in the copy changed since the run\'s first test run — the test command is not run');
+    assert.equal(readFileSync(join(w.run.clone, 'marks'), 'utf8'), 'ran\n', 'no second run');
+  } finally { w.done(); }
+});
+
+test('a program outside the copy is pinned by its arguments only', KROW, async () => {
+  const w = world({ files: { 'mark.mjs': 'import { appendFileSync } from "node:fs";\nappendFileSync("marks", "ran\\n");\n' } });
+  try {
+    for (const round of [1, 2]) {
+      const r = await w.exec({ args: [node(), 'mark.mjs'], round });
+      assert.equal(r.code, 0, r.tail);
+    }
+    assert.equal(readFileSync(join(w.run.clone, 'marks'), 'utf8'), 'ran\nran\n');
   } finally { w.done(); }
 });
 
@@ -525,7 +610,7 @@ async function underA(w, argv, { exe = node() } = {}) {
   if (!w.profileA) {
     mkdirSync(join(w.home, 'Library', 'Keychains'), { recursive: true });
     writeFileSync(join(w.home, 'Library', 'Keychains', 'k'), 'keychain-bytes\n');
-    w.profileA = writeProfileA(w.run, exe, { home: w.home, fleet: w.fleet });
+    w.profileA = writeProfileA(w.run, exe, { home: w.home, fleet: w.fleet }).profile;
   }
   const child = spawnT9('/usr/bin/sandbox-exec', ['-f', w.profileA, ...argv], {
     cwd: w.run.clone, env: { HOME: w.run.home, TMPDIR: w.run.tmp, PATH: '/usr/bin:/bin' }, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
@@ -578,7 +663,7 @@ test('profile A parses', KROW, async () => {
     assert.equal(w.profileA, join(w.run.out, 'a.sb'));
     assert.equal(statSync(w.profileA).mode & 0o777, 0o600);
     assert.equal(w.run.sandboxed, true);
-    assert.throws(() => writeProfileA(w.run, node(), { home: w.home, fleet: w.fleet }), (e) => e.code === 'EEXIST', 'once per run');
+    assert.equal(writeProfileA(w.run, node(), { home: w.home, fleet: w.fleet }), w.run.profileA, 'once per run');
   } finally { w.done(); }
 });
 
@@ -722,5 +807,133 @@ test('the copy\'s .gemini, .agents and .antigravity cannot be created or written
     ]);
     assert.deepEqual(got, ['ok', 'EPERM', 'EPERM', 'EPERM', 'EPERM', 'EPERM']);
     assert.equal(readFileSync(join(c, '.gemini', 'committed.md'), 'utf8'), 'committed\n');
+  } finally { w.done(); }
+});
+
+test('the OS temp root and /private/tmp are unreadable under profile A, the run\'s own directories still readable', KROW, async () => {
+  const w = probeWorld();
+  const elsewhere = join(BASE, 'another-programs-temp');
+  mkdirSync(elsewhere, { recursive: true });
+  writeFileSync(join(elsewhere, 'f'), 'not agy\'s\n');
+  const scratch = realpathSync(mkdtempSync(join(HOMES, 'neon-test-scratch-')));
+  made.push(scratch);
+  writeFileSync(join(scratch, 'f'), 'not agy\'s\n');
+  try {
+    const got = await probeA(w, [
+      ['read', join(elsewhere, 'f')], ['list', elsewhere], ['read', join(scratch, 'f')], ['list', scratch],
+      ['read', join(w.run.clone, 'README.md')], ['write', join(w.run.tmp, 'ok')], ['read', join(w.run.tmp, 'ok')],
+    ]);
+    assert.deepEqual(got, ['EPERM', 'EPERM', 'EPERM', 'EPERM', 'ok', 'ok', 'ok']);
+  } finally { w.done(); }
+});
+
+// The fix round after T9–T10's tester (2026-11-25): the pin by the resolved path and recorded only past every refusal,
+// profile A's temp denies, writeProfileA once per run with its resolved binary, and the run's changed names.
+import { unlinkSync as unlinkFix } from 'node:fs';
+import { testChangedPaths } from '../units/gemini/test-run.mjs';
+
+const CHANGED_PROGRAM = 'gemini: the test program in the copy changed since the run\'s first test run — the test command is not run';
+
+test('the pin hashes a program in the copy reached by another spelling', PURE_RUN, async () => {
+  const w = world({ files: { 'tool.sh': '#!/bin/sh\necho hi\n' } });
+  const alias = join(BASE, `alias-${++n}`);
+  symlinkSync(w.run.runDir, alias);
+  try {
+    const ctx = countingCtx();
+    const o = { args: [join(alias, 'clone', 'tool.sh')], timeoutMs: 1_000, reach: w.reach, home: w.home, fleet: w.fleet };
+    await runTestCommand(ctx, w.run, { ...o, round: 1 });
+    assert.equal(w.run.pin.program.real, join(w.run.clone, 'tool.sh'));
+    writeFileSync(join(w.run.clone, 'tool.sh'), '#!/bin/sh\necho rewritten\n');
+    await assert.rejects(runTestCommand(ctx, w.run, { ...o, round: 2 }), (e) => e.message === CHANGED_PROGRAM);
+    assert.equal(ctx.spawned, 1);
+  } finally { w.done(); }
+});
+
+test('a first call refused for another reason records no pin', PURE_RUN, async () => {
+  const w = world();
+  try {
+    const ctx = countingCtx();
+    const o = { timeoutMs: 1_000, reach: w.reach, fleet: w.fleet, round: 1 };
+    await assert.rejects(runTestCommand(ctx, w.run, { ...o, args: [node(), 'a.mjs'], home: join(BASE, `no-home-${++n}`) }), (e) => e.code === 'ENOENT');
+    assert.equal(w.run.pin, undefined);
+    await runTestCommand(ctx, w.run, { ...o, args: [node(), 'b.mjs'], home: w.home });
+    assert.equal(ctx.spawned, 1);
+    assert.deepEqual(w.run.pin.args, [node(), 'b.mjs']);
+  } finally { w.done(); }
+});
+
+test('a first call that cannot open its live log records no pin', PURE_RUN, async () => {
+  const w = world();
+  try {
+    const ctx = countingCtx();
+    const o = { timeoutMs: 1_000, reach: w.reach, home: w.home, fleet: w.fleet };
+    chmodT8(w.run.tmp, 0o500);
+    try {
+      await assert.rejects(runTestCommand(ctx, w.run, { ...o, round: 1, args: [node(), 'a.mjs'] }), (e) => e.code === 'EACCES');
+    } finally { chmodT8(w.run.tmp, 0o700); }
+    assert.equal(w.run.pin, undefined);
+    assert.equal(ctx.spawned, 0);
+    await runTestCommand(ctx, w.run, { ...o, round: 1, args: [node(), 'b.mjs'] });
+    assert.equal(ctx.spawned, 1);
+    assert.deepEqual(w.run.pin.args, [node(), 'b.mjs']);
+  } finally { w.done(); }
+});
+
+test('profile A denies the per-user temp parent for a macOS-shaped temp root and the temp root itself otherwise, with /private/tmp and /private/var/tmp', () => {
+  const p = {
+    clone: '/r/run-1/clone', tmp: '/r/run-1/tmp', shome: '/r/run-1/home', home: '/h', agyExe: '/opt/agy/bin/agy', src: '/w',
+    fleet: '/h/.omelette', runs: '/r', run: '/r/run-1', tmproot: '/t', deps: [],
+  };
+  const at = (tmproot) => renderProfileA({ ...p, tmproot }).split('\n');
+  const mac = at('/private/var/folders/ab/cd0/T');
+  assert.ok(mac.includes('(deny file-read* (subpath "/private/var/folders/ab/cd0") (subpath "/private/tmp") (subpath "/private/var/tmp"))'), mac.join('\n'));
+  assert.ok(mac.includes('(allow file-read-metadata (literal "/private/var/folders/ab/cd0") (literal "/private/var/folders/ab/cd0/T") (literal "/r") (literal "/r/run-1"))'));
+  assert.ok(mac.includes('(deny file-read* (regex "^/private/var/folders/ab/cd0/T/omelette-"))'), 'the omelette-* deny stays on the temp root');
+  for (const tmproot of ['/t', '/private/var/folders/ab/T', '/private/var/folders/ab/cd0/T/x', '/var/folders/ab/cd0/T']) {
+    const lines = at(tmproot);
+    assert.ok(lines.includes(`(deny file-read* (subpath "${tmproot}") (subpath "/private/tmp") (subpath "/private/var/tmp"))`), tmproot);
+    assert.ok(lines.includes(`(allow file-read-metadata (literal "${tmproot}") (literal "/r") (literal "/r/run-1"))`), tmproot);
+  }
+});
+
+test('/private/var/tmp is unreadable under profile A', { ...KROW, skip: !KERNEL }, async () => {
+  const w = probeWorld();
+  const vtmp = realpathSync(mkdtempSync(join('/private/var/tmp', 'neon-test-')));
+  made.push(vtmp);
+  writeFileSync(join(vtmp, 'f'), 'not agy\'s\n');
+  try {
+    assert.deepEqual(await probeA(w, [['read', join(vtmp, 'f')], ['list', vtmp]]), ['EPERM', 'EPERM']);
+  } finally { w.done(); }
+});
+
+test('writeProfileA returns the resolved binary and is the same object on a second call; a binary that resolves elsewhere is refused', PURE_RUN, () => {
+  const w = world();
+  const link = join(BASE, `agy-link-${++n}`);
+  symlinkSync(node(), link);
+  try {
+    const first = writeProfileA(w.run, link, { home: w.home, fleet: w.fleet });
+    assert.deepEqual(first, { profile: join(w.run.out, 'a.sb'), exe: node() });
+    assert.equal(w.run.profileA, first);
+    assert.equal(w.run.sandboxed, true);
+    assert.equal(writeProfileA(w.run, link, { home: w.home, fleet: w.fleet }), first);
+    assert.equal(writeProfileA(w.run, node(), { home: w.home, fleet: w.fleet }), first, 'the binary itself resolves to the same path');
+    const elsewhere = realpathSync('/usr/bin/true');
+    unlinkFix(link);
+    symlinkSync(elsewhere, link);
+    assert.throws(() => writeProfileA(w.run, link, { home: w.home, fleet: w.fleet }),
+      (e) => e.message === `gemini: agy's binary changed during the run (${JSON.stringify(node())} → ${JSON.stringify(elsewhere)}) — the profile allows the first only`);
+    assert.equal(w.run.profileA, first);
+  } finally { w.done(); }
+});
+
+test('testChangedPaths leaves a copied dependency out', { ...PURE_RUN, skip: !DARWIN }, () => {
+  const w = world({ ignored: ['node_modules'], untracked: { 'node_modules/p/index.js': 'dep\n' }, deps: ['node_modules'] });
+  try {
+    assert.ok(existsSync(join(w.run.clone, 'node_modules', 'p', 'index.js')), 'the dep was copied');
+    // The model's .gitignore no longer covers the copy: the exclude alone keeps it out.
+    writeFileSync(join(w.run.clone, '.gitignore'), '');
+    mkdirSync(join(w.run.clone, 'test'));
+    writeFileSync(join(w.run.clone, 'test', 'a.test.mjs'), 'ok\n');
+    assert.deepEqual(testChangedPaths(w.run).sort(), ['.gitignore', 'test/a.test.mjs']);
   } finally { w.done(); }
 });

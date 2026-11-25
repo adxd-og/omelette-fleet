@@ -685,3 +685,22 @@ test('resolveProgram refuses a deps path whose link resolves into the work tree'
   const message = `gemini: "node_modules/.bin/x" resolves into the work tree (${JSON.stringify(real)}) — the test command cannot read the work tree; name a program outside it, or a path under a deps entry`;
   assert.throws(() => resolveProgram({ word: 'node_modules/.bin/x', programs: [], deps: ['node_modules'], run }), (e) => e.message === message);
 });
+
+// The second fix round after the T9/T10 tester (2026-11-25): the notice's names come from the unit's own listing, which
+// honours no ignore rule (a model-written .gitignore can ignore itself) and matches the base name in lower case.
+import { testGuards } from '../units/gemini/test-run.mjs';
+
+test('testGuards names an ignore file that ignores itself, an attributes file in another letter case, a changed tracked one, and nothing under a dependency copy', { ...COPIED, timeout: 5_000 }, () => {
+  const work = writeTree(workTree({ 'pkg/.gitattributes': '*.bin binary\n' }), { 'node_modules/pkg/index.js': 'i\n', 'node_modules/pkg/.gitignore': '*\n' });
+  writeFileSync(join(work, '.git', 'info', 'exclude'), 'node_modules/\n');
+  const run = runWithDeps(work, ['node_modules']);
+  try {
+    // Whether this volume reads another letter case as the same file: the attributes file's part asserts only there.
+    const caseless = existsSync(join(run.clone, 'README.MD'));
+    writeFileSync(join(run.clone, '.gitignore'), '*\n');
+    writeFileSync(join(run.clone, 'a.test.mjs'), 'ok\n');
+    writeFileSync(join(run.clone, 'pkg', '.gitattributes'), '* -diff\n');
+    if (caseless) writeFileSync(join(run.clone, '.GITATTRIBUTES'), '* -diff\n');
+    assert.deepEqual(testGuards(run), [...(caseless ? ['.GITATTRIBUTES'] : []), '.gitignore', 'pkg/.gitattributes']);
+  } finally { discardRun(run); }
+});
