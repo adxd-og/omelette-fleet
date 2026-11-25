@@ -420,6 +420,50 @@ test('doctor prints the mistral block: login by file presence, the homes, the re
   assert.match(signed, /^ {2}repro {7}open in this shell \(OMELETTE_ALLOW_REPRO=1\) — the registration's env decides · sandbox-exec /m);
 });
 
+/** The gemini block of a doctor run: from its header to grok's. */
+const geminiBlock = (out) => out.slice(out.indexOf('── gemini ('), out.indexOf('── grok ('));
+
+test("doctor's gemini block names gemini_test's gate, closed and open", () => {
+  const dir = home();
+  try {
+    const gone = join(dir, 'no-such-cli');
+    const env = { AGY_BIN: gone, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone };
+    const closed = geminiBlock(cli(['doctor'], { dir, env }).out);
+    assert.match(closed, /^ {2}test {8}gemini_test closed in this shell — the registration's env decides; set OMELETTE_ALLOW_REPRO=1 there · sandbox-exec (found|macOS only \(1\.13\.0\)) · model Gemini 4 Neon \(High\)$/m, closed);
+    const open = geminiBlock(cli(['doctor'], { dir, env: { ...env, OMELETTE_ALLOW_REPRO: '1' } }).out);
+    assert.match(open, /^ {2}test {8}gemini_test open in this shell \(OMELETTE_ALLOW_REPRO=1\) — the registration's env decides · sandbox-exec (found|macOS only \(1\.13\.0\)) · model Gemini 4 Neon \(High\)$/m, open);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('doctor marks a gemini.testModel outside the catalog on the test line, without a fault — as an off-catalog model is a mark', () => {
+  const dir = home();
+  try {
+    mkdirSync(join(dir, 'bin'));
+    const fake = fakeBin(join(dir, 'bin'));
+    const gone = join(dir, 'no-such-cli');
+    const env = { AGY_BIN: fake, GROK_BIN: gone, CODEX_BIN: gone, VIBE_BIN: gone };
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({
+      mcpServers: { 'omelette-gemini': { command: 'node', args: [join(ROOT, 'servers', 'gemini.mjs')] } },
+    }));
+    writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1, units: { gemini: { testModel: 'nope' } } }));
+    const r = cli(['doctor'], { dir, env });
+    const block = geminiBlock(r.out);
+    assert.match(block, /^ {2}test {8}gemini_test .* · model nope — NOT in the catalog: gemini_test refuses every call until it names a Gemini id$/m, block);
+    assert.doesNotMatch(block, /FAULT/);
+    assert.equal(r.code, 0, r.out + r.err);
+
+    // The default is in the catalog: the same registered gemini is healthy.
+    writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ version: 1 }));
+    const ok = cli(['doctor'], { dir, env });
+    assert.doesNotMatch(geminiBlock(ok.out), /NOT in the catalog|FAULT/);
+    assert.equal(ok.code, 0, ok.out + ok.err);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('set mistral.reproKeep=true and mistral.maxPrice=2 validate; mistral.repro.keep is refused as not unit.key=value', () => {
   const dir = home();
   const ok = cli(['set', 'mistral.reproKeep=true', 'mistral.maxPrice=2'], { dir });

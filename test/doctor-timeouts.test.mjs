@@ -317,6 +317,29 @@ test('doctor: the deep-research bound is reported while gemini is enabled, and o
   assert.equal(lineStartingWith(doctor(s).out, 'deep research:'), undefined);
 });
 
+test('doctor: the gemini_test worst case is testTimeoutS + 360 s, within and above the wall', () => {
+  const s = sandbox();
+  try {
+    writeConfig(s.dir, { units: { gemini: { timeoutS: 300, testTimeoutS: 1500 }, grok: { enabled: false }, codex: { enabled: false }, mistral: { enabled: false } } });
+    assert.equal(
+      lineStartingWith(doctor(s).out, 'gemini_test:'),
+      'gemini_test: worst case gemini.testTimeoutS = 1500 s + 360 s for the diff and the cleanup = 1860 s · within the wall-clock limit',
+    );
+
+    const tight = doctor(s, { env: { [WALL]: '1000000' } });
+    assert.equal(tight.code, 0, tight.out);
+    assert.equal(
+      lineStartingWith(tight.out, 'gemini_test:'),
+      `gemini_test: worst case gemini.testTimeoutS = 1500 s + 360 s for the diff and the cleanup = 1860 s · ABOVE the wall-clock limit (1000000 ms) — lower gemini.testTimeoutS or raise ${WALL}`,
+    );
+
+    writeConfig(s.dir, { units: { gemini: { enabled: false, testTimeoutS: 1500 }, grok: { enabled: false }, codex: { timeoutS: 600 }, mistral: { enabled: false } } });
+    assert.equal(lineStartingWith(doctor(s).out, 'gemini_test:'), undefined);
+  } finally {
+    rmSync(s.dir, { recursive: true, force: true });
+  }
+});
+
 /** A project wired up to the point where doctor has no first-run step left. */
 function wiredProject(s) {
   // codex registered and disabled: `nextStep` needs a registration of ours, and
@@ -380,6 +403,7 @@ test('doctor: the whole mcp timeout block, in the order the spec sets', () => {
   assert.deepEqual(timeoutBlock(doctor(s).out), [
     `wall-clock: ${WALL} unset (default ~28 h) ≥ 1800000 needed · ok`,
     'deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · within the wall-clock limit',
+    'gemini_test: worst case gemini.testTimeoutS = 1500 s + 360 s for the diff and the cleanup = 1860 s · within the wall-clock limit',
     `idle: ${IDLE} unset → 30 min default; grok.timeoutS=1800 s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set ${IDLE}=0 or a per-server "timeout"`,
   ]);
 
@@ -388,6 +412,7 @@ test('doctor: the whole mcp timeout block, in the order the spec sets', () => {
     `wall-clock: ${WALL}=900000 ms (process env) < 1800000 needed (grok.timeoutS=1800 s) · TOO LOW`,
     `raise it: {"env":{"${WALL}":"1800000"}} — merge into .claude/settings.json or ~/.claude/settings.json (omelette-fleet never writes them)`,
     'deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · ABOVE the wall-clock limit (900000 ms) — run it deliberately',
+    `gemini_test: worst case gemini.testTimeoutS = 1500 s + 360 s for the diff and the cleanup = 1860 s · ABOVE the wall-clock limit (900000 ms) — lower gemini.testTimeoutS or raise ${WALL}`,
     `idle: ${IDLE} unset → 30 min default; grok.timeoutS=1800 s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set ${IDLE}=0 or a per-server "timeout"`,
   ]);
   assert.equal(low.code, 0, 'the whole block is informational');

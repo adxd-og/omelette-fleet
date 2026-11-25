@@ -64,6 +64,7 @@ import geminiUnit from '../units/gemini/adapter.mjs';
 import grokUnit from '../units/grok/adapter.mjs';
 import mistralUnit from '../units/mistral/adapter.mjs';
 import { reproAllowed, reproSupported } from '../units/mistral/repro.mjs';
+import { sandboxExecFound } from '../core/seatbelt.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
@@ -452,6 +453,21 @@ function mistralLines(fleetDir) {
 }
 
 /**
+ * Doctor's gemini `test` line: gemini_test's gate (read as the mistral `repro`
+ * line reads it), whether sandbox-exec is there, and the model a call that
+ * names none runs on. A `gemini.testModel` outside the catalog is ignored at
+ * call time with a warning on the server's stderr, where an MCP client does
+ * not see it, so here it is a problem: the caller adds it to the unit's.
+ */
+function geminiTestLine(cfg) {
+  const model = cfg.values.testModel;
+  const known = UNITS.gemini.catalog.isAllowedModel(model);
+  return {
+    line: `  test        gemini_test ${reproAllowed() ? 'open in this shell (OMELETTE_ALLOW_REPRO=1) — the registration\'s env decides' : 'closed in this shell — the registration\'s env decides; set OMELETTE_ALLOW_REPRO=1 there'} · sandbox-exec ${sandboxExecFound() ? 'found' : 'macOS only (1.13.0)'} · model ${fmtValue(model)}${known ? '' : " — NOT in the catalog: gemini_test refuses every call until it names a Gemini id"}`,
+  };
+}
+
+/**
  * Login state per vendor, each with its own honest signal:
  *   codex  `codex login status` → exit 0 + "Logged in" on EITHER stream
  *   grok   `grok models`        → /not authenticated|not signed in/ = signed out
@@ -816,6 +832,8 @@ const GEMINI_HARD_KILL_S = 60;
 /** gemini_deep_research: decompose, gather, synthesise — each stage retried once. */
 const DEEP_STAGES = 3;
 const DEEP_ATTEMPTS = 2;
+/** gemini_test: past its budget (gemini.testTimeoutS), the diff and the run's cleanup. */
+const TEST_TAIL_S = 360;
 
 /**
  * The settings files a read tripped over, each named ONCE. Two readers open
@@ -1007,11 +1025,13 @@ function idleWall({ longest, cwd = process.cwd(), env = process.env, read = read
  * sizing every session's wall for it would be advice nobody asked for.
  *
  * @param {object} o
- * @param {{unit:string, enabled:boolean, timeoutS:number}[]} o.units every unit, enabled or not.
+ * @param {{unit:string, enabled:boolean, timeoutS:number, testTimeoutS?:number}[]} o.units
+ *   every unit, enabled or not; gemini's carries `testTimeoutS`.
  * @param {object} o.registration our registration records keyed by unit —
  *   `registration[unit].entry.timeout` is the client's per-server override,
  *   `.name` and `.scope` are what the line calls it.
  * @returns {{wall:object|null, idle:object|null, deep:object|null,
+ *            test:{seconds:number, ok:boolean}|null,
  *            lines:string[], next:string|null, snippet:string|null,
  *            unreadable:string[]}} `unreadable` holds the absolute path of
  *   every settings file the two env lookups could not parse, each named once.
@@ -1020,7 +1040,7 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
   const enabled = units.filter((u) => u.enabled);
   // No enabled unit, no call to bound: an empty report rather than a line about
   // limits nothing can reach.
-  if (!enabled.length) return { wall: null, idle: null, deep: null, lines: [], next: null, snippet: null, unreadable: [] };
+  if (!enabled.length) return { wall: null, idle: null, deep: null, test: null, lines: [], next: null, snippet: null, unreadable: [] };
 
   const needFor = (u) => (u.timeoutS + (u.unit === 'gemini' ? GEMINI_HARD_KILL_S : 0)) * 1000;
   const because = (u) => (u.unit === 'gemini'
@@ -1066,6 +1086,7 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
 
   const gemini = enabled.find((u) => u.unit === 'gemini');
   let deep = null;
+  let test = null;
   if (gemini) {
     const seconds = DEEP_STAGES * DEEP_ATTEMPTS * (gemini.timeoutS + GEMINI_HARD_KILL_S);
     const own = servers.find((s) => s.unit === 'gemini' && s.ms !== null);
@@ -1073,6 +1094,12 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
     const fits = wall === null || seconds * 1000 <= wall;
     deep = { stages: DEEP_STAGES, attempts: DEEP_ATTEMPTS, timeoutS: gemini.timeoutS, seconds, ok: fits };
     lines.push(`deep research: gemini_deep_research worst case: ${DEEP_STAGES} stages × ${DEEP_ATTEMPTS} attempts × (${gemini.timeoutS} + ${GEMINI_HARD_KILL_S} s) = ${seconds} s${fits ? ' · within the wall-clock limit' : ` · ABOVE the wall-clock limit (${wall} ms) — run it deliberately`}`);
+    // gemini_test: one budget for the whole call, then the diff and the cleanup.
+    // Against the same wall as deep research, and like it not part of `needed`.
+    const testSeconds = gemini.testTimeoutS + TEST_TAIL_S;
+    const testFits = wall === null || testSeconds * 1000 <= wall;
+    test = { seconds: testSeconds, ok: testFits };
+    lines.push(`gemini_test: worst case gemini.testTimeoutS = ${gemini.testTimeoutS} s + ${TEST_TAIL_S} s for the diff and the cleanup = ${testSeconds} s${testFits ? ' · within the wall-clock limit' : ` · ABOVE the wall-clock limit (${wall} ms) — lower gemini.testTimeoutS or raise ${WALL_ENV}`}`);
   }
 
   const idle = idleWall({ longest: enabled.reduce((a, b) => (b.timeoutS > a.timeoutS ? b : a)), cwd, env, read });
@@ -1091,7 +1118,7 @@ function timeoutWalls({ units = [], registration = {}, cwd = process.cwd(), env 
 
   return {
     wall: { needed, neededBy: worst.unit, value, source, effective, ok, servers },
-    idle, deep, lines, next, snippet,
+    idle, deep, test, lines, next, snippet,
     // Both env lookups walked the same files; the caller wants each named once.
     unreadable: mergeUnreadable(wallUnreadable, idle.unreadable),
   };
@@ -2946,7 +2973,7 @@ async function cmdDoctor(argv) {
   // timeoutS before the per-unit blocks print, and the blocks below reuse these
   // same objects so the report cannot describe two different resolutions.
   const cfgs = Object.fromEntries(UNIT_ORDER.map((n) => [n, cfgFor(n)]));
-  const unitBounds = UNIT_ORDER.map((n) => ({ unit: n, enabled: cfgs[n].values.enabled, timeoutS: cfgs[n].values.timeoutS }));
+  const unitBounds = UNIT_ORDER.map((n) => ({ unit: n, enabled: cfgs[n].values.enabled, timeoutS: cfgs[n].values.timeoutS, testTimeoutS: cfgs[n].values.testTimeoutS }));
   // Every registration of ours this project can see, found by where it POINTS,
   // and the prefix that follows from it. `install` and `uninstall` still work
   // by name (findRegistration) — only the diagnosis looks wider.
@@ -3133,6 +3160,10 @@ async function cmdDoctor(argv) {
     out(`  results     ${cfg.values.results
       ? `${join(cfg.home, 'results', name)} · keep ${cfg.values.resultsKeep} · max ${fmtBytes(cfg.values.resultsMaxBytes)}`
       : '(disabled in config) — answers are not spooled'}`);
+    if (name === 'gemini') {
+      // A mark on the line, not a fault: an off-catalog `model` is a mark on its row too, and the tool itself refuses by name.
+      out(geminiTestLine(cfg).line);
+    }
     // Enabled AND registered AND broken. A unit you never wired up is not a fault.
     if (cfg.values.enabled && reg && problems.length) {
       faults++;
