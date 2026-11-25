@@ -32,9 +32,9 @@
  * Zero deps.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, rmdirSync, unlinkSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, rmdirSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 const MB = 1024 * 1024;
 /** The most of the clone's diff an answer carries; the rest is the clone's, kept with the unit's keep key. */
@@ -117,20 +117,36 @@ export function runsRootAt(name, unit) {
 
 /**
  * The run's directories and a HEAD-only clone of the work tree at `cwd`:
- * `runDir` (mkdtemp `run-*` under `root`, resolved — `root` is the runs root or
- * a function returning it, called after the work-tree check), `clone`, one key per entry
- * of `dirs` (each `<runDir>/<dir>`, 0700, made before the clone; `out` among
- * them, where the `.git` copy the diff is taken against goes), the clone's short
- * `head`, `dirty` — the work tree had uncommitted changes — `ids`, the lstat
- * `{ dev, ino }` of the clone and of every dir but `out` (assertRun), and `top`,
- * the work tree's top. The clone keeps no remote and no reflog; each path of
- * `drop` is removed from it and from its index; then `setup({ clone, env })`
- * runs, synchronously, with the env of the clone's git calls — before the
- * `.git` copy, so what it commits is in the copy the diff is taken against.
+ * `runDir` (mkdtemp `run-*` under `root`, resolved while `root` may not be —
+ * `root` is the runs root or a function returning it, called after the
+ * work-tree check), `clone`, one key per entry of `dirs` (each
+ * `<runDir>/<dir>`, 0700, made before the clone; `out` is made and keyed
+ * whether or not `dirs` names it — the `.git` copy the diff is taken against
+ * goes there), the clone's short `head`, `dirty` — the work tree had
+ * uncommitted changes — `ids`, the lstat `{ dev, ino }` of the clone and of
+ * every dir but `out` (assertRun), and `top`, the work tree's top. Each entry
+ * of `dirs` is a plain name (`[a-z][a-z0-9-]*`) and no key of the result, or
+ * prepareClone throws before anything else. The clone keeps no remote and no
+ * reflog; each path of `drop` — literal relative paths, the caller's
+ * constants (git reads them as pathspecs, the removal as plain paths) — is
+ * removed from it and from its index; then `setup({ clone, env, config, head })`
+ * runs, before the `.git` copy, so what it commits is in the copy the diff is
+ * taken against. `setup` runs git with `[...config, '-C', clone, …]` and
+ * `env` (config is CLONE_CONFIG, env the clone's git env) and sets its own
+ * commit identity; `head` is the clone's short HEAD read just before the call
+ * (the work tree's commit), while the result's `head` is read after `setup`,
+ * so it names a commit `setup` made. `setup` must be synchronous: one that
+ * returns a promise is refused (the run dir removed).
  * Throws, before making anything, when `cwd` is not inside a git work tree (the
  * refusal opening with `<unit>:`); any later failure removes the run dir.
  */
 export function prepareClone({ cwd, log = () => {}, unit, root, drop = [], dirs = ['tmp', 'out'], setup = null }) {
+  for (const d of dirs) {
+    if (!/^[a-z][a-z0-9-]*$/.test(d) || ['clone', 'head', 'dirty', 'ids', 'top'].includes(d)) {
+      throw new Error(`prepareClone: dirs entry ${JSON.stringify(d)} is not a plain directory name, or collides with a key of the result`);
+    }
+  }
+  const runDirs = dirs.includes('out') ? dirs : [...dirs, 'out'];
   const env = cloneGitEnv();
   let inside;
   try {
@@ -147,7 +163,7 @@ export function prepareClone({ cwd, log = () => {}, unit, root, drop = [], dirs 
   const runDir = realpathSync(mkdtempSync(join(typeof root === 'function' ? root() : root, 'run-')));
   try {
     const clone = join(runDir, 'clone');
-    const made = Object.fromEntries(dirs.map((d) => [d, join(runDir, d)]));
+    const made = Object.fromEntries(runDirs.map((d) => [d, join(runDir, d)]));
     for (const p of Object.values(made)) mkdirSync(p, { mode: 0o700 });
     // git URL-decodes a file:// URL: a literal % in the path is sent as %25.
     git([...CLONE_CONFIG, 'clone', '--no-hardlinks', '--depth', '1', '--quiet', `file://${top.replace(/%/g, '%25')}`, clone], { env, timeout: 300_000 });
@@ -157,7 +173,14 @@ export function prepareClone({ cwd, log = () => {}, unit, root, drop = [], dirs 
     for (const p of drop) rmSync(join(clone, p), { recursive: true, force: true });
     // The drop is the unit's, not the model's: out of the index too, so it is never proposed as a patch.
     if (drop.length) git([...CLONE_CONFIG, '-C', clone, 'rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', ...drop], { env });
-    if (setup) setup({ clone, env });
+    if (setup) {
+      const head = git([...CLONE_CONFIG, '-C', clone, 'rev-parse', '--short', 'HEAD'], { env }).trim();
+      const r = setup({ clone, env, config: CLONE_CONFIG, head });
+      if (r && typeof r.then === 'function') {
+        r.then(null, () => {});
+        throw new Error('prepareClone: setup must be synchronous — it returned a promise');
+      }
+    }
     // The diff is taken against this copy of the fresh .git, in OUT, which no sandboxed command can read or write.
     cpSync(join(clone, '.git'), join(runDir, 'out', 'git'), { recursive: true });
     const head = git([...CLONE_CONFIG, '-C', clone, 'rev-parse', '--short', 'HEAD'], { env }).trim();
@@ -199,7 +222,12 @@ export function assertRun(run, message) {
  * diffed)` line each, first, the path JSON-quoted when it holds a control
  * character. Past DIFF_CAP bytes the diff is cut at a line end and its last
  * line says so, naming `keepKey`. With `indexFile`, every git call of the diff
- * uses that index (GIT_INDEX_FILE) instead of the git dir's own.
+ * uses that index (GIT_INDEX_FILE) instead of the git dir's own: a scratch
+ * path (absolute, outside the clone) core overwrites with a fresh copy of the
+ * git dir's index before each diff, so the git dir's own index stays pristine
+ * and one path serves every diff of a run. A run passes it on every diff or on
+ * none: a diff without it writes its intent-to-add entries into the git dir's
+ * own index.
  *
  * This runs outside the sandbox, so it reads nothing the model could have
  * written but the work tree itself: the git dir is `gitDir`, the copy
@@ -211,7 +239,14 @@ export function assertRun(run, message) {
 export function cloneDiff(clone, gitDir = join(dirname(clone), 'out', 'git'), { keepKey = 'mistral.reproKeep', indexFile } = {}) {
   const base = ['--git-dir', gitDir, '--work-tree', clone, '--literal-pathspecs', ...DIFF_CONFIG];
   const env = isolatedGitEnv();
-  if (indexFile) env.GIT_INDEX_FILE = indexFile;
+  if (indexFile) {
+    if (!isAbsolute(indexFile)) throw new Error(`cloneDiff: indexFile must be an absolute path (got ${JSON.stringify(indexFile)})`);
+    const at = resolve(indexFile);
+    const root = resolve(clone);
+    if (at === root || at.startsWith(root + sep)) throw new Error('cloneDiff: indexFile must lie outside the clone — the clone is the model\'s to write');
+    copyFileSync(join(gitDir, 'index'), indexFile);
+    env.GIT_INDEX_FILE = indexFile;
+  }
   const opts = { cwd: clone, env };
   const untracked = git([...base, 'ls-files', '--others', '--exclude-standard', '-z'], opts).split('\0').filter(Boolean);
   const nested = untracked.filter((p) => inNestedRepo(clone, p));
