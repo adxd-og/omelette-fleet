@@ -243,7 +243,6 @@ const keyed = () => defineUnit({
   tools: [
     { name: 'fake_keyed', kind: 'research', modelKey: 'testModel', description: 'd', inputSchema: schema, run: (_a, ctx) => `model=${ctx.model}` },
     { name: 'fake_plain', kind: 'research', description: 'd', inputSchema: schema, run: (_a, ctx) => `model=${ctx.model}` },
-    { name: 'fake_ghost', kind: 'research', modelKey: 'noSuchKey', description: 'd', inputSchema: schema, run: (_a, ctx) => `model=${ctx.model}` },
   ],
 });
 const startEvent = (dir) => readFileSync(join(dir, 'fleet-log.ndjson'), 'utf8').split('\n').filter(Boolean).map(JSON.parse).find((l) => l.event === 'start');
@@ -265,11 +264,9 @@ test('modelKey: the status feed\'s start carries the key\'s model, and a plain t
   assert.equal(startEvent(plain.dir).model, 'm1');
 });
 
-test('modelKey: an empty configured value, and a key the config does not know, leave the model unnamed — and `model` is not consulted', async () => {
+test('modelKey: an empty configured value leaves the model unnamed — and `model` is not consulted', async () => {
   const empty = runtime(keyed(), { units: { fake: { model: 'm1', testModel: '' } } });
   assert.equal((await empty.rt.callTool('fake_keyed', {})).text, 'model=', 'an empty testModel is no model, not a fall-back to `model`');
-  const ghost = runtime(keyed(), { units: { fake: { model: 'm1' } } });
-  assert.equal((await ghost.rt.callTool('fake_ghost', {})).text, 'model=');
 });
 
 test('modelKey: a bad `model` does not warn a keyed tool, and a bad key does not warn a plain one', async () => {

@@ -29,7 +29,8 @@
  * })
  *
  * tool.modelKey: the config key a call that names no model takes its model
- * from (default 'model'); validated against the catalog as `model` is, and
+ * from (default 'model'); it must be one of the unit's config keys (KEY_SCHEMA
+ * or the unit's extraSchema); validated against the catalog as `model` is, and
  * never shown in tools/list.
  *
  * tool.kind: research | review | image | pipeline | catalog | local. `catalog`
@@ -104,7 +105,7 @@ import { serve } from './jsonrpc.mjs';
 import { contractFor, unitInstructions } from './rules.mjs';
 import { killLiveGroups, runProcess } from './spawn.mjs';
 import { createStatus, previewText } from './status.mjs';
-import { unitConfig } from './config.mjs';
+import { KEY_SCHEMA, unitConfig } from './config.mjs';
 import { createResultStore, formatEntry, isValidResultId, renderResult } from './results.mjs';
 import { makeLog, makeOnceLog } from './log.mjs';
 import { VERSION, announceUpdate } from './update.mjs';
@@ -148,6 +149,7 @@ export function defineUnit(spec) {
     if (!TOOL_KINDS.has(t.kind)) throw new Error(`${where}: tool "${t.name}" has unknown kind "${t.kind}"`);
     if (t.kind !== 'catalog' && typeof t.run !== 'function') throw new Error(`${where}: tool "${t.name}" needs run()`);
     if (t.modelKey !== undefined && typeof t.modelKey !== 'string') throw new Error(`${where}: tool "${t.name}" has a modelKey that is not a string`);
+    if (t.modelKey !== undefined && !Object.hasOwn(KEY_SCHEMA, t.modelKey) && !Object.hasOwn(spec.extraSchema || {}, t.modelKey)) throw new Error(`${where}: tool "${t.name}" has a modelKey "${t.modelKey}" that is no config key of the unit`);
   }
   if (typeof spec.catalog.isAllowedModel !== 'function') throw new Error(`${where}: catalog must come from makeCatalog()`);
   // envPassthrough is exact names (1.5.0): a pattern admits whatever the vendor

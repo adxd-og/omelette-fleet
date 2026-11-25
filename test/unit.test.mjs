@@ -932,3 +932,13 @@ test('a tool\'s modelKey: an unnamed model comes from that key, not from model',
   assert.throws(() => fakeUnit({ tools: [{ name: 't', kind: 'research', modelKey: 7, description: 'd', inputSchema: {}, run: () => '' }] }),
     /tool "t" has a modelKey that is not a string/);
 });
+
+test('a tool\'s modelKey must name a config key of the unit', () => {
+  const withKey = (modelKey) => fakeUnit({
+    extraSchema: { testModel: { type: 'string', default: '' } },
+    tools: [{ name: 't', kind: 'research', modelKey, description: 'd', inputSchema: {}, run: () => '' }],
+  });
+  for (const bad of ['ghost', '']) assert.throws(() => withKey(bad), /tool "t" has a modelKey ".*" that is no config key of the unit/, JSON.stringify(bad));
+  assert.doesNotThrow(() => withKey('model'));
+  assert.doesNotThrow(() => withKey('testModel'));
+});
