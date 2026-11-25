@@ -23,6 +23,7 @@ One file, read fresh on every call, and it can only ever *narrow* what a unit ma
 | What extra keys does one unit have, and what's its built-in default? | [Unit-specific extras and built-in overrides](#unit-specific-extras-and-built-in-overrides) |
 | Which config keys does a given unit actually read? | [Which unit actually uses which key](#which-unit-actually-uses-which-key) |
 | What are the Mistral unit's `mistral.*` keys, its two Vibe homes and `rendered.json`? | [The Mistral unit: keys and homes](#the-mistral-unit-keys-and-homes) |
+| What are `gemini_test`'s five keys, what do `deps` and `testCommand` take for Node and Python, and what do its `doctor` lines say? | [The Gemini unit: `gemini_test` keys and the call](#the-gemini-unit-gemini_test-keys-and-the-call) |
 | Which model does Codex pin when none is set, and what does doctor's `models` line compare? | [Which unit actually uses which key](#which-unit-actually-uses-which-key) |
 | In what order do env, file and defaults get resolved? | [Resolution order](#resolution-order) |
 | How do I change a config value from the command line? | [Editing with `set`](#editing-with-set) |
@@ -337,7 +338,7 @@ Booleans accept JSON booleans and the strings `1/true/on/yes` and `0/false/off/n
 
 | Unit | Extra key | Built-in defaults |
 |---|---|---|
-| gemini | — | `timeoutS: 300` |
+| gemini | `testModel` (string, `Gemini 4 Neon (High)`), `testKeep` (boolean, `false`), `testRunTimeoutS` (positive int, `300`), `testTimeoutS` (positive int, `1500`), `testPrograms` (string, `node,npm,npx,pnpm,yarn,python3`): all for `gemini_test`, [its section](#the-gemini-unit-gemini_test-keys-and-the-call) | `timeoutS: 300` |
 | grok | `imageMaxTurns` (positive int, default `8`) — turn cap for image runs only | `timeoutS: 300`, `maxTurns: 30`, `outputCap: 10000000` |
 | codex | — | `timeoutS: 600`, `effort: "xhigh"`, `webSearch: true`, `outputCap: 4000000` |
 | mistral | `reproTimeoutS` (positive int, `2400`), `maxPrice` (positive int, dollars, `1`), `reproMaxPrice` (positive int, `3`), `reproKeep` (boolean, `false`). All flat `mistral.<key>`, as is the rest: [the Mistral section](#the-mistral-unit-keys-and-homes) | `timeoutS: 1500`, `model: "mistral-large-4-0-3"`, `effort: "high"`, `maxTurns: 150`, `outputCap: 400000` |
@@ -389,7 +390,48 @@ There is no `reproTools` key: a repro run gives Vibe `bash` only, because Vibe's
 
 **The two homes.** `VIBE_HOME` is `<fleet home>/vibe/review/` for review and `<fleet home>/vibe/repro/` for repro. The unit renders both before every spawn from its catalog (`units/mistral/models.js`) and the policy block: a file whose bytes differ is rewritten, a symlink on the way is refused. Whenever it renders, it writes `rendered.json` (`{ version, at }`) beside them. Vibe rewrites `config.toml` on every run and drops the version marker, so `doctor` reads the sidecar to print `rendered v<version> at <time>`. The repro home also holds `repro.sb` and `shell.sh`. The operator's `~/.vibe` is never read or written. Edit nothing in a home: the next spawn overwrites it.
 
-**Environment.** `MISTRAL_DEFAULT_MODEL`, `MISTRAL_EFFORT`, `MISTRAL_TIMEOUT_S` set `model`, `effort`, `timeoutS`; `VIBE_BIN` points at a `vibe` that is not on `PATH`. `OMELETTE_ALLOW_REPRO` is the gate for the repro tool ([SECURITY](SECURITY.md#mistral--policy-for-reads-a-kernel-for-every-shell-command)).
+**Environment.** `MISTRAL_DEFAULT_MODEL`, `MISTRAL_EFFORT`, `MISTRAL_TIMEOUT_S` set `model`, `effort`, `timeoutS`; `VIBE_BIN` points at a `vibe` that is not on `PATH`. `OMELETTE_ALLOW_REPRO` is the gate for the repro tool ([SECURITY](SECURITY.md#mistral--policy-for-reads-a-kernel-for-every-shell-command)), and for `gemini_test` on the gemini registration ([the Gemini keys](#the-gemini-unit-gemini_test-keys-and-the-call)).
+
+### The Gemini unit: `gemini_test` keys and the call
+
+`gemini_test` (1.13.0) is the one Gemini tool with keys of its own. All five are flat `gemini.<key>` and, like every key, read fresh on each call. What the tool does and holds: [SECURITY](SECURITY.md#gemini--gemini_test-agy-under-a-kernel-the-tests-under-another).
+
+| Key | Default | What it bounds |
+|---|---|---|
+| `testModel` | `Gemini 4 Neon (High)` | The model of a `gemini_test` call that names none. Separate from `gemini.model` (research stays on Hydrogen). A value outside the catalog refuses the call, and `doctor` flags it; a Claude id is refused for this tool |
+| `testKeep` | `false` | `true` keeps the run's directory (the copy, its tmp, agy's scratch home, the out directory with each round's log and diff) and names it on the answer's last line. The copy holds what the model wrote |
+| `testRunTimeoutS` | `300` | One run of the test command. A run past it is killed (its process group with it) and the round line says so |
+| `testTimeoutS` | `1500` | The whole call: no round starts once it is spent, a round that outlives it is ended, and the diff of what is there is taken. An agy round killed at it marks the answer partial and names this key. Within it, each agy round is also bounded by `gemini.timeoutS` |
+| `testPrograms` | `node,npm,npx,pnpm,yarn,python3` | A comma-separated string: the program names a `testCommand` may start with. Each entry is a bare name (letters, digits, `.`, `_`, `+`, `-`); a path is refused. Add one with `omelette-fleet set gemini.testPrograms=node,npm,npx,pnpm,yarn,python3,go` |
+
+None of the five has an environment name. **The gate** is not a key: `OMELETTE_ALLOW_REPRO=1` on the gemini server's registration opens `gemini_test` as it opens Mistral's repro tool ([environment overrides](#environment-overrides)); `OMELETTE_ALLOW_WRITE` does not.
+
+**`doctor`** prints two lines for the tool, both only while gemini is enabled. In the gemini block, always: the gate in `doctor`'s own shell (the registration's env decides), whether `sandbox-exec` is found (`macOS only (1.13.0)` where it is not), and the model, which counts as a problem when it is not in the catalog:
+
+```
+  test        gemini_test open in this shell (OMELETTE_ALLOW_REPRO=1) — the registration's env decides · sandbox-exec found · model Gemini 4 Neon (High)
+```
+
+closed, the same line reads `closed in this shell — the registration's env decides; set OMELETTE_ALLOW_REPRO=1 there`. And under `mcp timeout`, the worst case against the wall-clock limit ([Client timeouts](#client-timeouts)).
+
+**The call.** `prompt`, `cwd`, `patch` and `testCommand` are required; `deps`, `rounds` (1 to 5, default 3) and `model` are optional.
+
+| Argument | Rule |
+|---|---|
+| `cwd` | Absolute path of the **top** of the git work tree. The copy is its HEAD; uncommitted and ignored files are not in it |
+| `patch` | Absolute path of a patch file, 1 byte to 16 MB: `git diff HEAD` after `git add -N` of new files. A patch that does not apply, or changes nothing, is refused before any spawn |
+| `testCommand` | The one command the unit runs, an argv array of 1 to 64 strings, no shell. Its first word is a name on `gemini.testPrograms` or a relative path under one of the `deps` entries; anything else, a program in the copy outside the dependencies included, is refused |
+| `deps` | Installed-dependency directories, relative to `cwd`, each a directory git ignores whole (no tracked file in it, the operator's global excludes count), none being or holding `.git` or `.omelette`, no glob character, none overlapping another, each on the same volume as the OS temp directory. Each is copied into the copy at the same place by `cp -c` (copy-on-write on APFS: no data is duplicated) before round 1. Nothing else of the work tree enters the copy: no `.env`, no other ignored file |
+
+```
+# Node: npm test over a copy of node_modules
+omelette-fleet call gemini gemini_test '{"prompt":"Test the new parseRange: the spec is docs/spec.md in the copy","cwd":"/abs/work/tree","patch":"/abs/task.patch","testCommand":["npm","test"],"deps":["node_modules"]}'
+
+# Python: pytest from the copy of the venv
+omelette-fleet call gemini gemini_test '{"prompt":"Test the new parse_range","cwd":"/abs/work/tree","patch":"/abs/task.patch","testCommand":[".venv/bin/pytest","tests/test_range.py"],"deps":[".venv"]}'
+```
+
+`.venv/bin/pytest` works because the unit relocates the copied venv's console scripts: a script whose first line names the work tree's `.venv/bin/` is rewritten to name the copy's. The base interpreter of a venv built on one under the home (pyenv, uv) is re-allowed read-only for the test command. An editable install (`pip install -e .`), a `pnpm` or `yarn` fetched by corepack under the home, Xcode projects, dependencies kept in the home (Go's module cache, Cargo's registry) and a test command that needs the network do not run: [what it misses](SECURITY.md#gemini-test-misses). The call is never retried, and the answer is spooled: read it back with `gemini_result` or `omelette-fleet results gemini`.
 
 ## Resolution order
 
@@ -493,7 +535,7 @@ Fleet-wide:
 | `OMELETTE_STATUS` | Overrides `status` for **every** unit (boolean words accepted). Source is reported as `env:OMELETTE_STATUS` |
 | `OMELETTE_ALLOW_WRITE` | Comma-separated list of units whose `workspace-write` request is honoured. **The second key of the write ceiling** — see [SECURITY.md](SECURITY.md) |
 | `ORION_ALLOW_GEMINI_MUTATE=1` | Legacy alias: opens the ceiling for `gemini` only |
-| `OMELETTE_ALLOW_REPRO` | `1`/`true`/`on`/`yes` opens `mistral_security_repro`. Its own gate: `OMELETTE_ALLOW_WRITE` does not open it, and it opens no write |
+| `OMELETTE_ALLOW_REPRO` | `1`/`true`/`on`/`yes` opens `mistral_security_repro` and `gemini_test`, each on the registration it is set on (a registration's env is per server). Its own gate: `OMELETTE_ALLOW_WRITE` does not open either, and it opens no write. The operator sets it, once, on the registration; no session sets it for a command of its own |
 | `OMELETTE_ENV_PASSTHROUGH` | Comma-separated exact names or `PREFIX_*` patterns added to the child-environment allowlist for **every** unit. The escape hatch for a CLI that needs one more variable; add narrowly, and note the billing scrub still runs after it |
 | `OMELETTE_UPDATE_CHECK` | `0`/`false`/`off`/`no` switches the release check off for every unit and for the CLI. It can only turn the check **off**: it is the machine-local kill switch, so setting it to `1` does not re-enable a config file that says `"updateCheck": false` |
 | `CLAUDE_CONFIG_DIR` | Not a fleet setting, but `doctor` honours it: it looks for `.claude.json` there before `~/`, and prints which file it read |
@@ -623,6 +665,7 @@ A hard kill whose text was captured returns that text marked partial — `[<unit
 ```
 mcp timeout   wall-clock: MCP_TOOL_TIMEOUT=2000000 ms (~/.claude/settings.json env) ≥ 1800000 needed · ok
               deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · ABOVE the wall-clock limit (2000000 ms) — run it deliberately
+              gemini_test: worst case gemini.testTimeoutS = 1500 s + 360 s for the diff and the cleanup = 1860 s · within the wall-clock limit
               idle: CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT unset → 30 min default; grok.timeoutS=1800 s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0 or a per-server "timeout"
 ```
 
@@ -635,6 +678,8 @@ Doctor resolves the variable the way the client does — the process environment
 **Idle — `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`.** Milliseconds; `0` disables it. A stdio tool call that sends neither a response nor a `notifications/progress` for **30 minutes** is aborted for idleness whatever the wall-clock limit says, so a unit whose `timeoutS` reaches 1800 s sits exactly on it. Since 0.3.3 the units send progress every 30 s **while the client passes a progress token** with the call, which is what keeps a long review alive. Claude Code ≥ 2.1.263 passes `_meta.progressToken` on every `tools/call`, and each progress notification resets the idle watchdog — verified in the shipped binary on 2026-09-08 — so this wall only bites on a client that does not; where one does not, set the variable to `0` or give that server its own `"timeout"`. Doctor names the unit that reaches the window.
 
 **Deep research** gets one more line while gemini is enabled: `gemini_deep_research` runs three stages, each retried once, each bounded by `timeoutS + 60 s`, so the worst case is `3 × 2 × (timeoutS + 60)` seconds. It is informational — that tool is one to run deliberately — and it never produces a `next` line.
+
+**`gemini_test`** gets one more line while gemini is enabled: the worst case is `gemini.testTimeoutS + 360 s` (the diff and the cleanup run after the budget, each of their steps bounded), 1860 s by default, `within the wall-clock limit` or `ABOVE the wall-clock limit (<ms> ms) — lower gemini.testTimeoutS or raise MCP_TOOL_TIMEOUT`. A call the client's wall cuts short keeps running, and its answer is spooled: `gemini_result`. Under the default `cancel: finish` a call the client dropped runs on to its budget and spends Gemini quota with no reader; `omelette-fleet set gemini.cancel=kill` ends it with the client. A first round that fails with nothing written — a failed sign-in, an exhausted pool, a brief too large for one command line — is an error result that names what to do; a later round that fails returns the answer marked partial. A `prompt` past 256 KB is refused, and a test program inside a `deps` copy must be a regular file of at most 1 GB.
 
 ## What `outputCap` does
 
