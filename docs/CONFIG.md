@@ -398,7 +398,7 @@ There is no `reproTools` key: a repro run gives Vibe `bash` only, because Vibe's
 
 | Key | Default | What it bounds |
 |---|---|---|
-| `testModel` | `Gemini 4 Neon (High)` | The model of a `gemini_test` call that names none. Separate from `gemini.model` (research stays on Hydrogen). A value outside the catalog refuses the call, and `doctor` flags it; a Claude id is refused for this tool |
+| `testModel` | `Gemini 4 Neon (High)` | The model of a `gemini_test` call that names none. Separate from `gemini.model` (research stays on Hydrogen). A value outside the catalog refuses the call, and so does an id that is not a Gemini model (Claude, GPT-OSS); `doctor` marks either on its `test` line |
 | `testKeep` | `false` | `true` keeps the run's directory (the copy, its tmp, agy's scratch home, the out directory with each round's log and diff) and names it on the answer's last line. The copy holds what the model wrote |
 | `testRunTimeoutS` | `300` | One run of the test command. A run past it is killed (its process group with it) and the round line says so |
 | `testTimeoutS` | `1500` | The whole call: no round starts once it is spent, a round that outlives it is ended, and the diff of what is there is taken. An agy round killed at it marks the answer partial and names this key. Within it, each agy round is also bounded by `gemini.timeoutS` |
@@ -406,13 +406,13 @@ There is no `reproTools` key: a repro run gives Vibe `bash` only, because Vibe's
 
 None of the five has an environment name. **The gate** is not a key: `OMELETTE_ALLOW_REPRO=1` on the gemini server's registration opens `gemini_test` as it opens Mistral's repro tool ([environment overrides](#environment-overrides)); `OMELETTE_ALLOW_WRITE` does not.
 
-**`doctor`** prints two lines for the tool, both only while gemini is enabled. In the gemini block, always: the gate in `doctor`'s own shell (the registration's env decides), whether `sandbox-exec` is found (`macOS only (1.13.0)` where it is not), and the model, which counts as a problem when it is not in the catalog:
+**`doctor`** prints two lines for the tool. In the gemini block, always: the gate in `doctor`'s own shell (the registration's env decides), whether `sandbox-exec` is found (`macOS only (1.13.0)` where it is not), and the model, marked when every call would refuse it — ` — NOT in the catalog: gemini_test refuses every call until it names a Gemini id`, ` — a Claude id: …` with the same ending, or ` — not a Gemini id: gemini_test refuses every call until it names one`. A mark on the line, not a fault: `doctor`'s exit code does not change.
 
 ```
   test        gemini_test open in this shell (OMELETTE_ALLOW_REPRO=1) — the registration's env decides · sandbox-exec found · model Gemini 4 Neon (High)
 ```
 
-closed, the same line reads `closed in this shell — the registration's env decides; set OMELETTE_ALLOW_REPRO=1 there`. And under `mcp timeout`, the worst case against the wall-clock limit ([Client timeouts](#client-timeouts)).
+closed, the same line reads `closed in this shell — the registration's env decides; set OMELETTE_ALLOW_REPRO=1 there`. And under `mcp timeout`, while gemini is enabled, the worst case against the wall-clock limit ([Client timeouts](#client-timeouts)).
 
 **The call.** `prompt`, `cwd`, `patch` and `testCommand` are required; `deps`, `rounds` (1 to 5, default 3) and `model` are optional.
 
@@ -420,8 +420,8 @@ closed, the same line reads `closed in this shell — the registration's env dec
 |---|---|
 | `cwd` | Absolute path of the **top** of the git work tree. The copy is its HEAD; uncommitted and ignored files are not in it |
 | `patch` | Absolute path of a patch file, 1 byte to 16 MB: `git diff HEAD` after `git add -N` of new files. A patch that does not apply, or changes nothing, is refused before any spawn |
-| `testCommand` | The one command the unit runs, an argv array of 1 to 64 strings, no shell. Its first word is a name on `gemini.testPrograms` or a relative path under one of the `deps` entries; anything else, a program in the copy outside the dependencies included, is refused |
-| `deps` | Installed-dependency directories, relative to `cwd`, each a directory git ignores whole (no tracked file in it, the operator's global excludes count), none being or holding `.git` or `.omelette`, no glob character, none overlapping another, each on the same volume as the OS temp directory. Each is copied into the copy at the same place by `cp -c` (copy-on-write on APFS: no data is duplicated) before round 1. Nothing else of the work tree enters the copy: no `.env`, no other ignored file |
+| `testCommand` | The one command the unit runs, an argv array of 1 to 64 strings, no shell. Its first word is a name on `gemini.testPrograms` or a relative path under one of the `deps` entries; anything else, a program in the copy outside the dependencies included, is refused. So is a program, or its interpreter, that resolves under `/Volumes` or `/Users/Shared`: the test profile reads neither |
+| `deps` | Installed-dependency directories, relative to `cwd`, each a directory git ignores whole (no tracked file in it, the operator's global excludes count), none being `.git` or `.omelette` or holding an entry of either name at any depth (a pip editable install from a repository leaves `.venv/src/<pkg>/.git`: refused, the path named), every directory in it readable, no glob character, none overlapping another, each on the same volume as the OS temp directory. Each is copied into the copy at the same place by `cp -c` (copy-on-write on APFS: no data is duplicated) before round 1. Nothing else of the work tree enters the copy: no `.env`, no other ignored file |
 
 ```
 # Node: npm test over a copy of node_modules
@@ -665,7 +665,7 @@ A hard kill whose text was captured returns that text marked partial — `[<unit
 ```
 mcp timeout   wall-clock: MCP_TOOL_TIMEOUT=2000000 ms (~/.claude/settings.json env) ≥ 1800000 needed · ok
               deep research: gemini_deep_research worst case: 3 stages × 2 attempts × (300 + 60 s) = 2160 s · ABOVE the wall-clock limit (2000000 ms) — run it deliberately
-              gemini_test: worst case gemini.testTimeoutS = 1500 s + 360 s for the diff and the cleanup = 1860 s · within the wall-clock limit
+              gemini_test: worst case gemini.testTimeoutS = 1500 s + 1080 s for the diff and the cleanup = 2580 s · within the wall-clock limit
               idle: CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT unset → 30 min default; grok.timeoutS=1800 s reaches it — units send progress every 30 s when the client passes a progress token; otherwise set CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0 or a per-server "timeout"
 ```
 
@@ -679,7 +679,7 @@ Doctor resolves the variable the way the client does — the process environment
 
 **Deep research** gets one more line while gemini is enabled: `gemini_deep_research` runs three stages, each retried once, each bounded by `timeoutS + 60 s`, so the worst case is `3 × 2 × (timeoutS + 60)` seconds. It is informational — that tool is one to run deliberately — and it never produces a `next` line.
 
-**`gemini_test`** gets one more line while gemini is enabled: the worst case is `gemini.testTimeoutS + 360 s` (the diff and the cleanup run after the budget, each of their steps bounded), 1860 s by default, `within the wall-clock limit` or `ABOVE the wall-clock limit (<ms> ms) — lower gemini.testTimeoutS or raise MCP_TOOL_TIMEOUT`. A call the client's wall cuts short keeps running, and its answer is spooled: `gemini_result`. Under the default `cancel: finish` a call the client dropped runs on to its budget and spends Gemini quota with no reader; `omelette-fleet set gemini.cancel=kill` ends it with the client. A first round that fails with nothing written — a failed sign-in, an exhausted pool, a brief too large for one command line — is an error result that names what to do; a later round that fails returns the answer marked partial. A `prompt` past 256 KB is refused, and a test program inside a `deps` copy must be a regular file of at most 1 GB.
+**`gemini_test`** gets one more line while gemini is enabled: the worst case is `gemini.testTimeoutS + 1080 s`, 2580 s by default: the diff, the lists and the cleanup run after the budget, each step at its own bound (a chmod 30 s, a git call 60 s, the removal 300 s), and 1080 s is their sum — a run where every one of them stalls; a usual run spends a few seconds there. The line ends `within the wall-clock limit` or `ABOVE the wall-clock limit (<ms> ms) — lower gemini.testTimeoutS or raise MCP_TOOL_TIMEOUT`. A call the client's wall cuts short keeps running, and its answer is spooled: `gemini_result`. Under the default `cancel: finish` a call the client dropped runs on to its budget and spends Gemini quota with no reader; `omelette-fleet set gemini.cancel=kill` ends it with the client. A first round that fails with nothing written — a failed sign-in, an exhausted pool, a brief too large for one command line, an agy output past `gemini.outputCap` — is an error result that names what to do; a later round that fails returns the answer marked partial. A `prompt` past 256 KB is refused, and a test program inside a `deps` copy must be a regular file of at most 1 GB. The 40 lines under a round line are the last of the 16 KB of output the unit keeps for the model, so very long lines leave fewer.
 
 ## What `outputCap` does
 
