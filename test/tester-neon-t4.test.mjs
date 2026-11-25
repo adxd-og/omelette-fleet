@@ -340,3 +340,38 @@ test('cloneDiff: an untracked file named like a glob or a pathspec magic is in t
   const d = cloneDiff(run.clone);
   for (const f of ['a[1].txt', ':(top)q', '*']) assert.ok(d.includes(`+++ b/${f}\n`), `${f} is not in the diff`);
 });
+
+// Third pass: the fix round's edges that test/clone.test.mjs leaves open.
+test('prepareClone: every reserved dirs name is refused, a hyphenated or numbered name is a plain one and a leading digit is not', () => {
+  const src = repo();
+  const before = runsIn();
+  for (const d of ['clone', 'head', 'dirty', 'ids', 'top', '1x', '-x', 'a_b', 'a.b', '']) {
+    assert.throws(() => open(src, { dirs: ['tmp', d] }), (e) => /^prepareClone: dirs entry .* is not a plain directory name, or collides with a key of the result$/.test(e.message), JSON.stringify(d));
+  }
+  assert.deepEqual(runsIn(), before, 'a refusal makes no run');
+  const run = open(src, { dirs: ['tmp', 'out', 'work-dir2'] });
+  assert.equal(run['work-dir2'], join(run.runDir, 'work-dir2'));
+  assert.deepEqual(Object.keys(run.ids), ['clone', 'tmp', 'work-dir2']);
+});
+
+test('prepareClone: root as a function is called once, after the work-tree check, and its path holds the run', () => {
+  const root = runsRootAt(NAME, 'gemini');
+  const calls = [];
+  const plain = join(BASE, `plain-${n++}`);
+  mkdirSync(plain);
+  assert.throws(() => prepareClone({ cwd: plain, unit: 'gemini', root: () => { calls.push('x'); return root; } }), /is not a git work tree/);
+  assert.equal(calls.length, 0, 'a refused cwd never asks for the root');
+  const run = prepareClone({ cwd: repo(), unit: 'gemini', root: () => { calls.push('y'); return root; } });
+  assert.equal(calls.length, 1);
+  assert.equal(dirname(run.runDir), realpathSync(root));
+});
+
+test('cloneDiff: an indexFile beside the clone that only starts with its name is allowed; one that reaches into the clone by a .. segment is refused', () => {
+  const run = open(repo());
+  const gitDir = join(run.runDir, 'out', 'git');
+  writeFileSync(join(run.clone, 'u.txt'), 'u\n');
+  assert.match(cloneDiff(run.clone, gitDir, { indexFile: `${run.clone}.index` }), /^\+\+\+ b\/u\.txt$/m, 'a sibling named like the clone plus a suffix');
+  const weird = `${run.runDir}/tmp/../clone`;
+  assert.throws(() => cloneDiff(weird, gitDir, { indexFile: join(run.clone, 'idx') }), /indexFile must lie outside the clone/);
+  assert.equal(existsSync(join(run.clone, 'idx')), false, 'nothing was written into the clone');
+});
