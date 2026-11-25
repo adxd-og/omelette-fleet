@@ -343,9 +343,10 @@ let tw = 0;
  * One row's world for gemini_test: HOME (with Library/Keychains, .ssh/id and the fleet home .omelette) under HOMES,
  * a work tree whose HEAD holds `files` (and a .gitignore of `ignored`) with `untracked` files beside it, a patch that
  * changes its README, the fleet config `config` for gemini, and a runtime over the gemini unit with AGY_BIN the fake.
- * `stub` replaces gemini_test's ctx.spawn; `signal` its ctx.signal. Records are kept, or spooled with `spool`.
+ * `stub` replaces gemini_test's ctx.spawn; `signal` its ctx.signal; `syncStub` the spawnSync of the chmod before the
+ * diff (ctx.spawnSync). Records are kept, or spooled with `spool`.
  */
-function toolWorld({ files = {}, ignored = [], untracked = {}, config = {}, stub = null, signal, spool = false } = {}) {
+function toolWorld({ files = {}, ignored = [], untracked = {}, config = {}, stub = null, signal, spool = false, syncStub = null } = {}) {
   const home = realpathSync(mkdtempSync(join(HOMES, 'neon-test-home-')));
   homesMade.push(home);
   const fleet = join(home, '.omelette');
@@ -381,6 +382,7 @@ function toolWorld({ files = {}, ignored = [], untracked = {}, config = {}, stub
         ...ctx,
         retry: (fn, o) => { retries++; return ctx.retry(fn, o); },
         ...(signal ? { signal } : {}),
+        ...(syncStub ? { spawnSync: syncStub } : {}),
         ...(stub ? { spawn: async (o) => { spawns.push(o); return stub(o, spawns.length); } } : {}),
       }),
     } : t)),
@@ -462,7 +464,11 @@ test('a Claude id and a testModel outside the catalog are refused', STUB_ROW, as
   const w = toolWorld({ stub: () => { throw new Error('no spawn may happen'); } });
   const claude = await w.call({ model: 'Claude Opus 5.5 (High)' });
   assert.equal(claude.text, 'Error: gemini_test does not run on a Claude model ("Claude Opus 5.5 (High)"): a call is up to five agy runs on Antigravity\'s small, separate Claude quota');
-  const off = toolWorld({ config: { testModel: 'nope' }, stub: () => { throw new Error('no spawn may happen'); } });
+  // Any family but gemini: GPT-OSS draws on the same small window.
+  const gpt = await w.call({ model: 'GPT-OSS 120B (Medium)' });
+  assert.equal(gpt.isError, true, gpt.text);
+  assert.equal(gpt.text, 'Error: gemini_test does not run on a non-Gemini model ("GPT-OSS 120B (Medium)"): it runs on Gemini models only');
+  const off =toolWorld({ config: { testModel: 'nope' }, stub: () => { throw new Error('no spawn may happen'); } });
   const r = await off.call();
   assert.equal(r.text, 'Error: gemini.testModel "nope" is not in the catalog — set it to a Gemini id (omelette-fleet set gemini.testModel=…)');
   assert.equal(w.spawns.length + off.spawns.length, 0);
@@ -654,7 +660,7 @@ import { roundPrompt } from '../units/gemini/test.mjs';
 
 /**
  * A stub over `agy` and `test`, arrays of results by round (a function gets the spawn options); a round past
- * either array repeats its last entry. `delayMs` holds each agy round that long.
+ * either array repeats its last entry. `delayMs` holds each agy round that long (a function: of the spawn options).
  */
 function scripted({ agy = [agyOk({ response: 'wrote', conversation_id: 'c-1' })], test = [{ out: 'ok 1\n', code: 0 }], delayMs = 0, seen = [] } = {}) {
   let a = 0;
@@ -663,7 +669,8 @@ function scripted({ agy = [agyOk({ response: 'wrote', conversation_id: 'c-1' })]
     seen.push({ at: Date.now(), o });
     if (isAgy(o)) {
       const k = ++a;
-      if (delayMs) await new Promise((res) => setTimeout(res, delayMs));
+      const hold = typeof delayMs === 'function' ? delayMs(o) : delayMs;
+      if (hold > 0) await new Promise((res) => setTimeout(res, hold));
       mkdirSync(join(o.cwd, 'test'), { recursive: true });
       writeFileSync(join(o.cwd, 'test', `r${k}.test.mjs`), `round ${k}\n`);
       const r = agy[Math.min(k, agy.length) - 1];
@@ -773,15 +780,17 @@ test('readRound: an agy that printed no envelope, a denied list of odd shapes, a
 
 test('the budget: no round starts once testTimeoutS is spent, and no spawn\'s hardKillMs exceeds what is left', { ...STUB_ROW, timeout: 10_000 }, async () => {
   const seen = [];
-  const w = toolWorld({ config: { testTimeoutS: 2 }, stub: scripted({ agy: [NO_DONE], delayMs: 1500, seen }) });
+  // agy's round holds until 500 ms before the budget ends (its hardKillMs is what is left): the run's setup has up to
+  // 2 s of the 3 before round 1 would not start, and the test run gets the last half second whatever setup took.
+  const w = toolWorld({ config: { testTimeoutS: 3 }, stub: scripted({ agy: [NO_DONE], delayMs: (o) => o.hardKillMs - 500, seen }) });
   const t0 = Date.now();
   const r = await w.call();
   assert.equal(w.spawns.filter(isAgy).length, 1);
   assert.ok(headerOf(r.text).includes('ended: the call\'s budget (gemini.testTimeoutS) was spent'), headerOf(r.text));
   const [agy, run] = seen.map((s) => s.o);
-  assert.ok(agy.hardKillMs <= 2000, String(agy.hardKillMs));
+  assert.ok(agy.hardKillMs <= 3000, String(agy.hardKillMs));
   assert.equal(agy.args[agy.args.indexOf('--print-timeout') + 1], '1s');
-  assert.ok(run.hardKillMs <= 2000 - (seen[1].at - t0) + 50, `${run.hardKillMs} after ${seen[1].at - t0} ms`);
+  assert.ok(run.hardKillMs <= 3000 - (seen[1].at - t0) + 50, `${run.hardKillMs} after ${seen[1].at - t0} ms`);
   assert.ok(run.hardKillMs < 1000, String(run.hardKillMs));
 });
 
@@ -1032,4 +1041,159 @@ test('a round that answered is not a failed sign-in for an oauth URL in its stde
   assert.ok(denied.end.startsWith('no output (denied: '), denied.end);
   assert.ok(!denied.end.includes(home) && !denied.end.includes('state=S8') && !denied.end.includes('wss://'), denied.end);
   assert.equal(cliSafe(`${home}bc/other and ${home}/x and ftp://h/y?z=1`), `${home}bc/other and ~/x and <url removed>`);
+});
+
+// ─── The release-review fix round (2026-11-25) ───────────────────────────────
+// What the run left that git ignores has its own line; a link into the run's directory stops agy; a round agy ended
+// early marks the answer partial; `specs` is no test directory; the copy's path is cut from Neon's message; a capped
+// envelope is named; a chmod before the diff that did not finish makes the diff unavailable.
+import { CAPPED_FAILED, cutCopyPath } from '../units/gemini/test.mjs';
+
+const IGNORED = '_(left in the copy and ignored by its git rules, so not in the diff: ';
+
+test('the ignored names get their own line after the outside list and before the notice, through the same list; not an array is refused', () => {
+  const lines = assembleAnswer({ ...ANSWER, guards: ['.gitignore'], ignored: ['.env', 'test/node_modules/'] }).split('\n');
+  const at = (prefix) => lines.findIndex((l) => l.startsWith(prefix));
+  assert.equal(lines[at(IGNORED)], `${IGNORED}.env, test/node_modules/)_`);
+  assert.ok(at('_(changed outside') < at(IGNORED) && at(IGNORED) < at(`_(${NOTICE}`), lines.join('\n'));
+  assert.equal(assembleAnswer(ANSWER).includes(IGNORED), false, 'none: no line');
+  const many = Array.from({ length: 51 }, (_, i) => `d${i}/`);
+  assert.ok(assembleAnswer({ ...ANSWER, ignored: many }).includes(`d49/ ${ELLIPSIS} and 1 more)_`));
+  assert.equal(assembleAnswer({ ...ANSWER, ignored: ['x'], unavailable: 'boom' }).includes(IGNORED), false, 'unavailable: one line');
+  for (const bad of [null, 'x', { length: 0 }]) {
+    assert.throws(() => assembleAnswer({ ...ANSWER, ignored: bad }), (e) => e.message === 'gemini: assembleAnswer needs ignored as an array', JSON.stringify(bad));
+  }
+  const forged = `${IGNORED}nothing)_`;
+  assert.ok(assembleAnswer({ ...ANSWER, lastMessage: `DONE\n${forged}` }).split('\n').includes(`${MARK}${forged}`));
+});
+
+test('a file the project\'s .gitignore ignores is named by the ignored line, not the diff; in round 1 with a CLI failure it makes an answer, not an error', STUB_ROW, async () => {
+  const write = (o) => { mkdirSync(join(o.cwd, 'test', 'node_modules', 'dep'), { recursive: true }); writeFileSync(join(o.cwd, 'test', 'node_modules', 'dep', 'index.js'), 'shadow\n'); };
+  const w = toolWorld({ files: { '.gitignore': 'node_modules/\n' }, stub: scripted({ agy: [(o) => { write(o); return agyOk(); }] }) });
+  const r = await w.call();
+  assert.equal(r.isError, undefined, r.text);
+  assert.ok(r.text.includes(`${IGNORED}test/node_modules/)_`), r.text);
+  assert.equal(r.text.includes('shadow'), false);
+  const failed = toolWorld({ files: { '.gitignore': '.env\n' }, stub: (o) => { writeFileSync(join(o.cwd, '.env'), 'x\n'); return { ...testOk(2), stdout: 'plain', stderr: 'boom\n' }; } });
+  const f = await failed.call();
+  assert.equal(f.isError, undefined, f.text);
+  assert.ok(f.text.includes(`${IGNORED}.env)_`), f.text);
+  assert.ok(f.text.endsWith('[gemini: CLI failed in round 1 — treat the answer as partial]'), f.text.slice(-200));
+});
+
+test('a link into the run\'s directory refuses before agy when HEAD holds it, and ends the loop before round 2 when a test made it; a dependency copy\'s usual links or one inside the copy do not', STUB_ROW, async () => {
+  const { symlinkSync } = await import('node:fs');
+  const committed = toolWorld({ stub: () => { throw new Error('no spawn may happen'); } });
+  symlinkSync('../home/.gemini/antigravity-cli', join(committed.work, 'cfg'));
+  gitIn(committed.work, 'add', 'cfg');
+  gitIn(committed.work, 'commit', '-qm', 'link');
+  const before = runs();
+  const c = await committed.call();
+  assert.equal(c.isError, true, c.text);
+  assert.equal(c.text, 'Error: gemini_test: a link in the copy leads into the run\'s directory outside the copy: cfg — HEAD, the patch or a dependency copy holds it; agy is not run');
+  assert.equal(committed.spawns.length, 0);
+  assert.deepEqual(runs(), before);
+
+  const made = toolWorld({ stub: scripted({ agy: [NO_DONE], test: [(o) => { symlinkSync('../../home', join(o.cwd, 'test', 'h')); return { code: 0 }; }] }) });
+  const m = await made.call();
+  assert.equal(made.spawns.filter(isAgy).length, 1, 'no round 2');
+  assert.ok(headerOf(m.text).includes(' · ended: a link out of the copy into the run\'s directory was found: test/h \u{2014} agy is not run again · '), headerOf(m.text));
+
+  // In a directory the test shut: the copy is made listable under profile B before the walk, and the link is found.
+  const shut = toolWorld({ stub: scripted({ agy: [NO_DONE], test: [(o) => { mkdirSync(join(o.cwd, 'test', 'shut')); symlinkSync('../../../home', join(o.cwd, 'test', 'shut', 'h')); chmodSync(join(o.cwd, 'test', 'shut'), 0); return { code: 0 }; }] }) });
+  const sh = await shut.call();
+  assert.equal(shut.spawns.filter(isAgy).length, 1, 'no round 2');
+  assert.ok(headerOf(sh.text).includes(' · ended: a link out of the copy into the run\'s directory was found: test/shut/h \u{2014} agy is not run again · '), headerOf(sh.text));
+  assert.deepEqual(runs().filter((d) => !before.includes(d)), [], 'the run is removed');
+
+  const fine = toolWorld({ ignored: ['node_modules'], untracked: { 'node_modules/pkg/index.js': '1\n' }, files: { inside: 'x\n' }, stub: scripted({ agy: [NO_DONE, agyOk()] }) });
+  mkdirSync(join(fine.work, 'node_modules', '.bin'));
+  symlinkSync('../pkg/index.js', join(fine.work, 'node_modules', '.bin', 'pkg'));
+  symlinkSync('/usr/bin/python3', join(fine.work, 'node_modules', 'python'));
+  symlinkSync('README.md', join(fine.work, 'up'));
+  gitIn(fine.work, 'add', 'up');
+  gitIn(fine.work, 'commit', '-qm', 'link');
+  const f = await fine.call({ deps: ['node_modules'] });
+  assert.equal(fine.spawns.filter(isAgy).length, 2, f.text);
+  assert.ok(headerOf(f.text).includes('ended: DONE'), headerOf(f.text));
+});
+
+test('a link a test planted in the copy\'s .git or in a dependency copy ends the loop before round 2: nothing in the copy is skipped', STUB_ROW, async () => {
+  const { symlinkSync } = await import('node:fs');
+  for (const at of ['.git/planted', 'node_modules/pkg/planted']) {
+    const w = toolWorld({ ignored: ['node_modules'], untracked: { 'node_modules/pkg/index.js': '1\n' }, stub: scripted({ agy: [NO_DONE], test: [(o) => { symlinkSync(join(o.cwd, '..', 'home', '.gemini'), join(o.cwd, at)); return { code: 0 }; }] }) });
+    const r = await w.call({ deps: ['node_modules'] });
+    assert.equal(w.spawns.filter(isAgy).length, 1, `no round 2: ${r.text}`);
+    assert.ok(headerOf(r.text).includes(` · ended: a link out of the copy into the run's directory was found: ${at} \u{2014} agy is not run again · `), headerOf(r.text));
+  }
+});
+
+test('with testKeep a link refused before round 1 names the kept run, and the run is there', STUB_ROW, async () => {
+  const { symlinkSync } = await import('node:fs');
+  const w = toolWorld({ config: { testKeep: true }, stub: () => { throw new Error('no spawn may happen'); } });
+  symlinkSync('../home/.gemini/settings.json', join(w.work, 'cfg'));
+  gitIn(w.work, 'add', 'cfg');
+  gitIn(w.work, 'commit', '-qm', 'link');
+  const r = await w.call();
+  const m = / \u{2014} run kept: (.+)$/u.exec(r.text);
+  try {
+    assert.equal(r.isError, true, r.text);
+    assert.ok(m, r.text);
+    assert.equal(r.text, `Error: gemini_test: a link in the copy leads into the run's directory outside the copy: cfg \u{2014} HEAD, the patch or a dependency copy holds it; agy is not run \u{2014} run kept: ${m[1]}`);
+    assert.equal(readdirSync(join(m[1], 'clone')).includes('cfg'), true);
+    assert.equal(w.spawns.length, 0);
+  } finally { if (m) rmSync(m[1], { recursive: true, force: true }); }
+});
+
+test('a round agy ended early marks the answer partial with its status', STUB_ROW, async () => {
+  const w = toolWorld({ stub: scripted({ agy: [{ ...agyOk({ status: 'TIME(OUT)', response: 'half a report' }), stderr: '' }] }) });
+  const r = await w.call();
+  assert.ok(headerOf(r.text).includes('ended: ended early (status=TIMEOUT)'), headerOf(r.text));
+  assert.ok(r.text.endsWith('[gemini: run ended early — status=TIMEOUT]'), r.text.slice(-120));
+  assert.match(r.text, PARTIAL_MARK_RE);
+  assert.equal(w.records.at(-1).partial, true);
+});
+
+test('specs is not a test directory: an edit to a spec is outside the tests', () => {
+  assert.equal(isTestPath('docs/superpowers/specs/x-design.md'), false);
+  assert.equal(isTestPath('spec/a.rb'), true);
+  assert.equal(outsideLine(assembleAnswer({ ...ANSWER, changed: ['docs/specs/x.md', 'test/a.test.mjs'] })), '_(changed outside the test directories: docs/specs/x.md)_');
+});
+
+test('the copy\'s path is cut from Neon\'s message: a file link reads relative, the bare path reads .', STUB_ROW, async () => {
+  const clone = '/private/var/folders/ab/cd0/T/omelette-gemini-test/run-XXXX/clone';
+  assert.equal(cutCopyPath(`see [test_ranges.py](file://${clone}/tests/test_ranges.py#L5-L6) and ${clone}/a.py, in ${clone}. Not ${clone}2/x nor ${clone}.bak`, clone),
+    `see [test_ranges.py](tests/test_ranges.py#L5-L6) and a.py, in .. Not ${clone}2/x nor ${clone}.bak`);
+  // In the tool: the run's own clone, as it holds it and resolved (agy's cwd is the resolved one).
+  const w = toolWorld({ stub: scripted({ agy: [(o) => agyOk({ response: `wrote [t](file://${o.cwd}/test/r1.test.mjs#L1) in ${o.cwd}\nDONE` })] }) });
+  const r = await w.call();
+  assert.ok(r.text.includes('\nwrote [t](test/r1.test.mjs#L1) in .\nDONE'), r.text);
+  assert.equal(r.text.includes('omelette-gemini-test/run-'), false, r.text);
+});
+
+test('a round whose envelope the output cap cut is a CLI failure named for gemini.outputCap; cancel, sign-in, kill and quota come first', STUB_ROW, async () => {
+  const capped = { stdout: '"response":"DONE"}', stderr: '', code: 0, killed: false, capped: true, cancelled: false };
+  assert.equal(readRound(capped).end, CAPPED_FAILED);
+  assert.equal(CAPPED_FAILED, 'failed \u{2014} agy\'s output passed gemini.outputCap and its answer envelope was lost');
+  assert.equal(readRound({ ...capped, cancelled: true }).end, 'cancelled');
+  assert.equal(readRound({ ...capped, stderr: 'Authentication required' }).end, SIGN_IN_FAILED);
+  assert.equal(readRound({ ...capped, killed: true }).end, 'hard-killed');
+  assert.equal(readRound({ ...capped, stderr: 'RESOURCE_EXHAUSTED: quota' }).end, 'quota exhausted');
+  assert.equal(readRound({ ...capped, stdout: JSON.stringify({ status: 'SUCCESS', response: 'r' }) }).end, 'answered', 'an envelope that survived the cap is read');
+  const w = toolWorld({ stub: () => capped });
+  const r = await w.call();
+  assert.equal(r.text, `Error: gemini_test: ${CAPPED_FAILED} \u{2014} raise gemini.outputCap (omelette-fleet set gemini.outputCap=\u{2026}) or narrow the brief; nothing was retried`);
+  assert.equal(w.spawns.length, 1, 'no test run');
+});
+
+test('a chmod before the diff that did not finish makes the diff unavailable; one that exited non-zero leaves the diff', STUB_ROW, async () => {
+  const timedOut = () => ({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync /usr/bin/sandbox-exec ETIMEDOUT'), { code: 'ETIMEDOUT' }) });
+  const w = toolWorld({ stub: scripted({ agy: [agyOk()] }), syncStub: timedOut });
+  const r = await w.call();
+  assert.equal(r.isError, undefined, r.text);
+  assert.match(r.text, /^_\(diff unavailable: the copy could not be made readable in 30 s\)_$/m);
+  assert.equal(r.text.includes(TEST_HEADING), false);
+  const exit1 = toolWorld({ stub: scripted({ agy: [agyOk()] }), syncStub: () => ({ status: 1, signal: null }) });
+  const e = await exit1.call();
+  assert.ok(e.text.includes('+++ b/test/r1.test.mjs'), e.text);
 });

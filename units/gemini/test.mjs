@@ -9,7 +9,7 @@
  * home, the test command under profile B, the diff, the cleanup.
  *
  * THE ORDER — the gate (OMELETTE_ALLOW_REPRO), macOS, the arguments, the model
- * (gemini.testModel unless the call names one; never a Claude id), the deps
+ * (gemini.testModel unless the call names one; a Gemini id only), the deps
  * entries — all before any run dir exists. Then the budget clock starts
  * (gemini.testTimeoutS), the run is made (prepareTestRun), the deps copied, and
  * the test program, its PATH directories and its reach are resolved ONCE, with
@@ -19,7 +19,10 @@
  *
  * A ROUND — before its spawns the run's dirs are checked to be the ones made
  * (assertRun) and the clone's and tmp's own modes put back to 0700 (a test can
- * chmod them shut). agy runs through ctx.spawn — the env allowlist, the billing
+ * chmod them shut), and before agy's the copy is walked for a link into the
+ * run's directory outside it (findRunLink: round 1 refused, a later round ends
+ * the loop; from round 2 after `chmod -R u+rwX` over the copy under profile B,
+ * so a directory the test shut is walked, and one still unlistable stops it). agy runs through ctx.spawn — the env allowlist, the billing
  * scrub, the cancel signal and the live-group kill hold — with sandbox-exec put
  * in front: profile A, written once per run, and the binary it resolved, the
  * only one the profile lets run; cwd the clone, HOME the scratch home, TMPDIR
@@ -38,9 +41,10 @@
  * in `out/` (read only when the run is kept). Nothing of stderr reaches the
  * answer or an error with a URL or the operator's home in it (cliSafe).
  *
- * THE DIFF — taken only through testDiff, testChangedPaths and testGuards,
- * after `chmod -R u+rwX` over the clone under profile B (git skips a mode-000
- * directory silently); the first that fails stops the others, and is one line
+ * THE DIFF — taken only through testDiff, testChangedPaths, testGuards and
+ * testIgnored, after `chmod -R u+rwX` over the clone under profile B (git skips
+ * a mode-000 directory silently; a chmod killed at its bound makes the diff
+ * unavailable); the first that fails stops the others, and is one line
  * of the answer (unavailableOf), never the answer's loss. Every chmod and rm
  * the tool runs is bounded at 30 s.
  *
@@ -66,8 +70,8 @@ import { SANDBOX_EXEC, sandboxExecFound } from '../../core/seatbelt.mjs';
 import { partialMark, withPartial } from '../../core/partial.mjs';
 import { EXHAUSTED_PATTERNS, HARD_KILL_GRACE_MS, parseAgyResult } from './agy.mjs';
 import {
-  checkDeps, checkTestCommand, copyDeps, discardRun, parsePrograms, prepareTestRun, profileBArgs, programNeeds, resolveProgram,
-  runTestCommand, safeOutput, testChangedPaths, testDiff, testGuards, testRunsRoot, toolchainReach, writeProfileA,
+  WALK_MAX, checkDeps, checkTestCommand, copyDeps, discardRun, findRunLink, parsePrograms, prepareTestRun, profileBArgs, programNeeds, resolveProgram,
+  runTestCommand, safeOutput, testChangedPaths, testDiff, testGuards, testIgnored, testRunsRoot, toolchainReach, writeProfileA,
 } from './test-run.mjs';
 
 /** The unit's heading the diff goes under. */
@@ -75,7 +79,7 @@ export const TEST_HEADING = '## proposed tests (not applied)';
 /** That heading's name as a model may write it (demoteHeadings). */
 export const TEST_HEADING_NAME = String.raw`proposed[ \t]+tests[ \t]*\([ \t]*not[ \t]+applied[ \t]*\)`;
 /** The lines only the unit writes: marked model-written when Neon's message holds one. */
-export const TEST_ADAPTER_LINES = String.raw`^[ \t]*(_\((gemini_test:|changed outside the test directories|no file outside the test directories|ignore or attributes files changed in the copy|the copy is unchanged|run kept:|diff unavailable:|Neon's last message is from round|Neon left no message|no output)|round \d+ · |\[gemini: )`;
+export const TEST_ADAPTER_LINES = String.raw`^[ \t]*(_\((gemini_test:|changed outside the test directories|no file outside the test directories|left in the copy and ignored by its git rules|ignore or attributes files changed in the copy|the copy is unchanged|run kept:|diff unavailable:|Neon's last message is from round|Neon left no message|no output)|round \d+ · |\[gemini: )`;
 
 /** The most names the outside list and the notice's list print. */
 const LIST_MAX = 50;
@@ -111,12 +115,13 @@ function nameList(names) {
 /** A caller's string made safe to print in one of the unit's lines: safeOutput, cut at its first newline. */
 const oneSafeLine = (s) => safeOutput(String(s)).split('\n')[0];
 
-const TEST_DIRS = new Set(['test', 'tests', '__tests__', 'spec', 'specs']);
+const TEST_DIRS = new Set(['test', 'tests', '__tests__', 'spec']);
 const TEST_FILE = [/^test_.*\.py$/, /_test\.(py|go)$/, /\.(test|spec)\.[cm]?[jt]sx?$/, /^conftest\.py$/];
 
 /**
  * A path in the test directories: a directory component `test`, `tests`,
- * `__tests__`, `spec` or `specs`, or a test file by its base name.
+ * `__tests__` or `spec`, or a test file by its base name — never `specs`, where
+ * a project keeps its specs: a model's edit to one is outside the tests.
  */
 export function isTestPath(p) {
   const parts = String(p).split('/');
@@ -156,24 +161,29 @@ function last40(tail) {
  * it is from when that is not the last round), or `_(Neon left no message)_`
  * — the message goes through safeOutput before it is neutralised; the files of
  * `changed`, then of `guards`, outside the test directories (isTestPath, no
- * name twice), or the line saying there are none; when `guards` (testGuards' names) holds any, the line naming them
+ * name twice), or the line saying there are none; when `ignored` (testIgnored's
+ * names: what the run left that git's ignore rules ignore) holds any, the line
+ * naming them; when `guards` (testGuards' names) holds any, the line naming them
  * (a model-written ignore or attributes file can hide files from the diff or
  * blank their content); both lists through nameList: at most 50 names, then
- * ` <ellipsis> and <n> more`, a name past 200 characters cut, an odd one quoted; the
+ * ` <ellipsis> and <n> more`, a name past 200 characters cut, an odd one quoted
+ * (the ignored list too); the
  * diff under TEST_HEADING, or `_(the copy is unchanged)_`;
  * `_(run kept: <keptRun>)_` when a run dir is kept. When `unavailable` is a
- * string (the diff, the changed names or the guards could not be taken), the
- * outside list, the notice and the diff are one `_(diff unavailable: <it>)_`
+ * string (the diff, the changed names, the guards or the ignored names could
+ * not be taken), the outside list, the ignored line, the notice and the diff
+ * are one `_(diff unavailable: <it>)_`
  * line instead: a list or a diff without the others could mislead. `model`,
  * `ended`, `keptRun`, `unavailable` and each round's ends are made safe and cut
  * at their first newline (a caller may pass an error message); `rounds`,
- * `changed` and `guards` that are not arrays are refused.
- * @param {{model: string, argv: string[], rounds: {k: number, agyEnd: string, agyMs: number, testEnd: string, testMs: number|null, tail: string|null}[], maxRounds: number, ended: string, totalMs: number, lastMessage: string, lastFrom: number, diff: string, changed: string[], guards?: string[], keptRun?: string|null, unavailable?: string|null}} o
+ * `changed`, `guards` and `ignored` that are not arrays are refused.
+ * @param {{model: string, argv: string[], rounds: {k: number, agyEnd: string, agyMs: number, testEnd: string, testMs: number|null, tail: string|null}[], maxRounds: number, ended: string, totalMs: number, lastMessage: string, lastFrom: number, diff: string, changed: string[], guards?: string[], ignored?: string[], keptRun?: string|null, unavailable?: string|null}} o
  * @returns {string}
  */
-export function assembleAnswer({ model, argv, rounds, maxRounds, ended, totalMs, lastMessage, lastFrom, diff, changed, guards = [], keptRun, unavailable = null }) {
+export function assembleAnswer({ model, argv, rounds, maxRounds, ended, totalMs, lastMessage, lastFrom, diff, changed, guards = [], ignored = [], keptRun, unavailable = null }) {
   if (!Array.isArray(rounds) || !Array.isArray(changed)) throw new Error('gemini: assembleAnswer needs rounds and changed as arrays');
   if (!Array.isArray(guards)) throw new Error('gemini: assembleAnswer needs guards as an array');
+  if (!Array.isArray(ignored)) throw new Error('gemini: assembleAnswer needs ignored as an array');
   const blocks = [`_(gemini_test: ${oneSafeLine(model)} · ${rounds.length} of at most ${maxRounds} rounds · ended: ${oneSafeLine(ended)} · ${secs(totalMs)} s · test command ${JSON.stringify(argv)})_`];
   for (const r of rounds) blocks.push(`${roundLine(r)}\n${r.tail === null || r.tail === undefined ? '_(no output)_' : fenced(last40(r.tail))}`);
   const message = safeOutput(String(lastMessage ?? ''));
@@ -188,6 +198,7 @@ export function assembleAnswer({ model, argv, rounds, maxRounds, ended, totalMs,
     // A guard outside the tests too: a `.gitignore` of `*` ignores itself and is in no changed name.
     const outside = [...new Set([...changed, ...guards].filter((p) => !isTestPath(p)))];
     blocks.push(outside.length ? `_(changed outside the test directories: ${nameList(outside)})_` : '_(no file outside the test directories changed)_');
+    if (ignored.length) blocks.push(`_(left in the copy and ignored by its git rules, so not in the diff: ${nameList(ignored)})_`);
     if (guards.length) blocks.push(`_(ignore or attributes files changed in the copy: ${nameList(guards)} \u{2014} files they cover may be missing from this diff, or shown without their content)_`);
     blocks.push(appendDiff('', diff, { heading: TEST_HEADING, headingName: TEST_HEADING_NAME, unchanged: '_(the copy is unchanged)_' }).replace(/^\n+/, ''));
   }
@@ -255,6 +266,7 @@ const cliFailed = (end) => end === 'quota exhausted' || end.startsWith('failed')
 function failureAdvice(end) {
   if (end === SIGN_IN_FAILED) return 'then call again; nothing was retried';
   if (end === 'quota exhausted') return 'the Gemini pool is exhausted — call again after it resets; nothing was retried';
+  if (end === CAPPED_FAILED) return 'raise gemini.outputCap (omelette-fleet set gemini.outputCap=…) or narrow the brief; nothing was retried';
   if (/\bE2BIG\b/.test(end)) return 'the brief is too large for one command line — shorten "prompt"';
   return 'nothing ran in the copy; the call was not retried';
 }
@@ -335,6 +347,9 @@ function asksSignIn(stderr, byUrl) {
   });
 }
 
+/** A round whose stdout passed the output cap: core's spawn kept the tail, and the envelope's start went with the rest. */
+export const CAPPED_FAILED = 'failed — agy\'s output passed gemini.outputCap and its answer envelope was lost';
+
 /** A failed sign-in's round word: named, and never the URL agy prints with it. */
 export const SIGN_IN_FAILED = 'failed — agy asked for a sign-in: under gemini_test it reads the login Keychain only — unlock the Keychain, or sign in once with agy';
 
@@ -364,7 +379,8 @@ export function isDone(text) {
  * id to resume (null when absent or not of CONVERSATION_ID's shape); `denied`;
  * `usage`. A cancel first; then a failed sign-in, named whatever the envelope
  * says; a kill keeps what the envelope held; with no envelope, the quota
- * patterns, else the exit and stderr's last 200 characters; an envelope with
+ * patterns, then a stdout the output cap cut (`capped`: CAPPED_FAILED), else
+ * the exit and stderr's last 200 characters; an envelope with
  * no response checks the quota first.
  * @param {{stdout?: string, stderr?: string, code?: number|null, killed?: boolean, cancelled?: boolean}} res
  */
@@ -381,6 +397,7 @@ export function readRound(res) {
   if (!parsed) {
     if (res.killed) return { ...none, end: 'hard-killed' };
     if (quota()) return { ...none, end: 'quota exhausted' };
+    if (res.capped) return { ...none, end: CAPPED_FAILED };
     return { ...none, end: `failed — agy exited ${res.code}: ${cliSafe(stderr).trim().slice(-200)}` };
   }
   const id = typeof parsed.conversation_id === 'string' && CONVERSATION_ID.test(parsed.conversation_id) ? parsed.conversation_id : null;
@@ -444,10 +461,17 @@ function readyRun(run) {
 /** The bound on every chmod and rm the tool runs (doctor's TEST_TAIL_S counts it). */
 const CHMOD_RM_MS = 30_000;
 
-/** `cmd` under profile B over the run (the clone and tmp writable), no shell, 30 s, its exit ignored. */
-function underB(run, { home, fleet, reach }, cmd) {
-  spawnSync(SANDBOX_EXEC, [...profileBArgs(run, { home, fleet, reach }), ...cmd], { cwd: '/', env: { PATH: '/usr/bin:/bin', HOME: run.tmp }, stdio: 'ignore', timeout: CHMOD_RM_MS });
+/**
+ * `cmd` under profile B over the run (the clone and tmp writable), no shell,
+ * 30 s; spawnSync's result, which every caller but the diff's ignores. `spawn`
+ * is spawnSync's seam for a test.
+ */
+function underB(run, { home, fleet, reach }, cmd, spawn = spawnSync) {
+  return spawn(SANDBOX_EXEC, [...profileBArgs(run, { home, fleet, reach }), ...cmd], { cwd: '/', env: { PATH: '/usr/bin:/bin', HOME: run.tmp }, stdio: 'ignore', timeout: CHMOD_RM_MS });
 }
+
+/** The diff's refusal when the copy could not be made readable before it. */
+export const UNREADABLE_COPY = 'the copy could not be made readable in 30 s';
 
 /** `cmd` under the run's profile A (the scratch home writable), no shell, 30 s, its exit ignored. */
 function underA(run, cmd) {
@@ -474,6 +498,39 @@ function removeSandboxedRun(run, o, log) {
     else spawnSync('/bin/rm', ['-rf', run.home], { stdio: 'ignore', timeout: CHMOD_RM_MS });
   };
   return removeRun(run.runDir, { log, dirs: ['clone', 'tmp', 'home'], clear, fix: chmodAll });
+}
+
+/**
+ * Neon's message with the copy's absolute path cut out: the run is removed
+ * before the answer is read, so a link into it (`file:///…/clone/tests/a.py#L5`)
+ * is dead and names the per-user temp dir. Every occurrence of `clone` — as
+ * given and resolved, each also after `file://` — followed by `/` becomes the
+ * empty string (`tests/a.py#L5`); followed by nothing that could continue a
+ * file name (a stop that ends a sentence included), it becomes `.`.
+ */
+export function cutCopyPath(text, clone) {
+  const spellings = [clone];
+  try { spellings.push(realpathSync(clone)); } catch { /* the given spelling only */ }
+  const alt = [...new Set(spellings)].sort((a, b) => b.length - a.length).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return String(text).replace(new RegExp(`(?:file://)?(?:${alt})(?:(/)|(?![A-Za-z0-9_~-]|\\.[A-Za-z0-9_~-]))`, 'g'), (_m, slash) => (slash ? '' : '.'));
+}
+
+/**
+ * Before agy's round `k`: why it may not run, or null — a link in the copy into
+ * the run's directory outside the copy (findRunLink), or a walk that could not
+ * finish. Round 1's text is a refusal (the link came with HEAD, the patch or a dependency copy);
+ * a later round's ends the loop.
+ */
+function linkStop(run, k) {
+  const found = findRunLink(run);
+  if (found.link !== undefined) {
+    return k === 1
+      ? `a link in the copy leads into the run's directory outside the copy: ${nameList([found.link])} — HEAD, the patch or a dependency copy holds it; agy is not run`
+      : `a link out of the copy into the run's directory was found: ${nameList([found.link])} — agy is not run again`;
+  }
+  if (found.tooMany) return `the copy holds more than ${WALK_MAX} entries — the link check before each agy round reads at most that many; agy is not run`;
+  if (found.unreadable !== undefined) return `a directory in the copy could not be read for the link check: ${nameList([found.unreadable])} — agy is not run`;
+  return null;
 }
 
 /** The operator's home, resolved: what both profiles deny, and the one the scratch home links Keychains from. */
@@ -508,6 +565,7 @@ export async function runGeminiTest(args, ctx) {
   if (!ctx.model) return refuse(`Error: gemini.testModel "${ctx.cfg.testModel}" is not in the catalog — set it to a Gemini id (omelette-fleet set gemini.testModel=…)`);
   const entry = ctx.catalog.find(ctx.model);
   if (entry && entry.family === 'claude') return refuse(`Error: gemini_test does not run on a Claude model ("${ctx.model}"): a call is up to five agy runs on Antigravity's small, separate Claude quota`);
+  if (entry && entry.family !== 'gemini') return refuse(`Error: gemini_test does not run on a non-Gemini model ("${ctx.model}"): it runs on Gemini models only`);
   if (args.deps !== undefined && !Array.isArray(args.deps)) return refuse('Error: "deps" must be an array of paths relative to cwd');
   const deps = checkDeps({ top: c.cwd, deps: args.deps || [], root: testRunsRoot() });
 
@@ -550,6 +608,18 @@ export async function runGeminiTest(args, ctx) {
     const own = timeoutS * 1000 + HARD_KILL_GRACE_MS;
     const limit = ctx.cfg.testRunTimeoutS * 1000;
     for (let k = 1; ; k++) {
+      if (deadline - Date.now() < 1000) { ended = BUDGET_SPENT; break; }
+      // A link in the copy into the run's own directory would turn agy's workspace writes into writes to its own settings.
+      // From round 2 the test has run: the copy is made listable first under profile B, never by this process (a child
+      // the test left could swap a directory for a link); with testKeep the round's own chmod did it.
+      readyRun(run);
+      if (k > 1 && !keep) underB(run, { home, fleet, reach }, ['/bin/chmod', '-R', 'u+rwX', run.clone]);
+      const stop = linkStop(run, k);
+      if (stop) {
+        if (k === 1) return refuse(`Error: gemini_test: ${stop}${keep ? ` — run kept: ${run.runDir}` : ''}`);
+        ended = stop;
+        break;
+      }
       const left = deadline - Date.now();
       if (left < 1000) { ended = BUDGET_SPENT; break; }
       const printS = Math.max(1, Math.min(timeoutS, Math.floor((left - HARD_KILL_GRACE_MS) / 1000)));
@@ -585,6 +655,9 @@ export async function runGeminiTest(args, ctx) {
           ? partialMark('gemini', 'killed', { after: ctx.cfg.testTimeoutS, key: 'testTimeoutS' })
           : partialMark('gemini', 'killed', { after: own / 1000 });
       }
+      // agy said the round did not finish cleanly: the answer is partial, as gemini_research marks it (readRound made the status safe).
+      const early = /^ended early \(status=([^)]*)\)/.exec(round.end);
+      if (early) marker = partialMark('gemini', 'status', { status: early[1] });
       const line = { k, agyEnd: round.end, agyMs, testEnd: 'not run', testMs: null, tail: null };
       rounds.push(line);
 
@@ -640,28 +713,33 @@ export async function runGeminiTest(args, ctx) {
     let diff = '';
     let changed = [];
     let guards = [];
+    let ignored = [];
     let unavailable = null;
     try {
-      // git skips a directory the test left mode 000 silently: the clone is made readable first, under profile B.
-      underB(run, { home, fleet, reach }, ['/bin/chmod', '-R', 'u+rwX', run.clone]);
+      // git skips a directory the test left mode 000 silently: the clone is made readable first, under profile B — and a
+      // chmod that did not finish makes the diff unavailable rather than silently short.
+      const made = underB(run, { home, fleet, reach }, ['/bin/chmod', '-R', 'u+rwX', run.clone], ctx.spawnSync);
+      if (made.error || made.signal) throw new Error(UNREADABLE_COPY);
+      if (made.status !== 0) ctx.log(`gemini_test: chmod -R u+rwX over the copy exited ${made.status} before the diff — what it could not reach may be missing from it`);
       diff = testDiff(run);
       changed = testChangedPaths(run);
       guards = testGuards(run);
+      ignored = testIgnored(run);
     } catch (e) {
-      // The first git call that fails stops the three: one line says why.
-      unavailable = unavailableOf(e);
+      // The first git call that fails stops the others: one line says why.
+      unavailable = e && e.message === UNREADABLE_COPY ? UNREADABLE_COPY : unavailableOf(e);
     }
     // A CLI failure: in round 1 with nothing in the copy, an error saying what to do; otherwise the answer, marked partial.
     const last = rounds[rounds.length - 1];
     if (ended !== 'cancelled' && last && cliFailed(last.agyEnd)) {
-      if (last.k === 1 && unavailable === null && changed.length === 0 && guards.length === 0) {
+      if (last.k === 1 && unavailable === null && changed.length === 0 && guards.length === 0 && ignored.length === 0) {
         return refuse(`Error: gemini_test: ${oneSafeLine(cliSafe(last.agyEnd))} — ${failureAdvice(last.agyEnd)}${keep ? ` — run kept: ${run.runDir}` : ''}`);
       }
       marker = partialMark('gemini', 'stopped', { n: last.k });
     }
     const text = assembleAnswer({
-      model: ctx.model, argv, rounds, maxRounds, ended, totalMs: Date.now() - start, lastMessage, lastFrom,
-      diff, changed, guards, keptRun: keep ? run.runDir : null, unavailable,
+      model: ctx.model, argv, rounds, maxRounds, ended, totalMs: Date.now() - start, lastMessage: cutCopyPath(lastMessage, run.clone), lastFrom,
+      diff, changed, guards, ignored, keptRun: keep ? run.runDir : null, unavailable,
     });
     return marker ? withPartial({ text, usage }, marker) : { text, usage };
   } catch (e) {

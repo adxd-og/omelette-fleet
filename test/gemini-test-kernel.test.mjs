@@ -886,12 +886,12 @@ test('profile A denies the per-user temp parent for a macOS-shaped temp root and
   };
   const at = (tmproot) => renderProfileA({ ...p, tmproot }).split('\n');
   const mac = at('/private/var/folders/ab/cd0/T');
-  assert.ok(mac.includes('(deny file-read* (subpath "/private/var/folders/ab/cd0") (subpath "/private/tmp") (subpath "/private/var/tmp"))'), mac.join('\n'));
+  assert.ok(mac.includes('(deny file-read* (subpath "/private/var/folders/ab/cd0") (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath "/Volumes") (subpath "/Users/Shared"))'), mac.join('\n'));
   assert.ok(mac.includes('(allow file-read-metadata (literal "/private/var/folders/ab/cd0") (literal "/private/var/folders/ab/cd0/T") (literal "/r") (literal "/r/run-1"))'));
   assert.ok(mac.includes('(deny file-read* (regex "^/private/var/folders/ab/cd0/T/omelette-"))'), 'the omelette-* deny stays on the temp root');
   for (const tmproot of ['/t', '/private/var/folders/ab/T', '/private/var/folders/ab/cd0/T/x', '/var/folders/ab/cd0/T']) {
     const lines = at(tmproot);
-    assert.ok(lines.includes(`(deny file-read* (subpath "${tmproot}") (subpath "/private/tmp") (subpath "/private/var/tmp"))`), tmproot);
+    assert.ok(lines.includes(`(deny file-read* (subpath "${tmproot}") (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath "/Volumes") (subpath "/Users/Shared"))`), tmproot);
     assert.ok(lines.includes(`(allow file-read-metadata (literal "${tmproot}") (literal "/r") (literal "/r/run-1"))`), tmproot);
   }
 });
@@ -962,4 +962,96 @@ test('a FIFO or another-size file put where the pinned program was is refused at
     await assert.rejects(runTestCommand(ctx, w.run, { ...o, round: 4 }), (e) => e.message === refused);
     assert.equal(ctx.spawned, 1);
   } finally { w.done(); }
+});
+
+// The release-review fix round (2026-11-25): profile B is repro.sb unchanged, then gemini_test's read denies of the
+// temp places and the shared ones, then the run's own re-allows (renderProfileB, written per run as out/b.sb); profile A
+// denies /Volumes and /Users/Shared too, and neither profile runs a binary that lives there.
+import { PROFILE_B, profileBArgs, readDenied, renderProfileB } from '../units/gemini/test-run.mjs';
+
+/** The probe of profile B: argv[2] a JSON list of ops (read, write, rename, nodetest), one JSON array of results. */
+const PROBE_B = [
+  'import { readFileSync, renameSync, writeFileSync } from "node:fs";',
+  'import { spawnSync } from "node:child_process";',
+  'const code = (e) => e.code || String(e.message);',
+  'const ops = { read: (p) => readFileSync(p), write: (p) => writeFileSync(p, "x"), rename: (a, b) => renameSync(a, b) };',
+  'const results = [];',
+  'for (const [op, ...a] of JSON.parse(process.argv[2])) {',
+  '  if (op === "nodetest") { const r = spawnSync(process.execPath, ["--test", a[0]], { timeout: 5000, stdio: "ignore" }); results.push(r.error ? code(r.error) : `exit ${r.status}`); continue; }',
+  '  try { ops[op](...a); results.push("ok"); } catch (e) { results.push(code(e)); }',
+  '}',
+  'console.log(JSON.stringify(results));',
+].join('\n');
+
+test('under profile B a test cannot read other programs\' temp files nor /Users/Shared, still reads and writes its clone and tmp, runs node --test, and cannot rename the clone or tmp', KROW, async () => {
+  const w = world({ files: { 'probe.mjs': PROBE_B, 'one.test.mjs': 'import test from "node:test";\ntest("one", () => {});\n' } });
+  // Elsewhere under the OS temp root (this file's TMPDIR is BASE), in /private/tmp, and under /Users/Shared.
+  const elsewhere = realpathSync(mkdtempSync(join(BASE, 'another-programs-')));
+  writeFileSync(join(elsewhere, 'f'), 'not the test\'s\n');
+  const ptmp = realpathSync(mkdtempSync('/private/tmp/neon-test-b-'));
+  writeFileSync(join(ptmp, 'f'), 'not the test\'s\n');
+  const shared = realpathSync(mkdtempSync('/Users/Shared/neon-test-b-'));
+  writeFileSync(join(shared, 'f'), 'not the test\'s\n');
+  writeFileSync(join(w.run.tmp, 'mine'), 'mine\n');
+  const ops = [
+    ['read', join(elsewhere, 'f')], ['read', join(ptmp, 'f')], ['read', join(shared, 'f')],
+    ['read', join(w.run.clone, 'README.md')], ['write', join(w.run.clone, 'written')], ['read', join(w.run.tmp, 'mine')], ['write', join(w.run.tmp, 'written')],
+    ['nodetest', 'one.test.mjs'],
+    ['rename', w.run.clone, `${w.run.clone}-moved`], ['rename', w.run.tmp, `${w.run.tmp}-moved`],
+  ];
+  try {
+    const r = await w.exec({ args: [node(), 'probe.mjs', JSON.stringify(ops)] });
+    assert.equal(r.code, 0, readFileSync(r.log, 'utf8'));
+    assert.deepEqual(JSON.parse(r.tail.trim().split('\n').pop()), ['EPERM', 'EPERM', 'EPERM', 'ok', 'ok', 'ok', 'ok', 'exit 0', 'EPERM', 'EPERM']);
+    assert.equal(existsSync(w.run.clone) && existsSync(w.run.tmp), true);
+  } finally {
+    for (const d of [elsewhere, ptmp, shared]) rmSync(d, { recursive: true, force: true });
+    w.done();
+  }
+});
+
+test('profile B is repro.sb\'s text unchanged and then gemini_test\'s rules, written once per run to out/b.sb, 0600', PURE_RUN, () => {
+  const w = world();
+  try {
+    const args = profileBArgs(w.run, { home: w.home, fleet: w.fleet, reach: w.reach });
+    const b = join(w.run.out, 'b.sb');
+    assert.equal(args.at(-1), b);
+    assert.equal(statSync(b).mode & 0o777, 0o600);
+    const repro = readFileSync(PROFILE_B, 'utf8');
+    const text = readFileSync(b, 'utf8');
+    assert.ok(text.startsWith(repro), 'repro.sb first, byte for byte');
+    assert.equal(profileBArgs(w.run, { home: w.home, fleet: w.fleet, reach: w.reach }).at(-1), b, 'once per run');
+    const tail = text.slice(repro.length).split('\n').filter((l) => l.startsWith('('));
+    assert.equal(tail.some((l) => /^\(allow file-write/.test(l)), false, 'no write re-allowed');
+  } finally { w.done(); }
+});
+
+test('renderProfileB: the read deny spares the reach, and the metadata re-allows run from the outermost denied place down to the run, last', () => {
+  const tail = (tmproot, run) => renderProfileB({ base: '(version 1)\n(allow default)', tmproot, run }).split('\n').slice(2).filter((l) => l.startsWith('('));
+  assert.deepEqual(readDenied('/private/var/folders/ab/cd0/T'), ['/private/var/folders/ab/cd0', '/private/tmp', '/private/var/tmp', '/Volumes', '/Users/Shared']);
+  assert.deepEqual(tail('/private/var/folders/ab/cd0/T', '/private/var/folders/ab/cd0/T/omelette-gemini-test/run-1'), [
+    '(deny file-read* (require-all (require-any (subpath "/private/var/folders/ab/cd0") (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath "/Volumes") (subpath "/Users/Shared")) (require-not (regex (param "NODE"))) (require-not (regex (param "NODEUP")))))',
+    '(allow file-read-metadata (literal "/private/var/folders/ab/cd0") (literal "/private/var/folders/ab/cd0/T") (literal "/private/var/folders/ab/cd0/T/omelette-gemini-test") (literal "/private/var/folders/ab/cd0/T/omelette-gemini-test/run-1"))',
+    '(allow file-read* (subpath (param "CLONE")) (subpath (param "TMP")))',
+  ]);
+  // A temp root of another shape is denied itself; a run outside every denied place needs no metadata line.
+  assert.deepEqual(tail('/t', '/t/omelette-gemini-test/run-1')[1], '(allow file-read-metadata (literal "/t") (literal "/t/omelette-gemini-test") (literal "/t/omelette-gemini-test/run-1"))');
+  assert.deepEqual(tail('/t', '/r/run-1').length, 2);
+});
+
+test('a binary under /Users/Shared is refused: agy\'s by writeProfileA, the test command\'s by toolchainReach', { ...PURE_RUN, skip: !DARWIN }, () => {
+  const w = world();
+  const shared = realpathSync(mkdtempSync('/Users/Shared/neon-test-bin-'));
+  const bin = join(shared, 'tool');
+  writeFileSync(bin, '#!/bin/sh\n');
+  try {
+    assert.throws(() => writeProfileA(w.run, bin, { home: w.home, fleet: w.fleet }),
+      (e) => e.message === `gemini: agy's binary ${JSON.stringify(bin)} lives under /Users/Shared, which profile A does not read — install agy elsewhere`);
+    assert.equal(w.run.profileA, undefined);
+    assert.throws(() => toolchainReach({ home: w.home, binaries: [bin] }),
+      (e) => e.message === `gemini: the test command needs ${JSON.stringify(bin)}, which lives under /Users/Shared — the test profile does not read it; install the toolchain elsewhere`);
+  } finally {
+    rmSync(shared, { recursive: true, force: true });
+    w.done();
+  }
 });

@@ -704,3 +704,191 @@ test('testGuards names an ignore file that ignores itself, an attributes file in
     assert.deepEqual(testGuards(run), [...(caseless ? ['.GITATTRIBUTES'] : []), '.gitignore', 'pkg/.gitattributes']);
   } finally { discardRun(run); }
 });
+
+// The release-review fix round (2026-11-25): what the run left that git ignores is named (testIgnored); an untracked
+// guard under a directory a committed, unchanged rule ignores is no guard; .git or .omelette at any depth of a deps
+// entry is refused; a link in the copy into the run's own directory is found before each agy round (findRunLink).
+import { WALK_MAX, findRunLink, testChangedPaths, testIgnored } from '../units/gemini/test-run.mjs';
+
+test('testIgnored names what the project\'s committed rules ignore, a whole directory as one entry, and never a dependency copy; a guard under a committed ignored directory is none, one under the model\'s own rule stays', { ...COPIED, timeout: 5_000 }, () => {
+  const work = writeTree(workTree({ '.gitignore': 'node_modules/\n.env\n.pytest_cache/\n' }), { 'node_modules/pkg/index.js': 'i\n', 'node_modules/pkg/.gitignore': '*\n' });
+  const run = runWithDeps(work, ['node_modules']);
+  try {
+    writeTree(run.clone, {
+      'test/a.test.mjs': 'ok\n', 'test/node_modules/dep/index.js': 'module.exports = "shadow";\n', '.env': 'SECRET=1\n',
+      '.pytest_cache/.gitignore': '*\n', '.pytest_cache/v/x': 'x\n', 'x/.gitignore': '*\n', 'x/a': 'a\n',
+    });
+    assert.deepEqual(testIgnored(run), ['.env', '.pytest_cache/', 'test/node_modules/', 'x/']);
+    assert.deepEqual(testGuards(run), ['x/.gitignore']);
+    assert.deepEqual(testChangedPaths(run), ['test/a.test.mjs']);
+    const diff = testDiff(run);
+    for (const p of ['.env', 'test/node_modules', 'node_modules/pkg']) assert.equal(diff.includes(p), false, p);
+  } finally { discardRun(run); }
+});
+
+test('testIgnored lists an ignored directory that holds a dependency copy by what else it holds', { ...COPIED, timeout: 5_000 }, () => {
+  const work = writeTree(workTree({ '.gitignore': 'vendor/\n' }), { 'vendor/node_modules/pkg/index.js': 'i\n' });
+  const run = runWithDeps(work, ['vendor/node_modules']);
+  try {
+    assert.deepEqual(testIgnored(run), []);
+    writeTree(run.clone, { 'vendor/planted.js': 'p\n', 'vendor/lib/a.js': 'a\n' });
+    assert.deepEqual(testIgnored(run).sort(), ['vendor/lib/', 'vendor/planted.js']);
+  } finally { discardRun(run); }
+});
+
+test('a guard under a directory the model\'s changed .gitignore ignores stays a guard', MADE, () => {
+  const work = workTree({ '.gitignore': 'build/\n' });
+  writeFileSync(join(work, 'README.md'), 'two\n');
+  const run = open(work, patchOf(work));
+  try {
+    writeTree(run.clone, { '.gitignore': 'build/\ny/\n', 'y/.gitignore': '*\n', 'build/.gitattributes': '* -diff\n' });
+    // The committed build/ rule decides build/, but its source is the .gitignore the model changed: no rule of HEAD's.
+    assert.deepEqual(testGuards(run), ['.gitignore', 'build/.gitattributes', 'y/.gitignore']);
+    assert.deepEqual(testIgnored(run), ['build/', 'y/']);
+  } finally { discardRun(run); }
+});
+
+test('checkDeps refuses .git or .omelette at any depth, a link of that name included, and a tree past its walk bound', CHECKED, () => {
+  const work = writeTree(workTree({ '.gitignore': '.venv/\nvendor/\nclean/\nbig/\n' }), {
+    '.venv/src/pkg/.git/HEAD': 'ref\n', 'vendor/a/.GIT': { link: '../x' }, 'clean/a/b/c.js': 'c\n', 'big/a': '1\n', 'big/b': '2\n', 'big/c/d': '3\n',
+  });
+  assert.throws(() => check(work, ['.venv']), refusal('.venv', 'holds .git or .omelette at ".venv/src/pkg/.git"'));
+  assert.throws(() => check(work, ['vendor']), refusal('vendor', 'holds .git or .omelette at "vendor/a/.GIT"'));
+  assert.deepEqual(check(work, ['clean']), ['clean']);
+  assert.equal(WALK_MAX, 1_000_000);
+  assert.throws(() => checkDeps({ top: work, deps: ['big'], root: testRunsRoot(), walkMax: 3 }), refusal('big', 'holds more than 3 entries — gemini_test walks at most that many looking for .git or .omelette'));
+  assert.deepEqual(checkDeps({ top: work, deps: ['big'], root: testRunsRoot(), walkMax: 4 }), ['big']);
+});
+
+test('findRunLink finds a link into the run\'s directory outside the copy, resolving or dangling, and leaves the rest alone', { ...COPIED, timeout: 5_000 }, () => {
+  // A dependency copy's usual links: one into the copy (node_modules/.bin), one to an interpreter outside the run (a venv's bin/python).
+  const work = writeTree(workTree({ '.gitignore': 'node_modules/\n' }), {
+    'node_modules/pkg/bin.js': 'b\n', 'node_modules/.bin/tool': { link: '../pkg/bin.js' }, 'node_modules/.venv/bin/python': { link: '/usr/bin/python3' },
+  });
+  const run = runWithDeps(work, ['node_modules']);
+  try {
+    // A link that stays in the copy, or leads outside the run, is no finding — in a dependency copy as anywhere.
+    writeTree(run.clone, { inside: { link: 'README.md' }, 'a/up': { link: '../README.md' }, sys: { link: '/usr/bin' }, 'a/gone': { link: 'nowhere' } });
+    assert.deepEqual(findRunLink(run), {});
+    writeTree(run.clone, { 'a/b/cfg': { link: '../../../home/.gemini/antigravity-cli' } });
+    assert.deepEqual(findRunLink(run), { link: 'a/b/cfg' }, 'dangling: resolved by its text');
+    rmSync(join(run.clone, 'a', 'b', 'cfg'));
+    writeTree(run.clone, { 'a/o': { link: join(run.runDir, 'out') } });
+    assert.deepEqual(findRunLink(run), { link: 'a/o' }, 'resolving: by its real path');
+    rmSync(join(run.clone, 'a', 'o'));
+    // A directory a test shut stops the walk: findRunLink changes no mode itself.
+    writeTree(run.clone, { 'shut/t': { link: '../../tmp' } });
+    chmodSync(join(run.clone, 'shut'), 0);
+    assert.deepEqual(findRunLink(run), { unreadable: 'shut' });
+    assert.equal(lstatSync(join(run.clone, 'shut')).mode & 0o777, 0);
+    chmodSync(join(run.clone, 'shut'), 0o755);
+    assert.deepEqual(findRunLink(run), { link: 'shut/t' });
+    assert.deepEqual(findRunLink(run, { max: 2 }), { tooMany: true });
+  } finally { discardRun(run); }
+});
+
+// Fix round two (2026-11-25): a link's target is where the kernel lands a create through it, a target holding the run
+// directory counts, and nothing in the copy is skipped.
+test('findRunLink resolves a link as the kernel does: a `..` after a link of the copy goes to that link\'s real parent, dangling or not', MADE, () => {
+  const work = workTree();
+  writeFileSync(join(work, 'README.md'), 'two\n');
+  const run = open(work, patchOf(work));
+  try {
+    // sub -> a/b/c: from it four `..` reach the run dir; read as text, sub/../../../../ leaves the run. .gemini does not exist yet.
+    writeTree(run.clone, { 'a/b/c/x': 'x\n', sub: { link: 'a/b/c' }, lnk: { link: 'sub/../../../../home/.gemini/settings.json' } });
+    assert.deepEqual(findRunLink(run), { link: 'lnk' });
+    rmSync(join(run.clone, 'lnk'));
+    // deep -> d/e: from it two `..` return to the copy's root; read as text, they leave it.
+    writeTree(run.clone, { 'd/e/x': 'x\n', deep: { link: 'd/e' }, back: { link: 'deep/../../README.md' }, 'back-gone': { link: 'deep/../../missing/new.txt' } });
+    assert.deepEqual(findRunLink(run), {});
+    // A `..` after a missing component: the kernel fails there, and the link is a finding.
+    writeTree(run.clone, { past: { link: 'missing/../README.md' } });
+    assert.deepEqual(findRunLink(run), { link: 'past' });
+    rmSync(join(run.clone, 'past'));
+    // On a volume that ignores letter case, the run dir spelled in capitals is the run dir.
+    if (existsSync(join(run.clone, 'readme.md'))) {
+      writeTree(run.clone, { caps: { link: `../../${run.runDir.split('/').pop().toUpperCase()}/home/x` } });
+      assert.deepEqual(findRunLink(run), { link: 'caps' });
+    }
+  } finally { discardRun(run); }
+});
+
+test('findRunLink finds a link to the run directory\'s ancestors — the runs root, the temp root, / — and not one to a sibling of the run or to /usr/share', MADE, () => {
+  const work = workTree();
+  writeFileSync(join(work, 'README.md'), 'two\n');
+  const run = open(work, patchOf(work));
+  const sibling = join(dirname(run.runDir), 'run-sibling');
+  mkdirSync(sibling);
+  try {
+    writeTree(run.clone, { sib: { link: sibling }, share: { link: '/usr/share' }, 'sib-new': { link: join(sibling, 'new') } });
+    assert.deepEqual(findRunLink(run), {});
+    for (const target of [dirname(run.runDir), tmpdir(), '/', `${dirname(run.runDir)}/`]) {
+      writeTree(run.clone, { 'z/up': { link: target } });
+      assert.deepEqual(findRunLink(run), { link: 'z/up' }, target);
+      rmSync(join(run.clone, 'z', 'up'));
+    }
+  } finally { discardRun(run); rmSync(sibling, { recursive: true, force: true }); }
+});
+
+// The session's probe on round two: the comparison goes by identity (dev:ino), not by the path's spelling.
+test('findRunLink compares identities: an existing file in home/ is found; an ancestor with a missing tail, and the copy spelled absolutely, are not', MADE, () => {
+  const work = workTree();
+  writeFileSync(join(work, 'README.md'), 'two\n');
+  const run = open(work, patchOf(work));
+  try {
+    mkdirSync(join(run.home, '.gemini'));
+    writeFileSync(join(run.home, '.gemini', 'settings.json'), '{}\n');
+    writeTree(run.clone, { 'src/x': 'x\n', 'n/m/abs': { link: join(run.runDir, 'clone', 'src') }, 'n/m/npm': { link: '../../../../../usr/local/lib/node_modules/x' } });
+    // n/m/npm: up through the copy, the run and the runs root to the temp root, then usr/ does not exist there.
+    writeTree(run.clone, { 'n/m/tmpnew': { link: join(tmpdir(), `nope-${process.pid}`, 'y') } });
+    // An existing file in an ancestor of the run: the walk ends on it, a name below the ancestor — no finding.
+    writeFileSync(join(tmpdir(), `file-${process.pid}`), 'f\n');
+    writeTree(run.clone, { 'n/m/tmpfile': { link: join(tmpdir(), `file-${process.pid}`) } });
+    assert.deepEqual(findRunLink(run), {});
+    writeTree(run.clone, { file: { link: join(run.runDir, 'home', '.gemini', 'settings.json') } });
+    assert.deepEqual(findRunLink(run), { link: 'file' });
+  } finally { discardRun(run); }
+});
+
+test('findRunLink sees the run through the Data volume\'s own spelling: /System/Volumes/Data<run>/home and /System/Volumes/Data itself are found', MADE, (t) => {
+  const DATA = '/System/Volumes/Data';
+  const work = workTree();
+  writeFileSync(join(work, 'README.md'), 'two\n');
+  const run = open(work, patchOf(work));
+  try {
+    const real = realpathSync.native(run.runDir);
+    const id = (p) => { const s = statSync(p, { bigint: true }); return `${s.dev}:${s.ino}`; };
+    let same = false;
+    try { same = id(DATA + real) === id(real); } catch { /* no Data volume */ }
+    if (!same) { t.skip('no Data volume spelling of the run directory'); return; }
+    writeTree(run.clone, { 'src/x': 'x\n', in: { link: `${DATA}${real}/clone/src` }, nope: { link: `${DATA}/nope-${process.pid}/y` } });
+    assert.deepEqual(findRunLink(run), {});
+    for (const target of [`${DATA}${real}/home`, DATA]) {
+      writeTree(run.clone, { x: { link: target } });
+      assert.deepEqual(findRunLink(run), { link: 'x' }, target);
+      rmSync(join(run.clone, 'x'));
+    }
+  } finally { discardRun(run); }
+});
+
+test('findRunLink walks the copy\'s .git and every dependency copy, and a chain of more than 40 links is a finding', { ...COPIED, timeout: 5_000 }, () => {
+  const work = writeTree(workTree({ '.gitignore': 'node_modules/\n' }), { 'node_modules/pkg/index.js': 'i\n' });
+  const run = runWithDeps(work, ['node_modules']);
+  try {
+    assert.deepEqual(findRunLink(run), {});
+    for (const at of ['.git/planted', 'node_modules/pkg/planted']) {
+      writeTree(run.clone, { [at]: { link: join(run.runDir, 'home', '.gemini') } });
+      assert.deepEqual(findRunLink(run), { link: at });
+      rmSync(join(run.clone, at));
+    }
+    // c01 -> c02 -> … -> c40 -> README.md is 40 links: no finding. c00 in front of it makes 41.
+    const name = (i) => `c${String(i).padStart(2, '0')}`;
+    for (let i = 1; i <= 40; i++) writeTree(run.clone, { [`chain/${name(i)}`]: { link: i === 40 ? '../README.md' : name(i + 1) } });
+    assert.deepEqual(findRunLink(run), {});
+    writeTree(run.clone, { 'chain/c00': { link: 'c01' } });
+    assert.deepEqual(findRunLink(run), { link: 'chain/c00' });
+    rmSync(join(run.clone, 'chain'), { recursive: true });
+    writeTree(run.clone, { 'loop/a': { link: 'b' }, 'loop/b': { link: 'a' } });
+    assert.equal(/^loop\/[ab]$/.test(findRunLink(run).link), true);
+  } finally { discardRun(run); }
+});

@@ -865,7 +865,7 @@ export default defineUnit({
           rounds: { type: 'integer', minimum: 1, maximum: 5, description: 'Optional: write-then-run rounds at most (1-5; default 3).' },
           model: {
             ...MODEL_PROP,
-            description: 'Optional. OMIT for `gemini.testModel` (default Gemini 4 Neon (High)), not `gemini.model`. Claude ids are refused here. Must be an exact id (call gemini_models for the guide).',
+            description: 'Optional. OMIT for `gemini.testModel` (default Gemini 4 Neon (High)), not `gemini.model`. Gemini ids only: Claude and GPT-OSS ids are refused here. Must be an exact id (call gemini_models for the guide).',
           },
         },
         required: ['prompt', 'cwd', 'patch', 'testCommand'],

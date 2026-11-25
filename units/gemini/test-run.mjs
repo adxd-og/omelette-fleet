@@ -47,9 +47,11 @@
  * tree enters the copy.
  *
  * PROFILE B — the test command runs once per round under units/mistral/repro.sb,
- * read in place, byte for byte (runTestCommand): no network, writes only the
+ * read at run time, byte for byte, with gemini_test's own rules after it in
+ * the run's `out/b.sb` (renderProfileB, runTestCommand): no network, writes only the
  * clone and the run's tmp, no read of the operator's home but the adapter's
- * node, the work tree, the fleet home, the out dir and every other run denied;
+ * node, the work tree, the fleet home, the out dir and every other run denied,
+ * nor of the temp places and the shared ones (readDenied) but the run's own;
  * HOME and TMPDIR are the run's tmp, PATH the unit's own (testPath), both streams
  * go to `tmp/round-<n>.log` (node aborts at start on a stdout the profile denies
  * reading, and it denies `out/`), copied by the unit to `out/round-<n>.log`
@@ -71,11 +73,11 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CLONE_CONFIG, changedPaths, cloneDiff, cloneGitEnv, gitRun, prepareClone, removeRun, runsRootAt, untrackedPast } from '../../core/clone.mjs';
+import { CLONE_CONFIG, changedPaths, cloneDiff, cloneGitEnv, gitRun, ignoreRules, ignoredPast, prepareClone, removeRun, runsRootAt, untrackedPast } from '../../core/clone.mjs';
 import { INVISIBLE_CHARS } from '../../core/log.mjs';
 import { NODEUP_NONE, SANDBOX_EXEC, nodeEnv, nodeUp, regexLiteral } from '../../core/seatbelt.mjs';
 import { locateBin } from '../../core/unit.mjs';
@@ -216,14 +218,50 @@ const GUARD_NAMES = ['.gitignore', '.gitattributes'];
  * whatever any ignore rule says (core's untrackedPast, with the run's scratch
  * index and its copied dependencies left out). Why the second set: a
  * `.gitignore` the model writes can ignore itself, and then it is in no changed
- * name, nor is anything it hides.
+ * name, nor is anything it hides. An untracked one is left out when a directory
+ * above it in the clone is itself ignored (core's ignoreRules: the directory's
+ * own rule, so `x/.gitignore` holding `*` does not count for `x`) by a rule
+ * whose source is an ignore file inside the clone, tracked at HEAD (a file
+ * outside the dependency copies that untrackedPast does not list) and not
+ * among testChangedPaths' names — `.pytest_cache/.gitignore`
+ * under a committed `.pytest_cache/` rule hides nothing; testIgnored names its
+ * directory.
  * @param {{clone: string, out: string, deps: {rel: string}[]}} run prepareTestRun's result, after copyDeps
  * @returns {string[]}
  */
 export function testGuards(run) {
-  const untracked = untrackedPast(run.clone, join(run.out, 'git'), { indexFile: join(run.out, 'diff.index'), exclude: run.deps.map((d) => d.rel) });
-  const guards = [...testChangedPaths(run), ...untracked].filter((p) => GUARD_NAMES.includes(p.split('/').pop().toLowerCase()));
-  return [...new Set(guards)].sort();
+  const gitDir = join(run.out, 'git');
+  const indexFile = join(run.out, 'diff.index');
+  const isGuard = (p) => GUARD_NAMES.includes(p.split('/').pop().toLowerCase());
+  const exclude = run.deps.map((d) => d.rel);
+  const others = untrackedPast(run.clone, gitDir, { indexFile, exclude });
+  const untracked = others.filter(isGuard);
+  const changed = testChangedPaths(run);
+  // An untracked guard under a directory a rule of HEAD's ignores whole hides nothing the diff would show.
+  const ancestors = (p) => { const a = []; for (let d = posix.dirname(p); d !== '.'; d = posix.dirname(d)) a.push(d); return a; };
+  const dirs = [...new Set(untracked.flatMap(ancestors))];
+  const rules = ignoreRules(run.clone, gitDir, { indexFile, paths: dirs });
+  // Tracked at HEAD: a file of the clone outside every dependency copy that is not untracked (the scratch index is HEAD's).
+  const untrackedAll = new Set(others);
+  const tracked = (s) => !isAbsolute(s) && posix.normalize(s) === s && s !== '..' && !s.startsWith('../')
+    && !exclude.some((e) => s === e || s.startsWith(`${e}/`)) && !untrackedAll.has(s) && !changed.includes(s)
+    && !!lstatOrNull(join(run.clone, s))?.isFile();
+  const hiding = new Set(dirs.filter((d) => rules.has(d) && tracked(rules.get(d).source)));
+  const kept = untracked.filter((p) => !ancestors(p).some((d) => hiding.has(d)));
+  return [...new Set([...changed.filter(isGuard), ...kept])].sort();
+}
+
+/**
+ * What the run left in the clone that git's ignore rules ignore, so in no diff
+ * line and no changed name (core's ignoredPast, with the run's scratch index
+ * and its copied dependencies left out): a file the project's own `.gitignore`
+ * ignores (`test/node_modules/<dep>`, `.env`) can decide a round's exit code.
+ * Relative to the clone, a directory ignored whole as one entry ending in `/`.
+ * @param {{clone: string, out: string, deps: {rel: string}[]}} run prepareTestRun's result, after copyDeps
+ * @returns {string[]}
+ */
+export function testIgnored(run) {
+  return ignoredPast(run.clone, join(run.out, 'git'), { indexFile: join(run.out, 'diff.index'), exclude: run.deps.map((d) => d.rel) });
 }
 
 /** The most a venv console script may weigh for relocateVenv to rewrite it. */
@@ -237,6 +275,35 @@ function lstatOrNull(p) {
   try { return lstatSync(p); } catch { return null; }
 }
 
+/** The most entries walkCopy reads in one walk: a dependency tree holds several hundred thousand. */
+export const WALK_MAX = 1_000_000;
+
+/**
+ * A depth-first walk of the directory `root`, no link followed (readdir's own
+ * types; a link is an entry, never entered): the first entry, relative to
+ * `root`, for which `match(name, path, dirent)` is true, as `{ hit }`; or `{
+ * tooMany: true }` once more than `max` entries were read; or `{ unreadable }`,
+ * the directory it could not list; `{}` when none matched. One synchronous
+ * pass, no child process; it changes nothing it walks.
+ * @returns {{hit?: string, tooMany?: true, unreadable?: string}}
+ */
+export function walkCopy(root, match, { max = WALK_MAX } = {}) {
+  const stack = [''];
+  let seen = 0;
+  while (stack.length) {
+    const rel = stack.pop();
+    let entries;
+    try { entries = readdirSync(join(root, rel), { withFileTypes: true }); } catch { return { unreadable: rel || '.' }; }
+    for (const d of entries) {
+      if (++seen > max) return { tooMany: true };
+      const path = rel ? `${rel}/${d.name}` : d.name;
+      if (match(d.name, path, d)) return { hit: path };
+      if (d.isDirectory()) stack.push(path);
+    }
+  }
+  return {};
+}
+
 /**
  * The call's `deps` entries checked against the work tree's top, before any run
  * dir exists; each refusal opens `gemini: deps entry <the entry, JSON>`. An
@@ -245,14 +312,17 @@ function lstatOrNull(p) {
  * character (`*`, `?`, `[`, `]`, `\`): it is named literally; no component
  * named `.git` or `.omelette` and no such direct child (lstat); a directory
  * (lstat: a link is not followed) whose real path is the top's real path joined
- * with it; holding no file git tracks; ignored by git whole (`check-ignore` of
+ * with it; no entry of either name at any depth in it (walkCopy, no link
+ * followed, a link of that name included; at most `walkMax` entries, past which,
+ * or at a directory it cannot read, it is refused); holding no file git
+ * tracks; ignored by git whole (`check-ignore` of
  * `<entry>/`, the operator's global excludes counted); overlapping no other
  * entry; on the volume of `root`, the runs root (`devOf`), so `cp -c` clones
  * instead of copying.
  * @param {{top: string, deps: unknown[], root: string, devOf?: (p: string) => number}} o
  * @returns {string[]} the entries normalised, no trailing `/`, in the order given
  */
-export function checkDeps({ top, deps, root, devOf = (p) => statSync(p).dev }) {
+export function checkDeps({ top, deps, root, devOf = (p) => statSync(p).dev, walkMax = WALK_MAX }) {
   const realTop = realpathSync(top);
   const accepted = [];
   for (const entry of deps) {
@@ -273,6 +343,10 @@ export function checkDeps({ top, deps, root, devOf = (p) => statSync(p).dev }) {
     const st = lstatOrNull(abs);
     if (!st || !st.isDirectory()) throw refused('is not a directory (a symlink is not followed)');
     if (realpathSync(abs) !== abs) throw refused('resolves outside the work tree');
+    const found = walkCopy(abs, (name) => reserved(name), { max: walkMax });
+    if (found.tooMany) throw refused(`holds more than ${walkMax} entries — gemini_test walks at most that many looking for .git or .omelette`);
+    if (found.unreadable !== undefined) throw refused(`cannot be walked: ${JSON.stringify(posix.join(rel, found.unreadable))} is not readable`);
+    if (found.hit !== undefined) throw refused(`holds .git or .omelette at ${JSON.stringify(posix.join(rel, found.hit))}`);
     if (gitRun([...CLONE_CONFIG, '-C', realTop, 'ls-files', '-z', '--', rel], { env: cloneGitEnv() }).text !== '') {
       throw refused('holds tracked files — only a directory git ignores whole is copied');
     }
@@ -383,14 +457,82 @@ export function relocateVenv(copy, src) {
 }
 
 /**
- * Profile B: Mistral's repro profile, byte for byte, read in place (spec, «What
- * it leaves open»: «with the same profile») — never a copy that could drift.
+ * Mistral's repro profile, the base of profile B: read from this path at run
+ * time, byte for byte (spec, «What it leaves open»: «with the same profile»),
+ * never a copy that could drift, and never edited for gemini_test.
  */
 export const PROFILE_B = fileURLToPath(new URL('../mistral/repro.sb', import.meta.url));
 
+/** The shared places neither profile reads: a mounted volume, and the directory every user of the Mac can write. */
+const SHARED_DENIED = ['/Volumes', '/Users/Shared'];
+
+/**
+ * The part of the OS temp root (resolved) both profiles deny reading: macOS's
+ * per-user temp dir (`/private/var/folders/<a>/<b>/T`) by its parent, which
+ * also holds the user's cache dirs (`C`, `0`); any other temp root itself.
+ */
+export function tempReadRoot(tmproot) {
+  return /^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/.test(tmproot) ? dirname(tmproot) : tmproot;
+}
+
+/** Every place both profiles deny reading, for the OS temp root `tmproot` (resolved): tempReadRoot's, `/private/tmp`, `/private/var/tmp`, `/Volumes`, `/Users/Shared`. */
+export const readDenied = (tmproot) => [tempReadRoot(tmproot), '/private/tmp', '/private/var/tmp', ...SHARED_DENIED];
+
+/**
+ * Profile B's text: `base` (repro.sb's text, unchanged) followed by gemini_test's
+ * own rules. First a read deny of readDenied's places — other programs' temp
+ * files and the shared places, which a test could print into the output the
+ * next round's model (it has the network) reads — that leaves alone what
+ * repro.sb's reach re-allows (NODE, and NODEUP's metadata: repro.sb's own rules
+ * decide those paths, so a toolchain under the home still runs wherever the
+ * home lies). Then, last, the re-allows the run needs: the metadata of each
+ * directory from the outermost denied place down to the run dir (`run`; node
+ * and git lstat every component) as literals, and reading CLONE and TMP. No
+ * write is re-allowed: repro.sb's write rules, its unlink, flags and `.vibe`
+ * denies stay the deciding ones. Every path comes resolved and goes in through
+ * sbString.
+ * @param {{base: string, tmproot: string, run: string}} p
+ * @returns {string}
+ */
+export function renderProfileB({ base, tmproot, run }) {
+  for (const [k, v] of Object.entries({ tmproot, run })) {
+    if (typeof v !== 'string' || !isAbsolute(v)) throw new Error(`gemini: profile B needs an absolute ${k} (got ${JSON.stringify(v)})`);
+  }
+  const denied = readDenied(tmproot);
+  const chain = [];
+  for (let d = run; d !== dirname(d); d = dirname(d)) if (denied.some((p) => within(d, p))) chain.unshift(d);
+  const subpaths = denied.map((p) => `(subpath ${sbString(p)})`).join(' ');
+  const lines = [
+    '; --- gemini_test, appended by units/gemini/test-run.mjs per run: repro.sb above is unchanged ---',
+    '; other programs\' temp files and the shared places are no test\'s to read: the output goes to a model with the network — but what the reach re-allows, decided above',
+    `(deny file-read* (require-all (require-any ${subpaths}) (require-not (regex (param "NODE"))) (require-not (regex (param "NODEUP")))))`,
+    '; the way down to the run\'s clone and tmp stays walkable, metadata only; then the clone and tmp read — no write re-allowed',
+    ...(chain.length ? [`(allow file-read-metadata ${chain.map((d) => `(literal ${sbString(d)})`).join(' ')})`] : []),
+    '(allow file-read* (subpath (param "CLONE")) (subpath (param "TMP")))',
+  ];
+  return `${base.replace(/\n?$/, '\n')}${lines.join('\n')}\n`;
+}
+
+/**
+ * Profile B for this run, once per run: renderProfileB over repro.sb's text
+ * read now, into `<out>/b.sb` (`wx`, 0600), the OS temp root and the run dir
+ * resolved; its path kept as `run.profileB`, and returned as it is on a later call.
+ * @param {{runDir: string, out: string, profileB?: string}} run
+ * @returns {string} the profile's path
+ */
+export function writeProfileB(run) {
+  if (run.profileB) return run.profileB;
+  const text = renderProfileB({ base: readFileSync(PROFILE_B, 'utf8'), tmproot: realpathSync(tmpdir()), run: realpathSync(run.runDir) });
+  const profile = join(run.out, 'b.sb');
+  writeFileSync(profile, text, { flag: 'wx', mode: 0o600 });
+  run.profileB = profile;
+  return profile;
+}
+
 /**
  * sandbox-exec's arguments for profile B over this run: a `-D` for every param
- * repro.sb reads, then `-f PROFILE_B`. Every path is resolved (Seatbelt matches
+ * repro.sb reads, then `-f` the run's profile B (writeProfileB, written on the
+ * first call once every param resolved). Every path is resolved (Seatbelt matches
  * real paths; a spelling through a link would deny nothing): CLONE, TMP, OUT and
  * RUN from the run, RUNS the run dir's parent, HOME the operator's, FLEET the
  * fleet home, SRC the work tree's top, TMPROOT the OS temp root as a regex
@@ -413,7 +555,7 @@ export function profileBArgs(run, { home, fleet, reach }) {
     ['NODE', reach.node],
     ['NODEUP', reach.up],
   ];
-  return [...params.flatMap(([k, v]) => ['-D', `${k}=${v}`]), '-f', PROFILE_B];
+  return [...params.flatMap(([k, v]) => ['-D', `${k}=${v}`]), '-f', writeProfileB(run)];
 }
 
 /**
@@ -824,7 +966,9 @@ function alternation(re, close) {
  *     «re-allowed whole» (the session's ruling on T8, 2026-11-25);
  *   - any other prefix (`~/.pyenv/versions/3.12.1`, uv's
  *     `~/.local/share/uv/python/cpython-…`): the prefix whole.
- * A binary that does not resolve, or resolves outside the home, adds nothing.
+ * A binary that does not resolve, or resolves outside the home, adds nothing;
+ * one that resolves under `/Volumes` or `/Users/Shared`, which profile B denies
+ * reading, is refused — the one place every binary of the test command passes.
  * The directories from the home down to each allowed path's parent are
  * stat-able (nodeUp). `binaries`: the program, its shebang interpreter (one
  * level) and, for each copied venv, `realpath(<copy>/bin/python)`. The tool
@@ -848,6 +992,11 @@ export function toolchainReach({ home, binaries, base = nodeEnv({ home }) }) {
   for (const b of binaries) {
     let real;
     try { real = realpathSync(b); } catch { continue; }
+    const shared = SHARED_DENIED.find((d) => within(real, d));
+    if (shared !== undefined) {
+      const where = shared === '/Volumes' ? 'on a mounted volume' : 'under /Users/Shared';
+      throw new Error(`gemini: the test command needs ${JSON.stringify(real)}, which lives ${where} — the test profile does not read it; install the toolchain elsewhere`);
+    }
     if (!within(real, realHome) || real === realHome) continue;
     const dir = dirname(real);
     const inBin = basename(dir) === 'bin';
@@ -884,6 +1033,145 @@ export function assertDeps(run) {
       }
     }
   }
+}
+
+/** The most symbolic links linkLanding follows for one link, the kernel's order of magnitude; past it the link is a finding. */
+const LINK_HOPS = 40;
+
+/**
+ * Where the kernel lands a create through the symbolic link `link` (an
+ * absolute path whose directory holds no link): `dir`, the deepest existing
+ * directory its resolution reached, and `tail`, whether a component is left
+ * after it — or null when it cannot say and the link is to be refused. The
+ * link's text is not normalised first: it is taken component by component
+ * from the link's real directory (`/` for an absolute text); `.` and an empty
+ * component are skipped; `..` is the parent of the real path reached so far;
+ * a component that is a link is followed, its own text taken the same way
+ * from the real directory it sits in. The first component that does not exist
+ * (or cannot be looked up, or follows a non-directory) ends the walk with a
+ * tail, and a `..` in the tail is null — the kernel would fail there. A walk
+ * that ends on an existing non-directory lands in the directory holding it,
+ * with a tail. More than LINK_HOPS links followed is null. Node's JS
+ * realpathSync is not used: it takes a `..` after a link textually (the
+ * kernel takes it from the link's real parent), and it fails on a dangling
+ * link — the usual case, since the file agy would create does not exist yet.
+ * `dir` is a spelling, not an identity: the caller compares by dev and inode.
+ * Reads only (lstat, readlink).
+ * @returns {{dir: string, tail: boolean}|null}
+ */
+function linkLanding(link) {
+  let cur = dirname(link);
+  let hops = 0;
+  const rest = [];
+  const follow = (at) => {
+    if (++hops > LINK_HOPS) return false;
+    const text = readlinkSync(at);
+    if (isAbsolute(text)) cur = '/';
+    rest.unshift(...text.split('/'));
+    return true;
+  };
+  try {
+    if (!follow(link)) return null;
+    while (rest.length) {
+      const c = rest.shift();
+      if (c === '' || c === '.') continue;
+      if (c === '..') { cur = dirname(cur); continue; }
+      const next = join(cur, c);
+      const st = lstatOrNull(next);
+      if (st && st.isSymbolicLink()) {
+        if (!follow(next)) return null;
+        continue;
+      }
+      if (!st || !st.isDirectory()) {
+        if (rest.includes('..')) return null;
+        return { dir: cur, tail: true };
+      }
+      cur = next;
+    }
+    return { dir: cur, tail: false };
+  } catch {
+    return null;
+  }
+}
+
+/** The most `..` steps up() takes from one directory before it calls the chain unreadable. */
+const UP_MAX = 128;
+
+/** `p`'s identity, `<dev>:<ino>` (bigint: an inode past 2^53 stays exact); throws when it cannot be stat'ed. */
+function idOf(p) {
+  const s = statSync(p, { bigint: true });
+  return `${s.dev}:${s.ino}`;
+}
+
+/**
+ * The identities of `dir`, `dir/..`, `dir/../..` …, each `..` taken by the
+ * kernel, until one repeats (the root); null past UP_MAX steps or when a stat
+ * fails.
+ * @returns {string[]|null}
+ */
+function up(dir) {
+  const ids = [];
+  let p = dir;
+  try {
+    for (let i = 0; i <= UP_MAX; i++) {
+      const id = idOf(p);
+      if (ids.includes(id)) return ids;
+      ids.push(id);
+      p = `${p}/..`;
+    }
+  } catch { /* unreadable: null */ }
+  return null;
+}
+
+/**
+ * A symbolic link in the copy that leads into the run's own directory outside
+ * the copy (`cfg -> ../home/.gemini/…`): profile A lets agy write the scratch
+ * home, so through such a link an «inside the workspace» path is a write to
+ * agy's own settings, which its next round reads. Checked before every agy
+ * spawn. The whole copy is walked by walkCopy — its `.git` and every
+ * dependency copy included (a test can plant a link in either, and the kernel
+ * checks a write by the path it resolves to), no link followed, at most `max`
+ * entries; a directory it cannot list stops it (`unreadable`) — it never
+ * changes a mode itself: the server's process outside any profile would chmod
+ * a path the model controls (the caller makes the copy listable under profile
+ * B first). Each link lands where the kernel lands a create through it
+ * (linkLanding: the deepest existing directory, and whether a tail is left),
+ * and the landing is compared by identity (dev and inode), never by its
+ * spelling — `/System/Volumes/Data/private/var/…` is the same directory as
+ * `/private/var/…`. The finding: a link linkLanding cannot place; a landing
+ * whose chain of `..` (up) holds the run dir and not the copy (in the run,
+ * outside the copy, whatever the tail); a landing with no tail that is an
+ * ancestor of the run dir (through it agy's own path reaches `…/run-X/home/…`)
+ * — the run dir's `..` chain, plus `/System/Volumes/Data` when that spelling of
+ * the run dir is the run dir (the Data volume's root is not on the `..` chain);
+ * a stat that fails on the way. An ancestor with a missing tail, a sibling of
+ * the run, a toolchain outside it are not this check's business.
+ * @param {{runDir: string, clone: string}} run
+ * @returns {{link?: string, tooMany?: true, unreadable?: string}} the link relative to the copy, or why the walk stopped; `{}` when none
+ */
+export function findRunLink(run, { max = WALK_MAX } = {}) {
+  const clone = realpathSync.native(run.clone);
+  const runId = idOf(run.runDir);
+  const cloneId = idOf(clone);
+  const runUp = up(run.runDir);
+  if (runUp === null) throw new Error('gemini: the run directory\'s ancestors could not be read for the link check');
+  const above = new Set(runUp.slice(1));
+  const DATA = '/System/Volumes/Data';
+  try {
+    if (idOf(DATA + realpathSync.native(run.runDir)) === runId) above.add(idOf(DATA));
+  } catch { /* no Data volume spelling of the run */ }
+  const chains = new Map();
+  const into = (link) => {
+    const landing = linkLanding(link);
+    if (landing === null) return true;
+    if (!chains.has(landing.dir)) chains.set(landing.dir, up(landing.dir));
+    const chain = chains.get(landing.dir);
+    if (chain === null) return true;
+    if (chain.includes(runId) && !chain.includes(cloneId)) return true;
+    return !landing.tail && above.has(chain[0]);
+  };
+  const found = walkCopy(clone, (_name, path, d) => d.isSymbolicLink() && into(join(clone, path)), { max });
+  return found.hit !== undefined ? { link: found.hit } : found;
 }
 
 /**
@@ -943,8 +1231,9 @@ export function sbString(s) {
  * only the run's clone, tmp and scratch home (never a copied dependency, never
  * the copy's `.gemini`, `.agents` or `.antigravity`); the operator's home
  * unreadable but `Library/Keychains` (read only), agy's binary and the metadata
- * of the directories down to both; the OS temp root, `/private/tmp` and
- * `/private/var/tmp` unreadable — for a temp root of macOS's per-user shape
+ * of the directories down to both; readDenied's places unreadable — the OS
+ * temp root, `/private/tmp`, `/private/var/tmp`, `/Volumes` and `/Users/Shared`;
+ * for a temp root of macOS's per-user shape
  * (`/private/var/folders/<a>/<b>/T`) its parent instead, which also holds the
  * user's cache directory `C` and `0`, its path and the temp root's re-allowed
  * as metadata literals (measured with the real agy, 2026-11-25: it signs in and
@@ -977,8 +1266,7 @@ export function renderProfileA({ clone, tmp, shome, home, agyExe, src, fleet, ru
   const keychains = join(home, 'Library', 'Keychains');
   // The two nodeUp chains in one regex: home down to agy's directory, and down to Library (the Keychains' parent).
   const up = [nodeUp({ home, node: agyExe }), nodeUp({ home, node: keychains })].filter((r) => r !== NODEUP_NONE).map((r) => r.slice(2, -2));
-  // macOS's per-user temp dir: its parent also holds the user's cache dirs (`C`, `0`), denied with it.
-  const temp = /^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/.test(tmproot) ? dirname(tmproot) : tmproot;
+  const temp = tempReadRoot(tmproot);
   const omelette = `^${regexLiteral(tmproot)}/omelette-`;
   const subpaths = (...ps) => ps.map((p) => `(subpath ${q(p)})`).join(' ');
   const literals = (...ps) => ps.map((p) => `(literal ${q(p)})`).join(' ');
@@ -990,8 +1278,8 @@ export function renderProfileA({ clone, tmp, shome, home, agyExe, src, fleet, ru
     `(allow file-write* ${subpaths(clone, tmp, shome)} (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/"))`,
     '(deny file-read* (regex #"^/dev/ttys"))',
     '(deny file-write* (regex #"^/dev/ttys"))',
-    '; the OS temp root (macOS\'s per-user one with its parent), /private/tmp and /private/var/tmp: other programs\' temp files are not agy\'s to read (it has the network); this run\'s own dirs are re-allowed last',
-    `(deny file-read* ${subpaths(temp, '/private/tmp', '/private/var/tmp')})`,
+    '; the OS temp root (macOS\'s per-user one with its parent), /private/tmp, /private/var/tmp, /Volumes and /Users/Shared: other programs\' temp files and shared places are not agy\'s to read (it has the network); this run\'s own dirs are re-allowed last',
+    `(deny file-read* ${subpaths(...readDenied(tmproot))})`,
     '; the operator\'s home, whole: agy gets the Keychain for its sign-in and its own binary (Measured 1, 3)',
     `(deny file-read* ${subpaths(home)})`,
     `(allow file-read-metadata (regex ${q(`^(${up.join('|')})$`)}))`,
@@ -1037,7 +1325,8 @@ export function renderProfileA({ clone, tmp, shome, home, agyExe, src, fleet, ru
  * path) kept on the run as `run.profileA`; `run.sandboxed` is set once the file
  * is written. A later call on the same run whose `exe` resolves to the same
  * path returns that same object and writes nothing; one whose `exe` resolves
- * elsewhere (an update mid-run) is refused. The caller execs the returned
+ * elsewhere (an update mid-run) is refused, as is a binary that resolves under
+ * `/Volumes` or `/Users/Shared`, which the profile denies. The caller execs the returned
  * `exe`, never the link it found: the profile allows the resolved binary's
  * literal only.
  * @param {{runDir: string, clone: string, tmp: string, home: string, out: string, top: string, deps: {copy: string}[], profileA?: {profile: string, exe: string}}} run
@@ -1047,6 +1336,10 @@ export function renderProfileA({ clone, tmp, shome, home, agyExe, src, fleet, ru
  */
 export function writeProfileA(run, exe, { home, fleet }) {
   const agyExe = realpathSync(exe);
+  const shared = SHARED_DENIED.find((d) => within(agyExe, d));
+  if (shared !== undefined) {
+    throw new Error(`gemini: agy's binary ${JSON.stringify(agyExe)} lives under ${shared}, which profile A does not read — install agy elsewhere`);
+  }
   if (run.profileA) {
     if (agyExe !== run.profileA.exe) {
       throw new Error(`gemini: agy's binary changed during the run (${JSON.stringify(run.profileA.exe)} → ${JSON.stringify(agyExe)}) — the profile allows the first only`);
