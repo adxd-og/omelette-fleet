@@ -176,11 +176,12 @@ test('cloneDiff: indexFile carries every git call of the diff — the copy\'s ow
   const mine = join(BASE, `index-${n++}`);
   copyFileSync(own, mine);
   const pristine = readFileSync(own);
-  writeFileSync(join(run.clone, 'README.md'), 'two\n');
+  // Another size than HEAD's `one\n`: a same-size rewrite in the second of the checkout is racily clean to git once the index is a second older.
+  writeFileSync(join(run.clone, 'README.md'), 'second\n');
   writeFileSync(join(run.clone, 'fresh.txt'), 'new\n');
   const first = cloneDiff(run.clone, gitDir, { indexFile: mine });
   const second = cloneDiff(run.clone, gitDir, { indexFile: mine });
-  assert.match(first, /^\+two$/m);
+  assert.match(first, /^\+second$/m);
   assert.match(first, /^\+\+\+ b\/fresh\.txt$/m, 'the untracked file is in the diff');
   assert.equal(second, first, 'the second diff over the same index file is the same');
   assert.deepEqual(readFileSync(own), pristine, 'the copy\'s own index is byte for byte what prepareClone left');
