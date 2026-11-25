@@ -6,7 +6,8 @@
  * text made unable to pass for the lines the unit appends after it.
  *
  * Used by Mistral's `mistral_security_repro` (units/mistral/repro.mjs
- * re-exports it under its own names and messages). What is a unit's own comes
+ * re-exports it under its own names and messages) and Gemini's `gemini_test`
+ * (units/gemini/test-run.mjs, its own runs root). What is a unit's own comes
  * in as an argument: the error prefix (`unit`), the runs root (`root`, from
  * runsRootAt), the paths dropped from the clone (`drop`), the run's directories
  * beside the clone (`dirs`), the config key the diff's truncation line names,
