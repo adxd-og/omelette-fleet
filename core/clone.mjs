@@ -141,6 +141,7 @@ export function runsRootAt(name, unit) {
  * refusal opening with `<unit>:`); any later failure removes the run dir.
  */
 export function prepareClone({ cwd, log = () => {}, unit, root, drop = [], dirs = ['tmp', 'out'], setup = null }) {
+  if (!Array.isArray(dirs)) throw new Error('prepareClone: dirs must be an array of directory names');
   for (const d of dirs) {
     if (!/^[a-z][a-z0-9-]*$/.test(d) || ['clone', 'head', 'dirty', 'ids', 'top'].includes(d)) {
       throw new Error(`prepareClone: dirs entry ${JSON.stringify(d)} is not a plain directory name, or collides with a key of the result`);
@@ -175,7 +176,7 @@ export function prepareClone({ cwd, log = () => {}, unit, root, drop = [], dirs 
     if (drop.length) git([...CLONE_CONFIG, '-C', clone, 'rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', ...drop], { env });
     if (setup) {
       const head = git([...CLONE_CONFIG, '-C', clone, 'rev-parse', '--short', 'HEAD'], { env }).trim();
-      const r = setup({ clone, env, config: CLONE_CONFIG, head });
+      const r = setup({ clone, env, config: [...CLONE_CONFIG], head });
       if (r && typeof r.then === 'function') {
         r.then(null, () => {});
         throw new Error('prepareClone: setup must be synchronous — it returned a promise');
@@ -239,11 +240,14 @@ export function assertRun(run, message) {
 export function cloneDiff(clone, gitDir = join(dirname(clone), 'out', 'git'), { keepKey = 'mistral.reproKeep', indexFile } = {}) {
   const base = ['--git-dir', gitDir, '--work-tree', clone, '--literal-pathspecs', ...DIFF_CONFIG];
   const env = isolatedGitEnv();
-  if (indexFile) {
-    if (!isAbsolute(indexFile)) throw new Error(`cloneDiff: indexFile must be an absolute path (got ${JSON.stringify(indexFile)})`);
+  if (indexFile !== undefined) {
+    if (typeof indexFile !== 'string' || !isAbsolute(indexFile)) throw new Error(`cloneDiff: indexFile must be an absolute path (got ${JSON.stringify(indexFile)})`);
     const at = resolve(indexFile);
     const root = resolve(clone);
     if (at === root || at.startsWith(root + sep)) throw new Error('cloneDiff: indexFile must lie outside the clone — the clone is the model\'s to write');
+    if (at === resolve(gitDir, 'index')) throw new Error('cloneDiff: indexFile must not be the git dir\'s own index');
+    // The scratch path is core's own: a lock a killed git left beside it, or a link standing at it, goes before the fresh copy.
+    for (const p of [indexFile, `${indexFile}.lock`]) rmSync(p, { force: true });
     copyFileSync(join(gitDir, 'index'), indexFile);
     env.GIT_INDEX_FILE = indexFile;
   }

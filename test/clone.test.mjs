@@ -3,7 +3,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareClone } from '../units/mistral/repro.mjs';
@@ -120,4 +120,32 @@ test('an async setup is refused and leaves no run', () => {
   const before = runs();
   assert.throws(() => open(src, { setup: async () => { throw new Error('late'); } }), /setup must be synchronous/);
   assert.deepEqual(runs(), before);
+});
+
+test('cloneDiff with indexFile: a lock or a link left at the scratch path neither stops nor redirects the next diff', () => {
+  const run = open(committed());
+  const indexFile = join(BASE, `index-${n++}`);
+  writeFileSync(join(run.clone, 'new.txt'), 'new\n');
+  writeFileSync(`${indexFile}.lock`, '');
+  assert.match(core.cloneDiff(run.clone, gitDirOf(run), { indexFile }), /^\+\+\+ b\/new\.txt$/m);
+  rmSync(indexFile);
+  symlinkSync(join(run.clone, 'planted'), indexFile);
+  assert.match(core.cloneDiff(run.clone, gitDirOf(run), { indexFile }), /^\+\+\+ b\/new\.txt$/m);
+  assert.equal(existsSync(join(run.clone, 'planted')), false, 'nothing was written through the link');
+  assert.equal(lstatSync(indexFile).isSymbolicLink(), false);
+});
+
+test('cloneDiff refuses the git dir\'s own index and an empty indexFile', () => {
+  const run = open(committed());
+  const own = 'cloneDiff: indexFile must not be the git dir\'s own index';
+  assert.throws(() => core.cloneDiff(run.clone, gitDirOf(run), { indexFile: join(gitDirOf(run), 'index') }), (e) => e.message === own);
+  assert.throws(() => core.cloneDiff(run.clone, gitDirOf(run), { indexFile: '' }), (e) => e.message === 'cloneDiff: indexFile must be an absolute path (got "")');
+});
+
+test('prepareClone refuses dirs that is not an array, and a setup cannot change CLONE_CONFIG', () => {
+  const src = committed();
+  assert.throws(() => open(src, { dirs: 'tmp' }), (e) => e.message === 'prepareClone: dirs must be an array of directory names');
+  const before = [...core.CLONE_CONFIG];
+  open(src, { setup: ({ config }) => { config.push('-c', 'x.y=z'); } });
+  assert.deepEqual(core.CLONE_CONFIG, before);
 });
