@@ -245,7 +245,11 @@ export function buildChildEnv({ env = process.env, allow = ALLOWED_ENV, passthro
  *     default: only a caller whose child runs a model's commands asks for it.
  *   outFd: an open file descriptor that takes the child's stdout AND stderr, in
  *     the order written; the result's `stdout` and `stderr` are then '' and
- *     `capped` false.
+ *     `capped` false. The caller owns the descriptor and closes it. With
+ *     `outFd` there is no pipe for a straggler to hold open, so the call ends
+ *     when the child exits and no longer waits for a process it left behind —
+ *     pass `killGroupOnExit` when the child may leave one, or it keeps writing
+ *     into the file after the call returned.
  * @returns {Promise<{stdout:string, stderr:string, code:number|null, signal:string|null,
  *                    killed:boolean, capped:boolean, cancelled:boolean}>}
  *   capped: the cap dropped characters, so `stdout` starts mid-stream.
