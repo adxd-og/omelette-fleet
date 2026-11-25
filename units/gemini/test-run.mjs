@@ -792,3 +792,124 @@ export function programNeeds({ word, program, env = process.env }) {
 
 /** programNeeds' `dirs`: the resolved directories the program needs on its PATH beside its own. */
 export const programDirs = (o) => programNeeds(o).dirs;
+
+/**
+ * A path as a Seatbelt string: `"` + `s` with `\` and `"` escaped + `"`. A
+ * path holding a control character (C0, DEL or C1) is refused, never rendered.
+ */
+export function sbString(s) {
+  if (typeof s !== 'string') throw new Error(`gemini: a profile A path must be a string (got ${typeof s})`);
+  if (CONTROL.test(s)) throw new Error(`gemini: a profile A path holds a control character: ${JSON.stringify(s)}`);
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Profile A — agy whole under the kernel (variant N, G0 2026-11-24): writes
+ * only the run's clone, tmp and scratch home (never a copied dependency, never
+ * the copy's `.gemini`, `.agents` or `.antigravity`); the operator's home
+ * unreadable but `Library/Keychains` (read only), agy's binary and the metadata
+ * of the directories down to both; the work tree, the fleet home, every other
+ * `omelette-*` temp dir and every other run denied, this run's dirs re-allowed
+ * last; no hand-off outside the profile but `/usr/bin/security`, which agy's
+ * sign-in runs; the network open. Every path comes resolved, absolute, and goes
+ * in through sbString; `deps` are the copies' absolute paths, each strictly
+ * under `clone` and normalised. The ancestors in the unlink deny are every
+ * directory strictly between the clone and each copy, in order, once each.
+ * @param {{clone: string, tmp: string, shome: string, home: string, agyExe: string, src: string, fleet: string, runs: string, run: string, tmproot: string, deps: string[]}} p
+ * @returns {string}
+ */
+export function renderProfileA({ clone, tmp, shome, home, agyExe, src, fleet, runs, run, tmproot, deps }) {
+  for (const [k, v] of Object.entries({ clone, tmp, shome, home, agyExe, src, fleet, runs, run, tmproot })) {
+    if (typeof v !== 'string' || !isAbsolute(v)) throw new Error(`gemini: profile A needs an absolute ${k} (got ${JSON.stringify(v)})`);
+  }
+  if (!Array.isArray(deps)) throw new Error('gemini: profile A needs deps as an array of paths');
+  const ancestors = [];
+  for (const d of deps) {
+    if (typeof d !== 'string' || !d.startsWith(`${clone}/`) || d.endsWith('/') || posix.normalize(d) !== d) {
+      throw new Error(`gemini: profile A: the dep copy ${JSON.stringify(d)} is not under the clone`);
+    }
+    const chain = [];
+    for (let a = dirname(d); a !== clone; a = dirname(a)) chain.unshift(a);
+    for (const a of chain) if (!ancestors.includes(a)) ancestors.push(a);
+  }
+  const q = sbString;
+  const keychains = join(home, 'Library', 'Keychains');
+  // The two nodeUp chains in one regex: home down to agy's directory, and down to Library (the Keychains' parent).
+  const up = [nodeUp({ home, node: agyExe }), nodeUp({ home, node: keychains })].filter((r) => r !== NODEUP_NONE).map((r) => r.slice(2, -2));
+  const omelette = `^${regexLiteral(tmproot)}/omelette-`;
+  const subpaths = (...ps) => ps.map((p) => `(subpath ${q(p)})`).join(' ');
+  const literals = (...ps) => ps.map((p) => `(literal ${q(p)})`).join(' ');
+  const lines = [
+    '(version 1)',
+    '; omelette-fleet gemini_test — profile A: agy whole under the kernel, rendered per run by units/gemini/test-run.mjs.',
+    '(allow default)',
+    '(deny file-write*)',
+    `(allow file-write* ${subpaths(clone, tmp, shome)} (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/"))`,
+    '(deny file-read* (regex #"^/dev/ttys"))',
+    '(deny file-write* (regex #"^/dev/ttys"))',
+    '; the operator\'s home, whole: agy gets the Keychain for its sign-in and its own binary (Measured 1, 3)',
+    `(deny file-read* ${subpaths(home)})`,
+    `(allow file-read-metadata (regex ${q(`^(${up.join('|')})$`)}))`,
+    `(allow file-read* ${literals(agyExe)})`,
+    `(allow file-read* ${subpaths(keychains)})`,
+    `(deny file-read* ${subpaths(src)})`,
+    `(deny file-read* ${subpaths(fleet)})`,
+    '; no hand-off outside the profile, as repro.sb — but /usr/bin/security, which agy\'s sign-in runs (Measured 3)',
+    '(deny appleevent-send)',
+    '(deny process-exec (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/automator") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy"))',
+    '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb"))',
+    '(deny mach-lookup (global-name "com.apple.sysmond"))',
+    '(deny job-creation)',
+    '(deny user-preference-write)',
+    '(deny signal)',
+    '(allow signal (target same-sandbox))',
+    '(deny sysctl-read (sysctl-name-prefix "kern.procargs"))',
+    '(deny process-info*)',
+    '(allow process-info* (target same-sandbox))',
+    '; every other omelette-* temp dir and every other run; this run\'s own dirs re-allowed last',
+    `(deny file-read* (regex ${q(omelette)}))`,
+    `(deny file-write* (regex ${q(omelette)}))`,
+    `(deny file-read* ${subpaths(runs)})`,
+    `(deny file-write* ${subpaths(runs)})`,
+    `(allow file-read-metadata ${literals(runs, run)})`,
+    `(allow file-read* ${subpaths(clone, tmp, shome)})`,
+    `(allow file-write* ${subpaths(clone, tmp, shome)})`,
+    `(deny file-write-flags ${subpaths(clone, tmp, shome)})`,
+    `(deny file-write-unlink ${literals(clone, tmp, shome, ...ancestors)})`,
+    '; the copied dependencies: read, never written (git ignores them, and the test program may live there)',
+    ...deps.map((d) => `(deny file-write* ${subpaths(d)})`),
+    '; agy\'s workspace-level config directories in the copy: read, never written — Neon plants no agent config (rules, hooks, plugins) for its own next round (Measured 8)',
+    `(deny file-write* ${subpaths(join(clone, '.gemini'), join(clone, '.agents'), join(clone, '.antigravity'))})`,
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Profile A for this run, rendered once into `<out>/a.sb` (`wx`, 0600: a
+ * second call fails EEXIST) with every path resolved — the run's own from
+ * `run.*`, never from testRunsRoot(), `agyExe` the real path of `exe`, the dep
+ * copies from `run.deps` — and `run.sandboxed` set once it is written.
+ * @param {{runDir: string, clone: string, tmp: string, home: string, out: string, top: string, deps: {copy: string}[]}} run
+ * @param {string} exe agy's binary as found
+ * @param {{home: string, fleet: string}} o the operator's home and the fleet home
+ * @returns {string} the profile's path
+ */
+export function writeProfileA(run, exe, { home, fleet }) {
+  const text = renderProfileA({
+    clone: realpathSync(run.clone),
+    tmp: realpathSync(run.tmp),
+    shome: realpathSync(run.home),
+    home: realpathSync(home),
+    agyExe: realpathSync(exe),
+    src: realpathSync(run.top),
+    fleet: realpathSync(fleet),
+    runs: realpathSync(dirname(run.runDir)),
+    run: realpathSync(run.runDir),
+    tmproot: realpathSync(tmpdir()),
+    deps: run.deps.map((d) => d.copy),
+  });
+  const path = join(run.out, 'a.sb');
+  writeFileSync(path, text, { flag: 'wx', mode: 0o600 });
+  run.sandboxed = true;
+  return path;
+}

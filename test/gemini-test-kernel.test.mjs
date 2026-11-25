@@ -489,3 +489,238 @@ test('runTestCommand refuses a time limit past what a timer can hold, and names 
     assert.deepEqual(listing(w.run), before);
   } finally { w.done(); }
 });
+
+// 1.13.0 T9 (plan, «T9 — profile A, rendered per run»; spec «The boundary», Profile A): agy's own cage. The kernel
+// rows run a probe node script directly under `sandbox-exec -f <out/a.sb>` — never agy — with cwd the clone, HOME the
+// scratch home and TMPDIR the run's tmp; the node binary is the profile's agyExe unless a row says otherwise. The
+// profile's `home` is the row's HOME under /private/tmp, the stand-in for the operator's home.
+import { spawn as spawnT9 } from 'node:child_process';
+import { linkSync as linkT9 } from 'node:fs';
+import { renderProfileA, sbString, writeProfileA } from '../units/gemini/test-run.mjs';
+
+/** The probe: argv[2] is a JSON list of ops, run in order; one JSON array of results ('ok', 'exit <n>' or an error code). */
+const PROBE_A = [
+  'import { appendFileSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";',
+  'import { spawn, spawnSync } from "node:child_process";',
+  'import { connect } from "node:net";',
+  'const code = (e) => e.code || String(e.message);',
+  'const sync = { read: (p) => readFileSync(p), write: (p) => writeFileSync(p, "x"), append: (p) => appendFileSync(p, "x"), stat: (p) => lstatSync(p), list: (p) => readdirSync(p), mkdir: (p) => mkdirSync(p), rename: (a, b) => renameSync(a, b), link: (a, b) => linkSync(a, b) };',
+  'const results = [];',
+  'for (const [op, ...a] of JSON.parse(process.argv[2])) {',
+  '  if (sync[op]) { try { sync[op](...a); results.push("ok"); } catch (e) { results.push(code(e)); } continue; }',
+  '  if (op === "exec") { const r = spawnSync(a[0], a.slice(1), { timeout: 5000, stdio: "ignore" }); results.push(r.error ? code(r.error) : `exit ${r.status}`); continue; }',
+  // A program that must not run: killed the moment it starts, stdin still open (pbcopy writes the clipboard only at EOF).
+  '  if (op === "spawnkill") { results.push(await new Promise((res) => { let c; try { c = spawn(a[0], [], { stdio: ["pipe", "ignore", "ignore"] }); } catch (e) { res(code(e)); return; } c.on("error", (e) => res(code(e))); c.on("spawn", () => { c.kill("SIGKILL"); res("ok"); }); })); continue; }',
+  '  if (op === "connect") { results.push(await new Promise((res) => { const s = connect(Number(a[0]), "127.0.0.1"); const t = setTimeout(() => { s.destroy(); res("timeout"); }, 2000); s.on("connect", () => { clearTimeout(t); s.destroy(); res("ok"); }); s.on("error", (e) => { clearTimeout(t); res(code(e)); }); })); continue; }',
+  '  results.push("unknown op");',
+  '}',
+  'console.log(JSON.stringify(results));',
+].join('\n');
+
+/**
+ * `argv` under the run's profile A (written once per run by writeProfileA, with `exe` as agy's binary — node by
+ * default), cwd the clone, HOME the scratch home: its own process group, killed whole after 5 s and again at exit.
+ */
+async function underA(w, argv, { exe = node() } = {}) {
+  if (!w.profileA) {
+    mkdirSync(join(w.home, 'Library', 'Keychains'), { recursive: true });
+    writeFileSync(join(w.home, 'Library', 'Keychains', 'k'), 'keychain-bytes\n');
+    w.profileA = writeProfileA(w.run, exe, { home: w.home, fleet: w.fleet });
+  }
+  const child = spawnT9('/usr/bin/sandbox-exec', ['-f', w.profileA, ...argv], {
+    cwd: w.run.clone, env: { HOME: w.run.home, TMPDIR: w.run.tmp, PATH: '/usr/bin:/bin' }, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const killGroup = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } };
+  const timer = setTimeout(killGroup, 5_000);
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => { stdout += d; });
+  child.stderr.on('data', (d) => { stderr += d; });
+  const [code] = await once(child, 'close');
+  clearTimeout(timer);
+  killGroup();
+  return { code, stdout, stderr };
+}
+
+/** The probe run under profile A with `ops`: its results, in order. */
+async function probeA(w, ops, o) {
+  const r = await underA(w, [node(), 'probe.mjs', JSON.stringify(ops)], o);
+  assert.equal(r.code, 0, `${r.stdout}${r.stderr}`);
+  return JSON.parse(r.stdout.trim().split('\n').pop());
+}
+
+const probeWorld = (o = {}) => world({ ...o, files: { 'probe.mjs': PROBE_A, ...(o.files || {}) } });
+
+test('sbString escapes a quote and a backslash, and refuses a newline', () => {
+  assert.equal(sbString('/a "b"\\c'), '"/a \\"b\\"\\\\c"');
+  assert.throws(() => sbString('/a\nb'), /control character/);
+});
+
+test('renderProfileA lists every dep copy after the clone\'s allow and every ancestor in the unlink deny', () => {
+  const p = {
+    clone: '/r/run-1/clone', tmp: '/r/run-1/tmp', shome: '/r/run-1/home', home: '/h', agyExe: '/opt/agy/bin/agy', src: '/w',
+    fleet: '/h/.omelette', runs: '/r', run: '/r/run-1', tmproot: '/t', deps: ['/r/run-1/clone/packages/a/node_modules', '/r/run-1/clone/node_modules'],
+  };
+  const lines = renderProfileA(p).split('\n');
+  const reAllow = lines.indexOf('(allow file-write* (subpath "/r/run-1/clone") (subpath "/r/run-1/tmp") (subpath "/r/run-1/home"))');
+  const dep1 = lines.indexOf('(deny file-write* (subpath "/r/run-1/clone/packages/a/node_modules"))');
+  const dep2 = lines.indexOf('(deny file-write* (subpath "/r/run-1/clone/node_modules"))');
+  assert.ok(reAllow > 0 && dep1 > reAllow && dep2 > dep1, `${reAllow} ${dep1} ${dep2}`);
+  assert.ok(lines.includes('(deny file-write-unlink (literal "/r/run-1/clone") (literal "/r/run-1/tmp") (literal "/r/run-1/home") (literal "/r/run-1/clone/packages") (literal "/r/run-1/clone/packages/a"))'));
+  assert.throws(() => renderProfileA({ ...p, deps: ['/r/run-1/elsewhere'] }), /not under the clone/);
+});
+
+test('profile A parses', KROW, async () => {
+  const w = probeWorld();
+  try {
+    const r = await underA(w, ['/usr/bin/true']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(w.profileA, join(w.run.out, 'a.sb'));
+    assert.equal(statSync(w.profileA).mode & 0o777, 0o600);
+    assert.equal(w.run.sandboxed, true);
+    assert.throws(() => writeProfileA(w.run, node(), { home: w.home, fleet: w.fleet }), (e) => e.code === 'EEXIST', 'once per run');
+  } finally { w.done(); }
+});
+
+test('writes land only in the copy, its tmp and the scratch home', KROW, async () => {
+  const w = probeWorld();
+  const sib = world();
+  // Another unit's temp dir: an omelette-* dir under the OS temp root (this file's TMPDIR is BASE), outside the runs root.
+  const other = join(BASE, 'omelette-other');
+  mkdirSync(other, { recursive: true });
+  const refused = [join(w.home, 'x'), join(w.work, 'planted'), join(w.fleet, 'planted'), join(sib.run.clone, 'planted'), join(w.run.out, 'planted'), join(BASE, 'planted'), join(other, 'planted')];
+  const allowed = [join(w.run.clone, 'written'), join(w.run.tmp, 'written'), join(w.run.home, 'written')];
+  try {
+    const got = await probeA(w, [...refused, ...allowed].map((p) => ['write', p]));
+    assert.deepEqual(got, [...refused.map(() => 'EPERM'), ...allowed.map(() => 'ok')]);
+    for (const p of refused) assert.equal(existsSync(p), false, p);
+    for (const p of allowed) assert.equal(existsSync(p), true, p);
+  } finally {
+    w.done();
+    sib.done();
+  }
+});
+
+test('reads of the home are refused but the Keychains link and agy\'s binary', KROW, async () => {
+  const w = probeWorld();
+  // agy's binary under the home, as a file the probe reads (node runs from outside the row's HOME).
+  const bin = join(w.home, '.local', 'agy', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'agy'), 'agy-binary\n');
+  writeFileSync(join(bin, 'other'), 'beside it\n');
+  try {
+    const got = await probeA(w, [
+      ['read', join(w.home, '.ssh', 'id')],
+      ['read', join(w.run.home, 'Library', 'Keychains', 'k')],
+      ['read', join(bin, 'agy')],
+      ['read', join(bin, 'other')],
+      ['stat', bin],
+      ['list', w.home],
+      ['list', bin],
+      ['write', join(w.run.home, 'Library', 'Keychains', 'new')],
+    ], { exe: join(bin, 'agy') });
+    assert.deepEqual(got, ['EPERM', 'ok', 'ok', 'EPERM', 'ok', 'EPERM', 'EPERM', 'EPERM']);
+  } finally { w.done(); }
+});
+
+test('the work tree and a sibling run are unreadable, the sibling run not even stat-able', KROW, async () => {
+  const w = probeWorld();
+  const sib = world();
+  const other = join(BASE, 'omelette-other');
+  mkdirSync(other, { recursive: true });
+  writeFileSync(join(other, 'f'), 'another unit\'s\n');
+  try {
+    const got = await probeA(w, [
+      ['read', join(other, 'f')],
+      ['read', join(w.work, 'README.md')],
+      ['stat', w.work],
+      ['stat', sib.run.runDir],
+      ['read', join(sib.run.clone, 'README.md')],
+      ['list', dirname(w.run.runDir)],
+      ['stat', w.run.runDir],
+      ['read', join(w.run.clone, 'README.md')],
+    ]);
+    assert.deepEqual(got, ['EPERM', 'EPERM', 'EPERM', 'EPERM', 'EPERM', 'EPERM', 'ok', 'ok']);
+  } finally {
+    w.done();
+    sib.done();
+  }
+});
+
+test('a copied dep is readable and not writable, and an ancestor of it cannot be renamed', KROW, async () => {
+  const w = probeWorld({
+    ignored: ['packages/a/node_modules'],
+    files: { 'packages/a/index.mjs': 'export default 1;\n' },
+    untracked: { 'packages/a/node_modules/pkg/index.js': 'module.exports = 1;\n' },
+    deps: ['packages/a/node_modules'],
+  });
+  const c = w.run.clone;
+  try {
+    const got = await probeA(w, [
+      ['read', join(c, 'packages', 'a', 'node_modules', 'pkg', 'index.js')],
+      ['write', join(c, 'packages', 'a', 'node_modules', 'pkg', 'index.js')],
+      ['write', join(c, 'packages', 'a', 'node_modules', 'new.js')],
+      ['rename', join(c, 'packages', 'a'), join(c, 'packages', 'b')],
+      ['rename', join(c, 'packages'), join(c, 'pk')],
+      ['write', join(c, 'packages', 'a', 'beside.mjs')],
+    ]);
+    assert.deepEqual(got, ['ok', 'EPERM', 'EPERM', 'EPERM', 'EPERM', 'ok']);
+    assert.equal(readFileSync(join(c, 'packages', 'a', 'node_modules', 'pkg', 'index.js'), 'utf8'), 'module.exports = 1;\n');
+  } finally { w.done(); }
+});
+
+test('the network is open', KROW, async () => {
+  const server = createServer((s) => s.end());
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const w = probeWorld();
+  try {
+    assert.deepEqual(await probeA(w, [['connect', String(server.address().port)]]), ['ok']);
+  } finally {
+    server.close();
+    w.done();
+  }
+});
+
+test('/usr/bin/security runs (help exits) while osascript, open and pbcopy are refused', KROW, async () => {
+  const w = probeWorld();
+  try {
+    const got = await probeA(w, [['exec', '/usr/bin/security', 'help'], ['spawnkill', '/usr/bin/osascript'], ['spawnkill', '/usr/bin/open'], ['spawnkill', '/usr/bin/pbcopy']]);
+    assert.deepEqual(got, ['exit 0', 'EPERM', 'EPERM', 'EPERM']);
+  } finally { w.done(); }
+});
+
+test('a hard link from the copy to a file in the home lets no write through', KROW, async () => {
+  const w = probeWorld();
+  try {
+    const got = await probeA(w, [
+      ['link', join(w.run.home, 'Library', 'Keychains', 'k'), join(w.run.clone, 'hl-k')],
+      ['append', join(w.run.clone, 'hl-k')],
+      ['link', join(w.home, '.ssh', 'id'), join(w.run.clone, 'hl-id')],
+      ['append', join(w.run.clone, 'hl-id')],
+    ]);
+    assert.equal(got[0], 'EPERM');
+    assert.equal(got[2], 'EPERM');
+    assert.equal(readFileSync(join(w.home, 'Library', 'Keychains', 'k'), 'utf8'), 'keychain-bytes\n');
+    assert.equal(readFileSync(join(w.home, '.ssh', 'id'), 'utf8'), 'ssh-secret-bytes\n');
+    assert.equal(statSync(join(w.home, 'Library', 'Keychains', 'k')).nlink, 1);
+    assert.equal(statSync(join(w.home, '.ssh', 'id')).nlink, 1);
+  } finally { w.done(); }
+});
+
+test('the copy\'s .gemini, .agents and .antigravity cannot be created or written, and a committed file under one is still read', KROW, async () => {
+  const w = probeWorld({ files: { '.gemini/committed.md': 'committed\n' } });
+  const c = w.run.clone;
+  try {
+    const got = await probeA(w, [
+      ['read', join(c, '.gemini', 'committed.md')],
+      ['write', join(c, '.gemini', 'committed.md')],
+      ['write', join(c, '.gemini', 'settings.json')],
+      ['rename', join(c, '.gemini'), join(c, 'g2')],
+      ['mkdir', join(c, '.agents')],
+      ['mkdir', join(c, '.antigravity')],
+    ]);
+    assert.deepEqual(got, ['ok', 'EPERM', 'EPERM', 'EPERM', 'EPERM', 'EPERM']);
+    assert.equal(readFileSync(join(c, '.gemini', 'committed.md'), 'utf8'), 'committed\n');
+  } finally { w.done(); }
+});
