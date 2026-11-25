@@ -66,6 +66,7 @@ Then merge the settings snippet that step 4 printed into the project's `.claude/
 | The strongest code review, given an absolute `cwd` | `codex_code_review` (Codex), on `gpt-6.1-sol` (xhigh) by default |
 | A security review that reads the tree with Mistral Large 4 (no shell, no web) | `mistral_security_review` (Mistral) |
 | The same review, with the model running its findings in a disposable clone under a kernel sandbox; macOS only, behind `OMELETTE_ALLOW_REPRO=1`, returns a diff the session applies or not | `mistral_security_repro` (Mistral) |
+| A second tester on Gemini 4 Neon: it writes tests in a disposable copy of the project and the unit runs them under a kernel profile; macOS only, behind `OMELETTE_ALLOW_REPRO=1`, returns the tests as a diff the session reads and keeps or not (on trial, not yet in the tester flow) | `gemini_test` (Gemini) |
 | An image, or an edit of one | `gemini_image`, `grok_image`, `codex_image`; `grok_image_edit` edits |
 | The answer to a call your client timed out on | `<unit>_result` on the same unit: every answer is saved before it is sent |
 
