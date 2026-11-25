@@ -1,7 +1,8 @@
 /**
  * omelette-fleet :: units/gemini/adapter.mjs
- * Google Gemini via the Antigravity CLI (`agy`) as a fleet unit — four tools:
- * `gemini_research`, `gemini_image`, `gemini_models`, `gemini_deep_research`.
+ * Google Gemini via the Antigravity CLI (`agy`) as a fleet unit — five tools:
+ * `gemini_research`, `gemini_image`, `gemini_models`, `gemini_deep_research`,
+ * `gemini_test`.
  * Each call spawns `agy -p` headless on the operator's Antigravity (OAuth)
  * subscription. The vendor-specific knowledge below was moved verbatim from
  * the standalone gemini-agy bridge (2026-06 → 2026-09); the plumbing it used
@@ -138,6 +139,20 @@
  * explicit model made every stage the same (deepResearchModel). gemini_research
  * and gemini_image report NOTHING on purpose — agy picks their model and never
  * says which — so those stay filed under `(vendor default)`.
+ *
+ * TEST — gemini_test (test.mjs, test-run.mjs) is the one tool here under a
+ * kernel: agy runs whole under a profile rendered per run (profile A) — writes
+ * only in a disposable HEAD clone with the session's patch committed, its tmp
+ * and a scratch HOME holding nothing but a link to the operator's Keychains;
+ * reads of the operator's home, the work tree, the fleet home and every other
+ * run denied; the network open, because agy reaches Google. Neon writes tests
+ * with its file tools only (`--mode accept-edits`, settings pinned with no
+ * permission granted); the unit runs the call's one test command after each
+ * round under Mistral's no-network repro profile (profile B). Its gate is
+ * OMELETTE_ALLOW_REPRO, the operator's, on the gemini registration
+ * (OMELETTE_ALLOW_WRITE does not open it); macOS only. No `mutateGate`: a
+ * tester's brief and patch hold git words legitimately, and Neon runs no
+ * command at all, so it can run no git. Never retried.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -151,6 +166,8 @@ import { makeCatalog } from '../../core/catalog.mjs';
 import { artifactMiss, extractImagePath, newestImage, unfinishedRun } from '../../core/artifact.mjs';
 import { partialMark, withPartial } from '../../core/partial.mjs';
 import { GEMINI_MODELS, GUIDE } from './models.js';
+import { EXHAUSTED_PATTERNS, HARD_KILL_GRACE_MS, parseAgyResult } from './agy.mjs';
+import { runGeminiTest } from './test.mjs';
 
 export const catalog = makeCatalog({
   models: GEMINI_MODELS,
@@ -182,14 +199,6 @@ const RISK_ENV = [
   'GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES',
 ];
 
-/** Exhaustion strings => quota is empty. Checked ONLY on FAILED turns (see header). */
-const EXHAUSTED_PATTERNS = [
-  /RESOURCE_EXHAUSTED/i,
-  /exhausted your (?:current )?quota/i,
-  /\bquota\b.*\b(exceeded|exhausted|reached|limit)\b/i,
-  /\b(exceeded|exhausted|reached)\b.*\bquota\b/i,
-];
-
 // "no terminal commands" is not decoration: headless agy auto-denies the shell
 // `command` tool, and a model that reaches for curl instead of read_url ends
 // the run with no output (seen live 2026-09-03 on a web-research prompt).
@@ -210,31 +219,14 @@ const IMAGE_PREFIX =
   'image from the description below and save it to a file, then print the ' +
   'absolute path to the saved file.\n\nDescription: ';
 
-const HARD_KILL_GRACE_MS = 60000;
-
 // agy 1.5.7 made Auto the default agent mode for sessions with no saved mode,
 // headless `-p` included. `--settings` is session-only and never saved, and
 // `"agentMode": ""` is agy's own spelling of the Default mode (its changelog,
 // 1.5.7).
 const DEFAULT_MODE_PIN = JSON.stringify({ agentMode: '' });
 
-/**
- * Parse agy's `--output-format json` payload, or null when stdout is not that.
- * The output cap keeps the TAIL, so an over-cap run arrives front-truncated and
- * fails the `{` check. Null therefore means one of two things, and only the
- * run's `capped` flag tells them apart: a CLI that printed plain text (fail
- * open to it) or an envelope the cap cut open (throw — see interpretAgy).
- */
-export function parseAgyResult(out) {
-  const s = String(out || '').trim();
-  if (!s || s[0] !== '{') return null;
-  try {
-    const o = JSON.parse(s);
-    return o && typeof o === 'object' && !Array.isArray(o) ? o : null;
-  } catch {
-    return null;
-  }
-}
+// parseAgyResult, EXHAUSTED_PATTERNS and HARD_KILL_GRACE_MS live in agy.mjs, shared with gemini_test (test.mjs).
+export { parseAgyResult };
 
 /**
  * Interpret one finished agy run. Exported for tests.
@@ -612,13 +604,22 @@ const PASSTHROUGH = [
 export default defineUnit({
   name: 'gemini',
   label: 'Gemini',
-  instructions: 'This unit: Gemini via the Antigravity CLI (agy). Web-grounded research (gemini_research), multi-source deep research (gemini_deep_research — about 5 CLI runs and minutes per call, use deliberately), multimodal reads of local images and PDFs (absolute path, and say "view the file directly, no terminal commands" — shell tools are auto-denied — needs `read_file(*)` in the agy allow-rules, the opt-in set in SECURITY), image generation. The weakest sandbox in the fleet: its read-only posture is a permission policy, not a kernel.',
+  instructions: 'This unit: Gemini via the Antigravity CLI (agy). Web-grounded research (gemini_research), multi-source deep research (gemini_deep_research — about 5 CLI runs and minutes per call, use deliberately), multimodal reads of local images and PDFs (absolute path, and say "view the file directly, no terminal commands" — shell tools are auto-denied — needs `read_file(*)` in the agy allow-rules, the opt-in set in SECURITY), image generation. The weakest sandbox in the fleet: its read-only posture is a permission policy, not a kernel — except gemini_test, a second tester behind OMELETTE_ALLOW_REPRO=1 on macOS, where agy runs whole under a kernel profile in a disposable copy and the unit runs the tests under another.',
   bin: { env: 'AGY_BIN', default: 'agy' },
   riskEnv: RISK_ENV,
   // exact names (PASSTHROUGH above); the scrub runs after the passthrough.
   envPassthrough: PASSTHROUGH,
   envMap: { model: 'AGY_DEFAULT_MODEL', timeoutS: 'AGY_TIMEOUT_S' },
   builtin: { timeoutS: 300 },
+  // gemini_test's keys: its model (separate from `model`), whether a run is kept, the limit of one test run and of
+  // the whole call, and the program names a test command may start with.
+  extraSchema: {
+    testModel: { type: 'string', default: 'Gemini 4 Neon (High)' },
+    testKeep: { type: 'boolean', default: false },
+    testRunTimeoutS: { type: 'posint', default: 300 },
+    testTimeoutS: { type: 'posint', default: 1500 },
+    testPrograms: { type: 'string', default: 'node,npm,npx,pnpm,yarn,python3' },
+  },
   supportedModes: { 'read-only': true, 'workspace-write': true },
   catalog,
   tools: [
@@ -776,9 +777,9 @@ export default defineUnit({
       kind: 'catalog',
       description:
         'List the Gemini/GPT-OSS/Claude models you can pass as `model` to gemini_research / ' +
-        'gemini_image / gemini_deep_research, with a "which model for what" cheat-sheet (speed/cost/strengths ' +
+        'gemini_image / gemini_deep_research / gemini_test, with a "which model for what" cheat-sheet (speed/cost/strengths ' +
         'and when to avoid each). No arguments. Call this first if unsure which model ' +
-        'to pick. Claude Opus 5.5 and Sonnet 5.5 (High and Medium) are listed too: Antigravity\'s separate, small Claude quota — one named call per question, never a sweep, refused by gemini_deep_research.',
+        'to pick. Claude Opus 5.5 and Sonnet 5.5 (High and Medium) are listed too: Antigravity\'s separate, small Claude quota — one named call per question, never a sweep, refused by gemini_deep_research and gemini_test.',
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -828,6 +829,49 @@ export default defineUnit({
         // status feed next to the count line the text already carries.
         return { text: r.text || '(empty deep-research report)', ...(r.partial ? { partial: true } : {}) };
       },
+    },
+    {
+      name: 'gemini_test',
+      kind: 'pipeline',
+      modelKey: 'testModel',
+      description:
+        'A SECOND TESTER on Gemini (default Gemini 4 Neon (High), `gemini.testModel`). The unit makes a disposable ' +
+        'HEAD-only clone of `cwd` (uncommitted and ignored files are not in it), applies and commits `patch` there, and ' +
+        'copies in the `deps` directories (copy-on-write). Neon writes tests with its file tools only and runs nothing: ' +
+        'agy runs whole under a macOS kernel profile that lets it write only in the copy, its tmp and a scratch home, ' +
+        'with the network open. After each round the unit runs `testCommand` itself in the copy under a kernel profile ' +
+        'with no network and no home, and hands Neon the output, for at most `rounds` rounds. The answer, in order: one ' +
+        'line per round with the test command\'s exit code and wall time as the unit measured them, with the last 40 ' +
+        'lines of its output; Neon\'s last message; the files changed outside the test directories; the diff under ' +
+        '`## proposed tests (not applied)`. Nothing is applied to your tree. Never retried. macOS only; closed unless ' +
+        'the gemini registration sets OMELETTE_ALLOW_REPRO=1 (OMELETTE_ALLOW_WRITE does not open it). A call lasts up ' +
+        'to `gemini.testTimeoutS` (default 1500 s): read the answer with gemini_result when the call was relayed.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'The brief: the task, the spec path in the copy, what to test.' },
+          cwd: { type: 'string', description: 'ABSOLUTE path of the top of the git work tree; its HEAD is cloned.' },
+          patch: { type: 'string', description: 'ABSOLUTE path of the patch under test: `git diff HEAD` after `git add -N` of new files. A patch that does not apply is an error before any spawn.' },
+          testCommand: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'The one command the unit runs, as an argv array (no shell): its first word a name on gemini.testPrograms (node, npm, npx, pnpm, yarn, python3 by default) or a path under a `deps` entry (".venv/bin/pytest").',
+          },
+          deps: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional: installed-dependency directories relative to cwd (["node_modules"], [".venv"]), each a directory git ignores whole; copied into the copy, read-only to Neon.',
+          },
+          rounds: { type: 'integer', minimum: 1, maximum: 5, description: 'Optional: write-then-run rounds at most (1-5; default 3).' },
+          model: {
+            ...MODEL_PROP,
+            description: 'Optional. OMIT for `gemini.testModel` (default Gemini 4 Neon (High)), not `gemini.model`. Claude ids are refused here. Must be an exact id (call gemini_models for the guide).',
+          },
+        },
+        required: ['prompt', 'cwd', 'patch', 'testCommand'],
+      },
+      // No ctx.retry: a second run would execute the model's tests again.
+      run: (args, ctx) => runGeminiTest(args, ctx),
     },
   ],
 });

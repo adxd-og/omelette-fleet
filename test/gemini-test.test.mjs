@@ -272,3 +272,372 @@ test('guards not an array is refused', () => {
     assert.throws(() => assembleAnswer({ ...ANSWER, guards: bad }), (e) => e.message === 'gemini: assembleAnswer needs guards as an array', JSON.stringify(bad));
   }
 });
+
+// ─── T11: the tool, one round end to end ─────────────────────────────────────
+// gemini_test registered on the gemini unit: its gate, its refusals before any spawn, its model key, the round's argv,
+// agy under profile A with a scratch home, the test command under profile B. The gate and HOME are read from the
+// server's own process env, as mistral_security_repro reads them: withEnv sets and restores them around each call.
+// Darwin rows stub ctx.spawn; kernel rows run a fake agy: an executable script used as AGY_BIN itself (profile A
+// allows reading agy's resolved binary and nothing else under the temp root), whose `#!` names this node with
+// --preserve-symlinks-main — node otherwise lstats every directory of its main script's path, and profile A denies
+// /private/tmp and the temp root. HOME is a `neon-test-home-` dir under /private/tmp, never the real home.
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import gemini from '../units/gemini/adapter.mjs';
+import { createUnitRuntime } from '../core/unit.mjs';
+import { SANDBOX_EXEC } from '../core/seatbelt.mjs';
+import { TEST_CLOSED, TEST_SETTINGS, buildRoundArgs, testPreamble } from '../units/gemini/test.mjs';
+
+const DARWIN = process.platform === 'darwin';
+// sandbox-exec cannot nest: inside a sandbox even an allow-everything profile fails, and the kernel rows skip.
+const KERNEL = DARWIN && spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true']).status === 0;
+const HOMES = DARWIN ? '/private/tmp' : BASE;
+const homesMade = [];
+after(() => { for (const d of homesMade) rmSync(d, { recursive: true, force: true }); });
+// A call on a stub: a run made and diffed, no model process (≤ 0.6 s locally); a kernel call: two sandboxed runs (≤ 1.5 s).
+const STUB_ROW = { timeout: 6_000, skip: !DARWIN };
+const KROW = { timeout: 15_000, skip: !KERNEL };
+
+/** `vars` set in this process's env (undefined deletes) for the length of `fn`, then put back. */
+async function withEnv(vars, fn) {
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  const put = (o) => { for (const [k, v] of Object.entries(o)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } };
+  put(vars);
+  try { return await fn(); } finally { put(saved); }
+}
+
+const NEON = 'Gemini 4 Neon (High)';
+const BRIEF = 'test the README change';
+const TEST_CMD = ['node', '--test', 'test/added.test.mjs'];
+// It writes a cache into node_modules when there is one, as a runner would, and shuts test/locked when it is there.
+const ADDED_TEST = 'import test from "node:test";\nimport { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";\ntest("added", () => { if (existsSync("node_modules")) { mkdirSync("node_modules/.cache", { recursive: true }); writeFileSync("node_modules/.cache/x", "c"); } if (existsSync("test/locked")) chmodSync("test/locked", 0); });\n';
+
+/** The fake agy: writes test/added.test.mjs in its cwd and its state under $HOME, does what the prompt's FAKE_* lines ask, prints one envelope. */
+const FAKE_AGY = join(BASE, 'fake-agy');
+writeFileSync(FAKE_AGY, [
+  `#!${realpathSync(process.execPath)} --preserve-symlinks-main`,
+  'const fs = require("node:fs");',
+  'const argv = process.argv.slice(2);',
+  'const prompt = argv[argv.indexOf("-p") + 1];',
+  'const opt = (k) => { const m = new RegExp(`^${k}=(.*)$`, "m").exec(prompt); return m ? m[1] : null; };',
+  'const tried = {};',
+  'const attempt = (name, f) => { try { f(); tried[name] = "ok"; } catch (e) { tried[name] = e.code || String(e.message); } };',
+  'fs.mkdirSync("test", { recursive: true });',
+  `fs.writeFileSync("test/added.test.mjs", ${JSON.stringify(ADDED_TEST)});`,
+  'fs.mkdirSync(`${process.env.HOME}/.gemini`, { recursive: true });',
+  'fs.writeFileSync(`${process.env.HOME}/.gemini/state`, argv.join(" "));',
+  'if (opt("FAKE_OUTSIDE")) attempt("outside", () => fs.writeFileSync(opt("FAKE_OUTSIDE"), "x"));',
+  'if (opt("FAKE_FSMONITOR")) fs.appendFileSync(".git/config", `[core]\\n\\tfsmonitor = touch ${opt("FAKE_FSMONITOR")}\\n`);',
+  'if (fs.existsSync("node_modules")) attempt("dep", () => fs.writeFileSync("node_modules/planted-by-agy", "x"));',
+  'if (opt("FAKE_LOCK")) { fs.mkdirSync("test/locked"); fs.writeFileSync("test/locked/inner.test.mjs", "// locked\\n"); }',
+  'process.stdout.write(JSON.stringify({ status: "SUCCESS", response: `wrote one test\\nTRIED ${JSON.stringify(tried)}\\nDONE`, conversation_id: "c-1", usage: { input_tokens: 5, output_tokens: 2 } }));',
+].join('\n'));
+chmodSync(FAKE_AGY, 0o755);
+
+const RUNS = join(BASE, 'omelette-gemini-test');
+const runs = () => (existsSync(RUNS) ? readdirSync(RUNS).filter((d) => d.startsWith('run-')) : []);
+
+let tw = 0;
+/**
+ * One row's world for gemini_test: HOME (with Library/Keychains, .ssh/id and the fleet home .omelette) under HOMES,
+ * a work tree whose HEAD holds `files` (and a .gitignore of `ignored`) with `untracked` files beside it, a patch that
+ * changes its README, the fleet config `config` for gemini, and a runtime over the gemini unit with AGY_BIN the fake.
+ * `stub` replaces gemini_test's ctx.spawn; `signal` its ctx.signal. Records are kept, or spooled with `spool`.
+ */
+function toolWorld({ files = {}, ignored = [], untracked = {}, config = {}, stub = null, signal, spool = false } = {}) {
+  const home = realpathSync(mkdtempSync(join(HOMES, 'neon-test-home-')));
+  homesMade.push(home);
+  const fleet = join(home, '.omelette');
+  mkdirSync(fleet);
+  mkdirSync(join(home, 'Library', 'Keychains'), { recursive: true });
+  mkdirSync(join(home, '.ssh'));
+  writeFileSync(join(home, '.ssh', 'id'), 'ssh-secret-bytes\n');
+  writeFileSync(join(fleet, 'fleet.config.json'), JSON.stringify({ units: { gemini: config } }));
+  const work = join(BASE, `tw${++tw}`);
+  mkdirSync(work);
+  gitIn(work, 'init', '-q');
+  const write = (tree) => {
+    for (const [p, c] of Object.entries(tree)) {
+      mkdirSync(dirname(join(work, p)), { recursive: true });
+      writeFileSync(join(work, p), c);
+    }
+  };
+  write({ 'README.md': 'one\n', ...(ignored.length ? { '.gitignore': ignored.map((d) => `/${d}/\n`).join('') } : {}), ...files });
+  gitIn(work, 'add', '-A');
+  gitIn(work, 'commit', '-qm', 'one');
+  write(untracked);
+  writeFileSync(join(work, 'README.md'), 'two\n');
+  const patch = join(BASE, `tp${tw}.patch`);
+  writeFileSync(patch, gitIn(work, 'diff', 'HEAD'));
+  const records = [];
+  const spawns = [];
+  let retries = 0;
+  const unit = {
+    ...gemini,
+    tools: gemini.tools.map((t) => (t.name === 'gemini_test' ? {
+      ...t,
+      run: (a, ctx) => t.run(a, {
+        ...ctx,
+        retry: (fn, o) => { retries++; return ctx.retry(fn, o); },
+        ...(signal ? { signal } : {}),
+        ...(stub ? { spawn: async (o) => { spawns.push(o); return stub(o, spawns.length); } } : {}),
+      }),
+    } : t)),
+  };
+  const rt = createUnitRuntime(unit, { env: { PATH: process.env.PATH, HOME: home, OMELETTE_HOME: fleet, AGY_BIN: FAKE_AGY }, ...(spool ? {} : { onResult: (r) => records.push(r) }) });
+  const call = (args = {}, vars = {}) => withEnv({ OMELETTE_ALLOW_REPRO: '1', HOME: home, ...vars }, () => rt.callTool('gemini_test', { prompt: BRIEF, cwd: work, patch, testCommand: TEST_CMD, ...args }));
+  return { home, fleet, work, patch, rt, call, records, spawns, retries: () => retries };
+}
+
+/** A stub agy round's result: one envelope on stdout. */
+const agyOk = (o = {}) => ({ stdout: JSON.stringify({ status: 'SUCCESS', response: 'wrote one test\nDONE', conversation_id: 'c-1', usage: { input_tokens: 5, output_tokens: 2 }, ...o }), stderr: '', code: 0, signal: null, killed: false, capped: false, cancelled: false });
+/** A stub test run's result. */
+const testOk = (code = 0) => ({ stdout: '', stderr: '', code, signal: null, killed: false, capped: false, cancelled: false });
+const isAgy = (o) => o.args.includes('--output-format');
+
+/** A run the answer kept, removed by the row: its modes put back first. */
+function dropKept(text) {
+  const m = /^_\(run kept: (.+)\)_$/m.exec(text);
+  if (!m) return;
+  execFileSync('/bin/chmod', ['-R', 'u+rwX', m[1]], { timeout: 5_000 });
+  rmSync(m[1], { recursive: true, force: true });
+}
+
+test('closed without OMELETTE_ALLOW_REPRO, and OMELETTE_ALLOW_WRITE=gemini does not open it', async () => {
+  const w = toolWorld({ stub: () => { throw new Error('no spawn may happen'); } });
+  for (const vars of [{ OMELETTE_ALLOW_REPRO: undefined }, { OMELETTE_ALLOW_REPRO: undefined, OMELETTE_ALLOW_WRITE: 'gemini' }, { OMELETTE_ALLOW_REPRO: '0' }]) {
+    const r = await w.call({}, vars);
+    assert.equal(r.isError, true, JSON.stringify(vars));
+    assert.equal(r.text, TEST_CLOSED);
+  }
+  assert.equal(TEST_CLOSED, 'Error: gemini_test is closed — set OMELETTE_ALLOW_REPRO=1 on the gemini unit\'s registration to let the model\'s tests run in a disposable copy (OMELETTE_ALLOW_WRITE does not open it)');
+  assert.equal(w.spawns.length, 0);
+});
+
+test('off macOS the tool refuses with the macOS-only line', { skip: DARWIN }, async () => {
+  const w = toolWorld({ stub: () => { throw new Error('no spawn may happen'); } });
+  const r = await w.call();
+  assert.equal(r.text, `Error: gemini_test: macOS only (1.13.0) — sandbox-exec is not available on ${process.platform}`);
+  assert.equal(w.spawns.length, 0);
+});
+
+test('each argument refusal comes before any spawn and leaves no run dir', STUB_ROW, async () => {
+  const w = toolWorld({ stub: () => { throw new Error('no spawn may happen'); } });
+  const before = runs();
+  const cases = [
+    [{ prompt: '  ' }, 'Error: "prompt" is required.'],
+    [{ cwd: 'relative/dir' }, 'Error: "cwd" must be an absolute path (got "relative/dir").'],
+    [{ cwd: undefined }, 'Error: "cwd" is required: the top of the git work tree to copy'],
+    [{ testCommand: [] }, 'Gemini error: gemini: "testCommand" must be an argv array of 1 to 64 strings with no control characters'],
+    [{ rounds: 0 }, 'Error: "rounds" must be a whole number from 1 to 5'],
+    [{ rounds: 6 }, 'Error: "rounds" must be a whole number from 1 to 5'],
+    [{ rounds: 2.5 }, 'Error: "rounds" must be a whole number from 1 to 5'],
+    [{ deps: ['.'] }, 'Gemini error: gemini: deps entry "." must be a relative path inside the work tree'],
+    [{ deps: 'node_modules' }, 'Error: "deps" must be an array of paths relative to cwd'],
+  ];
+  for (const [args, text] of cases) {
+    const r = await w.call(args);
+    assert.equal(r.isError, true, JSON.stringify(args));
+    assert.equal(r.text, text, JSON.stringify(args));
+  }
+  assert.equal(w.spawns.length, 0);
+  assert.deepEqual(runs(), before);
+});
+
+test('with no model the run asks for gemini.testModel, and the feed and the spool name it while gemini.model is Hydrogen', STUB_ROW, async () => {
+  const w = toolWorld({ config: { model: 'Gemini 4 Hydrogen (High)' }, stub: (o) => (isAgy(o) ? agyOk() : testOk()) });
+  const r = await w.call();
+  assert.equal(r.isError, undefined, r.text);
+  const agy = w.spawns.filter(isAgy);
+  assert.equal(agy.length, 1);
+  assert.equal(agy[0].args[agy[0].args.indexOf('--model') + 1], NEON);
+  assert.equal(w.records.at(-1).model, NEON);
+  const start = readFileSync(join(w.fleet, 'fleet-log.ndjson'), 'utf8').split('\n').filter(Boolean).map(JSON.parse).find((l) => l.event === 'start');
+  assert.equal(start.model, NEON);
+  assert.ok(r.text.startsWith(`_(gemini_test: ${NEON} · 1 of at most 3 rounds · `), r.text);
+});
+
+test('a Claude id and a testModel outside the catalog are refused', STUB_ROW, async () => {
+  const w = toolWorld({ stub: () => { throw new Error('no spawn may happen'); } });
+  const claude = await w.call({ model: 'Claude Opus 5.5 (High)' });
+  assert.equal(claude.text, 'Error: gemini_test does not run on a Claude model ("Claude Opus 5.5 (High)"): a call is up to five agy runs on Antigravity\'s small, separate Claude quota');
+  const off = toolWorld({ config: { testModel: 'nope' }, stub: () => { throw new Error('no spawn may happen'); } });
+  const r = await off.call();
+  assert.equal(r.text, 'Error: gemini.testModel "nope" is not in the catalog — set it to a Gemini id (omelette-fleet set gemini.testModel=…)');
+  assert.equal(w.spawns.length + off.spawns.length, 0);
+  assert.deepEqual(runs().filter((d) => !existsSync(join(RUNS, d, 'clone'))), []);
+});
+
+test('the preamble: the printed text, the deps sentence only with deps, then the brief', () => {
+  const head = 'You are a tester. The directory you are in is a disposable copy of a project at HEAD with a change applied and committed; nothing you write here reaches the real tree. Work from the files in this directory only; do not search the web. Write tests with your file tools only — create and edit files; run no command: you have no terminal. After you finish each message the unit runs the test command ["node","--test","t.mjs"] in this directory and sends you its output, for at most 3 rounds in all.\nThe rounds are for tests that run, not for green. Fix what keeps a test from running as intended: a syntax error, an import, a fixture, a wrong helper. A test that fails because the code does what the brief or the spec says it must not stays as it is: never weaken an assertion to match the code; name that test in your last message as a candidate defect, with the spec line it rests on. Do not edit the code under test; if you must change a file outside the tests, say which and why. ';
+  const tail = 'Do not answer DONE before you have seen the output of a run. When the tests run and test what the brief asks, whatever their result, end your message with a last line that says DONE alone, after a short report: each test file, what it tests, and each candidate defect.';
+  assert.equal(testPreamble({ argv: ['node', '--test', 't.mjs'], rounds: 3, deps: [] }), head + tail);
+  assert.equal(testPreamble({ argv: ['node', '--test', 't.mjs'], rounds: 3, deps: ['node_modules', '.venv'] }), `${head}The dependency directories node_modules, .venv are read-only: read them, do not write them. ${tail}`);
+});
+
+test('round argv: the exact flags, the pinned settings, and no --sandbox, --dangerously-skip-permissions, --continue or --mode auto', STUB_ROW, async () => {
+  let wrapped = null;
+  const w = toolWorld({
+    stub: (o) => {
+      if (!isAgy(o)) return testOk();
+      wrapped = o.wrap(FAKE_AGY, ['a', 'b']);
+      return agyOk();
+    },
+  });
+  const r = await w.call({ deps: [] });
+  assert.equal(r.isError, undefined, r.text);
+  const [o] = w.spawns.filter(isAgy);
+  assert.equal(TEST_SETTINGS, '{"allowNonWorkspaceAccess":false,"permissions":{"allow":[]}}');
+  assert.deepEqual(o.args, ['-p', `${testPreamble({ argv: TEST_CMD, rounds: 3, deps: [] })}\n\nThe brief:\n\n${BRIEF}`, '--output-format', 'json', '--print-timeout', '300s', '--model', NEON, '--disable-slash-commands', '--mode', 'accept-edits', '--settings', TEST_SETTINGS]);
+  assert.deepEqual(buildRoundArgs({ prompt: 'p', model: 'm', printS: 7, conversation: 'c-1' }).slice(-2), ['--conversation', 'c-1']);
+  for (const bad of ['--sandbox', '--dangerously-skip-permissions', '--continue', 'auto']) assert.equal(o.args.includes(bad), false, bad);
+  assert.equal(o.hardKillMs, 360_000);
+  assert.equal(o.killGroupOnExit, true);
+  assert.equal(o.outFd, undefined, 'agy\'s JSON is read from stdout');
+  assert.ok(o.cwd.endsWith('/clone'), o.cwd);
+  assert.equal(o.extraEnv.HOME, join(dirname(o.cwd), 'home'));
+  assert.equal(o.extraEnv.TMPDIR, join(dirname(o.cwd), 'tmp'));
+  // wrap: agy whole under profile A, the binary as resolved.
+  assert.deepEqual(wrapped, { bin: SANDBOX_EXEC, args: ['-f', join(dirname(o.cwd), 'out', 'a.sb'), realpathSync(FAKE_AGY), 'a', 'b'] });
+});
+
+test('never retried: an agy spawn that fails is one spawn', STUB_ROW, async () => {
+  const w = toolWorld({ stub: (o) => { if (isAgy(o)) throw new Error('agy not found in PATH'); return testOk(); } });
+  const r = await w.call({ rounds: 3 });
+  assert.equal(w.spawns.length, 1, 'one agy spawn, no test run after a failed round');
+  assert.equal(w.retries(), 0);
+  assert.match(r.text, /^round 1 · agy: failed — agy not found in PATH \(\d+\.\d s\) · test command: not run$/m);
+  assert.match(r.text, /· ended: agy failed ·/);
+});
+
+test('one round end to end: the test the fake wrote is under ## proposed tests (not applied), round 1\'s line carries the exit code and the wall time, the answer is spooled and gemini_result returns it', KROW, async () => {
+  const w = toolWorld({ spool: true });
+  const r = await w.call();
+  assert.equal(r.isError, undefined, r.text);
+  const lines = r.text.split('\n');
+  assert.match(r.text, /^round 1 · agy: .+ \(\d+\.\d s\) · test command: exit 0 \(\d+\.\d s\)$/m);
+  const heading = lines.indexOf(TEST_HEADING);
+  assert.ok(heading > 0 && lines.indexOf('+++ b/test/added.test.mjs') > heading, r.text);
+  assert.ok(r.text.includes('_(no file outside the test directories changed)_'), r.text);
+  const back = await w.rt.callTool('gemini_result', {});
+  assert.ok(back.text.includes(r.text), back.text.slice(0, 400));
+  assert.deepEqual(runs(), [], 'the run dir is removed');
+});
+
+test('agy runs with the scratch home: its state is under the run, the test HOME\'s .gemini does not exist, the work tree is unchanged; testKeep keeps the run and the last line names it', KROW, async () => {
+  const w = toolWorld({ config: { testKeep: true } });
+  const status = gitIn(w.work, 'status', '--porcelain');
+  const r = await w.call();
+  try {
+    assert.equal(r.isError, undefined, r.text);
+    const m = /^_\(run kept: (.+)\)_$/.exec(r.text.split('\n').at(-1));
+    assert.ok(m, r.text.split('\n').at(-1));
+    assert.match(readFileSync(join(m[1], 'home', '.gemini', 'state'), 'utf8'), /--mode accept-edits/);
+    assert.equal(existsSync(join(w.home, '.gemini')), false);
+    assert.equal(gitIn(w.work, 'status', '--porcelain'), status);
+    assert.equal(readFileSync(join(w.work, 'README.md'), 'utf8'), 'two\n');
+    assert.equal(existsSync(join(w.work, 'test')), false);
+  } finally { dropKept(r.text); }
+});
+
+test('a write the fake tries outside the copy is refused', KROW, async () => {
+  const w = toolWorld();
+  const r = await w.call({ prompt: `${BRIEF}\nFAKE_OUTSIDE=${join(w.home, 'x')}` });
+  assert.equal(r.isError, undefined, r.text);
+  assert.match(r.text, /TRIED \{"outside":"EPERM"\}/);
+  assert.equal(existsSync(join(w.home, 'x')), false);
+});
+
+test('nothing planted in the clone\'s .git runs at diff time', KROW, async () => {
+  const w = toolWorld();
+  const marker = join(BASE, `fsmonitor-ran-${tw}`);
+  const r = await w.call({ prompt: `${BRIEF}\nFAKE_FSMONITOR=${marker}` });
+  assert.equal(r.isError, undefined, r.text);
+  assert.ok(r.text.includes(TEST_HEADING), r.text);
+  assert.equal(existsSync(marker), false);
+});
+
+test('the work tree\'s node_modules is unchanged after a run with deps', KROW, async () => {
+  const w = toolWorld({ ignored: ['node_modules'], untracked: { 'node_modules/pkg/index.js': 'module.exports = 1;\n' } });
+  const r = await w.call({ deps: ['node_modules'] });
+  assert.equal(r.isError, undefined, r.text);
+  assert.match(r.text, /TRIED \{"dep":"EPERM"\}/);
+  assert.match(r.text, /test command: exit 0/);
+  assert.deepEqual(readdirSync(join(w.work, 'node_modules')), ['pkg']);
+  assert.deepEqual(readdirSync(join(w.work, 'node_modules', 'pkg')), ['index.js']);
+  assert.equal(readFileSync(join(w.work, 'node_modules', 'pkg', 'index.js'), 'utf8'), 'module.exports = 1;\n');
+  assert.equal(/^\+\+\+ b\/node_modules\//m.test(r.text), false, 'the copy, the cache the test wrote included, is out of the diff');
+  assert.ok(r.text.includes('_(no file outside the test directories changed)_'), r.text);
+  assert.deepEqual(runs(), []);
+});
+
+test('assembleAnswer: unavailable puts one line where the outside list, the notice and the diff stand', () => {
+  const a = assembleAnswer({ ...ANSWER, guards: ['.gitignore'], keptRun: '/tmp/run-x', unavailable: 'git diff: timed out\nsecond line' });
+  const lines = a.split('\n');
+  assert.ok(lines.includes('_(diff unavailable: git diff: timed out)_'), a);
+  for (const gone of ['_(changed outside', '_(ignore or attributes', TEST_HEADING, '_(the copy is unchanged)_']) assert.equal(lines.some((l) => l.startsWith(gone)), false, gone);
+  assert.equal(lines.at(-1), '_(run kept: /tmp/run-x)_');
+  assert.ok(a.indexOf('_(diff unavailable:') > a.indexOf('\nDONE\n'), a);
+});
+
+test('a diff git cannot take is one line of the answer, never the answer\'s loss', STUB_ROW, async () => {
+  const w = toolWorld({
+    stub: (o) => {
+      if (!isAgy(o)) return testOk();
+      mkdirSync(join(o.cwd, 'test'));
+      writeFileSync(join(o.cwd, 'test', 'added.test.mjs'), 'x\n');
+      // The out-dir .git loses its HEAD: every git call of the diff fails.
+      rmSync(join(dirname(o.cwd), 'out', 'git', 'HEAD'));
+      return agyOk();
+    },
+  });
+  const r = await w.call();
+  assert.equal(r.isError, undefined, r.text);
+  assert.match(r.text, /^_\(diff unavailable: git .+\)_$/m);
+  assert.match(r.text, /^round 1 · agy: answered \(\d+\.\d s\) · test command: exit 0/m);
+  assert.equal(r.text.includes(TEST_HEADING), false);
+});
+
+test('a program whose interpreter is in the work tree is refused before any spawn, and the run is removed', STUB_ROW, async () => {
+  const before = runs();
+  const w = toolWorld({ ignored: ['tools'], files: { 'bin/interp': '#!/bin/sh\n' }, untracked: {}, stub: () => { throw new Error('no spawn may happen'); } });
+  writeFileSync(join(w.work, '.gitignore'), '/tools/\n');
+  mkdirSync(join(w.work, 'tools'));
+  writeFileSync(join(w.work, 'tools', 'run'), `#!${join(w.work, 'bin', 'interp')}\n`);
+  const r = await w.call({ deps: ['tools'], testCommand: ['tools/run'] });
+  assert.equal(r.text, `Gemini error: gemini: "tools/run" needs ${JSON.stringify(join(w.work, 'bin', 'interp'))}, which is in the work tree — the test command cannot read the work tree`);
+  assert.equal(w.spawns.length, 0);
+  assert.deepEqual(runs(), before);
+});
+
+test('a test command the runner refuses ends the round saying why, and the diff is still taken', STUB_ROW, async () => {
+  const { renameSync } = await import('node:fs');
+  const w = toolWorld({
+    ignored: ['node_modules'],
+    untracked: { 'node_modules/pkg/index.js': 'module.exports = 1;\n' },
+    stub: (o) => {
+      if (!isAgy(o)) throw new Error('the runner refuses before any test spawn');
+      mkdirSync(join(o.cwd, 'test'));
+      writeFileSync(join(o.cwd, 'test', 'added.test.mjs'), 'x\n');
+      // A dependency directory replaced: runTestCommand's assertDeps refuses the run.
+      renameSync(join(o.cwd, 'node_modules'), join(o.cwd, 'nm-moved'));
+      mkdirSync(join(o.cwd, 'node_modules'));
+      return agyOk();
+    },
+  });
+  const r = await w.call({ deps: ['node_modules'] });
+  assert.equal(r.isError, undefined, r.text);
+  assert.ok(r.text.split('\n')[0].includes('· ended: the test command could not be run — gemini: a dependency directory of the copy was replaced during the run — the test command is not run ·'), r.text.split('\n')[0]);
+  assert.match(r.text, /^round 1 · agy: answered \(\d+\.\d s\) · test command: not run$/m);
+  assert.ok(r.text.includes('+++ b/test/added.test.mjs'), r.text);
+  assert.equal(w.spawns.length, 1);
+});
+
+test('a directory the test left mode 000 is in the diff, and the run is still removed', KROW, async () => {
+  const w = toolWorld();
+  const r = await w.call({ prompt: `${BRIEF}\nFAKE_LOCK=1` });
+  assert.equal(r.isError, undefined, r.text);
+  assert.match(r.text, /test command: exit 0/);
+  assert.ok(r.text.includes('+++ b/test/locked/inner.test.mjs'), r.text);
+  assert.deepEqual(runs(), []);
+});

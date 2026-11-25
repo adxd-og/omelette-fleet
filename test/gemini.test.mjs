@@ -170,8 +170,8 @@ test('deepResearchModel: the stage ids the run asked for, collapsed when every s
   assert.equal(deepResearchModel({}), '');
 });
 
-test('unit contract: four tools, billing scrub list, both modes declared', () => {
-  assert.deepEqual(unit.tools.map((t) => t.name), ['gemini_research', 'gemini_image', 'gemini_models', 'gemini_deep_research']);
+test('unit contract: five tools, billing scrub list, both modes declared', () => {
+  assert.deepEqual(unit.tools.map((t) => t.name), ['gemini_research', 'gemini_image', 'gemini_models', 'gemini_deep_research', 'gemini_test']);
   assert.ok(unit.riskEnv.includes('GEMINI_API_KEY') && unit.riskEnv.includes('ANTHROPIC_API_KEY'));
   assert.ok(unit.riskEnv.includes('GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES'));
   assert.deepEqual(unit.supportedModes, { 'read-only': true, 'workspace-write': true });

@@ -81,7 +81,7 @@ test('every served tool that takes `model` offers the three Hydrogen and four Ne
   writeFileSync(join(dir, 'fleet.config.json'), JSON.stringify({ units: { gemini: {} } }));
   const rt = createUnitRuntime(unit, { env: { ...process.env, OMELETTE_HOME: dir, AGY_BIN: process.execPath } });
   const takers = rt.tools.filter((t) => t.inputSchema && t.inputSchema.properties && t.inputSchema.properties.model);
-  assert.deepEqual(takers.map((t) => t.name).sort(), ['gemini_deep_research', 'gemini_image', 'gemini_research']);
+  assert.deepEqual(takers.map((t) => t.name).sort(), ['gemini_deep_research', 'gemini_image', 'gemini_research', 'gemini_test']);
   for (const t of takers) {
     const served = t.inputSchema.properties.model.enum;
     for (const [id] of [...HYDROGEN, ...NEON]) assert.ok(served.includes(id), t.name + ' / ' + id);
