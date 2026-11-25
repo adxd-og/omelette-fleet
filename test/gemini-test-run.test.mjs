@@ -481,3 +481,207 @@ test('copyDeps runs once per run: a second call is refused, and the run and its 
     assert.ok(existsSync(join(run.clone, 'node_modules', 'i.js')));
   } finally { discardRun(run); }
 });
+
+// 1.13.0 T8: the test program — a name on gemini.testPrograms or a path under a deps entry — and the toolchain the
+// kernel re-allows under the home for it. Pure, every platform: fixtures are directories under this file's BASE.
+import { renameSync as renameT8 } from 'node:fs';
+import { nodeEnv as nodeEnvT8 } from '../core/seatbelt.mjs';
+import { assertDeps, checkTestCommand, parsePrograms, resolveProgram, shebangOf, toolchainReach } from '../units/gemini/test-run.mjs';
+
+const PURE = { timeout: 1_000 };
+/** A fixture tree under a fresh dir of BASE: path → content (an executable file), or `{ link }` for a symlink. */
+function fixture(tree) {
+  const dir = join(BASE, `f${++n}`);
+  mkdirSync(dir);
+  for (const [p, c] of Object.entries(tree)) {
+    mkdirSync(dirname(join(dir, p)), { recursive: true });
+    if (typeof c === 'object') symlinkSync(c.link, join(dir, p));
+    else { writeFileSync(join(dir, p), c); chmodSync(join(dir, p), 0o755); }
+  }
+  return dir;
+}
+/** A run as resolveProgram reads it: its dir, its clone and the clone's tree, and a work tree top of its own (`top`, a tree or empty). */
+function fakeRun(tree = {}, top = {}) {
+  const runDir = fixture(Object.fromEntries(Object.entries(tree).map(([p, c]) => [`clone/${p}`, c])));
+  mkdirSync(join(runDir, 'clone'), { recursive: true });
+  return { runDir, clone: join(runDir, 'clone'), top: fixture(top) };
+}
+const NOT_UNDER = (w) => (e) => e.message === `gemini: ${JSON.stringify(w)} is not under a deps entry — a program in the copy outside the dependencies is a file the model can write`;
+
+test('a bare name not on testPrograms is refused naming the list and the set command', PURE, () => {
+  assert.throws(() => resolveProgram({ word: 'bash', programs: ['node', 'npm'], deps: [], run: fakeRun() }),
+    (e) => e.message === 'gemini: "bash" is not on gemini.testPrograms (node, npm) — name a program on it, add one with omelette-fleet set gemini.testPrograms=…, or name a path under a deps entry');
+});
+
+test('a bare name resolves through the absolute PATH entries only', PURE, () => {
+  const dir = fixture({ 'rel/node': '#!/bin/sh\n', 'abs/node': '#!/bin/sh\n' });
+  const saved = process.cwd();
+  process.chdir(dir);
+  try {
+    const run = fakeRun();
+    assert.equal(resolveProgram({ word: 'node', programs: ['node'], deps: [], run, env: { PATH: `rel:${join(dir, 'abs')}` } }), join(dir, 'abs', 'node'));
+    assert.throws(() => resolveProgram({ word: 'node', programs: ['node'], deps: [], run, env: { PATH: 'rel' } }), (e) => e.message === 'gemini: "node" is not found in PATH');
+  } finally { process.chdir(saved); }
+});
+
+test('paths not under a deps entry are refused', PURE, () => {
+  const run = fakeRun({ 'run.sh': '#!/bin/sh\n', 'scripts/x': '#!/bin/sh\n', 'x': '#!/bin/sh\n', 'node_modules/.bin/y': '#!/bin/sh\n' });
+  const resolve = (word) => resolveProgram({ word, programs: ['node'], deps: ['node_modules'], run });
+  assert.throws(() => resolve('run.sh'), /^Error: gemini: "run\.sh" is not on gemini\.testPrograms \(node\)/, 'a name with no slash is a program name');
+  for (const w of ['scripts/x', 'node_modules/../x', '/usr/bin/env', 'node_modules/', 'node_modules//']) assert.throws(() => resolve(w), NOT_UNDER(w), w);
+  assert.equal(resolve('./node_modules/.bin/y'), join(run.clone, 'node_modules', '.bin', 'y'));
+});
+
+test('a deps link that lands in the copy outside its dep is refused', PURE, () => {
+  const run = fakeRun({ 'evil.sh': '#!/bin/sh\n', 'node_modules/.bin/x': { link: '../../evil.sh' } });
+  assert.throws(() => resolveProgram({ word: 'node_modules/.bin/x', programs: [], deps: ['node_modules'], run }),
+    (e) => e.message === 'gemini: "node_modules/.bin/x" resolves into the copy outside its dependency directory');
+  assert.throws(() => resolveProgram({ word: 'node_modules/.bin/none', programs: [], deps: ['node_modules'], run }),
+    (e) => e.message === 'gemini: "node_modules/.bin/none" is not a file in the copy');
+});
+
+test('a deps link to a program outside the run is accepted', PURE, () => {
+  const run = fakeRun({ '.venv/bin/python': { link: '/usr/bin/true' }, 'node_modules/.bin/v': { link: '../v/cli.js' }, 'node_modules/v/cli.js': '#!/bin/sh\n' });
+  assert.equal(resolveProgram({ word: '.venv/bin/python', programs: [], deps: ['.venv', 'node_modules'], run }), join(run.clone, '.venv', 'bin', 'python'));
+  assert.equal(resolveProgram({ word: 'node_modules/.bin/v', programs: [], deps: ['.venv', 'node_modules'], run }), join(run.clone, 'node_modules', '.bin', 'v'));
+});
+
+/** Every path in `hits` matches `re`, every path in `misses` does not. */
+function covers(re, hits, misses) {
+  const r = new RegExp(re);
+  for (const p of hits) assert.ok(r.test(p), `${re} should match ${p}`);
+  for (const p of misses) assert.ok(!r.test(p), `${re} should miss ${p}`);
+}
+
+test('reach: a system program adds nothing; an nvm-shaped prefix under the home adds bin, npm and corepack only; a uv-shaped prefix is re-allowed whole; a binary in ~/bin adds itself alone; the up chain covers each', PURE, () => {
+  const home = fixture({
+    '.nvm/versions/node/v20/bin/node': 'n', '.nvm/versions/node/v20/lib/node_modules/npm/bin/npm-cli.js': 'n',
+    '.nvm/versions/node/v20/lib/node_modules/corepack/x.js': 'c', '.nvm/versions/node/v20/lib/node_modules/other/y.js': 'o',
+    '.local/share/uv/python/cpython-3.12/bin/python3.12': 'p', '.local/share/uv/python/cpython-3.12/lib/python3.12/os.py': 'o',
+    '.local/share/uv/other/z': 'z', 'bin/tool': 't', 'bin/other': 'o', '.ssh/id': 's',
+  });
+  const base = nodeEnvT8({ home, prefix: '/opt/fleet-node', binary: '/opt/fleet-node/bin/node' });
+  const system = toolchainReach({ home, binaries: ['/bin/echo'], base });
+  assert.deepEqual(system, { node: base.OMELETTE_REPRO_NODE, up: base.OMELETTE_REPRO_NODEUP });
+  const nvm = join(home, '.nvm/versions/node/v20');
+  const uv = join(home, '.local/share/uv/python/cpython-3.12');
+  const reach = toolchainReach({ home, binaries: ['/bin/echo', join(nvm, 'bin/node'), join(uv, 'bin/python3.12'), join(home, 'bin/tool')], base });
+  covers(reach.node,
+    ['/opt/fleet-node/bin/node', join(nvm, 'bin/node'), join(nvm, 'lib/node_modules/npm/bin/npm-cli.js'), join(nvm, 'lib/node_modules/corepack/x.js'),
+      uv, join(uv, 'lib/python3.12/os.py'), join(home, 'bin/tool')],
+    [home, join(nvm, 'lib/node_modules/other/y.js'), join(nvm, 'lib'), join(home, '.local/share/uv/other/z'), join(home, 'bin/other'), join(home, 'bin'), join(home, '.ssh/id'), `${join(home, 'bin/tool')}x`]);
+  covers(reach.up,
+    [home, join(home, '.nvm'), join(nvm, 'lib'), join(nvm, 'lib/node_modules'), join(home, '.local'), join(home, '.local/share/uv/python'), join(home, 'bin')],
+    [join(home, '.ssh'), join(home, '.local/share/uv/other'), join(home, '.local/share/uv/python/cpython-3.12/lib'), `${home}/`, '/opt']);
+});
+
+test('reach: a prefix that is a direct child of the home is re-allowed through its bin and lib only, and a binary outside a bin directory there alone', PURE, () => {
+  const home = fixture({ '.cargo/bin/rg': 'r', '.cargo/lib/x': 'l', '.cargo/credentials.toml': 's', '.cargo/registry/y': 'y', '.ssh/tool': 't', '.ssh/id': 's' });
+  const base = nodeEnvT8({ home, prefix: '/opt/fleet-node', binary: '/opt/fleet-node/bin/node' });
+  const reach = toolchainReach({ home, binaries: [join(home, '.cargo/bin/rg'), join(home, '.ssh/tool')], base });
+  covers(reach.node, [join(home, '.cargo/bin'), join(home, '.cargo/bin/rg'), join(home, '.cargo/lib'), join(home, '.cargo/lib/x'), join(home, '.ssh/tool')],
+    [join(home, '.cargo'), join(home, '.cargo/credentials.toml'), join(home, '.cargo/registry'), join(home, '.cargo/registry/y'), join(home, '.ssh/id'), join(home, '.ssh')]);
+  covers(reach.up, [home, join(home, '.cargo'), join(home, '.ssh')], [join(home, '.cargo/bin'), join(home, '.ssh/id')]);
+});
+
+test('shebangOf follows /usr/bin/env one level', PURE, () => {
+  const dir = fixture({
+    'bin/node': '#!/usr/bin/env other\n', 'env.js': '#!/usr/bin/env node\n', 'envs.js': '#!/usr/bin/env -S node --flag\n',
+    'sh.sh': '#!/bin/sh -e\n', 'none.txt': 'no shebang\n', 'lost.js': '#!/usr/bin/env missing\n',
+  });
+  const env = { PATH: join(dir, 'bin') };
+  assert.equal(shebangOf(join(dir, 'env.js'), { env }), join(dir, 'bin', 'node'), 'the interpreter is located, its own shebang not followed');
+  assert.equal(shebangOf(join(dir, 'envs.js'), { env }), join(dir, 'bin', 'node'));
+  assert.equal(shebangOf(join(dir, 'sh.sh'), { env }), '/bin/sh');
+  assert.equal(shebangOf(join(dir, 'none.txt'), { env }), null);
+  assert.equal(shebangOf(join(dir, 'lost.js'), { env }), null);
+});
+
+test('parsePrograms refuses a path and a space', PURE, () => {
+  assert.deepEqual(parsePrograms(' node , npm,,python3 '), ['node', 'npm', 'python3']);
+  assert.throws(() => parsePrograms('node,/usr/bin/x'), (e) => e.message === 'gemini: gemini.testPrograms holds "/usr/bin/x", not a program name');
+  assert.throws(() => parsePrograms('node,my prog'), (e) => e.message === 'gemini: gemini.testPrograms holds "my prog", not a program name');
+});
+
+test('checkTestCommand refuses [], a string, 65 words and a newline', PURE, () => {
+  const refused = (e) => e.message === 'gemini: "testCommand" must be an argv array of 1 to 64 strings with no control characters';
+  for (const bad of [[], 'node --test', Array(65).fill('x'), ['node', 'a\nb'], ['node', ''], ['node', 7], ['x'.repeat(4097)]]) assert.throws(() => checkTestCommand(bad), refused, JSON.stringify(bad).slice(0, 40));
+  assert.deepEqual(checkTestCommand(['node', '--test', 'x'.repeat(4096)]), ['node', '--test', 'x'.repeat(4096)]);
+  assert.equal(checkTestCommand(Array(64).fill('x')).length, 64);
+});
+
+test('assertDeps catches an ancestor renamed and recreated', PURE, () => {
+  const clone = fixture({ 'packages/a/node_modules/i.js': 'i' });
+  const parts = ['packages', 'a', 'node_modules'];
+  const chain = parts.map((_, i) => { const path = join(clone, ...parts.slice(0, i + 1)); const st = lstatSync(path); return { path, dev: st.dev, ino: st.ino }; });
+  const run = { deps: [{ rel: 'packages/a/node_modules', copy: join(clone, 'packages/a/node_modules'), chain }] };
+  assertDeps(run);
+  renameT8(join(clone, 'packages'), join(clone, 'packages.old'));
+  mkdirSync(join(clone, 'packages/a/node_modules'), { recursive: true });
+  assert.throws(() => assertDeps(run), (e) => e.message === 'gemini: a dependency directory of the copy was replaced during the run — the test command is not run');
+  rmSync(join(clone, 'packages'), { recursive: true });
+  symlinkSync(join(clone, 'packages.old'), join(clone, 'packages'));
+  assert.throws(() => assertDeps(run), /was replaced during the run/, 'a link to the original is not the directory');
+});
+
+// The session's ruling on T8 (2026-11-25): the test command's PATH gets the directories its program needs.
+import { programDirs, programNeeds, testPath as testPathT8 } from '../units/gemini/test-run.mjs';
+
+test('programDirs: a bare name found through a link gives the resolved directory it was found in and its interpreter\'s directory; a deps path gives only its interpreter\'s', PURE, () => {
+  const dir = fixture({
+    'real/v1/bin/node': '#!/bin/sh\n', 'real/v1/lib/npm/bin/npm-cli.js': '#!/usr/bin/env node\n', 'real/v1/bin/npm': { link: '../lib/npm/bin/npm-cli.js' },
+    'link': { link: 'real' }, 'other/bin/tool': '#!/bin/sh\n',
+  });
+  const env = { PATH: join(dir, 'link', 'v1', 'bin') };
+  const npm = resolveProgram({ word: 'npm', programs: ['npm'], deps: [], run: fakeRun(), env });
+  assert.equal(npm, join(dir, 'real/v1/lib/npm/bin/npm-cli.js'));
+  assert.deepEqual(programDirs({ word: 'npm', program: npm, env }), [join(dir, 'real/v1/bin')], 'resolved, not the link spelling');
+  assert.deepEqual(programNeeds({ word: 'npm', program: npm, env }), { dirs: [join(dir, 'real/v1/bin')], interpreter: join(dir, 'real/v1/bin/node') });
+  // A bare name whose script runs /bin/sh: the directory it was found in, and nothing for /bin.
+  const tool = resolveProgram({ word: 'tool', programs: ['tool'], deps: [], run: fakeRun(), env: { PATH: join(dir, 'other/bin') } });
+  assert.deepEqual(programDirs({ word: 'tool', program: tool, env: { PATH: join(dir, 'other/bin') } }), ['/bin']);
+  const run = fakeRun({ 'node_modules/x/cli.js': '#!/usr/bin/env node\n', 'node_modules/.bin/x': { link: '../x/cli.js' }, 'node_modules/.bin/y': '#!/bin/sh\n' });
+  const x = resolveProgram({ word: 'node_modules/.bin/x', programs: [], deps: ['node_modules'], run });
+  assert.deepEqual(programDirs({ word: 'node_modules/.bin/x', program: x, env }), [join(dir, 'real/v1/bin')]);
+  assert.deepEqual(programNeeds({ word: 'node_modules/.bin/x', program: x, env: { PATH: '/nowhere' } }), { dirs: [], interpreter: null });
+});
+
+test('testPath takes extra directories right after the program\'s, even under the home', PURE, () => {
+  const root = realpathSync(mkdtempSync(join(BASE, 'path-')));
+  const home = join(root, 'home');
+  for (const d of ['home/.nvm/bin', 'home/x/bin', 'sys/a']) mkdirSync(join(root, d), { recursive: true });
+  const program = join(home, '.nvm/lib/npm/bin/npm-cli.js');
+  assert.equal(testPathT8({ program, home, extra: [join(home, '.nvm/bin'), join(root, 'sys/a')], inherited: `${join(home, 'x/bin')}:${join(root, 'sys/a')}:/bin` }),
+    [join(home, '.nvm/lib/npm/bin'), join(home, '.nvm/bin'), join(root, 'sys/a'), '/bin', '/usr/bin'].join(':'));
+});
+
+// The fix round after T7–T8's tester (2026-11-25): holes and C1 controls in the command, a program in the work tree.
+test('checkTestCommand refuses a hole and a C1 control, and returns a copy', PURE, () => {
+  const refused = (e) => e.message === 'gemini: "testCommand" must be an argv array of 1 to 64 strings with no control characters';
+  for (const bad of [new Array(2), ['node', , 'x'], ['node', '\u009b31m'], ['node', '\u0085']]) assert.throws(() => checkTestCommand(bad), refused, JSON.stringify(bad));
+  const argv = ['node', '--test', ' é'];
+  const got = checkTestCommand(argv);
+  assert.deepEqual(got, argv);
+  assert.notEqual(got, argv, 'a copy, not the argument');
+});
+
+test('resolveProgram refuses a bare name that resolves into the work tree', PURE, () => {
+  const run = fakeRun({}, { 'node_modules/.bin/node': '#!/bin/sh\n' });
+  const real = join(run.top, 'node_modules', '.bin', 'node');
+  const message = `gemini: "node" resolves into the work tree (${JSON.stringify(real)}) — the test command cannot read the work tree; name a program outside it, or a path under a deps entry`;
+  const env = { PATH: `${join(run.top, 'node_modules', '.bin')}:/usr/bin:/bin` };
+  assert.throws(() => resolveProgram({ word: 'node', programs: ['node'], deps: [], run, env }), (e) => e.message === message);
+  // The top spelled through a link: compared resolved.
+  const link = join(BASE, `top-link-${++n}`);
+  symlinkSync(run.top, link);
+  assert.throws(() => resolveProgram({ word: 'node', programs: ['node'], deps: [], run: { ...run, top: link }, env }), (e) => e.message === message);
+});
+
+test('resolveProgram refuses a deps path whose link resolves into the work tree', PURE, () => {
+  const run = fakeRun({}, { 'tools/x.sh': '#!/bin/sh\n' });
+  mkdirSync(join(run.clone, 'node_modules', '.bin'), { recursive: true });
+  const real = realpathSync(join(run.top, 'tools', 'x.sh'));
+  symlinkSync(real, join(run.clone, 'node_modules', '.bin', 'x'));
+  const message = `gemini: "node_modules/.bin/x" resolves into the work tree (${JSON.stringify(real)}) — the test command cannot read the work tree; name a program outside it, or a path under a deps entry`;
+  assert.throws(() => resolveProgram({ word: 'node_modules/.bin/x', programs: [], deps: ['node_modules'], run }), (e) => e.message === message);
+});

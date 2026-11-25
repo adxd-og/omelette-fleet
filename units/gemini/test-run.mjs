@@ -53,7 +53,7 @@
  * HOME and TMPDIR are the run's tmp, PATH the unit's own (testPath), both streams
  * go to `tmp/round-<n>.log` (node aborts at start on a stdout the profile denies
  * reading, and it denies `out/`), copied by the unit to `out/round-<n>.log`
- * after the run, the group is killed when the command exits, a time
+ * after the run and removed from tmp, the group is killed when the command exits, a time
  * limit ends a run, and the model gets the last 16 KB, made safe to show.
  *
  * DROP — the workspace config paths agy honours, removed from the clone as
@@ -64,13 +64,15 @@
  * Zero deps.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { appendFileSync, chmodSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, posix } from 'node:path';
+import { basename, dirname, isAbsolute, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLONE_CONFIG, cloneDiff, cloneGitEnv, gitRun, prepareClone, removeRun, runsRootAt } from '../../core/clone.mjs';
 import { INVISIBLE_CHARS } from '../../core/log.mjs';
-import { SANDBOX_EXEC, regexLiteral } from '../../core/seatbelt.mjs';
+import { NODEUP_NONE, SANDBOX_EXEC, nodeEnv, nodeUp, regexLiteral } from '../../core/seatbelt.mjs';
+import { locateBin } from '../../core/unit.mjs';
 
 /** The name of gemini_test's runs root under the OS temp dir. */
 export const TEST_RUNS = 'omelette-gemini-test';
@@ -379,20 +381,23 @@ export function profileBArgs(run, { home, fleet, reach }) {
  * under repro.sb a stat through a symlink inside the home is EPERM, not ENOENT,
  * and a PATH search stops at it — npm's spawn of `sh` failed with the
  * operator's own PATH. In order, duplicates dropped (the first wins): the
- * program's own directory; each entry of `inherited` that is absolute and
- * resolves, kept only when neither its spelling nor its real path is the home
- * or under it (the home as given and resolved); then `/usr/bin` and `/bin`.
- * Nothing under the home is searched but the program's own directory.
- * @param {{program: string, home: string, inherited?: string}} o `program` the absolute path the runner executes
+ * program's own directory; each of `extra` as given — programDirs' resolved
+ * directories the program needs (node's `bin` for nvm's npm), taken even under
+ * the home: the reach re-allows them; each entry of `inherited` that is
+ * absolute and resolves, kept only when neither its spelling nor its real path
+ * is the home or under it (the home as given and resolved); then `/usr/bin` and
+ * `/bin`. Nothing else under the home is searched.
+ * @param {{program: string, home: string, inherited?: string, extra?: string[]}} o `program` the absolute path the runner executes
  * @returns {string}
  */
-export function testPath({ program, home, inherited = process.env.PATH || '' }) {
+export function testPath({ program, home, inherited = process.env.PATH || '', extra = [] }) {
   const homes = [home];
   try { homes.push(realpathSync(home)); } catch { /* the spelling alone */ }
   const under = (p) => homes.some((h) => p === h || p.startsWith(h.endsWith('/') ? h : `${h}/`));
   const path = [];
   const add = (d) => { if (!path.includes(d)) path.push(d); };
   add(dirname(program));
+  for (const d of extra) add(d);
   for (const entry of String(inherited).split(':')) {
     if (!entry || !isAbsolute(entry)) continue;
     let real;
@@ -453,20 +458,43 @@ export function readTail(path, bytes = 16384) {
  * absolute program) in the clone, through the unit's ctx.spawn — the env
  * allowlist, the billing scrub, the cancel signal and the live-group kill hold —
  * with `sandbox-exec` put in front (wrap), HOME and TMPDIR the run's tmp, PATH
- * testPath's, the process group killed when the command exits, `timeoutMs` its
- * hard kill. Both streams go, in the order written, to `<tmp>/round-<round>.log`
- * (created `wx+`, 0600, never following a link): node aborts at start when its
+ * testPath's with `pathDirs` (programDirs' result) right after the program's
+ * own directory, the process group killed when the command exits, `timeoutMs`
+ * its hard kill. Refused before anything is opened or spawned, in this order:
+ * a `timeoutMs` that is not a finite number above 0 (undefined would fall back
+ * to the unit's own time limit; 0, a negative or NaN start no timer); a `round`
+ * that is not a positive integer, or whose `<out>/round-<round>.log` already
+ * exists (lstat: a round number runs once per run); a copied dependency
+ * replaced (assertDeps, called here so no caller can forget it); profile B's
+ * arguments that cannot be built (profileBArgs resolves the home and the fleet
+ * home) — so a refusal leaves no file in tmp/ and `run.sandboxed` as it was.
+ * Both streams go, in the order written, to
+ * `<tmp>/round-<round>-<12 random hex>.log` (created `wx+`, 0600, never
+ * following a link; a name the model cannot plant ahead of the run, though it
+ * writes in tmp/): node aborts at start when its
  * stdout is a file the profile denies reading, and repro.sb denies OUT. After
  * the run the unit copies that file's last 1 MB, through its own descriptor (a
  * path the command replaced is never followed), to `<out>/round-<round>.log`
  * (`wx`, 0600), which is `log`; `tail` is that copy's last 16 KB through safeOutput.
+ * The descriptor closed, the live path is removed (removeLive), also after a
+ * spawn that throws: the unit's own file of a round's output does not stay in tmp/
+ * (what the command itself copied or hard-linked there is the command's).
  * Sets `run.sandboxed` before the spawn: from then on a model-written program
  * has run in the clone. `ms` is the unit's own wall time of the run.
  * @returns {Promise<{code: number|null, signal: string|null, killed: boolean, cancelled: boolean, ms: number, tail: string, log: string}>}
  */
-export async function runTestCommand(ctx, run, { args, round, timeoutMs, reach, home, fleet }) {
-  const live = join(run.tmp, `round-${round}.log`);
+export async function runTestCommand(ctx, run, { args, round, timeoutMs, reach, home, fleet, pathDirs = [] }) {
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(`gemini: runTestCommand needs a positive timeoutMs (got ${String(timeoutMs)})`);
+  }
+  // Past 2^31 - 1 ms node's timer clamps to 1 ms and the command would be killed at once.
+  if (timeoutMs > 2147483647) throw new Error(`gemini: runTestCommand needs a positive timeoutMs of at most 2147483647 (got ${String(timeoutMs)})`);
+  if (!Number.isInteger(round) || round < 1) throw new Error(`gemini: runTestCommand needs a positive whole round number (got ${typeof round === 'string' ? JSON.stringify(round) : String(round)})`);
   const log = join(run.out, `round-${round}.log`);
+  if (lstatOrNull(log)) throw new Error(`gemini: round ${round} already ran in this run`);
+  assertDeps(run);
+  const sandboxArgs = profileBArgs(run, { home, fleet, reach });
+  const live = join(run.tmp, `round-${round}-${randomBytes(6).toString('hex')}.log`);
   const outFd = openSync(live, 'wx+', 0o600);
   let r;
   let ms;
@@ -476,16 +504,27 @@ export async function runTestCommand(ctx, run, { args, round, timeoutMs, reach, 
     r = await ctx.spawn({
       args,
       cwd: run.clone,
-      extraEnv: { HOME: run.tmp, TMPDIR: run.tmp, PATH: testPath({ program: args[0], home }) },
+      extraEnv: { HOME: run.tmp, TMPDIR: run.tmp, PATH: testPath({ program: args[0], home, extra: pathDirs }) },
       hardKillMs: timeoutMs,
       killGroupOnExit: true,
       outFd,
-      wrap: (_exe, a) => ({ bin: SANDBOX_EXEC, args: [...profileBArgs(run, { home, fleet, reach }), ...a] }),
+      wrap: (_exe, a) => ({ bin: SANDBOX_EXEC, args: [...sandboxArgs, ...a] }),
     });
     ms = Date.now() - t0;
     copyFd(outFd, log);
-  } finally { closeSync(outFd); }
+  } finally {
+    closeSync(outFd);
+    removeLive(live);
+  }
   return { code: r.code, signal: r.signal, killed: r.killed, cancelled: r.cancelled, ms, tail: readTail(log), log };
+}
+
+/**
+ * The live log's path removed from tmp/, errors ignored: the command may have
+ * replaced it with a link or a directory, and rmSync never follows a link.
+ */
+function removeLive(live) {
+  try { rmSync(live, { recursive: true, force: true }); } catch { /* left for the run's cleanup */ }
 }
 
 /** The most of a round's output the unit keeps in `out/`: the command can grow its live log by path (a sparse truncate) to any size. */
@@ -510,3 +549,246 @@ function copyFd(fd, to) {
     }
   } finally { closeSync(outFd); }
 }
+
+/** A program name on gemini.testPrograms: a word, never a path. */
+const PROGRAM_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
+/** A control character (C0, DEL, C1), refused in a test command word. */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * The config value `gemini.testPrograms` as a list: split on `,`, trimmed,
+ * empties dropped; each a program name, never a path or a word with a space.
+ * @returns {string[]}
+ */
+export function parsePrograms(value) {
+  const list = String(value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  for (const p of list) {
+    if (!PROGRAM_NAME.test(p)) throw new Error(`gemini: gemini.testPrograms holds ${JSON.stringify(p)}, not a program name`);
+  }
+  return list;
+}
+
+/**
+ * The call's `testCommand`: an argv array of 1 to 64 strings, each 1 to 4096
+ * characters with no control character (C0, DEL or C1). Every word is read by
+ * index: a hole is not a string. No shell ever reads it.
+ * @returns {string[]} a dense copy
+ */
+export function checkTestCommand(argv) {
+  const refused = () => new Error('gemini: "testCommand" must be an argv array of 1 to 64 strings with no control characters');
+  if (!Array.isArray(argv) || argv.length < 1 || argv.length > 64) throw refused();
+  const words = [];
+  for (let i = 0; i < argv.length; i++) {
+    const w = argv[i];
+    if (typeof w !== 'string' || w.length < 1 || w.length > 4096 || CONTROL.test(w)) throw refused();
+    words.push(w);
+  }
+  return words;
+}
+
+/** `p` is `dir` or under it (both resolved). */
+const within = (p, dir) => p === dir || p.startsWith(dir.endsWith('/') ? dir : `${dir}/`);
+
+/**
+ * The absolute program the test command runs, from its first word — a file
+ * Neon cannot write either way:
+ *   - a word with no `/` must be on `programs` (gemini.testPrograms) and is
+ *     found by locateBin in the absolute PATH entries of `env` only, returned
+ *     resolved; one that resolves to `run.top` or under it (both resolved) is
+ *     refused — profile B denies the work tree, so a PATH entry inside the
+ *     project (`node_modules/.bin` put there by a shell hook) would end as an
+ *     exit 126 with the work tree's path in the output the model reads;
+ *   - a word with `/` must be relative, with no `..` component, strictly under a
+ *     `deps` entry (checkDeps' names), a file in the clone, and resolve either
+ *     inside that dependency's copy or outside the run dir (a link to a system
+ *     interpreter); returned as `<clone>/<word>`, normalised.
+ * @param {{word: string, programs: string[], deps: string[], run: {runDir: string, clone: string, top: string}, env?: object}} o
+ * @returns {string}
+ */
+export function resolveProgram({ word, programs, deps, run, env = process.env }) {
+  const q = JSON.stringify(word);
+  if (!word.includes('/')) {
+    if (!programs.includes(word)) {
+      throw new Error(`gemini: ${q} is not on gemini.testPrograms (${programs.join(', ')}) — name a program on it, add one with omelette-fleet set gemini.testPrograms=…, or name a path under a deps entry`);
+    }
+    const found = locateBin(word, env);
+    if (!found) throw new Error(`gemini: ${q} is not found in PATH`);
+    const real = realpathSync(found);
+    if (within(real, realpathSync(run.top))) {
+      throw new Error(`gemini: ${q} resolves into the work tree (${JSON.stringify(real)}) — the test command cannot read the work tree; name a program outside it, or a path under a deps entry`);
+    }
+    return real;
+  }
+  const notUnder = () => new Error(`gemini: ${q} is not under a deps entry — a program in the copy outside the dependencies is a file the model can write`);
+  if (isAbsolute(word) || word.split('/').includes('..')) throw notUnder();
+  const rel = posix.normalize(word).replace(/\/+$/, '');
+  const dep = deps.find((d) => rel.startsWith(`${d}/`));
+  if (dep === undefined) throw notUnder();
+  const program = join(run.clone, rel);
+  let real;
+  try {
+    real = realpathSync(program);
+    if (!statSync(real).isFile()) throw new Error('not a file');
+  } catch { throw new Error(`gemini: ${q} is not a file in the copy`); }
+  // A link in the dependency that names the work tree itself (an absolute link an installer left): profile B denies it.
+  if (within(real, realpathSync(run.top))) {
+    throw new Error(`gemini: ${q} resolves into the work tree (${JSON.stringify(real)}) — the test command cannot read the work tree; name a program outside it, or a path under a deps entry`);
+  }
+  if (!within(real, realpathSync(join(run.clone, dep))) && within(real, realpathSync(run.runDir))) {
+    throw new Error(`gemini: ${q} resolves into the copy outside its dependency directory`);
+  }
+  return program;
+}
+
+/**
+ * The interpreter a script's `#!` line names: the path as written, or for
+ * `/usr/bin/env <name>` (`-S` allowed) the program locateBin finds for `<name>`
+ * in `env`'s absolute PATH entries — pass the test command's own PATH
+ * (testPath), which is where env will look. One level: the interpreter's own
+ * `#!` is not read. Null for no `#!`, a relative interpreter, an env with any
+ * other option or an assignment, or a name not found.
+ * @returns {string|null}
+ */
+export function shebangOf(path, { env = process.env } = {}) {
+  let head;
+  const fd = openSync(path, 'r');
+  try {
+    const buf = Buffer.alloc(512);
+    head = buf.subarray(0, readSync(fd, buf, 0, buf.length, 0)).toString('utf8');
+  } finally { closeSync(fd); }
+  if (!head.startsWith('#!')) return null;
+  const words = head.slice(2).split('\n')[0].trim().split(/[ \t]+/).filter(Boolean);
+  const interp = words[0];
+  if (!interp || !isAbsolute(interp)) return null;
+  if (interp !== '/usr/bin/env') return interp;
+  let i = 1;
+  if (words[i] === '-S') i++;
+  const name = words[i];
+  if (!name || name.startsWith('-') || name.includes('=') || name.includes('/')) return null;
+  return locateBin(name, env);
+}
+
+/** The alternation inside a nodeReach / nodeUp regex of the given shape, or null when it has no path (`^$`). */
+function alternation(re, close) {
+  if (re === NODEUP_NONE) return null;
+  if (!re.startsWith('^(') || !re.endsWith(close)) throw new Error(`gemini: a reach regex of an unknown shape: ${re}`);
+  return re.slice(2, -close.length);
+}
+
+/**
+ * What profile B re-allows under the home (NODE, NODEUP) for the test
+ * command's toolchain: `base` (nodeEnv's pair — the adapter's node, repro.sb's
+ * own reach) widened by each of `binaries` that resolves under `home`. For a
+ * binary `b` (resolved), its prefix is the parent of its directory when that
+ * directory is named `bin`, else its directory:
+ *   - a prefix that is the home or an ancestor of it: the binary alone;
+ *   - a prefix holding `bin/node`: nodeReach's three paths (`bin`,
+ *     `lib/node_modules/npm`, `lib/node_modules/corepack`);
+ *   - a prefix that is a direct child of the home (`~/.cargo`, `~/miniconda3`):
+ *     its `bin` and `lib` only, or the binary alone when it sits in no `bin` —
+ *     never the whole directory, which holds credentials and data
+ *     (`~/.cargo/credentials.toml`, `~/.local/share`); narrower than the plan's
+ *     «re-allowed whole» (the session's ruling on T8, 2026-11-25);
+ *   - any other prefix (`~/.pyenv/versions/3.12.1`, uv's
+ *     `~/.local/share/uv/python/cpython-…`): the prefix whole.
+ * A binary that does not resolve, or resolves outside the home, adds nothing.
+ * The directories from the home down to each allowed path's parent are
+ * stat-able (nodeUp). `binaries`: the program, its shebang interpreter (one
+ * level) and, for each copied venv, `realpath(<copy>/bin/python)`. The tool
+ * computes `program` (resolveProgram), then programNeeds, and passes its
+ * `interpreter` here and its `dirs` to runTestCommand as `pathDirs`: one lookup,
+ * so the interpreter re-allowed is the one the PATH will find.
+ * @param {{home: string, binaries: string[], base?: {OMELETTE_REPRO_NODE: string, OMELETTE_REPRO_NODEUP: string}}} o
+ * @returns {{node: string, up: string}} `node` one `^(…)(/|$)` regex, `up` one `^(…)$` regex (NODEUP_NONE when empty)
+ */
+export function toolchainReach({ home, binaries, base = nodeEnv({ home }) }) {
+  const realHome = realpathSync(home);
+  const nodeParts = [alternation(base.OMELETTE_REPRO_NODE, ')(/|$)')];
+  const upParts = [alternation(base.OMELETTE_REPRO_NODEUP, ')$')].filter((p) => p !== null);
+  const allowed = [];
+  const add = (paths, upTo) => {
+    for (const p of paths) if (!allowed.includes(p)) allowed.push(p);
+    const up = alternation(nodeUp({ home: realHome, node: upTo }), ')$');
+    if (up !== null && !upParts.includes(up)) upParts.push(up);
+  };
+  for (const b of binaries) {
+    let real;
+    try { real = realpathSync(b); } catch { continue; }
+    if (!within(real, realHome) || real === realHome) continue;
+    const dir = dirname(real);
+    const inBin = basename(dir) === 'bin';
+    const prefix = inBin ? dirname(dir) : dir;
+    if (within(realHome, prefix)) add([real], real);
+    else if (existsSync(join(prefix, 'bin', 'node'))) {
+      const modules = join(prefix, 'lib', 'node_modules');
+      add([join(prefix, 'bin'), join(modules, 'npm'), join(modules, 'corepack')], join(modules, 'npm'));
+    } else if (dirname(prefix) === realHome) {
+      if (inBin) add([dir, join(prefix, 'lib')], dir); else add([real], real);
+    } else add([prefix], prefix);
+  }
+  if (allowed.length) nodeParts.push(allowed.map(regexLiteral).join('|'));
+  return {
+    node: `^(${nodeParts.join('|')})(/|$)`,
+    up: upParts.length ? `^(${upParts.join('|')})$` : NODEUP_NONE,
+  };
+}
+
+/**
+ * The copied dependency directories are still the ones copyDeps made: every
+ * `chain` entry (the directories from the clone down to each copy) still lstats
+ * as a directory with its recorded dev and ino — a rename of an ancestor and a
+ * new directory, or a link, in its place is caught before the program runs.
+ * runTestCommand calls it itself before every run; no caller needs to.
+ * @param {{deps: {chain: {path: string, dev: number, ino: number}[]}[]}} run
+ */
+export function assertDeps(run) {
+  for (const d of run.deps) {
+    for (const c of d.chain) {
+      const st = lstatOrNull(c.path);
+      if (!st || !st.isDirectory() || st.dev !== c.dev || st.ino !== c.ino) {
+        throw new Error('gemini: a dependency directory of the copy was replaced during the run — the test command is not run');
+      }
+    }
+  }
+}
+
+/**
+ * What the program needs beyond its own directory, from one lookup (the
+ * session's ruling on T8, 2026-11-25: nvm's npm resolves to
+ * `…/lib/node_modules/npm/bin/npm-cli.js`, whose `#!/usr/bin/env node` finds no
+ * node in its own directory and exits 127):
+ *   - `dirs`, in order, without duplicates or `dirname(program)` itself:
+ *     (a) for a bare name, the directory locateBin found it in, resolved (for
+ *     nvm's `npm`, node's own `bin`); nothing for a path under a deps entry;
+ *     (b) the directory of the program's shebang interpreter, resolved —
+ *     looked up by shebangOf on `[dirname(program), (a), env.PATH]`.
+ *     Every one resolved: a spelling through a link inside the home stops a
+ *     PATH search under the profile.
+ *   - `interpreter`: that interpreter, resolved, or null.
+ * The tool computes `program` (resolveProgram), then this, and passes `dirs` to
+ * runTestCommand as `pathDirs` and `interpreter` to toolchainReach's binaries —
+ * so the interpreter re-allowed is the one the PATH will find.
+ * @param {{word: string, program: string, env?: object}} o `word` the command's first word, `program` resolveProgram's result
+ * @returns {{dirs: string[], interpreter: string|null}}
+ */
+export function programNeeds({ word, program, env = process.env }) {
+  const own = dirname(program);
+  const dirs = [];
+  const add = (d) => { if (d !== own && !dirs.includes(d)) dirs.push(d); };
+  if (!word.includes('/')) {
+    const found = locateBin(word, env);
+    if (found) add(realpathSync(dirname(found)));
+  }
+  const PATH = [own, ...dirs, env.PATH || ''].filter(Boolean).join(':');
+  let interpreter = shebangOf(program, { env: { PATH } });
+  if (interpreter) {
+    try {
+      interpreter = realpathSync(interpreter);
+      add(dirname(interpreter));
+    } catch { interpreter = null; }
+  }
+  return { dirs, interpreter };
+}
+
+/** programNeeds' `dirs`: the resolved directories the program needs on its PATH beside its own. */
+export const programDirs = (o) => programNeeds(o).dirs;

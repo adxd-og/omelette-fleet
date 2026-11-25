@@ -89,16 +89,20 @@ function world({ files = {}, ignored = [], untracked = {}, deps = [] } = {}) {
       },
     }],
   });
-  /** Runs `args` (args[0] absolute) once; `env` is the server's env the spawn selects from. */
-  const exec = async (o, env = process.env) => {
+  /** The tool called once with `o`: the runtime's answer (an error included) and runTestCommand's result. */
+  const call = async (o, env = process.env) => {
     opts = o;
     result = null;
     const rt = createUnitRuntime(unit, { env: { ...env, AGY_BIN: process.execPath, OMELETTE_HOME: fleet }, onResult: () => {} });
-    const r = await rt.callTool('neontest_run', {});
-    assert.equal(r.isError, undefined, r.text);
-    return result;
+    return { r: await rt.callTool('neontest_run', {}), result };
   };
-  return { home, fleet, work, run, reach, exec, done: () => discardRun(run) };
+  /** Runs `args` (args[0] absolute) once; `env` is the server's env the spawn selects from. */
+  const exec = async (o, env = process.env) => {
+    const { r, result: got } = await call(o, env);
+    assert.equal(r.isError, undefined, r.text);
+    return got;
+  };
+  return { home, fleet, work, run, reach, exec, call, done: () => discardRun(run) };
 }
 
 const node = () => realpathSync(process.execPath);
@@ -180,7 +184,15 @@ test('a run past its time limit is killed and says so', KROW, async () => {
 });
 
 test('the live log the command can reach in tmp, grown sparse to 1 GB, leaves out/ at most its last 1 MB', KROW, async () => {
-  const w = world({ files: { 'grow.mjs': 'import { truncateSync } from "node:fs";\nconsole.log("before");\ntruncateSync(`${process.env.TMPDIR}/round-1.log`, 2 ** 30);\n' } });
+  // The live log's name is random, but the command lists tmp/ and finds it: round-1-<12 hex>.log.
+  const grow = [
+    'import { readdirSync, truncateSync } from "node:fs";',
+    'console.log("before");',
+    'const live = readdirSync(process.env.TMPDIR).filter((n) => /^round-1-[0-9a-f]{12}\\.log$/.test(n));',
+    'if (live.length !== 1) process.exit(3);',
+    'truncateSync(`${process.env.TMPDIR}/${live[0]}`, 2 ** 30);',
+  ].join('\n');
+  const w = world({ files: { 'grow.mjs': grow } });
   try {
     const r = await w.exec({ args: [node(), 'grow.mjs'] });
     assert.equal(r.code, 0, r.tail);
@@ -290,4 +302,190 @@ test('testPath puts the program\'s directory first, drops entries under the home
   assert.equal(testPath({ program, home: homeLink, inherited: `${join(home, 'bin')}:${join(homeLink, 'bin')}:${join(root, 'sys', 'a')}` }), [join(root, 'prog', 'bin'), join(root, 'sys', 'a'), '/usr/bin', '/bin'].join(':'));
   // The program's own directory is kept even under the home, once.
   assert.equal(testPath({ program: join(home, 'bin', 'node'), home, inherited: join(home, 'bin') }), [join(home, 'bin'), '/usr/bin', '/bin'].join(':'));
+});
+
+// 1.13.0 T8: what the kernel re-allows under the home for a program that lives there (toolchainReach).
+import { chmodSync as chmodT8 } from 'node:fs';
+import { toolchainReach } from '../units/gemini/test-run.mjs';
+
+test('a program under the home runs under profile B with its reach and fails closed without it', KROW, async () => {
+  const w = world();
+  const tool = join(w.home, '.local', 'share', 'tool', 'bin', 'tool');
+  mkdirSync(dirname(tool), { recursive: true });
+  // A script, not a copy of /bin/echo: on macOS 27 a copied platform binary is killed at exec (137), sandbox or not.
+  // /bin/sh opens the script by its path under the home, which only the reach makes readable.
+  writeFileSync(tool, '#!/bin/sh\necho "$@"\n');
+  chmodT8(tool, 0o755);
+  try {
+    const reached = await w.exec({ args: [tool, 'reached'], reach: toolchainReach({ home: w.home, binaries: [tool] }) });
+    assert.equal(reached.code, 0, reached.tail);
+    assert.equal(reached.tail, 'reached\n');
+    const closed = await w.exec({ args: [tool, 'reached'], round: 2 });
+    assert.notEqual(closed.code, 0, 'with nodeEnv alone the program under the home is not readable');
+    assert.equal(closed.tail.includes('reached'), false);
+  } finally { w.done(); }
+});
+
+// The session's rulings on T8 (2026-11-25): the PATH gets the program's directories; the live log's name is not guessable.
+import { programDirs, programNeeds, resolveProgram } from '../units/gemini/test-run.mjs';
+
+test('a program whose interpreter lives in another directory under the home runs with programDirs and exits 127 without', KROW, async () => {
+  const w = world();
+  const v1 = join(w.home, '.tool', 'versions', 'v1');
+  mkdirSync(join(v1, 'bin'), { recursive: true });
+  mkdirSync(join(v1, 'lib', 'prog'), { recursive: true });
+  writeFileSync(join(v1, 'bin', 'interp'), '#!/bin/sh\nexec /bin/sh "$1"\n');
+  writeFileSync(join(v1, 'lib', 'prog', 'prog.sh'), '#!/usr/bin/env interp\necho ran\n');
+  chmodT8(join(v1, 'bin', 'interp'), 0o755);
+  chmodT8(join(v1, 'lib', 'prog', 'prog.sh'), 0o755);
+  symlinkSync('../lib/prog/prog.sh', join(v1, 'bin', 'prog'));
+  const env = { PATH: join(v1, 'bin') };
+  try {
+    const program = resolveProgram({ word: 'prog', programs: ['prog'], deps: [], run: w.run, env });
+    const needs = programNeeds({ word: 'prog', program, env });
+    assert.deepEqual(programDirs({ word: 'prog', program, env }), [join(v1, 'bin')]);
+    const reach = toolchainReach({ home: w.home, binaries: [program, needs.interpreter] });
+    const ran = await w.exec({ args: [program], reach, pathDirs: needs.dirs });
+    assert.equal(ran.code, 0, ran.tail);
+    assert.equal(ran.tail, 'ran\n');
+    const without = await w.exec({ args: [program], reach, pathDirs: [], round: 2 });
+    assert.equal(without.code, 127, without.tail);
+  } finally { w.done(); }
+});
+
+test('a file the model planted at tmp/round-1.log does not stop the run', KROW, async () => {
+  const w = world({ files: { 'ok.mjs': 'console.log("ran");\n' } });
+  writeFileSync(join(w.run.tmp, 'round-1.log'), 'planted\n');
+  try {
+    const r = await w.exec({ args: [node(), 'ok.mjs'] });
+    assert.equal(r.code, 0, r.tail);
+    assert.equal(r.tail, 'ran\n');
+    assert.equal(r.log, join(w.run.out, 'round-1.log'));
+    assert.equal(readFileSync(join(w.run.tmp, 'round-1.log'), 'utf8'), 'planted\n');
+  } finally { w.done(); }
+});
+
+// The fix round after T7–T8's tester (2026-11-25): runTestCommand's own refusals, each before anything is opened
+// or spawned, and the live log removed from tmp/ after the copy.
+import { lstatSync as lstatFix, readdirSync as readdirFix, renameSync as renameFix } from 'node:fs';
+
+// Each pure row's budget: ten times its time under a full `npm test` (a run made, then refused: ≤ 310 ms).
+const PURE_RUN = { timeout: 3_100 };
+/** A ctx whose spawn only counts: a refusal before the spawn leaves `spawned` at 0. */
+const countingCtx = () => ({ spawned: 0, async spawn() { this.spawned++; return { code: 0, signal: null, killed: false, cancelled: false }; } });
+/** What tmp/ and out/ hold, to compare before and after a refusal. */
+const listing = (run) => ({ tmp: readdirFix(run.tmp).sort(), out: readdirFix(run.out).sort() });
+
+test('runTestCommand refuses a missing, zero, negative and NaN time limit before anything is opened', PURE_RUN, async () => {
+  const w = world();
+  try {
+    const before = listing(w.run);
+    for (const timeoutMs of [undefined, 0, -1, NaN]) {
+      const ctx = countingCtx();
+      await assert.rejects(runTestCommand(ctx, w.run, { args: [node()], round: 1, timeoutMs, reach: w.reach, home: w.home, fleet: w.fleet }),
+        (e) => e.message === `gemini: runTestCommand needs a positive timeoutMs (got ${String(timeoutMs)})`, String(timeoutMs));
+      assert.equal(ctx.spawned, 0);
+    }
+    assert.deepEqual(listing(w.run), before);
+    assert.equal(w.run.sandboxed, undefined);
+  } finally { w.done(); }
+});
+
+test('a round number runs once: the second call is refused before the command runs', KROW, async () => {
+  const w = world({ files: { 'mark.mjs': 'import { appendFileSync } from "node:fs";\nappendFileSync("marks", "ran\\n");\n' } });
+  try {
+    const first = await w.exec({ args: [node(), 'mark.mjs'] });
+    assert.equal(first.code, 0, first.tail);
+    const { r } = await w.call({ args: [node(), 'mark.mjs'] });
+    assert.equal(r.isError, true);
+    assert.equal(r.text, 'Neon test error: gemini: round 1 already ran in this run');
+    assert.equal(readFileSync(join(w.run.clone, 'marks'), 'utf8'), 'ran\n', 'the refused call did not run the command');
+  } finally { w.done(); }
+});
+
+test('a round that is not a positive whole number is refused', PURE_RUN, async () => {
+  const w = world();
+  try {
+    const before = listing(w.run);
+    for (const round of [0, -1, 1.5, NaN, '1', undefined]) {
+      const ctx = countingCtx();
+      await assert.rejects(runTestCommand(ctx, w.run, { args: [node()], round, timeoutMs: 1_000, reach: w.reach, home: w.home, fleet: w.fleet }),
+        (e) => e.message === `gemini: runTestCommand needs a positive whole round number (got ${typeof round === 'string' ? JSON.stringify(round) : String(round)})`, String(round));
+      assert.equal(ctx.spawned, 0);
+    }
+    assert.deepEqual(listing(w.run), before);
+  } finally { w.done(); }
+});
+
+test('runTestCommand refuses a run whose dependency chain was replaced, before the command runs', PURE_RUN, async () => {
+  const w = world();
+  try {
+    const copy = join(w.run.clone, 'packages', 'a', 'node_modules');
+    mkdirSync(copy, { recursive: true });
+    const parts = ['packages', 'a', 'node_modules'];
+    const chain = parts.map((_, i) => { const path = join(w.run.clone, ...parts.slice(0, i + 1)); const st = lstatFix(path); return { path, dev: st.dev, ino: st.ino }; });
+    w.run.deps = [{ rel: 'packages/a/node_modules', copy, chain }];
+    renameFix(join(w.run.clone, 'packages'), join(w.run.clone, 'packages.old'));
+    mkdirSync(copy, { recursive: true });
+    const before = listing(w.run);
+    const ctx = countingCtx();
+    await assert.rejects(runTestCommand(ctx, w.run, { args: [node()], round: 1, timeoutMs: 1_000, reach: w.reach, home: w.home, fleet: w.fleet }),
+      (e) => e.message === 'gemini: a dependency directory of the copy was replaced during the run — the test command is not run');
+    assert.equal(ctx.spawned, 0);
+    assert.deepEqual(listing(w.run), before);
+    assert.equal(w.run.sandboxed, undefined);
+  } finally { w.done(); }
+});
+
+test('a home that cannot be resolved leaves no live log and the run not marked sandboxed', PURE_RUN, async () => {
+  const w = world();
+  try {
+    const missing = join(BASE, `no-home-${++n}`);
+    const ctx = countingCtx();
+    await assert.rejects(runTestCommand(ctx, w.run, { args: [node()], round: 1, timeoutMs: 1_000, reach: w.reach, home: missing, fleet: w.fleet }), (e) => e.code === 'ENOENT');
+    assert.equal(ctx.spawned, 0);
+    assert.deepEqual(readdirFix(w.run.tmp), []);
+    assert.equal(w.run.sandboxed, undefined);
+  } finally { w.done(); }
+});
+
+test('the live log is gone from tmp after the run, also when the command replaced it with a directory or a link', { ...KROW, timeout: 4_500 }, async () => {
+  // Each command finds its live log by listing tmp/; the second puts a directory in its place, the third a link to a
+  // directory outside the run that holds a file.
+  const find = 'const at = process.env.TMPDIR + "/" + readdirSync(process.env.TMPDIR).find((x) => /^round-\\d+-[0-9a-f]{12}\\.log$/.test(x));';
+  const w = world({
+    files: {
+      'plain.mjs': 'console.log("plain");\n',
+      'todir.mjs': `import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";\n${find}\nconsole.log("todir");\nunlinkSync(at); mkdirSync(at); writeFileSync(at + "/inside", "x");\n`,
+      'tolink.mjs': `import { readdirSync, symlinkSync, unlinkSync } from "node:fs";\n${find}\nconsole.log("tolink");\nunlinkSync(at); symlinkSync(process.argv[2], at);\n`,
+    },
+  });
+  const outside = realpathSync(mkdtempSync(join(BASE, 'outside-')));
+  writeFileSync(join(outside, 'keep'), 'kept\n');
+  try {
+    const rounds = [[1, 'plain.mjs'], [2, 'todir.mjs'], [3, 'tolink.mjs', outside]];
+    for (const [round, script, ...rest] of rounds) {
+      const r = await w.exec({ args: [node(), script, ...rest], round });
+      assert.equal(r.code, 0, r.tail);
+      assert.equal(r.tail, `${script.split('.')[0]}\n`);
+      assert.deepEqual(readdirFix(w.run.tmp).filter((x) => x.startsWith('round-')), [], `round ${round}`);
+    }
+    assert.equal(readFileSync(join(outside, 'keep'), 'utf8'), 'kept\n', 'the link\'s target and what it holds are untouched');
+    assert.deepEqual(readdirFix(outside), ['keep']);
+  } finally { w.done(); }
+});
+
+test('runTestCommand refuses a time limit past what a timer can hold, and names a round given as a string', PURE_RUN, async () => {
+  const w = world();
+  try {
+    const before = listing(w.run);
+    const ctx = countingCtx();
+    // Node clamps a setTimeout past 2^31 - 1 ms to 1 ms: the command would be killed at once.
+    await assert.rejects(runTestCommand(ctx, w.run, { args: [node()], round: 1, timeoutMs: 2 ** 31, reach: w.reach, home: w.home, fleet: w.fleet }),
+      (e) => e.message === 'gemini: runTestCommand needs a positive timeoutMs of at most 2147483647 (got 2147483648)');
+    await assert.rejects(runTestCommand(ctx, w.run, { args: [node()], round: '4', timeoutMs: 1000, reach: w.reach, home: w.home, fleet: w.fleet }),
+      (e) => e.message === 'gemini: runTestCommand needs a positive whole round number (got "4")');
+    assert.equal(ctx.spawned, 0);
+    assert.deepEqual(listing(w.run), before);
+  } finally { w.done(); }
 });
