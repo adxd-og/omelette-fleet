@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.13.0 — 2026-11-25
+## 1.13.0 — 2026-11-26
 
 `gemini_test`: a second tester on Gemini 4 Neon. The model writes test files in a disposable copy of your project, the unit runs your one test command itself after each round, and the answer is a diff you apply or drop. Map: [CONFIG, "The Gemini unit: `gemini_test` keys and the call"](docs/CONFIG.md#the-gemini-unit-gemini_test-keys-and-the-call) for the call, the keys and the `doctor` lines; [SECURITY, "Gemini — `gemini_test`"](docs/SECURITY.md#gemini--gemini_test-agy-under-a-kernel-the-tests-under-another) for what the two kernel profiles hold and what they miss; [MEASUREMENTS](docs/MEASUREMENTS.md) for what was measured against a real agy.
 
