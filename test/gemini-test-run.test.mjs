@@ -871,6 +871,25 @@ test('findRunLink sees the run through the Data volume\'s own spelling: /System/
   } finally { discardRun(run); }
 });
 
+// RC2 of the fix round's re-check: volfs names a directory by device and inode, and no component under /.vol can be looked up.
+test('findRunLink finds a link into /.vol: the scratch home named by device and inode, with or without a tail', MADE, (t) => {
+  const work = workTree();
+  writeFileSync(join(work, 'README.md'), 'two\n');
+  const run = open(work, patchOf(work));
+  try {
+    const s = statSync(run.home, { bigint: true });
+    const vol = `/.vol/${s.dev}/${s.ino}`;
+    let reaches = false;
+    try { reaches = statSync(vol, { bigint: true }).ino === s.ino; } catch { /* no volfs */ }
+    if (!reaches) { t.skip('no volfs spelling of the scratch home'); return; }
+    for (const target of [vol, `${vol}/.gemini/settings.json`]) {
+      writeTree(run.clone, { x: { link: target } });
+      assert.deepEqual(findRunLink(run), { link: 'x' }, target);
+      rmSync(join(run.clone, 'x'));
+    }
+  } finally { discardRun(run); }
+});
+
 test('findRunLink walks the copy\'s .git and every dependency copy, and a chain of more than 40 links is a finding', { ...COPIED, timeout: 5_000 }, () => {
   const work = writeTree(workTree({ '.gitignore': 'node_modules/\n' }), { 'node_modules/pkg/index.js': 'i\n' });
   const run = runWithDeps(work, ['node_modules']);

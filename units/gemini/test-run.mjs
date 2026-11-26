@@ -1142,9 +1142,11 @@ function up(dir) {
  * whose chain of `..` (up) holds the run dir and not the copy (in the run,
  * outside the copy, whatever the tail); a landing with no tail that is an
  * ancestor of the run dir (through it agy's own path reaches `…/run-X/home/…`)
- * — the run dir's `..` chain, plus `/System/Volumes/Data` when that spelling of
- * the run dir is the run dir (the Data volume's root is not on the `..` chain);
- * a stat that fails on the way. An ancestor with a missing tail, a sibling of
+ * — the run dir's `..` chain, plus `/System/Volumes/Data` and its own `..`
+ * chain (`/System/Volumes`, `/System`) when that spelling of the run dir is the
+ * run dir (none of the three is on the run's `..` chain); a landing in `/.vol`
+ * (volfs names a directory by device and inode, and no component under it can
+ * be looked up to place it); a stat that fails on the way. An ancestor with a missing tail, a sibling of
  * the run, a toolchain outside it are not this check's business.
  * @param {{runDir: string, clone: string}} run
  * @returns {{link?: string, tooMany?: true, unreadable?: string}} the link relative to the copy, or why the walk stopped; `{}` when none
@@ -1157,9 +1159,15 @@ export function findRunLink(run, { max = WALK_MAX } = {}) {
   if (runUp === null) throw new Error('gemini: the run directory\'s ancestors could not be read for the link check');
   const above = new Set(runUp.slice(1));
   const DATA = '/System/Volumes/Data';
-  try {
-    if (idOf(DATA + realpathSync.native(run.runDir)) === runId) above.add(idOf(DATA));
-  } catch { /* no Data volume spelling of the run */ }
+  let viaData = false;
+  try { viaData = idOf(DATA + realpathSync.native(run.runDir)) === runId; } catch { /* no Data volume spelling of the run */ }
+  if (viaData) {
+    const dataUp = up(DATA);
+    if (dataUp === null) throw new Error('gemini: the Data volume\'s ancestors could not be read for the link check');
+    for (const id of dataUp) above.add(id);
+  }
+  let volId = null;
+  try { volId = idOf('/.vol'); } catch { /* no volfs here */ }
   const chains = new Map();
   const into = (link) => {
     const landing = linkLanding(link);
@@ -1167,6 +1175,7 @@ export function findRunLink(run, { max = WALK_MAX } = {}) {
     if (!chains.has(landing.dir)) chains.set(landing.dir, up(landing.dir));
     const chain = chains.get(landing.dir);
     if (chain === null) return true;
+    if (chain[0] === volId) return true;
     if (chain.includes(runId) && !chain.includes(cloneId)) return true;
     return !landing.tail && above.has(chain[0]);
   };
