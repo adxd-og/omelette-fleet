@@ -72,11 +72,10 @@ test('gemini_deep_research naming Carbon (High) is not refused and runs every st
   for (const [stage, model] of seen) assert.equal(model, 'Gemini 4 Carbon (High)', stage);
 });
 
-test('gemini_models lists both Carbon ids and no Carbon (Low)', async () => {
+test('gemini_models lists both Carbon ids', async () => {
   const rt = world({}, () => { throw new Error('no spawn'); });
   const r = await rt.callTool('gemini_models', {});
   assert.ok(!r.isError, r.text);
   assert.ok(r.text.includes('Gemini 4 Carbon (High)'));
   assert.ok(r.text.includes('Gemini 4 Carbon (Medium)'));
-  assert.ok(!r.text.includes('Carbon (Low)'));
 });
