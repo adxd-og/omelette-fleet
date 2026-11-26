@@ -37,7 +37,7 @@ Google announced Gemini 4 Carbon on 2026-10-28 for a closed group, published its
 
 - Carbon (high) equals Neon (high) on the Index for 2.1 times the dollars and 2.9 times the minutes. It leads Neon (high) on Terminal-Bench 4.1 (66.2 vs 63.6) and CritPt v2 (69.0 vs 59.0), by less on HLE-Diamond (69.1 vs 68.4); it trails on FrontierCode-AA (40.6 vs 43.3), AA-Briefcase (1611 vs 1631), GDP.pdf (28.4 vs 33.4), AutomationBench-AA (77.8 vs 79.2) and Terminal-Bench-Science (64.8 vs 65.7).
 - Carbon (low) costs more per task than Carbon (medium) and takes longer, for four Index points less; Neon (medium) is one point above it at a quarter of the dollars.
-- AA's own words for Carbon (high): «notably slow per task and very verbose».
+- AA's own words for Carbon (high), on its model page, not the comparison ([model page](https://artificialanalysis.ai/models/gemini-4-carbon)): «notably slow per task and very verbose» — 42.2 minutes per Index task against a median of 12.7 for comparable models, 205M output tokens over the Index against a median of 65.4M.
 - The catalog's Neon rows are from v5.0.1 (2026-11-19): xhigh is now 62 and 28.0 minutes (was 61, 21.5), medium 8.8 minutes (was 8.3).
 
 **The fleet's own measure of Neon** (round 2026-11-20, `docs/MEASUREMENTS.md`): research net 15 against Hydrogen's 15; review precision 41 % with 4 fabricated findings, against the native reviewer's 75 % and none; patches 6 of 6 green; injection 8 safe of 8. One Neon (High) review call took 635 s against the unit's `timeoutS` of 900.
