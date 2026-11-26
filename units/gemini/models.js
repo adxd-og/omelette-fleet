@@ -77,7 +77,10 @@
  * against Argon, GPT-6 Astra, Claude Opus 5.5 and Claude Fable 5.1 that states no
  * thinking level for any row or column: no card row is filed under any level, and
  * its three security rows (CWE-bench, ExploitGym, SEC-bench Pro) hold "when
- * accessed through the Fairwind Program", which this unit's sign-in is not;
+ * accessed through the Fairwind Program" — not what a sign-in outside that
+ * program gets. The card's Terminal-Bench-Science 0.1 64.8 equals AA's figure for
+ * Carbon at high, so that row is probably at high — an inference, not a published
+ * fact; no card row is filed under any level;
  * Artificial Analysis, Intelligence Index v5.0.2 (third party), its Neon-vs-Carbon
  * comparison page, for the Index, the dollars and minutes per Index task and the
  * per-benchmark rows of Neon and Carbon at all seven levels, and its Gemini 4
@@ -361,9 +364,11 @@ export const GEMINI_MODELS = [
     effort: 'Medium',
     tier: 'heavy',
     useFor:
-      'Carbon at a lighter level, for the question Carbon (High) is for when its wait is the obstacle: two Index ' +
-      'points under High at two thirds of the time. A named one-call route as High is: not the fleet default, not ' +
-      'the tie-breaker, never a sweep or a deep-research stage. Artificial Analysis (Index v5.0.2, read 2026-11-26), Carbon at ' +
+      'Carbon at a lighter level: two Index points under High at two thirds of the time. Not a step past Neon ' +
+      '(High): on AA it sits under Neon at high on the Index and on Terminal-Bench 4.1 and leads it on CritPt v2 ' +
+      'only (see avoid), so it is for a hard-reasoning question of that kind when Carbon (High)\'s wait is the ' +
+      'obstacle. A named one-call route as High is: not the fleet default, not the tie-breaker, not for a sweep or a ' +
+      'deep-research stage. Artificial Analysis (Index v5.0.2, read 2026-11-26), Carbon at ' +
       'medium against Carbon at high: Intelligence Index 58 vs 60, at $6.59 vs $7.76 and 28.1 vs 42.2 minutes per ' +
       'Index task; CritPt v2 69.0 at both, Terminal-Bench 4.1 61.6 vs 66.2, FrontierCode-AA 2.0 39.5 vs 40.6, GDP.pdf ' +
       '29.6 vs 28.4, and AA-Omniscience falls to 47 from 54. The card\'s table and the launch post state no level ' +
@@ -383,7 +388,8 @@ export const GEMINI_MODELS = [
     useFor:
       'A named one-call route past Neon (High): a terminal-agent or hard-reasoning question Neon (High) fell short ' +
       'on, at about three times its wait. Not the fleet default, which stays Hydrogen (High); not the tie-breaker, ' +
-      'which stays Neon (High); never a sweep or a deep-research stage. Artificial Analysis (Index v5.0.2, read ' +
+      'which stays Neon (High); not for a sweep or a deep-research stage (a named id is not refused there: see ' +
+      'avoid). Artificial Analysis (Index v5.0.2, read ' +
       '2026-11-26, the Neon-vs-Carbon comparison page), Carbon at high against Neon at high: Intelligence Index 60 vs ' +
       '60 — level, at 2.1 times the dollars ($7.76 vs $3.74) and 2.9 times the minutes (42.2 vs 14.8) per Index ' +
       'task; it leads on Terminal-Bench 4.1 (66.2 vs 63.6) and CritPt v2 (69.0 vs 59.0), by less on HLE-Diamond ' +
@@ -396,8 +402,8 @@ export const GEMINI_MODELS = [
       'column and is not this level\'s measurement (no level stated): AA Index v5.0 59, Terminal-Bench 4.0 65.2 ' +
       'against Claude Opus 5.5\'s 59.6, Agents\' Last Exam v1.1 77.4, GraphWalks 256k–1M 96.2, Terminal-Bench-Science ' +
       '0.1 64.8. Google\'s launch post (no level stated): a 0.0% attack success rate on Gray Swan indirect prompt ' +
-      'injection, against Argon\'s 0.7%; the same post has its external benchmarks "evaluated without guardrails", ' +
-      'and does not say whether that covers the injection figure. How agy\'s (High) ' +
+      'injection, against Argon\'s 0.7%; the same post has its external benchmarks "evaluated without ' +
+      'guardrails". How agy\'s (High) ' +
       'maps to the API\'s thinking levels is not published.',
     avoid:
       'Sweeps, lookups and anything Neon (High) answers: on AA (Index v5.0.2, both at high) Carbon is level with Neon ' +
@@ -408,8 +414,8 @@ export const GEMINI_MODELS = [
       'runs every stage — about five agy runs — on it. A long task can end at gemini.timeoutS (300 s built ' +
       'in; AA\'s 42.2 minutes is per Index task, not per call) — raising it is config. Its security ' +
       'rows on the card (CWE-bench 71.0, ExploitGym 54.8, SEC-bench Pro 88.2; no level stated) hold "when accessed ' +
-      'through the Fairwind Program", and this sign-in is not in it: what the model scores behind the consumer ' +
-      'guardrails is not published. What a Carbon call costs the shared Gemini pool against a Neon or Hydrogen call ' +
+      'through the Fairwind Program": they are not what a sign-in outside that program gets, and what the model ' +
+      'scores behind the consumer guardrails is not published. What a Carbon call costs the shared Gemini pool against a Neon or Hydrogen call ' +
       'is not measured. Reading one exact URL is not measured on Carbon: send an exact-page read to Grok or Codex ' +
       'research.',
   },
@@ -543,8 +549,8 @@ export const GUIDE =
   'Neon (XHigh)=two Index points over High (AA at xhigh: 62) for 1.7x its cost; ' +
   'Neon (Medium)=about Hydrogen (High)\'s AA cost and time, Index 55 to its 51; ' +
   'Neon (Low)=the lightest Neon (AA at low: Index 44, $0.75), weak on terminal work; ' +
-  'Gemini 4 Carbon (High|Medium)=one named call past Neon (High) on terminal or hard reasoning (AA at high: ' +
-  'Neon\'s Index, 2.1x the $, 2.9x the time); ' +
+  'Gemini 4 Carbon (High)=named call past Neon (High): terminal agents, hard reasoning (AA: Index tie, 2.1x $, ' +
+  '2.9x time; Medium under Neon bar CritPt); ' +
   'Claude Opus 5.5 (High|Medium) and Claude Sonnet 5.5 (High|Medium)=Antigravity\'s SEPARATE Claude quota, and a ' +
   'SMALL one: one named call per question — an independent Opus read, a hard verification pass, a cheap Sonnet ' +
   'cross-check — when the Claude Code pool is the constraint; never the default, never a sweep, never a ' +
