@@ -686,7 +686,7 @@ test('programNeeds: a bare name found through a link into another directory adds
   const dir = tree({ 'x/bin/foo': { link: '../lib/foo.sh' }, 'x/lib/foo.sh': '#!/bin/sh\n' });
   const program = realpathSync(join(dir, 'x/bin/foo'));
   assert.equal(program, join(dir, 'x/lib/foo.sh'));
-  assert.deepEqual(programNeeds({ word: 'foo', program, env: { PATH: join(dir, 'x/bin') } }), { dirs: [join(dir, 'x/bin'), '/bin'], interpreter: '/bin/sh' });
+  assert.deepEqual(programNeeds({ word: 'foo', program, env: { PATH: join(dir, 'x/bin') } }), { dirs: [join(dir, 'x/bin'), dirname(realpathSync('/bin/sh'))], interpreter: realpathSync('/bin/sh') });
 });
 
 test('programNeeds: a relative PATH entry is not searched for the program or its interpreter', () => {

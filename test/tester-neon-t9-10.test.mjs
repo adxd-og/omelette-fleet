@@ -41,6 +41,8 @@ const gitIn = (dir, ...a) => execFileSync('git', ['-C', dir, ...a], { stdio: 'pi
 
 // Budgets: ten times the local time of the step (a run made ≈ 0.3 s; a run made and probed under the kernel ≈ 0.6 s).
 const PURE = { timeout: 3_100 };
+// copyDeps runs `cp -c` (clonefile): the rows that copy a dependency directory are macOS's.
+const COPIES = { ...PURE, skip: !DARWIN };
 const KROW = { timeout: 8_000, skip: !KERNEL };
 const node = () => realpathSync(process.execPath);
 
@@ -354,7 +356,7 @@ test('writeProfileA that cannot resolve agy\'s binary leaves no profile file and
   } finally { w.done(); }
 });
 
-test('writeProfileA\'s dep lines are the run\'s copies, in the order the run holds them', PURE, () => {
+test('writeProfileA\'s dep lines are the run\'s copies, in the order the run holds them', COPIES, () => {
   const w = world({
     ignored: ['packages/a/node_modules', 'packages/b/node_modules', 'node_modules'],
     untracked: { 'packages/a/node_modules/p/i.js': 'a\n', 'packages/b/node_modules/p/i.js': 'b\n', 'node_modules/p/i.js': 'c\n' },
@@ -777,7 +779,7 @@ test('a name that needs quoting has its quote and backslash escaped, and an astr
   assert.equal(line('a\\b"c'), '_(changed outside the test directories: a\\b"c)_', 'a name that needs no quoting is printed as it is');
 });
 
-test('a program spelled under the copy that is a link to a file outside the run is hashed, one that does not resolve is refused at the first call, and a program outside the run is not hashed', PURE, async () => {
+test('a program spelled under the copy that is a link to a file outside the run is hashed, one that does not resolve is refused at the first call, and a program outside the run is not hashed', COPIES, async () => {
   const w = toolWorld();
   const outside = join(BASE, `outside-prog-${n}.sh`);
   writeFileSync(outside, '#!/bin/sh\necho one\n');
@@ -817,7 +819,7 @@ test('a program spelled under the copy that is a link to a file outside the run 
   } finally { w3.done(); }
 });
 
-test('testChangedPaths leaves the copied dependencies out when the model un-ignores them, takes its names from the out dir\'s git and not the clone\'s, and is what the diff shows', PURE, () => {
+test('testChangedPaths leaves the copied dependencies out when the model un-ignores them, takes its names from the out dir\'s git and not the clone\'s, and is what the diff shows', COPIES, () => {
   const w = world({ ignored: ['tooldeps'], untracked: { 'tooldeps/p/i.js': 'dep\n' }, files: { 'src/a.mjs': 'a\n' }, deps: ['tooldeps'] });
   const c = w.run.clone;
   try {
@@ -1012,7 +1014,7 @@ test('the pin holds a call to its first reach for each of the two regexes, and a
   } finally { w.done(); }
 });
 
-test('a program in a dependency copy is held to its real path and its bytes: a same-byte rewrite runs, a link to equal bytes, a different file of the same size and a deleted file are refused', PURE, async () => {
+test('a program in a dependency copy is held to its real path and its bytes: a same-byte rewrite runs, a link to equal bytes, a different file of the same size and a deleted file are refused', COPIES, async () => {
   const w = toolWorld();
   const tool = join(w.run.clone, 'tools', 'bin', 'tool.sh');
   const bytes = readFileSync(tool);
@@ -1037,7 +1039,7 @@ test('a program in a dependency copy is held to its real path and its bytes: a s
   } finally { w.done(); }
 });
 
-test('a program in the copy reached by another spelling of the clone\'s path is pinned like any other', PURE, async () => {
+test('a program in the copy reached by another spelling of the clone\'s path is pinned like any other', COPIES, async () => {
   // Contract: «for a program in the clone, its real path and SHA-256». The alias is a link to the run dir.
   const w = toolWorld();
   const alias = join(BASE, `alias-${n}`);
@@ -1072,7 +1074,7 @@ test('the pin keeps its own copies: the caller\'s arrays changed afterwards, or 
   } finally { w.done(); }
 });
 
-test('run.pin is frozen all the way down: the lists, the program and the pin itself', PURE, async () => {
+test('run.pin is frozen all the way down: the lists, the program and the pin itself', COPIES, async () => {
   const w = toolWorld();
   const tool = join(w.run.clone, 'tools', 'bin', 'tool.sh');
   try {

@@ -639,7 +639,7 @@ test('programDirs: a bare name found through a link gives the resolved directory
   assert.deepEqual(programNeeds({ word: 'npm', program: npm, env }), { dirs: [join(dir, 'real/v1/bin')], interpreter: join(dir, 'real/v1/bin/node') });
   // A bare name whose script runs /bin/sh: the directory it was found in, and nothing for /bin.
   const tool = resolveProgram({ word: 'tool', programs: ['tool'], deps: [], run: fakeRun(), env: { PATH: join(dir, 'other/bin') } });
-  assert.deepEqual(programDirs({ word: 'tool', program: tool, env: { PATH: join(dir, 'other/bin') } }), ['/bin']);
+  assert.deepEqual(programDirs({ word: 'tool', program: tool, env: { PATH: join(dir, 'other/bin') } }), [dirname(realpathSync('/bin/sh'))]);
   const run = fakeRun({ 'node_modules/x/cli.js': '#!/usr/bin/env node\n', 'node_modules/.bin/x': { link: '../x/cli.js' }, 'node_modules/.bin/y': '#!/bin/sh\n' });
   const x = resolveProgram({ word: 'node_modules/.bin/x', programs: [], deps: ['node_modules'], run });
   assert.deepEqual(programDirs({ word: 'node_modules/.bin/x', program: x, env }), [join(dir, 'real/v1/bin')]);

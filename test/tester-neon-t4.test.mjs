@@ -6,7 +6,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -124,7 +124,8 @@ test('prepareClone: extra dirs are made 0700, keyed on the result, in ids but fo
   assert.ok(existsSync(join(run.out, 'git', 'HEAD')), 'the pristine .git copy is in out');
   assertRun(run, MSG);
   // every key of ids is checked: a replaced scratch dir, a link standing for it, a missing one
-  rmSync(run.scratch, { recursive: true });
+  // moved aside, not removed: ext4 and overlayfs hand a freed inode straight back, and the row is about another inode
+  renameSync(run.scratch, `${run.scratch}.old`);
   assert.throws(() => assertRun(run, MSG), (e) => e.message === MSG, 'removed');
   mkdirSync(run.scratch);
   assert.throws(() => assertRun(run, MSG), (e) => e.message === MSG, 'recreated: another inode');
@@ -135,11 +136,11 @@ test('prepareClone: extra dirs are made 0700, keyed on the result, in ids but fo
   rmSync(run.scratch);
   // the same for the first of dirs, and the clone
   const run2 = open(src, { dirs: ['tmp', 'out', 'scratch'] });
-  rmSync(run2.tmp, { recursive: true });
+  renameSync(run2.tmp, `${run2.tmp}.old`);
   mkdirSync(run2.tmp);
   assert.throws(() => assertRun(run2, MSG), (e) => e.message === MSG);
   const run3 = open(src, { dirs: ['tmp', 'out', 'scratch'] });
-  rmSync(run3.clone, { recursive: true, force: true });
+  renameSync(run3.clone, `${run3.clone}.old`);
   mkdirSync(run3.clone);
   assert.throws(() => assertRun(run3, MSG), (e) => e.message === MSG);
 });
