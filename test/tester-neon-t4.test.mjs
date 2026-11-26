@@ -72,14 +72,16 @@ test('prepareClone: setup runs after the drop and before the .git copy — what 
   const seen = {};
   const run = open(src, {
     drop: ['.vibe'],
-    setup: ({ clone, env }) => {
+    setup: ({ clone, env, config }) => {
       seen.keys = Object.keys(env).includes('GIT_LFS_SKIP_SMUDGE') && env.GIT_CONFIG_GLOBAL === '/dev/null';
       seen.vibeOnDisk = existsSync(join(clone, '.vibe'));
       seen.vibeInIndex = git(clone, 'ls-files', '--', '.vibe').trim();
       seen.outGit = existsSync(join(dirname(clone), 'out', 'git'));
       writeFileSync(join(clone, 'setup.txt'), 'made by setup\n');
       git(clone, 'add', 'setup.txt');
-      git(clone, 'commit', '-qm', 'setup');
+      // With the clone's own config, as prepareClone's contract says: a bare commit starts git's detached
+      // maintenance (git >= 2.47), whose lock file comes and goes under .git while prepareClone copies it.
+      execFileSync('git', [...config, '-C', clone, 'commit', '-qm', 'setup'], { stdio: 'pipe', env: GENV, timeout: 20_000 });
     },
   });
   assert.deepEqual(seen, { keys: true, vibeOnDisk: false, vibeInIndex: '', outGit: false }, 'setup ran after the drop, before out/git exists, with the clone git env');
