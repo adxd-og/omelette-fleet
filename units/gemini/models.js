@@ -366,7 +366,7 @@ export const GEMINI_MODELS = [
     useFor:
       'Carbon at a lighter level: two Index points under High at two thirds of the time. Not a step past Neon ' +
       '(High): on AA it sits under Neon at high on the Index and on Terminal-Bench 4.1 and leads it on CritPt v2 ' +
-      'only (see avoid), so it is for a hard-reasoning question of that kind when Carbon (High)\'s wait is the ' +
+      '(the rows read are in avoid), so it is for a hard-reasoning question of that kind when Carbon (High)\'s wait is the ' +
       'obstacle. A named one-call route as High is: not the fleet default, not the tie-breaker, not for a sweep or a ' +
       'deep-research stage. Artificial Analysis (Index v5.0.2, read 2026-11-26), Carbon at ' +
       'medium against Carbon at high: Intelligence Index 58 vs 60, at $6.59 vs $7.76 and 28.1 vs 42.2 minutes per ' +
@@ -549,8 +549,8 @@ export const GUIDE =
   'Neon (XHigh)=two Index points over High (AA at xhigh: 62) for 1.7x its cost; ' +
   'Neon (Medium)=about Hydrogen (High)\'s AA cost and time, Index 55 to its 51; ' +
   'Neon (Low)=the lightest Neon (AA at low: Index 44, $0.75), weak on terminal work; ' +
-  'Gemini 4 Carbon (High)=named call past Neon (High): terminal agents, hard reasoning (AA: Index tie, 2.1x $, ' +
-  '2.9x time; Medium under Neon bar CritPt); ' +
+  'Gemini 4 Carbon (High)=named call past Neon (High): terminal agents, hard reasoning (AA at high: Index 60 as ' +
+  'Neon, 2.1x $, 2.9x time; at medium: 58); ' +
   'Claude Opus 5.5 (High|Medium) and Claude Sonnet 5.5 (High|Medium)=Antigravity\'s SEPARATE Claude quota, and a ' +
   'SMALL one: one named call per question — an independent Opus read, a hard verification pass, a cheap Sonnet ' +
   'cross-check — when the Claude Code pool is the constraint; never the default, never a sweep, never a ' +
