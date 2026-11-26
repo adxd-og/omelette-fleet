@@ -49,10 +49,18 @@ const DIFF_CONFIG = [
 ];
 /** The env of every git call on the work tree and for the clone: isolated, and git-lfs smudges nothing. */
 export const cloneGitEnv = () => ({ ...isolatedGitEnv(), GIT_LFS_SKIP_SMUDGE: '1' });
-/** Every git call on the work tree and for the clone: no hook, no fsmonitor, no LFS filter. */
+/**
+ * Every git call on the work tree and for the clone: no hook, no fsmonitor, no
+ * LFS filter, and no automatic maintenance — since git 2.47 a commit starts a
+ * detached `git maintenance run --auto` that goes on working in the clone's
+ * `.git` after the command returned (measured on git 2.54.0, 2026-11-25): the
+ * copy of that `.git` into the run's out dir met entries vanishing under it,
+ * and no git process may be left in a clone the model is about to write.
+ */
 export const CLONE_CONFIG = [
   '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
   '-c', 'filter.lfs.smudge=', '-c', 'filter.lfs.process=', '-c', 'filter.lfs.required=false',
+  '-c', 'gc.auto=0', '-c', 'maintenance.auto=false',
 ];
 
 /**

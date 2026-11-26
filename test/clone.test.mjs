@@ -2,7 +2,7 @@
 // must keep of the order Mistral's prepareClone always had.
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -212,4 +212,19 @@ test('ignoreRules names the deciding source of an ignored directory, not one a n
   const rules = core.ignoreRules(run.clone, gitDirOf(run), { indexFile: join(BASE, `index-${n++}`), paths: ['cache', ':odd', 'keep', 'plain'] });
   assert.deepEqual([...rules.entries()], [['cache', { source: '.gitignore', pattern: 'cache/' }], [':odd', { source: '.gitignore', pattern: ':odd/' }]]);
   assert.equal(core.ignoreRules(run.clone, gitDirOf(run), { paths: [] }).size, 0, 'no path: no git call');
+});
+
+// Found on CI (2026-11-25): git 2.47+ starts a detached `git maintenance run --auto` after a commit, older gits a
+// `git gc --auto`; it worked in the clone's .git while prepareClone copied it. git's own trace is the evidence.
+test('a commit made with CLONE_CONFIG starts no gc and no maintenance, and one made without it starts one', () => {
+  const spawned = (config) => {
+    const dir = committed();
+    writeFileSync(join(dir, 'more.txt'), 'more\n');
+    gitIn(dir, 'add', '-A');
+    const r = spawnSync('git', [...config, '-C', dir, 'commit', '-qm', 'two'], { env: { ...GENV, GIT_TRACE: '1' }, encoding: 'utf8', timeout: 20_000 });
+    assert.equal(r.status, 0, r.stderr);
+    return (r.stderr.match(/run_command: git (gc|maintenance)\b/g) || []).length;
+  };
+  assert.equal(spawned(core.CLONE_CONFIG), 0);
+  assert.equal(spawned([]), 1, 'the control: this git starts one without the flags');
 });
