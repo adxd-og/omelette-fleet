@@ -10,27 +10,40 @@
  * (gemini-4-hydrogen-high, Gemini 4 Hydrogen (High)); --model accepts both, and the display names are kept here because they carry
  * the effort level readably.
  *
- * SYNCED TO agy (verified 2026-11-19, agy 1.5.12, auto-updated from 1.5.8). This
- * sync: Gemini 4 Neon (Low|Medium|High|XHigh) added — `agy models` lists all four
- * (slugs gemini-4-neon-low|-medium|-high|-xhigh), and (High) answered headless on
- * the operator's Google AI Pro sign-in with no API key (5.7 s); Gemini 4 Argon
- * (Low|Medium|High) and Gemini 4 Hydrogen (XHigh) removed by the sweep below — agy
- * 1.5.12 still lists both. GPT-OSS 120B: agy 1.5.12 still lists it on 2026-11-19,
- * after the announced removal date of 2026-11-18; the entry stays until agy stops
- * listing it. Listed by agy 1.5.12 and not in this catalog: the swept Argon,
- * Hydrogen (XHigh) and 3.8 Flash ids, Orchestrator (Argon), Orchestrator (Neon) (Antigravity: it plans on
- * Neon and implements on Hydrogen, with no level to choose) and the Claude Low
- * tiers. If agy adds/renames/removes a model, re-check and update GEMINI_MODELS
- * below (and re-confirm the bench notes in useFor/avoid). The (Low/Medium/High/
- * XHigh) suffix is the model's reasoning/thinking-effort level (Low=lightest,
- * XHigh=most deliberation; Antigravity's docs call XHigh "Extra"). How agy's
- * levels map to the API's thinking levels is not published.
+ * SYNCED TO agy (verified 2026-11-26, agy 1.5.18, auto-updated from 1.5.12 across
+ * the releases between). This sync: Gemini 4 Carbon (Medium) and (High) added. On
+ * agy 1.5.17 `agy models` listed Carbon at Low, Medium and High, no XHigh (slugs
+ * gemini-4-carbon-low|-medium|-high), and Orchestrator (Carbon); (High) and
+ * (Medium) each answered a one-word prompt headless on the operator's Google AI
+ * Pro sign-in, with the unit's own flags, in 6 s — both runs on 1.5.17. agy updated
+ * itself to 1.5.18 the same day, and `agy models` prints the same 27 lines.
+ * Listed by agy 1.5.18 and not in this catalog: Gemini 4 Carbon (Low) — on
+ * Artificial Analysis (Index v5.0.2, read 2026-11-26) it costs more per Index task
+ * than Carbon at medium and takes longer, for four Index points less ($7.19 vs
+ * $6.59, 29.9 vs 28.1 minutes, Index 54 vs 58), and Neon at medium scores one point
+ * above it (55) at about a quarter of the dollars ($1.90), so it stays out
+ * (operator, 2026-11-26); the three Orchestrator rows, (Neon), (Carbon) and
+ * (Argon) — Antigravity: a planner, Neon by default or Carbon or Argon, paired
+ * with Hydrogen, whose effort cannot be set; a read-only unit has no use for a
+ * planner–executor pair; the swept Gemini 4 Argon (Low|Medium|High), Gemini 4
+ * Hydrogen (XHigh) and Gemini 3.8 Flash (Low|Medium|High); and the Claude Low
+ * tiers. Antigravity's models page (read 2026-11-26): "Gemini 4 Argon, Gemini 3.8
+ * Flash, GPT-OSS-120b, and Claude 4.6 models are leaving on November 30, 2026" —
+ * of those only GPT-OSS 120B (Medium) is in this catalog, and agy 1.5.18 still
+ * lists it on 2026-11-26: the entry stays until agy stops listing it. If agy
+ * adds/renames/removes a model, re-check and update GEMINI_MODELS below (and
+ * re-confirm the bench notes in useFor/avoid). The (Low/Medium/High/XHigh) suffix
+ * is the model's reasoning/thinking-effort level (Low=lightest, XHigh=most
+ * deliberation; Antigravity's docs call XHigh "Extra"). How agy's levels map to
+ * the API's thinking levels is not published.
  *
- * SWEEP 2026-11-19, on the operator's word: Gemini 4 Argon (all three entries) and
- * Gemini 4 Hydrogen (XHigh) left the catalog, and Argon's quota rule with them;
- * Gemini 4 Neon (released by Google 2026-11-18) entered at four levels. Why, from
- * Artificial Analysis (Index v5.0.1, read 2026-11-19), each comparison on the same
- * pages: Neon at high leads Argon at high on the Intelligence Index (60 vs 50),
+ * SWEEP 2026-11-19 (agy 1.5.12), on the operator's word: Gemini 4 Argon (all three
+ * entries) and Gemini 4 Hydrogen (XHigh) left the catalog, and Argon's quota rule
+ * with them; Gemini 4 Neon (released by Google 2026-11-18) entered at four levels —
+ * `agy models` listed all four (slugs gemini-4-neon-low|-medium|-high|-xhigh), and
+ * (High) answered headless on the operator's Google AI Pro sign-in with no API key
+ * (5.7 s). Why, from Artificial Analysis (Index v5.0.1, read 2026-11-19), each
+ * comparison on the same pages: Neon at high leads Argon at high on the Intelligence Index (60 vs 50),
  * Terminal-Bench 4.0 (61.6 vs 57.1), Terminal-Bench-Science 0.1 (65.7 vs 52.9) and
  * AutomationBench-AA (79.2 vs 77.5), at $3.74 vs $4.97 and 14.8 vs 29.5 minutes per
  * Index task; Neon at medium scores 55 to Hydrogen at xhigh's 54, at $1.90 vs $3.16
@@ -38,10 +51,10 @@
  * tie-breaker Neon (High). AA has re-measured since 2026-11-13 (Hydrogen at high
  * from 7.9 to 8.6 minutes per task, at xhigh from 13.7 to 15.2; Argon at high from
  * 30.0 to 29.5).
- * agy 1.5.12 still lists the four ids and Antigravity's models page names no
- * removal for Argon: restoring one means re-adding its entry here by hand, with
- * today's figures rather than the ones it left with; until then the allowlist
- * refuses its id before any spawn.
+ * agy 1.5.12 still listed the four swept ids, and 1.5.18 still does; Antigravity's
+ * models page (read 2026-11-26) has Argon leaving on 2026-11-30. Restoring one
+ * means re-adding its entry here by hand, with today's figures rather than the
+ * ones it left with; until then the allowlist refuses its id before any spawn.
  *
  * GENERATION SWEEP 2026-11-13: Gemini 4 Hydrogen (released by Google
  * 2026-11-12) replaced the three 3.8 Flash entries outright — operator decision,
@@ -52,6 +65,31 @@
  * the rows the 3.8 Flash entries held, so there is no same-harness delta beyond
  * what Google's launch post states against 3.8 Flash. Restoring a retired
  * generation means re-adding its entry here by hand.
+ *
+ * CARBON SOURCES (read 2026-11-26): Google's launch post (2026-10-28, when Carbon
+ * opened to a closed group) for the Gray Swan indirect prompt injection figure —
+ * 0.0% attack success against Argon's 0.7%, no level stated — for its external
+ * benchmarks being "evaluated without guardrails", and for API prices of $2 / $10
+ * per Mtok introductory, $4 / $20 after; the DeepMind model card (published
+ * 2026-11-10) for the model's shape — "based on Gemini 4 Argon", "using more
+ * thinking tokens than Gemini 4 Argon"; 1M tokens for input and output together;
+ * knowledge cutoff March 2026; text, image, audio and video in — and for one table
+ * against Argon, GPT-6 Astra, Claude Opus 5.5 and Claude Fable 5.1 that states no
+ * thinking level for any row or column: no card row is filed under any level, and
+ * its three security rows (CWE-bench, ExploitGym, SEC-bench Pro) hold "when
+ * accessed through the Fairwind Program", which this unit's sign-in is not;
+ * Artificial Analysis, Intelligence Index v5.0.2 (third party), its Neon-vs-Carbon
+ * comparison page, for the Index, the dollars and minutes per Index task and the
+ * per-benchmark rows of Neon and Carbon at all seven levels, and its Gemini 4
+ * Carbon model page for its own words on Carbon at high and the two medians beside
+ * them; Antigravity's models and plans pages for the plans, the levels (Low, Medium,
+ * High), the shared Gemini quota and the 2026-11-30 removals. Not confirmed, and not
+ * written below as a fact: what a Carbon call costs the Gemini pool against a Neon
+ * or Hydrogen call; the level behind the card's table and the post's figures; when
+ * Carbon reached paid Pro; its context window inside Antigravity (the card says 1M
+ * of the model, the models page gives none for Carbon); what the security rows are
+ * outside the Fairwind Program; a hallucination rate by level. AA's dollars are API
+ * prices per Index task, not what a call costs the Antigravity pool.
  *
  * NEON SOURCES (read 2026-11-19): the DeepMind model card (published 2026-11-18)
  * for the model's shape — adapted from Gemini 4 Carbon, as Hydrogen is; 1M tokens
@@ -64,14 +102,16 @@
  * Intelligence Index 61 "at its xhigh thinking level", Gray Swan IPI "0.0% attack
  * success rate" at "its highest thinking level" — and no number against Argon or
  * Hydrogen; Artificial Analysis, Intelligence Index v5.0.1 (third party), for four
- * figures and eight per-benchmark rows at each level; Antigravity's models page for
- * the plans (Google AI Pro, Ultra and Enterprise) and "default for new
+ * figures and eight per-benchmark rows at each level, re-read on v5.0.2 (2026-11-26,
+ * the Neon-vs-Carbon comparison page): where a Neon figure moved, the entry carries
+ * the v5.0.2 one and says so; Antigravity's models page for the plans (Google AI
+ * Pro, Ultra and Enterprise) and "default for new
  * conversations" — Antigravity's own default, not this fleet's: Hydrogen (High)
  * stays the fleet default until an eval says otherwise. Neon's context window
  * inside Antigravity is not confirmed: the models page says "Up to 512K tokens",
- * the card 1M. The card's Index 61 and HLE-Diamond 71.3 equal AA's xhigh figures
- * while the post gives its FrontierCode 46.2 at high, so the card's column probably
- * mixes levels — an inference, not a published fact; no card row is filed under
+ * the card 1M. The card's Index 61 and HLE-Diamond 71.3 equal AA's v5.0.1 xhigh
+ * figures while the post gives its FrontierCode 46.2 at high, so the card's column
+ * probably mixes levels — an inference, not a published fact; no card row is filed under
  * any level. AA's dollars are API prices per Index task: what a Neon call costs
  * the Antigravity pool against a Hydrogen call is not measured.
  *
@@ -89,9 +129,11 @@
  * on those rows — an inference, not a published fact. No card row is filed under
  * any level as that level's measurement.
  *
- * Either card's Terminal-Bench 4.1 (cheating-adjusted, a term whose meaning is not
- * confirmed) and AA's Terminal-Bench 4.0 are different versions; do not compare
- * the two. Each comparison below stays inside one source.
+ * The Terminal-Bench rows are different measurements: Neon's and Hydrogen's cards
+ * give Terminal-Bench 4.1 (cheating-adjusted, a term whose meaning is not
+ * confirmed), Carbon's card Terminal-Bench 4.0, AA's v5.0.1 pages Terminal-Bench
+ * 4.0 and AA's v5.0.2 comparison page Terminal-Bench 4.1; do not compare across
+ * them. Each comparison below stays inside one source.
  *
  * SCOPE: Gemini family + GPT-OSS + Claude Opus 5.5 and Sonnet 5.5 via Antigravity.
  * The Claude family runs on Antigravity's OWN quota bucket, separate from the shared
@@ -129,6 +171,14 @@
  * Argon (the operator, 2026-11-19): it is not a one-call route by quota, and no rule
  * like Argon's applies. What a Neon call costs that pool against a Hydrogen call is
  * not measured yet (the eval reads it).
+ * Gemini 4 Carbon is, in Antigravity's words (models page, read 2026-11-26),
+ * "included on paid Google AI Pro plans …, Google AI Ultra, and Gemini Enterprise
+ * within the shared Gemini quota": which pool, not how much. What a Carbon call
+ * costs that pool against a Neon or Hydrogen call is not measured (the eval reads
+ * it at its first call). Carbon is a named one-call route by its wait and its AA
+ * price, not by a quota rule: never the default, never a sweep, never a
+ * deep-research stage (no stage picks a heavy entry; unlike a Claude id, a named
+ * Carbon id is not refused there), and the tie-breaker stays Neon (High).
  *
  * Zero deps. Plain ESM (.js), importable by both .js modules and the .mjs MCP.
  */
@@ -220,7 +270,8 @@ export const GEMINI_MODELS = [
     tier: 'heavy',
     useFor:
       'The lightest Neon level: a question that wants Neon at the least depth and spend. Artificial Analysis (Index ' +
-      'v5.0.1, read 2026-11-19), Neon at low: Intelligence Index 44 at $0.75 and 3.7 minutes per Index task, 28.3M ' +
+      'v5.0.1, read 2026-11-19; the minutes from v5.0.2, read 2026-11-26), Neon at low: Intelligence Index 44 at ' +
+      '$0.75 and 3.8 minutes per Index task, 28.3M ' +
       'output tokens over the Index; Terminal-Bench 4.0 32.8, Terminal-Bench-Science 0.1 27.1, AutomationBench-AA ' +
       '76.0, FrontierCode-AA 2.0 26.9, GDP.pdf 31.4, HLE-Diamond 54.2, CritPt v2 (Hard Subset) 62.0, AA-Omniscience ' +
       'v1.1 49 — automation and CritPt hold at low (79.2 and 59.0 at high). How agy\'s (Low) maps to the API\'s ' +
@@ -239,7 +290,8 @@ export const GEMINI_MODELS = [
     useFor:
       'Neon between Low and High: about Hydrogen (High)\'s cost and time with four Index points more — Artificial Analysis ' +
       '(Index v5.0.1, read 2026-11-19), Neon at medium against Hydrogen at high: Intelligence Index 55 vs 51, at ' +
-      '$1.90 vs $1.87 and 8.3 vs 8.6 minutes per Index task, 62.9M vs 110M output tokens over the Index. Its own rows at ' +
+      '$1.90 vs $1.87 and 8.3 vs 8.6 minutes per Index task, 62.9M vs 110M output tokens over the Index; on v5.0.2 ' +
+      '(read 2026-11-26) Neon at medium is 8.8 minutes, and Hydrogen was not re-read there. Its own rows at ' +
       'medium: Terminal-Bench 4.0 54.5, Terminal-Bench-Science 0.1 54.8, AutomationBench-AA 77.8, FrontierCode-AA 2.0 ' +
       '36.9, GDP.pdf 32.8, HLE-Diamond 63.6, CritPt v2 (Hard Subset) 61.5, AA-Omniscience v1.1 51. How agy\'s ' +
       '(Medium) maps to the API\'s thinking levels is not published.',
@@ -268,7 +320,7 @@ export const GEMINI_MODELS = [
       'from Gemini 4 Carbon, as Hydrogen is; 1M tokens for input and output together (Antigravity\'s models page says ' +
       'up to 512K; which holds inside agy is not confirmed), 64K synchronous output; knowledge cutoff March 2026; ' +
       'text, image, audio and video in. The card\'s table states no thinking level and is not this level\'s ' +
-      'measurement: on it Neon leads Claude Opus 5.5 and GPT-6.2 Sol on the AA Index v5.0.1 (61 vs 59 and 57 — that 61 equals AA\'s xhigh figure, not this level\'s 60), ' +
+      'measurement: on it Neon leads Claude Opus 5.5 and GPT-6.2 Sol on the AA Index v5.0.1 (61 vs 59 and 57 — that 61 equals AA\'s v5.0.1 xhigh figure, not this level\'s 60), ' +
       'Agents\' Last Exam v1.1 (75.8 vs 71.6 and 73.0), Terminal-Bench-Science 0.1 (70.5 vs 63.3 and 68.0), ' +
       'HLE-Diamond (71.3 vs 67.9 and 64.0), GraphWalks 256k–1M (95.2 vs 66.8 and 80.1) and LVBench (89.0 vs 83.7 and ' +
       '87.6). Its safety section, against Hydrogen: unjustified refusals 3.00 percentage points lower (lower is better; no level stated).',
@@ -289,16 +341,77 @@ export const GEMINI_MODELS = [
     tier: 'heavy',
     useFor:
       'The deepest Neon level, one call when depth pays more than High gives. Artificial Analysis (Index v5.0.1, read ' +
-      '2026-11-19), Neon at xhigh: Intelligence Index 61 at $6.44 and 21.5 minutes per Index task, 283M output tokens ' +
+      '2026-11-19; the Index and the minutes from v5.0.2, read 2026-11-26), Neon at xhigh: Intelligence Index 62 at ' +
+      '$6.44 and 28.0 minutes per Index task, 283M output tokens ' +
       'over the Index; Terminal-Bench 4.0 63.6, Terminal-Bench-Science 0.1 70.0, AutomationBench-AA 79.3, ' +
       'FrontierCode-AA 2.0 44.4, GDP.pdf 28.0, HLE-Diamond 71.3, CritPt v2 (Hard Subset) 60.5, AA-Omniscience v1.1 55. ' +
       'Google\'s launch post: Index 61 "at its xhigh thinking level", and a "0.0% attack success rate" on Gray Swan IPI ' +
       '(prompt injection) at "its highest thinking level". How agy\'s (XHigh) maps to the API\'s thinking levels is ' +
       'not published.',
     avoid:
-      'As Neon (High), and anything High already answers: over High it buys one Index point (61 vs 60) for 1.7 times ' +
+      'As Neon (High), and anything High already answers: over High it buys two Index points (62 vs 60) for 1.7 times ' +
       'the cost per Index task ($6.44 vs $3.74) and 2.3 times the output tokens (283M vs 123M), and GDP.pdf falls ' +
-      '(28.0 vs 33.4) — AA, both levels. The tie-breaker is High, not this level.',
+      '(28.0 vs 33.4) — AA, both levels (the Index on v5.0.2, the tokens on v5.0.1). The tie-breaker is High, not this ' +
+      'level.',
+  },
+  {
+    id: 'Gemini 4 Carbon (Medium)',
+    label: 'Gemini 4 Carbon · Medium',
+    family: 'gemini',
+    effort: 'Medium',
+    tier: 'heavy',
+    useFor:
+      'Carbon at a lighter level, for the question Carbon (High) is for when its wait is the obstacle: two Index ' +
+      'points under High at two thirds of the time. A named one-call route as High is: not the fleet default, not ' +
+      'the tie-breaker, never a sweep or a deep-research stage. Artificial Analysis (Index v5.0.2, read 2026-11-26), Carbon at ' +
+      'medium against Carbon at high: Intelligence Index 58 vs 60, at $6.59 vs $7.76 and 28.1 vs 42.2 minutes per ' +
+      'Index task; CritPt v2 69.0 at both, Terminal-Bench 4.1 61.6 vs 66.2, FrontierCode-AA 2.0 39.5 vs 40.6, GDP.pdf ' +
+      '29.6 vs 28.4, and AA-Omniscience falls to 47 from 54. The card\'s table and the launch post state no level ' +
+      '(see Carbon (High)). How agy\'s (Medium) maps to the API\'s thinking levels is not published.',
+    avoid:
+      'As Carbon (High), and a question Neon (High) answers: on AA, Neon at high scores above Carbon at medium on the ' +
+      'Index (60 vs 58) at $3.74 vs $6.59 and 14.8 vs 28.1 minutes per Index task, and leads it on Terminal-Bench ' +
+      '4.1 (63.6 vs 61.6), FrontierCode-AA 2.0 (43.3 vs 39.5), GDP.pdf (33.4 vs 29.6) and AA-Omniscience (54 vs 47); ' +
+      'Carbon at medium leads on CritPt v2 (69.0 vs 59.0) — AA, Index v5.0.2.',
+  },
+  {
+    id: 'Gemini 4 Carbon (High)',
+    label: 'Gemini 4 Carbon · High',
+    family: 'gemini',
+    effort: 'High',
+    tier: 'heavy',
+    useFor:
+      'A named one-call route past Neon (High): a terminal-agent or hard-reasoning question Neon (High) fell short ' +
+      'on, at about three times its wait. Not the fleet default, which stays Hydrogen (High); not the tie-breaker, ' +
+      'which stays Neon (High); never a sweep or a deep-research stage. Artificial Analysis (Index v5.0.2, read ' +
+      '2026-11-26, the Neon-vs-Carbon comparison page), Carbon at high against Neon at high: Intelligence Index 60 vs ' +
+      '60 — level, at 2.1 times the dollars ($7.76 vs $3.74) and 2.9 times the minutes (42.2 vs 14.8) per Index ' +
+      'task; it leads on Terminal-Bench 4.1 (66.2 vs 63.6) and CritPt v2 (69.0 vs 59.0), by less on HLE-Diamond ' +
+      '(69.1 vs 68.4), and AA-Omniscience is 54 at both. AA\'s model page for Carbon, at high: "notably slow per task ' +
+      'and very verbose" — 42.2 minutes per Index task against a median of 12.7 for comparable models, 205M output ' +
+      'tokens over the Index against a median of 65.4M. Its shape, from the DeepMind card (published 2026-11-10): ' +
+      '"based on Gemini 4 Argon", "using more thinking tokens than Gemini 4 Argon"; 1M tokens for input and output ' +
+      'together (its window inside Antigravity is not confirmed: the models page gives none for Carbon); knowledge ' +
+      'cutoff March 2026; text, image, audio and video in. The card\'s table states no thinking level for any row or ' +
+      'column and is not this level\'s measurement (no level stated): AA Index v5.0 59, Terminal-Bench 4.0 65.2 ' +
+      'against Claude Opus 5.5\'s 59.6, Agents\' Last Exam v1.1 77.4, GraphWalks 256k–1M 96.2, Terminal-Bench-Science ' +
+      '0.1 64.8. Google\'s launch post (no level stated): a 0.0% attack success rate on Gray Swan indirect prompt ' +
+      'injection, against Argon\'s 0.7%; the same post has its external benchmarks "evaluated without guardrails", ' +
+      'and does not say whether that covers the injection figure. How agy\'s (High) ' +
+      'maps to the API\'s thinking levels is not published.',
+    avoid:
+      'Sweeps, lookups and anything Neon (High) answers: on AA (Index v5.0.2, both at high) Carbon is level with Neon ' +
+      'on the Index and behind it on FrontierCode-AA 2.0 (40.6 vs 43.3), AA-Briefcase (1611 vs 1631), GDP.pdf (28.4 vs ' +
+      '33.4), AutomationBench-AA (77.8 vs 79.2) and Terminal-Bench-Science (64.8 vs 65.7). The card\'s rows it trails ' +
+      'on (no level stated): FrontierSWE 2 61.2 against GPT-6 Astra\'s 65.5, OSWorld-2.1 offline 81.5 against Claude ' +
+      'Opus 5.5\'s 87.2. Deep research stays on Hydrogen: Carbon is heavy, so no stage picks it, and naming it there ' +
+      'runs every stage — about five agy runs — on it. A long task can end at gemini.timeoutS (300 s built ' +
+      'in; AA\'s 42.2 minutes is per Index task, not per call) — raising it is config. Its security ' +
+      'rows on the card (CWE-bench 71.0, ExploitGym 54.8, SEC-bench Pro 88.2; no level stated) hold "when accessed ' +
+      'through the Fairwind Program", and this sign-in is not in it: what the model scores behind the consumer ' +
+      'guardrails is not published. What a Carbon call costs the shared Gemini pool against a Neon or Hydrogen call ' +
+      'is not measured. Reading one exact URL is not measured on Carbon: send an exact-page read to Grok or Codex ' +
+      'research.',
   },
   {
     id: 'Claude Opus 5.5 (High)',
@@ -353,7 +466,7 @@ export const GEMINI_MODELS = [
     useFor:
       'Non-Google open-weights SECOND OPINION — cross-check a Gemini answer with a different model family, math-heavy reasoning (strong on AIME/competition math), and de-biasing when you suspect single-vendor blind spots. Apache-2.0 MoE (~5.1B active params); near-parity with o4-mini on core reasoning (MMLU ~90%).',
     avoid:
-      'Primary frontier work and long-context tasks — it trails the frontier Gemini models on overall reasoning/agentic depth and has no long-context retrieval advantage. Use as a corroborating voice, not the lead researcher. Antigravity announced its removal for 2026-11-18 (it was 2026-11-02); agy 1.5.12 still listed it on 2026-11-19, and it leaves the catalog when agy stops listing it.',
+      'Primary frontier work and long-context tasks — it trails the frontier Gemini models on overall reasoning/agentic depth and has no long-context retrieval advantage. Use as a corroborating voice, not the lead researcher. Antigravity\'s models page has it leaving on 2026-11-30 (the dates announced before were 2026-11-02, then 2026-11-18); agy 1.5.18 still lists it on 2026-11-26, and it leaves the catalog when agy stops listing it.',
   },
 ];
 
@@ -381,9 +494,10 @@ export const DEFAULT_MODEL = '';
  * stderr and an empty stdout, which callers surface loudly. What the allowlist
  * still buys:
  *   1. POLICY — it keeps every id agy lists but the catalog does not admit (the
- *      Claude Low tiers, Orchestrator (Neon) and the swept Argon, Hydrogen (XHigh)
- *      and 3.8 Flash ids today, a next model tomorrow) out of the agy path until
- *      the catalog says so. agy itself would happily run them.
+ *      Claude Low tiers, Gemini 4 Carbon (Low), the three Orchestrator rows and
+ *      the swept Argon, Hydrogen (XHigh) and 3.8 Flash ids today, a next model
+ *      tomorrow) out of the agy path until the catalog says so. agy itself would
+ *      happily run them.
  *   2. A local rejection with the valid ids instead of paying a process spawn
  *      to be told the same thing.
  * If a future agy release goes back to silent fallback, this gate is also the
@@ -426,9 +540,11 @@ export const GUIDE =
   'Gemini 4 Neon (High)=the step up from Hydrogen, terminal agents and terminal science included, named per call ' +
   'when depth pays, and the tie-breaker when Grok and Hydrogen disagree (AA at high: Index 60 at $3.74 and 14.8 ' +
   'min); on the shared Gemini pool, but not the default and not for sweeps; ' +
-  'Neon (XHigh)=one Index point over High (AA at xhigh: 61) for 1.7x its cost; ' +
+  'Neon (XHigh)=two Index points over High (AA at xhigh: 62) for 1.7x its cost; ' +
   'Neon (Medium)=about Hydrogen (High)\'s AA cost and time, Index 55 to its 51; ' +
   'Neon (Low)=the lightest Neon (AA at low: Index 44, $0.75), weak on terminal work; ' +
+  'Gemini 4 Carbon (High|Medium)=one named call past Neon (High) on terminal or hard reasoning (AA at high: ' +
+  'Neon\'s Index, 2.1x the $, 2.9x the time); ' +
   'Claude Opus 5.5 (High|Medium) and Claude Sonnet 5.5 (High|Medium)=Antigravity\'s SEPARATE Claude quota, and a ' +
   'SMALL one: one named call per question — an independent Opus read, a hard verification pass, a cheap Sonnet ' +
   'cross-check — when the Claude Code pool is the constraint; never the default, never a sweep, never a ' +

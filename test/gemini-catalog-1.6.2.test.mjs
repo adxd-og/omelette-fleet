@@ -18,9 +18,10 @@ const CLAUDE = [
 ];
 
 // 1.12.0: re-anchored on Gemini 4 Neon (XHigh), the last Gemini entry since Argon left.
-test('the four Claude 5.5 entries follow Gemini 4 Neon (XHigh), in order, heavy, with their efforts', () => {
+// 1.14.0: re-anchored on Gemini 4 Carbon (High), the last Gemini entry since Carbon entered.
+test('the four Claude 5.5 entries follow Gemini 4 Carbon (High), in order, heavy, with their efforts', () => {
   const ids = GEMINI_MODELS.map((m) => m.id);
-  const at = ids.indexOf('Gemini 4 Neon (XHigh)');
+  const at = ids.indexOf('Gemini 4 Carbon (High)');
   assert.ok(at >= 0);
   assert.deepEqual(ids.slice(at + 1, at + 5), CLAUDE.map(([id]) => id));
   for (const [id, effort] of CLAUDE) {
