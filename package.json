@@ -16,6 +16,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "pretest": "node scripts/tmp-sweep.mjs",
     "test": "node --import ./test/tmp-preload.mjs --test test/*.test.mjs",
     "test:file": "node --import ./test/tmp-preload.mjs --test"
   },
