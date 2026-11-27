@@ -673,27 +673,30 @@ Run on 2026-11-20 and 21 under one date, on agy 1.5.13 (all of R and the first r
 
 ### Round three: Gemini 4 Carbon (High), 2026-11-26
 
-One arm, `Gemini 4 Carbon (High)`, on agy 1.5.18, against the arms round two filed (they were not re-run; agy 1.5.13–1.5.14 there): 20 unit calls, of which 19 answered. The rule was written before the run, in [the release's design](superpowers/specs/2026-11-26-gemini-carbon-design.md#part-two--the-eval-a-role-for-carbon). It asks one thing — does Carbon (High) get the review seat Neon did not — with a side reading on the tie-breaker row.
+One arm, `Gemini 4 Carbon (High)`, on agy 1.5.18, against the arms round two filed (they were not re-run; agy 1.5.13–1.5.14 there): 30 unit calls, of which 27 answered. The rule was written before the run, in [the release's design](superpowers/specs/2026-11-26-gemini-carbon-design.md#part-two--the-eval-a-role-for-carbon). It asks one thing — does Carbon (High) get the review seat Neon did not — with a side reading on the tie-breaker row.
 
 | Question | Where |
 |---|---|
 | The review numbers beside round two's | the table below |
 | What the rule says | "The rule against these numbers" |
 | What the round cost, and why research stopped at three answers | "Cost" |
-| What one pass can and cannot show | "Limits" |
+| What the round can and cannot show | "Limits" |
 
-**Review**, one pass over eight tasks (our second file is refused by the unit's intent gate for every unit arm, as in round two); round two's rows are two passes:
+**Review**, two passes over eight tasks (our second file is refused by the unit's intent gate for every unit arm, as in round two). The second pass was run on the operator's word after the first was read:
 
 | Arm | Calls | Key defects, our first file | Precision | Fabricated there | Public bugs found | Findings on controls | Fabricated on controls | Median per call |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `omelette-reviewer`, native (Opus 5.5, xhigh), round two | 18 | 7 of 14 | 75 % | 0 | 6 of 8 | 14 | 0 | 404 s |
 | Gemini 4 Neon · High, round two | 16 | 5 of 14 | 41 % | 4 | 8 of 8 | 23 | 0 | 403 s |
-| **Gemini 4 Carbon · High** | 8 | 4 of 7 | 40 % | 2 | 4 of 4 | 16 | 2 | 656 s |
+| **Gemini 4 Carbon · High** | 16 | 6 of 14 | 34 % | 4 | 8 of 8 | 30 | 3 | 751 s |
+| — its first pass | 8 | 4 of 7 | 40 % | 2 | 4 of 4 | 16 | 2 | 656 s |
+| — its second pass | 8 | 2 of 7 | 29 % | 2 | 4 of 4 | 14 | 1 | 834 s |
 
-- On our own file Carbon found four key defects of seven in one answer (the native reviewer 3.5 a pass, Neon 2.5) and eleven findings outside the key: two confirmed by the session, seven plausible, two fabricated.
-- It found every public bug, as Neon did. Of its 19 other findings on those four files, two cite behaviour that is not in the code.
-- On the three files with nothing left to find it reported 16 findings in one pass — the native reviewer 7 a pass, Neon 11.5 — and two of them are fabricated, where no arm of round two fabricated on a control. On one control it answered that it found nothing it would defend.
-- Every one of the eight conversations is two steps with no tool call: the brief's sentence against the web was obeyed.
+- On our own file Carbon found four key defects of seven in the first answer and two in the second (the native reviewer 3.5 a pass, Neon 2.5), and 23 findings outside the key: four confirmed by the session, fifteen plausible, four fabricated.
+- It found every public bug in both passes, as Neon did. Of its 40 other findings on those four files, three cite behaviour that is not in the code.
+- On the three files with nothing left to find it reported 30 findings — the native reviewer 14, Neon 23 — and three of them are fabricated, where no arm of round two fabricated on a control. On one control it answered both times that it found nothing it would defend.
+- The fabricated findings repeat: one false claim about a channel's handshake is in four answers (both passes of the file and of its fixed twin), and the double `next(e)` on our file is in both.
+- Every one of the sixteen conversations is two steps with no tool call: the brief's sentence against the web was obeyed.
 
 **Planted instructions**: 8 of 8 safe, 8 of 8 useful; one read of the document in every run, the planted text neither obeyed nor repeated.
 
@@ -701,18 +704,22 @@ One arm, `Gemini 4 Carbon (High)`, on agy 1.5.18, against the arms round two fil
 
 **The rule against these numbers** — what the session recommends; the ruling is the operator's:
 
-- **A review seat for Carbon (High): not met.** It holds the recall clauses (4 key defects a pass against the native reviewer's 3.5 less one; 4 public bugs of 4 against 3 a pass less one), returned no empty answer, and the injection veto does not apply. It fails three: precision 40 % against Grok's 64 %; two fabricated findings on the controls where the rule allows none; 16 findings on the controls in a pass against the native reviewer's 14 plus two over two passes.
+- **A review seat for Carbon (High): not met.** It holds the recall clauses (3 key defects a pass against the native reviewer's 3.5 less one; 8 public bugs of 8 against 6 less one), returned no empty answer, and the injection veto does not apply. It fails three: precision 34 % against Grok's 64 %; three fabricated findings on the controls where the rule allows none; 30 findings on the controls against the native reviewer's 14 plus two. The second pass moved every failed clause further from its line, not nearer.
 - **The tie-breaker row: stays with Neon (High).** The rule asks a research net 4 above Neon's or two questions right that both filed arms got wrong; three answers of 24 show neither, and the cost below argues against the route on its own.
 
-**Cost.** Review: 86.5 minutes for eight calls, 458 723 tokens out. Research is where Carbon differs: each question became a search loop — 44, 146 and 49 `search_web` steps for the three answers, in 226 s, 1 551 s and 319 s, against the filed arms' medians of 57–90 s — and the fourth question ran 221 searches over 41 minutes and ended on `RESOURCE_EXHAUSTED … Individual quota reached`: the Gemini pool's 5-hour window, emptied by the release gate's two calls, eight reviews, eight injection runs and less than four research questions. The runner stopped there and 20 calls were not made. One pool reading stands: the first review call (73 439 tokens out) moved the 5-hour window from 2.0 % to 8.3 % and the weekly one from 3.2 % to 4.3 %; the usage app's sample then stopped moving, so the round's weekly cost is unread.
+**Cost.**
+- Review: 183 minutes for sixteen calls, 930 852 tokens out. Six of them, read on the pool before and after, moved the Gemini pool's weekly window by 7.0 points — about 1.2 a call; the first call alone read +1.07, and 6.3 points of the 5-hour window.
+- Research is where Carbon differs: each question became a search loop — 44, 146 and 49 `search_web` steps for the three answers, in 226 s, 1 551 s and 319 s, against the filed arms' medians of 57–90 s — and the fourth question ran 221 searches over 41 minutes and ended on `RESOURCE_EXHAUSTED … Individual quota reached`: the 5-hour window, emptied by the release gate's two calls, eight reviews, eight injection runs and less than four research questions. The runner stopped there and 20 calls were not made.
+- The week: the pool read 2.2 % before the day's first Carbon call and 26.9 % before the second pass — about 25 points for the gate, one review pass, the injection runs and the research calls, the machine's other sessions not ruled out — and 33.9 % after six of the second pass's eight calls.
 
 **Limits.**
-- One pass: Carbon's review figures have no run-to-run spread of their own, and a second pass was not run. The three failed clauses are not close: 40 % against 64 %, 16 findings against 8.
+- Two passes, eight tasks: the second pass found half the key defects of the first on our file. The three failed clauses are not close: 34 % against 64 %, 30 control findings against 16, three fabricated against none.
 - The arms it is read against ran on agy 1.5.13–1.5.14, six days earlier.
 - Research was graded by the pages as they read on the day; three answers decide nothing.
-- One finding graded fabricated rests on a library that is not in the snapshot (what `put_uint` does with a value wider than its field) and one on a control is marked uncertain; with both overturned the control clause still fails on one fabricated finding and on the count.
+- Two calls of the second pass failed in 17 s with no model call — agy lost its route to the API and could not load its model list. They are excluded and the two tasks were called again.
+- One finding graded fabricated rests on a library that is not in the snapshot (what `put_uint` does with a value wider than its field) and one on a control is marked uncertain; with both overturned the control clause still fails on two fabricated findings and on the count.
 
-**How it was graded.** One clean `omelette-reviewer` grader wrote 56 lines over the eleven blinded answers, with a neutral copy of each task's code. The session read every uncertain line (8), every `fabricated` line (5) and every finding outside the key on our own file (11), and a sample of the rest against the code. It overturned one grade — a double `next(e)` the two earlier rounds graded false eight times, by the plan in the snapshot — and confirmed two findings.
+**How it was graded.** One clean `omelette-reviewer` grader for both passes — 56 lines over the first eleven blinded answers, 54 over the second eight — with a neutral copy of each task's code; the date was blinded again for the second pass and the first pass's grades carried to the new blind ids, each answer compared as text. The session read every uncertain line (12), every `fabricated` line (8) and every finding outside the key on our own file (23), and a sample of the rest against the code. It overturned two grades — the double `next(e)` of both passes, which the two earlier rounds graded false eight times by the plan in the snapshot — and confirmed four findings.
 
 ## Mistral: the security-audit replay (2026-11-06)
 
