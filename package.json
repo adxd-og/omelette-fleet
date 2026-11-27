@@ -16,7 +16,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --import ./test/tmp-preload.mjs --test test/*.test.mjs",
+    "test:file": "node --import ./test/tmp-preload.mjs --test"
   },
   "files": [
     "bin",
