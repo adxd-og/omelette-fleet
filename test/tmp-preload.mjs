@@ -24,16 +24,24 @@ import { syncBuiltinESMExports } from 'node:module';
 const made = new Set();
 const root = () => { try { return fs.realpathSync(os.tmpdir()); } catch { return os.tmpdir(); } };
 const note = (p) => {
-  try { const r = fs.realpathSync(p); if (path.dirname(r) === root()) made.add(r); } catch { /* gone already */ }
+  try {
+    // The parent is resolved, the new directory's own name is not: a link at that name is never followed.
+    const s = typeof p === 'string' ? p : p.toString();
+    const parent = fs.realpathSync(path.dirname(path.resolve(s)));
+    if (parent === root()) made.add(path.join(parent, path.basename(s)));
+  } catch { /* gone already */ }
   return p;
 };
 
 const sync = fs.mkdtempSync;
 fs.mkdtempSync = function (...a) { return note(sync.apply(this, a)); };
 const cb = fs.mkdtemp;
-fs.mkdtemp = function (prefix, opts, done) {
-  if (typeof opts === 'function') { done = opts; opts = undefined; }
-  return cb.call(this, prefix, opts, (e, p) => { if (!e) note(p); done(e, p); });
+fs.mkdtemp = function (...a) {
+  const done = a[a.length - 1];
+  // No callback: node's own argument error, at the call, as without the preload.
+  if (typeof done !== 'function') return cb.apply(this, a);
+  a[a.length - 1] = (e, p) => { if (!e) note(p); done(e, p); };
+  return cb.apply(this, a);
 };
 const pm = fs.promises.mkdtemp;
 fs.promises.mkdtemp = async function (...a) { return note(await pm.apply(this, a)); };

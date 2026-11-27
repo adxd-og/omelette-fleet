@@ -62,6 +62,25 @@ test('TMPDIR through a link: the parent is compared resolved', () => {
   assert.deepEqual(exists(r.made, ['a', 'b', 'c']), { a: false, b: false, c: false });
 });
 
+test("a callback-less fs.mkdtemp throws node's own error at the call, as without the preload, and makes nothing", () => {
+  const tmp = mkdtempSync(join(B, 'nocb-'));
+  const SRC = [
+    "import fs from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import { join } from 'node:path';",
+    "for (const args of [[join(tmpdir(), 'm-')], [join(tmpdir(), 'm-'), {}], [join(tmpdir(), 'm-'), 'utf8']]) {",
+    "  try { fs.mkdtemp(...args); console.log('no throw'); } catch (e) { console.log(e.code); }",
+    '}',
+  ].join('\n');
+  const env = { ...process.env, TMPDIR: tmp };
+  delete env.NODE_TEST_CONTEXT;
+  const r = spawnSync(process.execPath, ['--import', PRELOAD, '--input-type=module', '-e', SRC], { env, timeout: 30_000, encoding: 'utf8' });
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.equal(r.stdout, 'ERR_INVALID_ARG_TYPE\nERR_INVALID_ARG_TYPE\nERR_INVALID_ARG_TYPE\n');
+  assert.equal(r.stderr, '');
+  assert.deepEqual(readdirSync(tmp), []);
+});
+
 test('without the preload the same fixture leaves a, b and c', () => {
   const r = run('pass', { preload: false });
   assert.equal(r.status, 0, r.output);
