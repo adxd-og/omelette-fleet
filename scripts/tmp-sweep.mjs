@@ -15,11 +15,15 @@
  * belongs to this user; its modification time is more than MAX_AGE_MS old. The
  * units' fixed parents (`omelette-evals`, `omelette-mistral-repro`,
  * `omelette-gemini-test`) stay whatever their age, as does everything not
- * ours. After BUDGET_MS of wall clock it leaves the rest to the next run. It
+ * ours. A root that group or others can write and that lacks the sticky bit is
+ * not swept at all: there another user could swap an entry between the `lstat`
+ * and the removal. The clock is read before each matching name, so after
+ * BUDGET_MS it leaves the rest to the next run; one directory's removal is
+ * never interrupted, so a sweep can run past the budget by that one removal. It
  * never fails `npm test`: anything thrown is one line on stderr, and the exit
  * code is 0. Importing the module runs nothing.
  */
-import { lstatSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -40,10 +44,12 @@ export const BUDGET_MS = 5000;
  * the `lstat`s of a crowded directory as well as the removals: at `budgetMs`
  * or more since the call began, the rest is left and `stopped` is true. `uid: null` (no
  * `process.getuid`) removes nothing. Returns names, not paths. THROWS when
- * `root` cannot be read.
+ * root cannot be read, or is writable by group or others without the sticky bit.
  */
 export function sweep({ root, now = Date.now(), maxAgeMs = MAX_AGE_MS, budgetMs = BUDGET_MS, uid = typeof process.getuid === 'function' ? process.getuid() : null }) {
   const began = Date.now();
+  const mode = statSync(root).mode;
+  if ((mode & 0o022) && !(mode & 0o1000)) throw new Error(`${root} is writable by group or others and not sticky: not swept`);
   const removed = [];
   const failed = [];
   for (const name of readdirSync(root)) {

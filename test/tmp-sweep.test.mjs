@@ -103,6 +103,39 @@ test('one that cannot be removed does not stop the rest', { skip: process.getuid
   }
 });
 
+test('a root others can write is swept only when it is sticky', () => {
+  const root = rootOf();
+  const p = dir(root, 'omelette-w-Ab3xYz', OLD);
+  try {
+    chmodSync(root, 0o777);
+    assert.throws(() => sweep({ root, now: NOW }), /writable by group or others and not sticky/);
+    assert.ok(existsSync(p));
+    chmodSync(root, 0o775);
+    assert.throws(() => sweep({ root, now: NOW }), /writable by group or others and not sticky/);
+    assert.ok(existsSync(p));
+    chmodSync(root, 0o1777);
+    assert.deepEqual(sweep({ root, now: NOW }).removed, ['omelette-w-Ab3xYz']);
+  } finally {
+    chmodSync(root, 0o700);
+  }
+});
+
+test('as a script: a root others can write and not sticky is left alone, exit 0', () => {
+  const root = rootOf();
+  const p = dir(root, 'omelette-w-Ab3xYz', OLD);
+  try {
+    chmodSync(root, 0o777);
+    const r = spawnSync(process.execPath, [SCRIPT], { env: { ...process.env, TMPDIR: root }, timeout: 10_000, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, '');
+    assert.ok(r.stderr.startsWith('tmp-sweep: '), r.stderr);
+    assert.match(r.stderr, /not sticky/);
+    assert.ok(existsSync(p));
+  } finally {
+    chmodSync(root, 0o700);
+  }
+});
+
 test('as a script: a temp directory that does not exist', () => {
   const r = spawnSync(process.execPath, [SCRIPT], { env: { ...process.env, TMPDIR: join(B, 'absent') }, timeout: 10_000, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
