@@ -25,7 +25,7 @@ Not confirmed: that the leftovers make a run take 7–13 minutes (another sessio
 
 - **Goal.** A full `npm test` leaves the OS temp directory with no test scratch it did not have before the run.
 - **Goal.** A mutation run (`scripts/mutants.mjs`) leaves none either.
-- **Goal.** What a bare `node --test test/x.test.mjs` or a killed process leaves is gone within a day, without anyone asking.
+- **Goal.** What a bare `node --test test/x.test.mjs` or a killed process leaves under an `omelette-*` name is gone within a day, without anyone asking. Scratch under another prefix (`spawn-outfd-`, `unit-outfd-`, `neon-test-` and the like — 28 literal prefixes in 18 test files) is removed by the preload under `npm test` and `npm run test:file`, and stays after a bare run: the sweep takes no name another program could share. (Narrowed on 2026-11-27 after the review — the design below already said this; the goal had promised more.)
 - **Stays out.** The 178 test files: not edited. `TMPDIR`: not changed. Making the suite faster. The shipped package: no command, no hook, nothing under `bin`, `core`, `units`, `hooks`.
 - **A failure even if it works.** A test that passed before and now runs a different branch, or is skipped. A sweep that removes a directory something still uses — a unit's call in flight, an eval round's snapshot, another session's test run. A sweep that follows a link out of the temp directory.
 
