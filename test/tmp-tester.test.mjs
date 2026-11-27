@@ -227,3 +227,91 @@ test('sweep: failures do not stop the rest, whatever order the names are listed 
     for (const s of stuck) chmodSync(join(s, 'sub'), 0o700);
   }
 });
+
+// ---- the fix round ---------------------------------------------------------------------------------
+
+// A link at the name mkdtemp returned: the second load of the preload wraps this fake, so the link is
+// there when note() looks, with no race. Its target, a directory the process did not make, must outlive it.
+const LINKED = `
+import test from 'node:test';
+import fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+test('linked', async () => {
+  const victim = join(tmpdir(), 'victim');
+  fs.mkdirSync(victim);
+  fs.writeFileSync(join(victim, 'keep'), 'x');
+  const link = join(tmpdir(), 'lnk-AAAAAA');
+  fs.mkdtempSync = () => { fs.symlinkSync(victim, link); return link; };
+  await import(process.env.PRELOAD_URL + '?again');
+  fs.mkdtempSync(join(tmpdir(), 'lnk-'));
+  fs.writeFileSync(process.env.FIXTURE_OUT, JSON.stringify({ victim, keep: join(victim, 'keep'), link }));
+});
+`;
+test('preload: a link at the name mkdtemp returned is recorded as the link, never as its target', () => {
+  const row = mkdtempSync(join(B, 'row-'));
+  const tmp = join(row, 'tmp');
+  const out = join(row, 'out.json');
+  const file = join(row, 'fixture.mjs');
+  mkdirSync(tmp);
+  writeFileSync(file, LINKED);
+  const env = { ...process.env, TMPDIR: tmp, FIXTURE_OUT: out, PRELOAD_URL: PRELOAD };
+  delete env.NODE_TEST_CONTEXT;
+  const r = spawnSync(process.execPath, ['--import', PRELOAD, '--test', file], { env, timeout: 30_000, encoding: 'utf8' });
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  const m = JSON.parse(readFileSync(out, 'utf8'));
+  assert.equal(existsSync(m.keep), true, 'the link target and its file are untouched');
+  assert.deepEqual(readdirSync(tmp), ['victim']);
+});
+
+const sticky = (mode) => mode & 0o1000;
+test('sweep: which root modes are refused — any write bit for group or others without the sticky bit; others are swept', () => {
+  const root = rootOf();
+  const p = dir(root, 'omelette-m-Ab3xYz', 48 * HOUR);
+  try {
+    for (const mode of [0o757, 0o770, 0o772, 0o777, 0o722, 0o702]) {
+      chmodSync(root, mode);
+      assert.throws(() => sweep({ root, now: NOW }), /not sticky/, mode.toString(8));
+      assert.ok(existsSync(p), mode.toString(8));
+    }
+    for (const mode of [0o700, 0o750, 0o755, 0o705, 0o1777, 0o1757, 0o1770]) {
+      chmodSync(root, mode);
+      assert.ok(sticky(mode) || !(mode & 0o022), 'table sanity');
+      assert.deepEqual(sweep({ root, now: NOW, budgetMs: 0 }), { removed: [], failed: [], stopped: true }, mode.toString(8));
+    }
+    chmodSync(root, 0o755);
+    assert.deepEqual(sweep({ root, now: NOW }).removed, ['omelette-m-Ab3xYz']);
+  } finally {
+    chmodSync(root, 0o700);
+  }
+});
+
+const CWDS = `
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+test('relative TMPDIR', async () => {
+  assert.equal(tmpdir(), 'rel-tmp');
+  const a = fs.mkdtempSync(join(tmpdir(), 'a-'));
+  const b = await fs.promises.mkdtemp(join(tmpdir(), 'b-'));
+  const c = await new Promise((res, rej) => fs.mkdtemp(join(tmpdir(), 'c-'), (e, d) => (e ? rej(e) : res(d))));
+  const buf = fs.mkdtempSync(join(tmpdir(), 'd-'), { encoding: 'buffer' });
+  const all = [a, b, c, buf.toString()];
+  for (const p of all) assert.ok(fs.existsSync(p), p);
+  fs.writeFileSync(process.env.FIXTURE_OUT, JSON.stringify(all.map((p) => join(process.cwd(), p))));
+});
+`;
+test('preload: a relative TMPDIR is resolved against the working directory, and its directories go', () => {
+  const row = mkdtempSync(join(B, 'row-'));
+  mkdirSync(join(row, 'rel-tmp'));
+  const out = join(row, 'out.json');
+  const file = join(row, 'fixture.mjs');
+  writeFileSync(file, CWDS);
+  const env = { ...process.env, TMPDIR: 'rel-tmp', FIXTURE_OUT: out };
+  delete env.NODE_TEST_CONTEXT;
+  const r = spawnSync(process.execPath, ['--import', PRELOAD, '--test', file], { cwd: row, env, timeout: 30_000, encoding: 'utf8' });
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.deepEqual(readdirSync(join(row, 'rel-tmp')), []);
+});
