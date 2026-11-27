@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { applyMutant, main, prepareScratch, runSuite } from '../scripts/mutants.mjs';
 
 const ENTRIES = ['lib', 'test'];
@@ -209,6 +210,38 @@ test("a file node's own --test-timeout cancelled counts as one still running at 
   const r = await runSuite({ cwd: sb.root, files: ['test/b.test.mjs'], timeoutMs: 60_000, home: join(sb.dir, 'home'), reporter: staged });
   assert.deepEqual({ timedOut: r.timedOut, stillRunning: r.stillRunning, failed: r.failed }, { timedOut: true, stillRunning: ['test/b.test.mjs'], failed: ['test/b.test.mjs'] }, r.stderr);
   assert.ok(r.wallMs < 60_000, 'the runner\'s own cap never fired');
+});
+
+// The suite's one file makes a directory under its tmpdir() — a TMPDIR of the row's own — and records
+// its path; the row reads it back once the suite has exited.
+const PRELOAD = fileURLToPath(new URL('./tmp-preload.mjs', import.meta.url));
+const MAKES_A_TMPDIR = [
+  "import test from 'node:test';",
+  "import { mkdtempSync, writeFileSync } from 'node:fs';",
+  "import { tmpdir } from 'node:os';",
+  "import { join } from 'node:path';",
+  "test('makes a temp directory', () => { writeFileSync(process.env.MUT_PRELOAD_OUT, mkdtempSync(join(tmpdir(), 'mut-preload-'))); });",
+  '',
+].join('\n');
+const madeBySuite = async (sb, preload) => {
+  writeFileSync(join(sb.root, 'test', 'p.test.mjs'), MAKES_A_TMPDIR);
+  const tmp = join(sb.dir, 'tmp');
+  mkdirSync(tmp);
+  const out = join(sb.dir, 'made.txt');
+  const env = { ...process.env, TMPDIR: tmp, MUT_PRELOAD_OUT: out };
+  const r = await runSuite({ cwd: sb.root, files: ['test/p.test.mjs'], timeoutMs: 60_000, home: join(sb.dir, 'home'), env, ...(preload ? { preload } : {}) });
+  assert.deepEqual({ code: r.code, failed: r.failed }, { code: 0, failed: [] }, r.stderr);
+  return readFileSync(out, 'utf8');
+};
+
+test("runSuite with preload: the suite's directory is gone after the run", async (t) => {
+  const made = await madeBySuite(sandbox(t), PRELOAD);
+  assert.equal(existsSync(made), false, made);
+});
+
+test('runSuite without preload: it stays', async (t) => {
+  const made = await madeBySuite(sandbox(t));
+  assert.equal(existsSync(made), true, made);
 });
 
 // The strays a run's files recorded, set up for one test and killed after it whatever happens.

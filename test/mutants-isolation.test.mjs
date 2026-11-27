@@ -6,13 +6,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { main, prepareScratch } from '../scripts/mutants.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'mutants.mjs');
+const PRELOAD = join(dirname(fileURLToPath(import.meta.url)), 'tmp-preload.mjs');
 const ENTRIES = ['lib', 'test'];
 const LIB = "import { spawn } from 'node:child_process';\nimport { fileURLToPath } from 'node:url';\nexport function hang() {\n  return 1;\n}\n";
 // Started by the hanging mutant: it starts itself again in a process group of its own and exits, so
@@ -141,6 +142,23 @@ test('a suite child gets HOME and OMELETTE_HOME on <scratch>/home, emptied befor
   const { timeoutMs } = JSON.parse(readFileSync(join(sb.dir, 'report.json'), 'utf8'));
   assert.match(records[0].parent, /--test-timeout=\d+ /);
   assert.ok(records[1].parent.includes(`--test-timeout=${timeoutMs} `), `the mutant's suite has the cap, saw: ${records[1].parent.slice(0, 300)}`);
+});
+
+test("a tree holding test/tmp-preload.mjs: every suite of the run, the baseline's and the mutant's, is started with --import of the scratch's copy", async (t) => {
+  const sb = sandbox(t);
+  copyFileSync(PRELOAD, join(sb.root, 'test', 'tmp-preload.mjs'));
+  const scratch = join(sb.dir, 'scratch');
+  const envfile = join(sb.dir, 'env.ndjson');
+  const cataloguePath = join(sb.dir, 'catalogue.json');
+  writeFileSync(cataloguePath, JSON.stringify([MUTANT]));
+  const io = capture();
+  const code = await withEnv({ MUT_ENVFILE: envfile },
+    () => main(['--scratch', scratch, '--out', join(sb.dir, 'report.json')], { root: sb.root, cataloguePath, entries: ENTRIES, out: io.out, err: io.err }));
+  assert.equal(code, 0, io.lines.err.join('\n'));
+  const records = readFileSync(envfile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(records.length, 2, 'the baseline and the one mutant each ran the probe');
+  const preloadUrl = pathToFileURL(join(scratch, 'work', 'test', 'tmp-preload.mjs')).href;
+  for (const r of records) assert.ok(r.parent.includes(`--import=${preloadUrl} --test `), `the suite loads the copy's preload, saw: ${r.parent.slice(0, 300)}`);
 });
 
 test('with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE set, preparing a scratch leaves the operator repository, its origin and its staged index alone', async (t) => {

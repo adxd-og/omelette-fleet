@@ -574,18 +574,22 @@ const stragglerNote = ({ killed, alive }) => (killed || alive ? `stragglers: ${k
  * `node --test <files>` in `cwd`, with `reporter` as its `--test-reporter` and
  * `timeoutMs` as its `--test-timeout`, killed (killTree: every descendant and
  * the process group) at `timeoutMs`. `home` is emptied first: nothing a test
- * left there reaches the next run. Resolves to the files that failed, the files
- * still running at the cap (or cancelled by node at it), the test count node
- * reported, the exit code and the wall time.
+ * left there reaches the next run. `preload`, when a string, is loaded into
+ * the suite by `--import=<its file URL>` before `--test` (the copy's
+ * test/tmp-preload.mjs: each test process removes the temp directories it
+ * made); absent, there is no `--import`. Resolves to the files that failed,
+ * the files still running at the cap (or cancelled by node at it), the test
+ * count node reported, the exit code and the wall time.
  */
-export function runSuite({ cwd, files, timeoutMs, home, reporter = SELF, env = process.env }) {
+export function runSuite({ cwd, files, timeoutMs, home, reporter = SELF, env = process.env, preload }) {
   rmSync(home, { recursive: true, force: true });
   mkdirSync(home, { recursive: true });
   // node names each file by its real path (macOS: /var is /private/var), so the base must be real too.
   const base = realpathSync(cwd);
   return new Promise((resolveRun, rejectRun) => {
     const t0 = Date.now();
-    const child = spawn(process.execPath, ['--test', `--test-reporter=${pathToFileURL(reporter).href}`, `--test-timeout=${timeoutMs}`, ...files], {
+    const imports = typeof preload === 'string' ? [`--import=${pathToFileURL(preload).href}`] : [];
+    const child = spawn(process.execPath, [...imports, '--test', `--test-reporter=${pathToFileURL(reporter).href}`, `--test-timeout=${timeoutMs}`, ...files], {
       cwd, env: childEnv(home, env), detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
     LIVE_SUITES.add(child);
@@ -702,7 +706,8 @@ export async function runMutants({
     const touched = [...new Set(catalogue.map((m) => m.file))];
     const date = now().toISOString();
 
-    const suite = { cwd: paths.work, files, home: paths.home, reporter: paths.reporter };
+    const preload = join(paths.work, 'test', 'tmp-preload.mjs'); // the suite's own temp-directory clean-up, when the tree has it
+    const suite = { cwd: paths.work, files, home: paths.home, reporter: paths.reporter, ...(existsSync(preload) ? { preload } : {}) };
     const base = await runSuite({ ...suite, timeoutMs: timeoutS ? timeoutS * 1000 : BASELINE_CAP_MS });
     if (base.timedOut || base.code !== 0 || base.failed.length) {
       const why = base.timedOut ? `timed out (${base.stillRunning.join(', ')} still running)` : `failed: ${base.failed.join(', ') || `exit ${base.code}`}`;
