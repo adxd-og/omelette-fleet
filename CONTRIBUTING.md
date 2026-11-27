@@ -12,6 +12,8 @@ npm test
 
 No `npm install` — there is nothing to install. `npm test` is `node --test` over `test/*.test.mjs` and needs Node ≥ 20, no vendor CLI, and no `claude`. CI runs exactly that on Node 20 and 22, on Ubuntu and macOS.
 
+One file is `npm run test:file -- test/x.test.mjs` (the file is required). Both scripts load `test/tmp-preload.mjs`, which removes the temp directories each test process made; a bare `node --test test/x.test.mjs` leaves them in the OS temp directory: a later `npm test` sweeps the ones named `omelette-…` once they are older than a day (`scripts/tmp-sweep.mjs`), and the rest stay.
+
 To exercise a real unit by hand, use the CLI rather than a client: `./bin/omelette-fleet.mjs call codex codex_models '{}'`.
 
 ## The rules
