@@ -135,7 +135,8 @@ test('listLedgers: after the first git error (a hang included) no later ledger a
   for (const n of ['a', 'b', 'c']) p.write(`.omelette/ledger-${n}.md`, ledger(`feat/${n}`));
   p.write('.omelette/ledger-m.md', ledger('main'));
   const g = fakeGit('hang');
-  const l = listLedgers(p.dir, { env: g.env, timeoutMs: 300 });
+  // The wait covers the fake's start: killed before its first write, it logs no call (0.3 s was short under load).
+  const l = listLedgers(p.dir, { env: g.env, timeoutMs: 2000 });
   assert.equal(l.error, 'timeout');
   assert.deepEqual(l.ledgers.map((x) => `${x.name}:${x.state}:${x.error ?? ''}`), [
     'ledger-a.md:unknown:timeout', 'ledger-b.md:unknown:timeout', 'ledger-c.md:unknown:timeout', 'ledger-m.md:standing:',
