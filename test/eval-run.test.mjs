@@ -254,6 +254,15 @@ test('the V snapshot is the commit\'s tree with no .git, and no git history is r
   assert.equal(existsSync(join(path, 'kept')), true);
 });
 
+test('a snapshot left with directories and no file, as the OS\'s temp cleaning leaves one, is made again', () => {
+  const { repo, commit } = fixtureRepo();
+  const path = join(tmp('omelette-evals-snap-'), commit);
+  mkdirSync(join(path, 'src', 'gone'), { recursive: true });
+  assert.equal(ensureSnapshot({ repo, commit, path }), path);
+  assert.equal(readFileSync(join(path, 'src', 'thing.js'), 'utf8'), 'export const thing = 1; // the reviewed state\n');
+  assert.equal(existsSync(join(path, 'src', 'gone')), false, 'made again, not extracted over what was left');
+});
+
 test('a snapshot git can reach history from is refused: one with .git, and one inside a work tree', () => {
   const { repo, commit } = fixtureRepo();
   // Inside the live checkout's tree, git walks up to its .git and the later fix is one `git log` away.

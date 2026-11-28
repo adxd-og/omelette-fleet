@@ -274,7 +274,12 @@ export function ensureSnapshot({ repo = ROOT, commit, path, guard = true }) {
   if (!isAbsolute(path)) throw new Error(`snapshot path ${path} is not absolute`);
   if (existsSync(path)) {
     if (guard) assertNoHistory(path);
-    return path;
+    // The OS's temp cleaning takes a snapshot's files and leaves its
+    // directories: one that holds nothing but directories is made again.
+    const hollow = statSync(path).isDirectory()
+      && readdirSync(path, { recursive: true, withFileTypes: true }).every((e) => e.isDirectory());
+    if (!hollow) return path;
+    rmSync(path, { recursive: true });
   }
   // A file, not a pipe: a tar that stops reading at the end-of-archive marker
   // would leave the writer of a pipe with EPIPE on the padding behind it.
