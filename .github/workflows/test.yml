@@ -15,6 +15,9 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    # A job takes 5 to 9 minutes; one whose test left a process behind once sat
+    # out GitHub's six-hour limit.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
